@@ -1,0 +1,181 @@
+<section class="panel">
+    <h2 class="text-2xl font-bold mb-4">Storage / RAID</h2>
+
+    <div class="space-y-3">
+        <div class="card">
+            <div class="text-lg font-semibold mb-3">Read-Only Discovery</div>
+            <div class="text-sm text-slate-400 mb-3">Read current controller, logical volume, and physical drive inventory from iLO Redfish. Phase 1 does not create, delete, or modify RAID volumes.</div>
+
+            <form hx-post="/read-current-storage" hx-target="#main-content" hx-swap="outerHTML">
+                <input type="hidden" name="return_page" value="storage">
+                <label class="check mb-3"><input type="checkbox" name="deep_smart_storage_scan"> Deep Smart Storage Scan</label>
+                <div class="actions">
+                    <button class="btn" type="submit">Read Current Storage</button>
+                </div>
+            </form>
+        </div>
+
+        {% if storage_export_paths %}
+        <div class="result">
+            Export path: {{ storage_export_paths.directory }}<br>
+            Summary file: {{ storage_export_paths.summary }}<br>
+            Raw file: {{ storage_export_paths.raw }}
+        </div>
+        {% endif %}
+
+        {% if storage_discovery %}
+        {% set server = storage_discovery.server or {} %}
+        {% set ilo = storage_discovery.ilo or {} %}
+        {% set capabilities = storage_discovery.capabilities or {} %}
+        {% set standard = storage_discovery.standard_redfish_storage or {} %}
+        {% set hpe = storage_discovery.hpe_smart_storage or {} %}
+        {% set hpe_diagnostics = hpe.diagnostics or capabilities.hpe_smart_storage_diagnostics or {} %}
+
+        <div class="grid grid-cols-1 md:grid-cols-3 gap-3">
+            <div class="card">
+                <div class="text-xs font-bold uppercase text-slate-400 mb-1">Server</div>
+                <div><strong>Model:</strong> {{ server.model or "Unknown" }}</div>
+                <div><strong>Generation:</strong> {{ server.generation or "Unknown" }}</div>
+                <div><strong>Serial:</strong> {{ server.serial_number or "Unknown" }}</div>
+            </div>
+            <div class="card">
+                <div class="text-xs font-bold uppercase text-slate-400 mb-1">iLO</div>
+                <div><strong>Version:</strong> {{ ilo.version or "Unknown" }}</div>
+                <div><strong>Model:</strong> {{ ilo.model or "Unknown" }}</div>
+                <div><strong>Firmware:</strong> {{ ilo.firmware or "Unknown" }}</div>
+            </div>
+            <div class="card">
+                <div class="text-xs font-bold uppercase text-slate-400 mb-1">Detected Resources</div>
+                <div><strong>Standard Redfish Storage:</strong> {{ "Yes" if capabilities.standard_redfish_storage else "No" }}</div>
+                <div><strong>HPE Smart Storage:</strong> {{ "Yes" if capabilities.hpe_smart_storage else "No" }}</div>
+                <div><strong>Storage path:</strong> {{ capabilities.standard_storage_path or "Not exposed" }}</div>
+            </div>
+        </div>
+
+        <div class="card">
+            <div class="text-lg font-semibold mb-3">Standard Redfish Storage</div>
+            {% if standard.controllers or standard.volumes or standard.drives %}
+                <div class="text-sm font-bold text-slate-300 mb-2">Controllers</div>
+                {% if standard.controllers %}
+                <table class="mb-4">
+                    <thead><tr><th>Name</th><th>Model</th><th>Firmware</th><th>Status</th></tr></thead>
+                    <tbody>
+                    {% for controller in standard.controllers %}
+                        <tr><td>{{ controller.name }}</td><td>{{ controller.model }}</td><td>{{ controller.firmware_version }}</td><td>{{ controller.status }}</td></tr>
+                    {% endfor %}
+                    </tbody>
+                </table>
+                {% else %}
+                <div class="muted mb-4">No standard Redfish controllers reported.</div>
+                {% endif %}
+
+                <div class="text-sm font-bold text-slate-300 mb-2">Logical Volumes</div>
+                {% if standard.volumes %}
+                <table class="mb-4">
+                    <thead><tr><th>Name</th><th>RAID</th><th>Size GiB</th><th>Status</th></tr></thead>
+                    <tbody>
+                    {% for volume in standard.volumes %}
+                        <tr><td>{{ volume.name or volume.id }}</td><td>{{ volume.raid_type }}</td><td>{{ volume.capacity_gib or "" }}</td><td>{{ volume.status }}</td></tr>
+                    {% endfor %}
+                    </tbody>
+                </table>
+                {% else %}
+                <div class="muted mb-4">No standard Redfish volumes reported.</div>
+                {% endif %}
+
+                <div class="text-sm font-bold text-slate-300 mb-2">Physical Drives</div>
+                {% if standard.drives %}
+                <table>
+                    <thead><tr><th>Bay</th><th>Model</th><th>Size GiB</th><th>Media</th><th>Protocol</th><th>Status</th></tr></thead>
+                    <tbody>
+                    {% for drive in standard.drives %}
+                        <tr><td>{{ drive.bay }}</td><td>{{ drive.model or drive.name }}</td><td>{{ drive.size_gib or "" }}</td><td>{{ drive.media_type }}</td><td>{{ drive.protocol }}</td><td>{{ drive.status }}</td></tr>
+                    {% endfor %}
+                    </tbody>
+                </table>
+                {% else %}
+                <div class="muted">No standard Redfish drives reported.</div>
+                {% endif %}
+            {% else %}
+                <div class="muted">This server did not expose populated standard Redfish Storage resources.</div>
+            {% endif %}
+        </div>
+
+        <div class="card">
+            <div class="text-lg font-semibold mb-3">HPE Smart Storage</div>
+            {% if hpe_diagnostics.warnings %}
+            <div class="error mb-4">
+                {% for warning in hpe_diagnostics.warnings %}
+                    <div>{{ warning }}</div>
+                {% endfor %}
+            </div>
+            {% endif %}
+            {% if hpe.controllers or hpe.volumes or hpe.drives %}
+                <div class="text-sm font-bold text-slate-300 mb-2">Controllers</div>
+                {% if hpe.controllers %}
+                <table class="mb-4">
+                    <thead><tr><th>Name</th><th>Model</th><th>Firmware</th><th>Status</th></tr></thead>
+                    <tbody>
+                    {% for controller in hpe.controllers %}
+                        <tr><td>{{ controller.name }}</td><td>{{ controller.model }}</td><td>{{ controller.firmware_version }}</td><td>{{ controller.status }}</td></tr>
+                    {% endfor %}
+                    </tbody>
+                </table>
+                {% else %}
+                <div class="muted mb-4">No HPE Smart Storage controllers reported.</div>
+                {% endif %}
+
+                <div class="text-sm font-bold text-slate-300 mb-2">Logical Volumes</div>
+                {% if hpe.volumes %}
+                <table class="mb-4">
+                    <thead><tr><th>Name</th><th>RAID</th><th>Size GiB</th><th>Status</th></tr></thead>
+                    <tbody>
+                    {% for volume in hpe.volumes %}
+                        <tr><td>{{ volume.name or volume.id }}</td><td>{{ volume.raid_type }}</td><td>{{ volume.capacity_gib or "" }}</td><td>{{ volume.status }}</td></tr>
+                    {% endfor %}
+                    </tbody>
+                </table>
+                {% else %}
+                <div class="muted mb-4">No HPE Smart Storage logical volumes reported.</div>
+                {% endif %}
+
+                <div class="text-sm font-bold text-slate-300 mb-2">Physical Drives</div>
+                {% if hpe.drives %}
+                <table>
+                    <thead><tr><th>Bay</th><th>Model</th><th>Size GiB</th><th>Media</th><th>Protocol</th><th>Status</th></tr></thead>
+                    <tbody>
+                    {% for drive in hpe.drives %}
+                        <tr><td>{{ drive.bay }}</td><td>{{ drive.model or drive.name }}</td><td>{{ drive.size_gib or "" }}</td><td>{{ drive.media_type }}</td><td>{{ drive.protocol }}</td><td>{{ drive.status }}</td></tr>
+                    {% endfor %}
+                    </tbody>
+                </table>
+                {% else %}
+                <div class="muted">No HPE Smart Storage physical drives reported.</div>
+                {% endif %}
+            {% else %}
+                <div class="muted">No older HPE Smart Storage resources were detected.</div>
+            {% endif %}
+
+            {% if hpe_diagnostics.probed_paths or hpe_diagnostics.collections %}
+            <details class="mt-4">
+                <summary class="summary-row">
+                    <span class="text-sm font-bold text-slate-300">Smart Storage traversal diagnostics</span>
+                    <span class="status progress">{{ hpe_diagnostics.collections|length }} collections</span>
+                </summary>
+                <div class="codeblock mt-4">
+Deep scan requested: {{ hpe_diagnostics.deep_scan_requested }}
+Deep fallback ran: {{ hpe_diagnostics.deep_fallback_ran }}
+
+Probed paths:
+{% for probe in hpe_diagnostics.probed_paths %}- {{ probe.phase or "unknown" }} {{ probe.status }} {{ probe.path }}{% if probe.members is defined %} (members: {{ probe.members }}){% endif %}{% if probe.error %} - {{ probe.error }}{% endif %}
+{% endfor %}
+Collections:
+{% for collection in hpe_diagnostics.collections %}- {{ collection.phase or "unknown" }} {{ collection.status }} {{ collection.collection }}{% if collection.path %} at {{ collection.path }}{% endif %} (members: {{ collection.members }}){% if collection.error %} - {{ collection.error }}{% endif %}
+{% endfor %}
+                </div>
+            </details>
+            {% endif %}
+        </div>
+        {% endif %}
+    </div>
+</section>

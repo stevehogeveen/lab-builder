@@ -1,0 +1,42 @@
+<section class="panel">
+    <h2 class="text-2xl font-bold mb-4">Kit Library</h2>
+
+    <form
+        hx-post="/load-kit"
+        hx-target="#main-content"
+        hx-swap="outerHTML"
+        class="mb-4"
+    >
+        <input type="hidden" name="return_page" value="kits">
+        <label class="block text-sm font-bold text-slate-300 mb-2">Load Existing Kit</label>
+        <select name="selected_kit" class="bg-slate-800 border border-slate-600 rounded-lg p-2 w-full">
+            {% for kit in kits %}
+            <option value="{{ kit }}" {% if kit == current_kit %}selected{% endif %}>{{ kit }}</option>
+            {% endfor %}
+        </select>
+        <div class="actions">
+            <button class="btn" type="submit">Load Kit</button>
+        </div>
+    </form>
+
+    <form
+        hx-post="/new-kit"
+        hx-target="#main-content"
+        hx-swap="outerHTML"
+    >
+        <input type="hidden" name="return_page" value="kits">
+        <label class="block text-sm font-bold text-slate-300 mb-2">Create New Kit</label>
+        <input name="new_kit_name" placeholder="Kit-02" class="bg-slate-800 border border-slate-600 rounded-lg p-2 w-full">
+        <div class="actions">
+            <button class="btn" type="submit">Create Kit</button>
+        </div>
+    </form>
+
+    <div class="mt-6 text-sm text-slate-300 space-y-2">
+        <div><span class="text-slate-400">Subnet:</span> {{ cfg.get('ip_plan', {}).get('subnet', '') }}</div>
+        <div><span class="text-slate-400">Gateway:</span> {{ cfg.get('ip_plan', {}).get('gateway', '') }}</div>
+        <div><span class="text-slate-400">DNS:</span>
+            {{ cfg.get('shared_network', {}).get('dns_servers', [])|join(', ') }}
+        </div>
+    </div>
+</section>

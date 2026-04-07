@@ -1,0 +1,86 @@
+site:
+  name: DOP-X70-PVSM011
+shared_network:
+  subnet: 10.122.141.0/26
+  dns_servers:
+  - 8.8.8.8
+  - 1.1.1.1
+  - ''
+  - ''
+shared_snmp:
+  v3_username: Private
+  v3_auth_protocol: SHA
+  v3_auth_password: P@ssw0rd
+  v3_priv_protocol: AES
+  v3_priv_password: P@ssw0d
+ip_plan:
+  subnet: 10.122.141.0/26
+  netmask: 255.255.255.192
+  prefixlen: 26
+  first_usable: 10.122.141.1
+  last_usable: 10.122.141.62
+  max_usable_offset: 62
+  gateway: 10.122.141.1
+  switch: 10.122.141.2
+  esxi: 10.122.141.10
+  ilo: 10.122.141.11
+  windows: 10.122.141.20
+  qnap: 10.122.141.30
+  iosafe: 10.122.141.31
+included:
+  ilo: true
+  esxi: false
+  windows: false
+  qnap: false
+  iosafe: false
+  cisco_switch: false
+section_completion:
+  basics: true
+  network: true
+  included: true
+  credentials: true
+ilo:
+  host: 10.122.141.10
+  current_ip: 10.122.141.10
+  target_ip: 10.122.141.11
+  subnet_mask: 255.255.255.192
+  gateway: 10.122.141.1
+  dns_servers:
+  - 8.8.8.8
+  - 1.1.1.1
+  - ''
+  - ''
+  hostname: DOP-X70-ILO-Test
+  username: esbaccess
+  password: '!ESB43v3r!'
+esxi:
+  hostname: esxi01
+  management_ip: 10.122.141.10
+  subnet_mask: 255.255.255.192
+  gateway: 10.122.141.1
+  dns_servers: &id001
+  - 8.8.8.8
+  - 1.1.1.1
+  root_password: ''
+windows:
+  vm_name: win2022-01
+  admin_password: ''
+  ip_address: 10.122.141.20
+  subnet_mask: 255.255.255.192
+  gateway: 10.122.141.1
+  dns_servers: *id001
+qnap:
+  hostname: ''
+  ip: 10.122.141.30
+  username: ''
+  password: ''
+iosafe:
+  hostname: ''
+  ip: 10.122.141.31
+  username: ''
+  password: ''
+cisco_switch:
+  hostname: ''
+  ip: 10.122.141.2
+  username: ''
+  password: ''

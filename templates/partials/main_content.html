@@ -1,0 +1,33 @@
+<div id="main-content" class="space-y-6">
+    {% if message %}<div class="msg">{{ message }}</div>{% endif %}
+    {% if error_message %}<div class="error">{{ error_message }}</div>{% endif %}
+    {% if ks_result %}<div class="result">{{ ks_result }}</div>{% endif %}
+    {% if ks_content %}<div class="codeblock">{{ ks_content }}</div>{% endif %}
+    {% if config_view_title and config_view_content %}
+    <details class="card" open>
+        <summary class="summary-row">
+            <span class="text-lg font-semibold">{{ config_view_title }}</span>
+            <span class="status ready">YAML</span>
+        </summary>
+        <div class="codeblock mt-4">{{ config_view_content }}</div>
+    </details>
+    {% endif %}
+
+    {% if active_page == "dashboard" %}
+        {% include "partials/pages/dashboard.html" %}
+    {% elif active_page == "execution" %}
+        {% include "partials/pages/execution.html" %}
+    {% elif active_page == "configuration" %}
+        {% include "partials/pages/configuration.html" %}
+    {% elif active_page == "configs" %}
+        {% include "partials/pages/configs.html" %}
+    {% elif active_page == "storage" %}
+        {% include "partials/pages/storage.html" %}
+    {% elif active_page == "kits" %}
+        {% include "partials/pages/kits.html" %}
+    {% elif active_page == "history" %}
+        {% include "partials/pages/history.html" %}
+    {% else %}
+        {% include "partials/pages/dashboard.html" %}
+    {% endif %}
+</div>

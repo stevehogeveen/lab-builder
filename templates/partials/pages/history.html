@@ -1,0 +1,66 @@
+<section class="panel">
+    <div class="flex items-center justify-between mb-4">
+        <h2 class="text-2xl font-bold">Recent Runs</h2>
+        <div class="text-sm text-slate-400">Latest 25 entries</div>
+    </div>
+
+    {% if history %}
+        <div class="space-y-3">
+            {% for item in history %}
+            <details class="card">
+                <summary class="cursor-pointer flex items-center justify-between">
+                    <span class="font-semibold">{{ item.get('time', '') }} | {{ item.get('scope', '') }}</span>
+                    <span class="text-sm text-slate-400">{{ item.get('status', '') }} | {{ item.get('progress_percent', 0) }}%</span>
+                </summary>
+                <div class="mt-4 text-sm text-slate-300 space-y-2">
+                    <div><span class="text-slate-400">Final Stage:</span> {{ item.get('current_stage', '') }}</div>
+                    <div><span class="text-slate-400">Completed:</span> {{ item.get('completed_steps', 0) }} / {{ item.get('total_steps', 0) }}</div>
+
+                    {% if item.get('config_summary') %}
+                    <div class="card">
+                        <div class="font-semibold mb-2">Config Used</div>
+                        <div class="space-y-1">
+                            {% if item.get('config_summary', {}).get('login_ip') %}<div><span class="text-slate-400">Login IP:</span> {{ item.get('config_summary', {}).get('login_ip', '') }}</div>{% endif %}
+                            {% if item.get('config_summary', {}).get('target_ip') %}<div><span class="text-slate-400">Target IP:</span> {{ item.get('config_summary', {}).get('target_ip', '') }}</div>{% endif %}
+                            {% if item.get('config_summary', {}).get('hostname') %}<div><span class="text-slate-400">Hostname:</span> {{ item.get('config_summary', {}).get('hostname', '') }}</div>{% endif %}
+                            {% if item.get('config_summary', {}).get('gateway') %}<div><span class="text-slate-400">Gateway:</span> {{ item.get('config_summary', {}).get('gateway', '') }}</div>{% endif %}
+                            {% if item.get('config_summary', {}).get('dns_servers') %}<div><span class="text-slate-400">DNS:</span> {{ item.get('config_summary', {}).get('dns_servers', [])|join(', ') }}</div>{% endif %}
+                            {% if item.get('config_summary', {}).get('snmp_v3_username') %}<div><span class="text-slate-400">SNMP v3 User:</span> {{ item.get('config_summary', {}).get('snmp_v3_username', '') }}</div>{% endif %}
+                            {% if item.get('config_summary', {}).get('snmp_v3_auth_protocol') %}<div><span class="text-slate-400">SNMP Auth:</span> {{ item.get('config_summary', {}).get('snmp_v3_auth_protocol', '') }}</div>{% endif %}
+                            {% if item.get('config_summary', {}).get('snmp_v3_priv_protocol') %}<div><span class="text-slate-400">SNMP Privacy:</span> {{ item.get('config_summary', {}).get('snmp_v3_priv_protocol', '') }}</div>{% endif %}
+                        </div>
+                    </div>
+                    {% endif %}
+
+                    {% if item.get('issues') %}
+                    <div>
+                        <div class="font-semibold mb-2">Issues / Warnings</div>
+                        <div class="codeblock">
+{% for line in item.get('issues', []) %}{{ line }}
+{% endfor %}
+                        </div>
+                    </div>
+                    {% endif %}
+
+                    {% if item.get('logs') %}
+                    <div>
+                        <div class="font-semibold mb-2">Full Execution Log</div>
+                        <div class="codeblock">
+{% for line in item.get('logs', []) %}{{ line }}
+{% endfor %}
+                        </div>
+                    </div>
+                    {% elif item.get('log_tail') %}
+                    <div class="codeblock">
+{% for line in item.get('log_tail', []) %}{{ line }}
+{% endfor %}
+                    </div>
+                    {% endif %}
+                </div>
+            </details>
+            {% endfor %}
+        </div>
+    {% else %}
+        <div class="result">No history yet for this kit.</div>
+    {% endif %}
+</section>

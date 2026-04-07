@@ -1,0 +1,461 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{{ title }}</title>
+
+    <link rel="stylesheet" href="/static/css/tailwind.css">
+    <link rel="stylesheet" href="/static/css/gridstack.min.css">
+
+    <style>
+        :root {
+            --bg: #0b1420;
+            --panel: rgba(17, 27, 39, 0.96);
+            --panel2: #162334;
+            --border: #243449;
+            --text: #e7eef8;
+            --muted: #95a6bb;
+            --accent: #2f6fed;
+            --good: #1fa46b;
+            --warn: #c88a18;
+            --bad: #cf5a50;
+            --sidebar: #0f1a28;
+            --hero-bg: rgba(17, 27, 39, 0.98);
+            --card-shadow: 0 10px 28px rgba(2, 10, 19, 0.32);
+            --panel-glow: rgba(47,111,237,.08);
+        }
+
+        body[data-theme="light"] {
+            --bg: #f4f7fb;
+            --panel: rgba(255, 255, 255, 0.98);
+            --panel2: #edf3fa;
+            --border: #d7e0ec;
+            --text: #172536;
+            --muted: #6d7f95;
+            --accent: #1d5fd1;
+            --good: #1b8a59;
+            --warn: #a86a13;
+            --bad: #c24b43;
+            --sidebar: #eaf0f7;
+            --hero-bg: rgba(255, 255, 255, 0.98);
+            --card-shadow: 0 8px 24px rgba(22, 37, 54, 0.08);
+            --panel-glow: rgba(29,95,209,.05);
+        }
+
+        * { box-sizing: border-box; }
+
+        body {
+            margin: 0;
+            background:
+                linear-gradient(180deg, color-mix(in srgb, var(--bg) 96%, white 4%) 0%, var(--bg) 100%);
+            color: var(--text);
+            font-family: "Inter", "Segoe UI", "Helvetica Neue", sans-serif;
+        }
+
+        .app-shell {
+            display: grid;
+            grid-template-columns: 250px 1fr;
+            min-height: 100vh;
+        }
+
+        .sidebar {
+            background: var(--sidebar);
+            border-right: 1px solid var(--border);
+            padding: 22px 16px;
+            position: sticky;
+            top: 0;
+            height: 100vh;
+        }
+
+        .brand-block {
+            margin-bottom: 28px;
+        }
+
+        .eyebrow {
+            color: var(--accent);
+            font-size: 0.72rem;
+            font-weight: 700;
+            letter-spacing: .14em;
+            margin-bottom: 8px;
+            text-transform: uppercase;
+        }
+
+        .brand {
+            font-size: 1.5rem;
+            font-weight: 800;
+            margin-bottom: 8px;
+        }
+
+        .nav-group {
+            margin-bottom: 20px;
+        }
+
+        .nav-label {
+            color: var(--muted);
+            font-size: 0.8rem;
+            text-transform: uppercase;
+            letter-spacing: .08em;
+            margin-bottom: 8px;
+        }
+
+        .nav-link {
+            display: block;
+            text-decoration: none;
+            color: var(--text);
+            background: transparent;
+            border: 1px solid transparent;
+            padding: 10px 12px;
+            border-radius: 10px;
+            margin-bottom: 8px;
+            transition: background 0.18s ease, border-color 0.18s ease, transform 0.18s ease;
+        }
+
+        .nav-link:hover {
+            background: color-mix(in srgb, var(--panel2) 82%, white 18%);
+            border-color: var(--border);
+            transform: translateX(1px);
+        }
+
+        .nav-link-active {
+            background: color-mix(in srgb, var(--accent) 10%, var(--panel));
+            border-color: color-mix(in srgb, var(--accent) 18%, var(--border));
+        }
+
+        .main {
+            padding: 24px;
+        }
+
+        .hero {
+            background: var(--hero-bg);
+            border: 1px solid var(--border);
+            border-radius: 16px;
+            box-shadow: var(--card-shadow);
+            padding: 24px;
+            margin-bottom: 18px;
+            display: flex;
+            align-items: flex-end;
+            justify-content: space-between;
+            gap: 16px;
+            position: relative;
+            overflow: hidden;
+        }
+
+        .hero::before {
+            content: "";
+            position: absolute;
+            inset: 0;
+            background:
+                linear-gradient(180deg, rgba(255,255,255,.03), transparent 42%);
+            pointer-events: none;
+        }
+
+        .panel, .card {
+            background: var(--panel);
+            border: 1px solid var(--border);
+            border-radius: 16px;
+            box-shadow: var(--card-shadow);
+        }
+
+        .panel { padding: 18px; }
+        .card { padding: 16px; height: 100%; }
+
+        .muted { color: var(--muted); }
+
+        .status {
+            display: inline-block;
+            padding: 6px 10px;
+            border-radius: 999px;
+            font-weight: bold;
+            font-size: .8rem;
+        }
+
+        .ready { color: var(--good); background: rgba(61,220,151,.12); }
+        .progress { color: var(--accent); background: rgba(99,210,255,.12); }
+        .pending { color: var(--warn); background: rgba(255,176,32,.12); }
+
+        .live-inventory-spinner {
+            width: 14px;
+            height: 14px;
+            border: 2px solid color-mix(in srgb, var(--accent) 24%, var(--border));
+            border-top-color: var(--accent);
+            border-radius: 999px;
+            display: inline-block;
+            animation: live-inventory-spin 0.8s linear infinite;
+            flex: 0 0 auto;
+        }
+
+        .live-inventory-spinner.hidden {
+            display: none;
+        }
+
+        @keyframes live-inventory-spin {
+            to { transform: rotate(360deg); }
+        }
+
+        .btn {
+            background: var(--panel2);
+            color: var(--text);
+            border: 1px solid var(--border);
+            border-radius: 10px;
+            padding: 10px 14px;
+            font-weight: bold;
+            cursor: pointer;
+            transition: transform 0.18s ease, border-color 0.18s ease, background 0.18s ease;
+        }
+
+        .btn:hover {
+            border-color: var(--accent);
+            transform: translateY(-1px);
+        }
+
+        .theme-toggle {
+            min-width: 132px;
+        }
+
+        .btn-danger {
+            background: #2b1520;
+            color: #ffd7d7;
+            border-color: #7a3737;
+        }
+
+        .msg, .result, .error, .codeblock {
+            margin-top: 14px;
+            padding: 12px 14px;
+            border-radius: 12px;
+            border: 1px solid var(--border);
+            white-space: pre-wrap;
+        }
+
+        .msg { background: color-mix(in srgb, var(--good) 10%, var(--panel)); color: var(--text); }
+        .result { background: color-mix(in srgb, var(--accent) 10%, var(--panel)); color: var(--text); }
+        .error { background: color-mix(in srgb, var(--bad) 10%, var(--panel)); color: var(--text); border-color: color-mix(in srgb, var(--bad) 35%, var(--border)); }
+
+        .codeblock {
+            background: color-mix(in srgb, var(--panel2) 72%, black 28%);
+            color: color-mix(in srgb, var(--text) 86%, white 14%);
+            font-family: Consolas, monospace;
+            overflow-x: auto;
+        }
+
+        .progress-shell {
+            width: 100%;
+            background: #0a1120;
+            border: 1px solid var(--border);
+            border-radius: 999px;
+            overflow: hidden;
+            height: 18px;
+            margin-top: 12px;
+        }
+
+        .progress-bar {
+            height: 100%;
+            background: linear-gradient(90deg, #3ddc97, #63d2ff);
+            width: {{ job.get('progress_percent', 0) }}%;
+            transition: width 0.3s ease;
+        }
+
+        .job-badge {
+            display: inline-block;
+            padding: 6px 10px;
+            border-radius: 999px;
+            font-weight: bold;
+            margin-bottom: 10px;
+            background: rgba(99,210,255,.12);
+            color: #d8f5ff;
+        }
+
+        .grid-stack-item-content {
+            background: transparent;
+            border: none;
+            box-shadow: none;
+            inset: 0 !important;
+        }
+
+        details summary {
+            list-style: none;
+            cursor: pointer;
+        }
+
+        details summary::-webkit-details-marker {
+            display: none;
+        }
+
+        .summary-row {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 12px;
+        }
+
+        table {
+            width: 100%;
+            border-collapse: collapse;
+        }
+
+        th, td {
+            border-bottom: 1px solid var(--border);
+            padding: 8px 6px;
+            text-align: left;
+        }
+
+        .hero-meta {
+            min-width: 220px;
+            display: grid;
+            grid-template-columns: repeat(2, minmax(0, 1fr));
+            gap: 12px;
+        }
+
+        .hero-stat {
+            background: color-mix(in srgb, var(--panel2) 72%, transparent);
+            border: 1px solid var(--border);
+            border-radius: 12px;
+            padding: 12px 14px;
+        }
+
+        .hero-stat-label {
+            color: var(--muted);
+            font-size: .78rem;
+            margin-bottom: 6px;
+            text-transform: uppercase;
+            letter-spacing: .08em;
+        }
+
+        .hero-stat-value {
+            font-size: 1.1rem;
+            font-weight: 700;
+        }
+
+        @media (max-width: 1000px) {
+            .app-shell {
+                grid-template-columns: 1fr;
+            }
+
+            .sidebar {
+                position: relative;
+                height: auto;
+            }
+
+            .hero {
+                flex-direction: column;
+                align-items: stretch;
+            }
+
+            .hero-meta {
+                min-width: 0;
+            }
+        }
+    </style>
+</head>
+<body>
+<div class="app-shell">
+    {% include "partials/sidebar.html" %}
+
+    <main class="main">
+        <section class="hero">
+            <div>
+                <h1 class="text-3xl font-bold mb-2">{{ title }}</h1>
+                <div class="muted">{{ page_subtitle }}</div>
+            </div>
+            <div class="hero-meta">
+                <button id="theme-toggle" class="btn theme-toggle" type="button">Light Mode</button>
+                <div class="hero-stat">
+                    <div class="hero-stat-label">Active Kit</div>
+                    <div class="hero-stat-value">{{ current_kit }}</div>
+                </div>
+                <div class="hero-stat">
+                    <div class="hero-stat-label">Job Status</div>
+                    <div class="hero-stat-value">{{ job.get('status', 'Idle') }}</div>
+                </div>
+            </div>
+        </section>
+
+        {% include "partials/main_content.html" %}
+    </main>
+</div>
+
+<script src="/static/js/htmx.min.js"></script>
+<script src="/static/js/alpine.min.js"></script>
+<script src="/static/js/gridstack-all.js"></script>
+<script src="/static/js/dashboard.js"></script>
+<script src="/static/js/live-inventory-status.js"></script>
+
+<script>
+(function () {
+    const themeKey = "lab-builder-theme";
+    const themeToggle = document.getElementById("theme-toggle");
+    const applyTheme = function (theme) {
+        document.body.setAttribute("data-theme", theme);
+        if (themeToggle) {
+            themeToggle.textContent = theme === "light" ? "Dark Mode" : "Light Mode";
+        }
+    };
+
+    const savedTheme = localStorage.getItem(themeKey) || "dark";
+    applyTheme(savedTheme);
+
+    if (themeToggle) {
+        themeToggle.addEventListener("click", function () {
+            const nextTheme = document.body.getAttribute("data-theme") === "light" ? "dark" : "light";
+            localStorage.setItem(themeKey, nextTheme);
+            applyTheme(nextTheme);
+        });
+    }
+
+    const kitName = {{ current_kit|tojson }};
+    const proto = window.location.protocol === "https:" ? "wss" : "ws";
+    const wsUrl = `${proto}://${window.location.host}/ws/job/${encodeURIComponent(kitName)}`;
+    const ws = new WebSocket(wsUrl);
+
+    ws.onmessage = function (event) {
+        const text = event.data;
+        const lines = text.split("\n");
+        let data = {};
+        let currentKey = null;
+
+        for (const rawLine of lines) {
+            const line = rawLine.replace(/\r$/, "");
+            if (!line.trim()) continue;
+
+            if (line.startsWith("  - ")) {
+                if (currentKey && Array.isArray(data[currentKey])) {
+                    data[currentKey].push(line.replace(/^  - /, ""));
+                }
+                continue;
+            }
+
+            const idx = line.indexOf(":");
+            if (idx > -1) {
+                const key = line.slice(0, idx).trim();
+                let value = line.slice(idx + 1).trim();
+                if (value === "") {
+                    data[key] = [];
+                } else {
+                    value = value.replace(/^["']|["']$/g, "");
+                    if (/^\d+$/.test(value)) value = parseInt(value, 10);
+                    data[key] = value;
+                }
+                currentKey = key;
+            }
+        }
+
+        const status = document.getElementById("job-status");
+        const scope = document.getElementById("job-scope");
+        const stage = document.getElementById("job-stage");
+        const completed = document.getElementById("job-completed");
+        const progressText = document.getElementById("job-progress-text");
+        const progressBar = document.getElementById("job-progress-bar");
+        const logs = document.getElementById("job-logs");
+
+        if (status) status.textContent = "Status: " + (data.status || "Idle");
+        if (scope) scope.textContent = data.scope || "";
+        if (stage) stage.textContent = data.current_stage || "";
+        if (completed) completed.textContent = `${data.completed_steps || 0} / ${data.total_steps || 0}`;
+        if (progressText) progressText.textContent = `${data.progress_percent || 0}%`;
+        if (progressBar) progressBar.style.width = `${data.progress_percent || 0}%`;
+        if (logs && Array.isArray(data.logs)) logs.textContent = data.logs.join("\n");
+    };
+})();
+</script>
+</body>
+</html>

@@ -1,0 +1,306 @@
+<section class="panel">
+    <h2 class="text-2xl font-bold mb-4">Configuration</h2>
+
+    <form
+        hx-post="/save-config"
+        hx-target="#main-content"
+        hx-swap="outerHTML"
+        class="space-y-4"
+    >
+        <input type="hidden" name="return_page" value="configuration">
+        <details class="card" id="kit-basics" open>
+            <summary class="summary-row">
+                <span class="text-lg font-semibold">Kit Basics</span>
+                <span class="status {{ section_states.get('basics', {}).get('class_name', 'pending') }}">{{ section_states.get('basics', {}).get('label', 'Pending') }}</span>
+            </summary>
+            <div class="checks mt-4">
+                <label class="check"><input type="radio" name="section_basics_complete" value="false" onchange="const badge=this.closest('details').querySelector('.status'); if (badge) { badge.textContent='Not Complete'; badge.classList.remove('ready'); badge.classList.add('pending'); } this.form.requestSubmit();" {% if not cfg.get('section_completion', {}).get('basics') %}checked{% endif %}> Not Complete</label>
+                <label class="check"><input type="radio" name="section_basics_complete" value="true" onchange="const badge=this.closest('details').querySelector('.status'); if (badge) { badge.textContent='Complete'; badge.classList.remove('pending'); badge.classList.add('ready'); } this.form.requestSubmit();" {% if cfg.get('section_completion', {}).get('basics') %}checked{% endif %}> Complete</label>
+            </div>
+            <div class="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4 mt-4">
+                <div>
+                    <label class="block text-sm font-bold text-slate-300 mb-2">Site / Kit Name</label>
+                    <input type="text" name="site_name" value="{{ cfg.get('site', {}).get('name', '') }}" class="bg-slate-800 border border-slate-600 rounded-lg p-2 w-full">
+                </div>
+            </div>
+        </details>
+
+        <details class="card" id="network-dns">
+            <summary class="summary-row">
+                <span class="text-lg font-semibold">Network & DNS</span>
+                <span class="status {{ section_states.get('network', {}).get('class_name', 'pending') }}">{{ section_states.get('network', {}).get('label', 'Pending') }}</span>
+            </summary>
+            <div class="checks mt-4">
+                <label class="check"><input type="radio" name="section_network_complete" value="false" onchange="const badge=this.closest('details').querySelector('.status'); if (badge) { badge.textContent='Not Complete'; badge.classList.remove('ready'); badge.classList.add('pending'); } this.form.requestSubmit();" {% if not cfg.get('section_completion', {}).get('network') %}checked{% endif %}> Not Complete</label>
+                <label class="check"><input type="radio" name="section_network_complete" value="true" onchange="const badge=this.closest('details').querySelector('.status'); if (badge) { badge.textContent='Complete'; badge.classList.remove('pending'); badge.classList.add('ready'); } this.form.requestSubmit();" {% if cfg.get('section_completion', {}).get('network') %}checked{% endif %}> Complete</label>
+            </div>
+            <div class="space-y-4 mt-4">
+                <div class="card">
+                    <div class="text-lg font-semibold mb-3">Kit Network</div>
+                    <div class="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
+                        <div>
+                            <label class="block text-sm font-bold text-slate-300 mb-2">Kit Subnet (CIDR)</label>
+                            <input type="text" name="shared_subnet" value="{{ cfg.get('shared_network', {}).get('subnet', '') }}" class="bg-slate-800 border border-slate-600 rounded-lg p-2 w-full">
+                        </div>
+                        <div>
+                            <label class="block text-sm font-bold text-slate-300 mb-2">Shared Gateway</label>
+                            <input type="text" name="gateway_ip" value="{{ cfg.get('ip_plan', {}).get('gateway', '') }}" class="bg-slate-800 border border-slate-600 rounded-lg p-2 w-full">
+                        </div>
+                        <div class="text-sm text-slate-400 flex items-end">
+                            Change the kit subnet, then use <span class="font-semibold text-slate-200 ml-1 mr-1">Auto-Fill IP Plan</span> to regenerate default host IPs.
+                        </div>
+                    </div>
+                </div>
+
+                <div class="card">
+                    <div class="text-lg font-semibold mb-3">iLO</div>
+                    <div class="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
+                        <div id="ilo-network-config">
+                            <label class="block text-sm font-bold text-slate-300 mb-2">Final iLO IP</label>
+                            <input type="text" name="ilo_target_ip" value="{{ cfg.get('ilo', {}).get('target_ip', cfg.get('ip_plan', {}).get('ilo', '')) }}" class="bg-slate-800 border border-slate-600 rounded-lg p-2 w-full">
+                        </div>
+                    </div>
+                </div>
+
+                <div class="card">
+                    <div class="text-lg font-semibold mb-3">ESXi</div>
+                    <div class="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
+                        <div id="esxi-network-config">
+                            <label class="block text-sm font-bold text-slate-300 mb-2">ESXi IP</label>
+                            <input type="text" name="esxi_ip" value="{{ cfg.get('ip_plan', {}).get('esxi', '') }}" class="bg-slate-800 border border-slate-600 rounded-lg p-2 w-full">
+                        </div>
+                    </div>
+                </div>
+
+                <div class="card">
+                    <div class="text-lg font-semibold mb-3">Windows</div>
+                    <div class="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
+                        <div id="windows-network-config">
+                            <label class="block text-sm font-bold text-slate-300 mb-2">Windows IP</label>
+                            <input type="text" name="windows_ip" value="{{ cfg.get('ip_plan', {}).get('windows', '') }}" class="bg-slate-800 border border-slate-600 rounded-lg p-2 w-full">
+                        </div>
+                    </div>
+                </div>
+
+                <div class="card">
+                    <div class="text-lg font-semibold mb-3">QNAP</div>
+                    <div class="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
+                        <div id="qnap-network-config">
+                            <label class="block text-sm font-bold text-slate-300 mb-2">QNAP IP</label>
+                            <input type="text" name="qnap_ip" value="{{ cfg.get('ip_plan', {}).get('qnap', '') }}" class="bg-slate-800 border border-slate-600 rounded-lg p-2 w-full">
+                        </div>
+                    </div>
+                </div>
+
+                <div class="card">
+                    <div class="text-lg font-semibold mb-3">ioSafe</div>
+                    <div class="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
+                        <div id="iosafe-network-config">
+                            <label class="block text-sm font-bold text-slate-300 mb-2">ioSafe IP</label>
+                            <input type="text" name="iosafe_ip" value="{{ cfg.get('ip_plan', {}).get('iosafe', '') }}" class="bg-slate-800 border border-slate-600 rounded-lg p-2 w-full">
+                        </div>
+                    </div>
+                </div>
+
+                <div class="card">
+                    <div class="text-lg font-semibold mb-3">Cisco Switch</div>
+                    <div class="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
+                        <div id="switch-network-config">
+                            <label class="block text-sm font-bold text-slate-300 mb-2">Switch IP</label>
+                            <input type="text" name="switch_ip" value="{{ cfg.get('ip_plan', {}).get('switch', '') }}" class="bg-slate-800 border border-slate-600 rounded-lg p-2 w-full">
+                        </div>
+                    </div>
+                </div>
+
+                <div class="card">
+                    <div class="text-lg font-semibold mb-3">Shared DNS & SNMP</div>
+                    <div class="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
+                        <div>
+                            <label class="block text-sm font-bold text-slate-300 mb-2">DNS Server 1</label>
+                            <input type="text" name="dns1" value="{{ cfg.get('shared_network', {}).get('dns_servers', ['', '', '', ''])[0] }}" class="bg-slate-800 border border-slate-600 rounded-lg p-2 w-full">
+                        </div>
+                        <div>
+                            <label class="block text-sm font-bold text-slate-300 mb-2">DNS Server 2</label>
+                            <input type="text" name="dns2" value="{{ cfg.get('shared_network', {}).get('dns_servers', ['', '', '', ''])[1] }}" class="bg-slate-800 border border-slate-600 rounded-lg p-2 w-full">
+                        </div>
+                        <div>
+                            <label class="block text-sm font-bold text-slate-300 mb-2">DNS Server 3</label>
+                            <input type="text" name="dns3" value="{{ cfg.get('shared_network', {}).get('dns_servers', ['', '', '', ''])[2] }}" class="bg-slate-800 border border-slate-600 rounded-lg p-2 w-full">
+                        </div>
+                        <div>
+                            <label class="block text-sm font-bold text-slate-300 mb-2">DNS Server 4</label>
+                            <input type="text" name="dns4" value="{{ cfg.get('shared_network', {}).get('dns_servers', ['', '', '', ''])[3] }}" class="bg-slate-800 border border-slate-600 rounded-lg p-2 w-full">
+                        </div>
+                        <div>
+                            <label class="block text-sm font-bold text-slate-300 mb-2">SNMP v3 Username</label>
+                            <input type="text" name="snmp_v3_username" value="{{ cfg.get('shared_snmp', {}).get('v3_username', '') }}" class="bg-slate-800 border border-slate-600 rounded-lg p-2 w-full">
+                        </div>
+                        <div>
+                            <label class="block text-sm font-bold text-slate-300 mb-2">SNMP v3 Auth Protocol</label>
+                            <select name="snmp_v3_auth_protocol" class="bg-slate-800 border border-slate-600 rounded-lg p-2 w-full">
+                                <option value="SHA" {% if cfg.get('shared_snmp', {}).get('v3_auth_protocol', 'SHA') == 'SHA' %}selected{% endif %}>SHA</option>
+                                <option value="MD5" {% if cfg.get('shared_snmp', {}).get('v3_auth_protocol', 'SHA') == 'MD5' %}selected{% endif %}>MD5</option>
+                            </select>
+                        </div>
+                        <div>
+                            <label class="block text-sm font-bold text-slate-300 mb-2">SNMP v3 Auth Password</label>
+                            <input type="password" name="snmp_v3_auth_password" value="{{ cfg.get('shared_snmp', {}).get('v3_auth_password', '') }}" class="bg-slate-800 border border-slate-600 rounded-lg p-2 w-full">
+                        </div>
+                        <div>
+                            <label class="block text-sm font-bold text-slate-300 mb-2">SNMP v3 Privacy Protocol</label>
+                            <select name="snmp_v3_priv_protocol" class="bg-slate-800 border border-slate-600 rounded-lg p-2 w-full">
+                                <option value="AES" {% if cfg.get('shared_snmp', {}).get('v3_priv_protocol', 'AES') == 'AES' %}selected{% endif %}>AES</option>
+                                <option value="DES" {% if cfg.get('shared_snmp', {}).get('v3_priv_protocol', 'AES') == 'DES' %}selected{% endif %}>DES</option>
+                            </select>
+                        </div>
+                        <div>
+                            <label class="block text-sm font-bold text-slate-300 mb-2">SNMP v3 Privacy Password</label>
+                            <input type="password" name="snmp_v3_priv_password" value="{{ cfg.get('shared_snmp', {}).get('v3_priv_password', '') }}" class="bg-slate-800 border border-slate-600 rounded-lg p-2 w-full">
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </details>
+
+        <details class="card" id="included-components">
+            <summary class="summary-row">
+                <span class="text-lg font-semibold">Included in this Kit</span>
+                <span class="status {{ section_states.get('included', {}).get('class_name', 'pending') }}">{{ section_states.get('included', {}).get('label', 'Pending') }}</span>
+            </summary>
+            <div class="checks mt-4">
+                <label class="check"><input type="radio" name="section_included_complete" value="false" onchange="const badge=this.closest('details').querySelector('.status'); if (badge) { badge.textContent='Not Complete'; badge.classList.remove('ready'); badge.classList.add('pending'); } this.form.requestSubmit();" {% if not cfg.get('section_completion', {}).get('included') %}checked{% endif %}> Not Complete</label>
+                <label class="check"><input type="radio" name="section_included_complete" value="true" onchange="const badge=this.closest('details').querySelector('.status'); if (badge) { badge.textContent='Complete'; badge.classList.remove('pending'); badge.classList.add('ready'); } this.form.requestSubmit();" {% if cfg.get('section_completion', {}).get('included') %}checked{% endif %}> Complete</label>
+            </div>
+            <div class="checks mt-4">
+                <label class="check"><input type="checkbox" name="included_ilo" {% if cfg.get('included', {}).get('ilo') %}checked{% endif %}> iLO</label>
+                <label class="check"><input type="checkbox" name="included_esxi" {% if cfg.get('included', {}).get('esxi') %}checked{% endif %}> ESXi</label>
+                <label class="check"><input type="checkbox" name="included_windows" {% if cfg.get('included', {}).get('windows') %}checked{% endif %}> Windows</label>
+                <label class="check"><input type="checkbox" name="included_qnap" {% if cfg.get('included', {}).get('qnap') %}checked{% endif %}> QNAP</label>
+                <label class="check"><input type="checkbox" name="included_iosafe" {% if cfg.get('included', {}).get('iosafe') %}checked{% endif %}> ioSafe</label>
+                <label class="check"><input type="checkbox" name="included_cisco_switch" {% if cfg.get('included', {}).get('cisco_switch') %}checked{% endif %}> Cisco Switch</label>
+            </div>
+        </details>
+
+        <details class="card" id="credentials-hostnames">
+            <summary class="summary-row">
+                <span class="text-lg font-semibold">Credentials & Hostnames</span>
+                <span class="status {{ section_states.get('credentials', {}).get('class_name', 'pending') }}">{{ section_states.get('credentials', {}).get('label', 'Pending') }}</span>
+            </summary>
+            <div class="checks mt-4">
+                <label class="check"><input type="radio" name="section_credentials_complete" value="false" onchange="const badge=this.closest('details').querySelector('.status'); if (badge) { badge.textContent='Not Complete'; badge.classList.remove('ready'); badge.classList.add('pending'); } this.form.requestSubmit();" {% if not cfg.get('section_completion', {}).get('credentials') %}checked{% endif %}> Not Complete</label>
+                <label class="check"><input type="radio" name="section_credentials_complete" value="true" onchange="const badge=this.closest('details').querySelector('.status'); if (badge) { badge.textContent='Complete'; badge.classList.remove('pending'); badge.classList.add('ready'); } this.form.requestSubmit();" {% if cfg.get('section_completion', {}).get('credentials') %}checked{% endif %}> Complete</label>
+            </div>
+            <div class="space-y-4 mt-4">
+                <div class="card">
+                    <div class="text-lg font-semibold mb-3">iLO Credentials</div>
+                    <div class="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
+                        <div id="ilo-config">
+                            <label class="block text-sm font-bold text-slate-300 mb-2">Redfish Login IP</label>
+                            <input type="text" name="ilo_current_ip" value="{{ cfg.get('ilo', {}).get('current_ip', cfg.get('ilo', {}).get('host', '')) }}" class="bg-slate-800 border border-slate-600 rounded-lg p-2 w-full">
+                        </div>
+                        <div>
+                            <label class="block text-sm font-bold text-slate-300 mb-2">Desired iLO Hostname</label>
+                            <input type="text" name="ilo_hostname" value="{{ cfg.get('ilo', {}).get('hostname', '') }}" class="bg-slate-800 border border-slate-600 rounded-lg p-2 w-full">
+                        </div>
+                        <div>
+                            <label class="block text-sm font-bold text-slate-300 mb-2">iLO Username</label>
+                            <input type="text" name="ilo_username" value="{{ cfg.get('ilo', {}).get('username', '') }}" class="bg-slate-800 border border-slate-600 rounded-lg p-2 w-full">
+                        </div>
+                        <div>
+                            <label class="block text-sm font-bold text-slate-300 mb-2">iLO Password</label>
+                            <input type="password" name="ilo_password" value="{{ cfg.get('ilo', {}).get('password', '') }}" class="bg-slate-800 border border-slate-600 rounded-lg p-2 w-full">
+                        </div>
+                    </div>
+                </div>
+
+                <div class="card">
+                    <div class="text-lg font-semibold mb-3">ESXi Credentials</div>
+                    <div class="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
+                        <div id="esxi-config">
+                            <label class="block text-sm font-bold text-slate-300 mb-2">ESXi Hostname</label>
+                            <input type="text" name="esxi_hostname" value="{{ cfg.get('esxi', {}).get('hostname', '') }}" class="bg-slate-800 border border-slate-600 rounded-lg p-2 w-full">
+                        </div>
+                        <div>
+                            <label class="block text-sm font-bold text-slate-300 mb-2">ESXi Root Password</label>
+                            <input type="password" name="esxi_root_password" value="{{ cfg.get('esxi', {}).get('root_password', '') }}" class="bg-slate-800 border border-slate-600 rounded-lg p-2 w-full">
+                        </div>
+                    </div>
+                </div>
+
+                <div class="card">
+                    <div class="text-lg font-semibold mb-3">Windows Credentials</div>
+                    <div class="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
+                        <div id="windows-config">
+                            <label class="block text-sm font-bold text-slate-300 mb-2">Windows VM Name</label>
+                            <input type="text" name="windows_vm_name" value="{{ cfg.get('windows', {}).get('vm_name', '') }}" class="bg-slate-800 border border-slate-600 rounded-lg p-2 w-full">
+                        </div>
+                        <div>
+                            <label class="block text-sm font-bold text-slate-300 mb-2">Windows Admin Password</label>
+                            <input type="password" name="windows_admin_password" value="{{ cfg.get('windows', {}).get('admin_password', '') }}" class="bg-slate-800 border border-slate-600 rounded-lg p-2 w-full">
+                        </div>
+                    </div>
+                </div>
+
+                <div class="card">
+                    <div class="text-lg font-semibold mb-3">QNAP Credentials</div>
+                    <div class="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
+                        <div id="qnap-config">
+                            <label class="block text-sm font-bold text-slate-300 mb-2">QNAP Hostname</label>
+                            <input type="text" name="qnap_hostname" value="{{ cfg.get('qnap', {}).get('hostname', '') }}" class="bg-slate-800 border border-slate-600 rounded-lg p-2 w-full">
+                        </div>
+                        <div>
+                            <label class="block text-sm font-bold text-slate-300 mb-2">QNAP Username</label>
+                            <input type="text" name="qnap_username" value="{{ cfg.get('qnap', {}).get('username', '') }}" class="bg-slate-800 border border-slate-600 rounded-lg p-2 w-full">
+                        </div>
+                        <div>
+                            <label class="block text-sm font-bold text-slate-300 mb-2">QNAP Password</label>
+                            <input type="password" name="qnap_password" value="{{ cfg.get('qnap', {}).get('password', '') }}" class="bg-slate-800 border border-slate-600 rounded-lg p-2 w-full">
+                        </div>
+                    </div>
+                </div>
+
+                <div class="card">
+                    <div class="text-lg font-semibold mb-3">ioSafe Credentials</div>
+                    <div class="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
+                        <div id="iosafe-config">
+                            <label class="block text-sm font-bold text-slate-300 mb-2">ioSafe Hostname</label>
+                            <input type="text" name="iosafe_hostname" value="{{ cfg.get('iosafe', {}).get('hostname', '') }}" class="bg-slate-800 border border-slate-600 rounded-lg p-2 w-full">
+                        </div>
+                        <div>
+                            <label class="block text-sm font-bold text-slate-300 mb-2">ioSafe Username</label>
+                            <input type="text" name="iosafe_username" value="{{ cfg.get('iosafe', {}).get('username', '') }}" class="bg-slate-800 border border-slate-600 rounded-lg p-2 w-full">
+                        </div>
+                        <div>
+                            <label class="block text-sm font-bold text-slate-300 mb-2">ioSafe Password</label>
+                            <input type="password" name="iosafe_password" value="{{ cfg.get('iosafe', {}).get('password', '') }}" class="bg-slate-800 border border-slate-600 rounded-lg p-2 w-full">
+                        </div>
+                    </div>
+                </div>
+
+                <div class="card">
+                    <div class="text-lg font-semibold mb-3">Cisco Switch Credentials</div>
+                    <div class="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
+                        <div id="switch-config">
+                            <label class="block text-sm font-bold text-slate-300 mb-2">Cisco Switch Hostname</label>
+                            <input type="text" name="cisco_switch_hostname" value="{{ cfg.get('cisco_switch', {}).get('hostname', '') }}" class="bg-slate-800 border border-slate-600 rounded-lg p-2 w-full">
+                        </div>
+                        <div>
+                            <label class="block text-sm font-bold text-slate-300 mb-2">Cisco Switch Username</label>
+                            <input type="text" name="cisco_switch_username" value="{{ cfg.get('cisco_switch', {}).get('username', '') }}" class="bg-slate-800 border border-slate-600 rounded-lg p-2 w-full">
+                        </div>
+                        <div>
+                            <label class="block text-sm font-bold text-slate-300 mb-2">Cisco Switch Password</label>
+                            <input type="password" name="cisco_switch_password" value="{{ cfg.get('cisco_switch', {}).get('password', '') }}" class="bg-slate-800 border border-slate-600 rounded-lg p-2 w-full">
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </details>
+
+        <div class="actions">
+            <button class="btn" type="submit">Save Dashboard Config</button>
+            <button class="btn" hx-post="/autofill-ip-plan" hx-vals='{"return_page":"configuration"}' hx-target="#main-content" hx-swap="outerHTML" type="button">Auto-Fill IP Plan</button>
+            <button class="btn" hx-post="/generate-ks" hx-vals='{"return_page":"configuration"}' hx-target="#main-content" hx-swap="outerHTML" type="button">Generate ESXi KS.CFG</button>
+        </div>
+    </form>
+</section>

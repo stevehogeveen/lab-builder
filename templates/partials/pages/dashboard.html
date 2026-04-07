@@ -1,0 +1,90 @@
+<section class="panel">
+    <div class="flex items-center justify-between mb-4">
+        <h2 class="text-2xl font-bold">Devices</h2>
+        <div class="text-sm text-slate-400">Included components and assigned IPs</div>
+    </div>
+
+    <div class="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
+        <a class="card block" href="/configuration#ilo-config">
+            <div class="flex items-center justify-between">
+                <h3 class="text-lg font-semibold">iLO</h3>
+                <span class="status {{ 'ready' if cfg.get('included', {}).get('ilo') else 'pending' }}">
+                    {{ 'Included' if cfg.get('included', {}).get('ilo') else 'Off' }}
+                </span>
+            </div>
+            <div class="mt-3 text-sm text-slate-300 space-y-1">
+                <div><span class="text-slate-400">Redfish Login IP:</span> {{ cfg.get('ilo', {}).get('current_ip', cfg.get('ilo', {}).get('host', '')) }}</div>
+                <div><span class="text-slate-400">Final iLO IP:</span> {{ cfg.get('ilo', {}).get('target_ip', cfg.get('ip_plan', {}).get('ilo', '')) }}</div>
+                <div><span class="text-slate-400">Hostname:</span> {{ cfg.get('ilo', {}).get('hostname', '') }}</div>
+                <div><span class="text-slate-400">User:</span> {{ cfg.get('ilo', {}).get('username', '') }}</div>
+            </div>
+        </a>
+
+        <a class="card block" href="/configuration#esxi-config">
+            <div class="flex items-center justify-between">
+                <h3 class="text-lg font-semibold">ESXi</h3>
+                <span class="status {{ 'ready' if cfg.get('included', {}).get('esxi') else 'pending' }}">
+                    {{ 'Included' if cfg.get('included', {}).get('esxi') else 'Off' }}
+                </span>
+            </div>
+            <div class="mt-3 text-sm text-slate-300 space-y-1">
+                <div><span class="text-slate-400">IP:</span> {{ cfg.get('ip_plan', {}).get('esxi', '') }}</div>
+                <div><span class="text-slate-400">Hostname:</span> {{ cfg.get('esxi', {}).get('hostname', '') }}</div>
+                <div><span class="text-slate-400">Gateway:</span> {{ cfg.get('ip_plan', {}).get('gateway', '') }}</div>
+            </div>
+        </a>
+
+        <a class="card block" href="/configuration#windows-config">
+            <div class="flex items-center justify-between">
+                <h3 class="text-lg font-semibold">Windows</h3>
+                <span class="status {{ 'ready' if cfg.get('included', {}).get('windows') else 'pending' }}">
+                    {{ 'Included' if cfg.get('included', {}).get('windows') else 'Off' }}
+                </span>
+            </div>
+            <div class="mt-3 text-sm text-slate-300 space-y-1">
+                <div><span class="text-slate-400">IP:</span> {{ cfg.get('ip_plan', {}).get('windows', '') }}</div>
+                <div><span class="text-slate-400">VM Name:</span> {{ cfg.get('windows', {}).get('vm_name', '') }}</div>
+                <div><span class="text-slate-400">Gateway:</span> {{ cfg.get('ip_plan', {}).get('gateway', '') }}</div>
+            </div>
+        </a>
+
+        <a class="card block" href="/configuration#qnap-config">
+            <div class="flex items-center justify-between">
+                <h3 class="text-lg font-semibold">QNAP</h3>
+                <span class="status {{ 'ready' if cfg.get('included', {}).get('qnap') else 'pending' }}">
+                    {{ 'Included' if cfg.get('included', {}).get('qnap') else 'Off' }}
+                </span>
+            </div>
+            <div class="mt-3 text-sm text-slate-300 space-y-1">
+                <div><span class="text-slate-400">IP:</span> {{ cfg.get('ip_plan', {}).get('qnap', '') }}</div>
+                <div><span class="text-slate-400">Hostname:</span> {{ cfg.get('qnap', {}).get('hostname', '') }}</div>
+            </div>
+        </a>
+
+        <a class="card block" href="/configuration#iosafe-config">
+            <div class="flex items-center justify-between">
+                <h3 class="text-lg font-semibold">ioSafe</h3>
+                <span class="status {{ 'ready' if cfg.get('included', {}).get('iosafe') else 'pending' }}">
+                    {{ 'Included' if cfg.get('included', {}).get('iosafe') else 'Off' }}
+                </span>
+            </div>
+            <div class="mt-3 text-sm text-slate-300 space-y-1">
+                <div><span class="text-slate-400">IP:</span> {{ cfg.get('ip_plan', {}).get('iosafe', '') }}</div>
+                <div><span class="text-slate-400">Hostname:</span> {{ cfg.get('iosafe', {}).get('hostname', '') }}</div>
+            </div>
+        </a>
+
+        <a class="card block" href="/configuration#switch-config">
+            <div class="flex items-center justify-between">
+                <h3 class="text-lg font-semibold">Cisco Switch</h3>
+                <span class="status {{ 'ready' if cfg.get('included', {}).get('cisco_switch') else 'pending' }}">
+                    {{ 'Included' if cfg.get('included', {}).get('cisco_switch') else 'Off' }}
+                </span>
+            </div>
+            <div class="mt-3 text-sm text-slate-300 space-y-1">
+                <div><span class="text-slate-400">IP:</span> {{ cfg.get('ip_plan', {}).get('switch', '') }}</div>
+                <div><span class="text-slate-400">Hostname:</span> {{ cfg.get('cisco_switch', {}).get('hostname', '') }}</div>
+            </div>
+        </a>
+    </div>
+</section>

@@ -1,0 +1,8 @@
+vmaccepteula
+rootpw {{ cfg.get('esxi', {}).get('root_password', '') }}
+install --firstdisk --overwritevmfs
+network --bootproto=static --device=vmnic0 --ip={{ cfg.get('esxi', {}).get('management_ip', '') }} --netmask={{ cfg.get('esxi', {}).get('subnet_mask', '255.255.255.0') }} --gateway={{ cfg.get('esxi', {}).get('gateway', '') }} --nameserver={{ (cfg.get('esxi', {}).get('dns_servers', []) or []) | join(',') }} --hostname={{ cfg.get('esxi', {}).get('hostname', 'esxi01') }}
+reboot
+
+%firstboot --interpreter=busybox
+esxcli network ip set --ipv6-enabled=false

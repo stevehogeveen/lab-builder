@@ -1,0 +1,79 @@
+site:
+  name: Kit-01
+shared_network:
+  subnet: 10.10.8.0/24
+  gateway_offset: 1
+  switch_offset: 2
+  esxi_offset: 10
+  ilo_offset: 11
+  windows_offset: 20
+  qnap_offset: 30
+  iosafe_offset: 31
+  dns_servers:
+  - ''
+  - ''
+  - ''
+  - ''
+shared_snmp:
+  v3_username: ''
+  v3_auth_protocol: SHA
+  v3_auth_password: ''
+  v3_priv_protocol: AES
+  v3_priv_password: ''
+ip_plan:
+  subnet: 10.10.8.0/24
+  netmask: 255.255.255.0
+  prefixlen: 24
+  first_usable: 10.10.8.1
+  last_usable: 10.10.8.254
+  max_usable_offset: 254
+  gateway: 10.10.8.1
+  switch: 10.10.8.2
+  esxi: 10.10.8.10
+  ilo: 10.10.8.11
+  windows: 10.10.8.20
+  qnap: 10.10.8.30
+  iosafe: 10.10.8.31
+included:
+  ilo: true
+  esxi: true
+  windows: true
+  qnap: false
+  iosafe: false
+  cisco_switch: false
+ilo:
+  host: 10.10.8.11
+  hostname: ilo01
+  username: Administrator
+  password: ChangeMe!
+esxi:
+  hostname: esxi01
+  management_ip: 10.10.8.10
+  subnet_mask: 255.255.255.0
+  gateway: 10.10.8.1
+  dns_servers:
+  - 10.10.8.1
+  root_password: ChangeMeRoot!
+windows:
+  vm_name: win2022-01
+  admin_password: ChangeMeToo!
+  ip_address: 10.10.8.20
+  subnet_mask: 255.255.255.0
+  gateway: 10.10.8.1
+  dns_servers:
+  - 10.10.8.1
+qnap:
+  hostname: ''
+  ip: 10.10.8.30
+  username: ''
+  password: ''
+iosafe:
+  hostname: ''
+  ip: 10.10.8.31
+  username: ''
+  password: ''
+cisco_switch:
+  hostname: ''
+  ip: 10.10.8.2
+  username: ''
+  password: ''

@@ -1,0 +1,46 @@
+status: Completed
+scope: ilo
+current_stage: Finished
+progress_percent: 100
+completed_steps: 13
+total_steps: 13
+logs:
+- '[RUNNING] Validating iLO config for 192.168.1.20'
+- '[CONFIG] login_ip=192.168.1.20 | target_ip=192.168.1.251 | hostname=DOP-X70-ILO-Test
+  | subnet_mask=255.255.255.0 | gateway=192.168.1.1'
+- '[CONFIG] shared_dns=8.8.8.8, 1.1.1.1 | snmp_v3_user=Private | auth=SHA | priv=AES'
+- '[RUNNING] Connecting to https://192.168.1.20/redfish/v1/'
+- '[OK] Redfish version: 1.20.0'
+- '[OK] System: HPE ProLiant DL360 Gen10 | Power: On'
+- '[OK] Active interface /redfish/v1/Managers/1/EthernetInterfaces/1 | dhcpv4={''DHCPEnabled'':
+  False, ''UseDNSServers'': False, ''UseDomainName'': False, ''UseGateway'': False,
+  ''UseNTPServers'': False, ''UseStaticRoutes'': False} | ipv4=[{''Address'': ''192.168.1.251'',
+  ''AddressOrigin'': ''Static'', ''Gateway'': ''192.168.1.1'', ''SubnetMask'': ''255.255.255.0''}]'
+- '[RUNNING] Disabling DHCPv4 and setting static IPv4 address=192.168.1.251 subnet_mask=255.255.255.0
+  gateway=192.168.1.1'
+- '[OK] Static IPv4 applied via DHCPv4, IPv4StaticAddresses | before_dhcpv4={''DHCPEnabled'':
+  False, ''UseDNSServers'': False, ''UseDomainName'': False, ''UseGateway'': False,
+  ''UseNTPServers'': False, ''UseStaticRoutes'': False} | after_dhcpv4={''DHCPEnabled'':
+  False, ''UseDNSServers'': False, ''UseDomainName'': False, ''UseGateway'': False,
+  ''UseNTPServers'': False, ''UseStaticRoutes'': False} | before_ipv4=[{''Address'':
+  ''192.168.1.251'', ''AddressOrigin'': ''Static'', ''Gateway'': ''192.168.1.1'',
+  ''SubnetMask'': ''255.255.255.0''}] | after_ipv4=[{''Address'': ''192.168.1.251'',
+  ''AddressOrigin'': ''Static'', ''Gateway'': ''192.168.1.1'', ''SubnetMask'': ''255.255.255.0''}]'
+- '[RUNNING] Attempting to set iLO hostname to: DOP-X70-ILO-Test'
+- '[OK] Hostname write via NetworkProtocol.HostName | before=''DOP-X70-ILO-Test''
+  | after=''DOP-X70-ILO-Test'' | matched=True'
+- '[RUNNING] Applying DNS servers to active iLO interface: 8.8.8.8, 1.1.1.1'
+- '[OK] DNS applied via StaticNameServers | before=[''8.8.8.8'', ''1.1.1.1'', ''0.0.0.0'',
+  ''::'', ''::'', ''::''] | after=[''8.8.8.8'', ''1.1.1.1'', ''0.0.0.0'', ''::'',
+  ''::'', ''::'']'
+- '[RUNNING] Attempting to disable IPv6 where supported'
+- '[SKIP/INFO] IPv6 hardening not applied: IPv6 disable failed. IPv6: IPv6 not present
+  as a writable object at /redfish/v1/Managers/1/NetworkProtocol | DHCPv6: DHCPv6
+  not present as a writable object at /redfish/v1/Managers/1/NetworkProtocol'
+- '[RUNNING] Enabling SNMP, forcing SNMPv3-only where supported, disabling SNMPv1
+  where supported'
+- '[OK] SNMP hardening applied. Keys touched: ProtocolEnabled'
+- '[RUNNING] All requested config changes succeeded. Restarting iLO to apply them
+  cleanly.'
+- '[DONE] Real iLO automation finished. iLO reset requested via /redfish/v1/Managers/1/Actions/Manager.Reset
+  (GracefulRestart).'

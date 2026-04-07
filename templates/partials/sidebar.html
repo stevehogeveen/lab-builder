@@ -1,0 +1,28 @@
+<aside class="sidebar">
+    <div class="brand-block">
+        <div class="eyebrow">Offline Provisioning</div>
+        <div class="brand">Lab Builder</div>
+        <div class="muted">Per-kit deployment dashboard for repeatable lab builds.</div>
+    </div>
+
+    <div class="nav-group">
+        <div class="nav-label">Main</div>
+        <a class="nav-link{% if active_page == 'dashboard' %} nav-link-active{% endif %}" href="/dashboard">Dashboard</a>
+        <a class="nav-link{% if active_page == 'execution' %} nav-link-active{% endif %}" href="/execution">Execution</a>
+        <a class="nav-link{% if active_page == 'configuration' %} nav-link-active{% endif %}" href="/configuration">Configuration</a>
+        <a class="nav-link{% if active_page == 'configs' %} nav-link-active{% endif %}" href="/configs">Configs</a>
+        <a class="nav-link{% if active_page == 'storage' %} nav-link-active{% endif %}" href="/storage">Storage / RAID</a>
+        <a class="nav-link{% if active_page == 'kits' %} nav-link-active{% endif %}" href="/kits">Kits</a>
+        <a class="nav-link{% if active_page == 'history' %} nav-link-active{% endif %}" href="/history">History</a>
+    </div>
+
+    <div class="nav-group">
+        <div class="nav-label">Quick</div>
+        <a class="nav-link" href="/">Home</a>
+    </div>
+
+    <div class="nav-group">
+        <div class="nav-label">Layout</div>
+        <button class="btn w-full mb-2" onclick="resetDashboardLayout()">Reset Layout</button>
+    </div>
+</aside>
