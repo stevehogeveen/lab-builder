@@ -371,8 +371,10 @@ class FakeGen10RealBoxSmartStorageILOClient(ILOClient):
                 "Systems": {"@odata.id": "/redfish/v1/Systems/"},
                 "Managers": {"@odata.id": "/redfish/v1/Managers/"},
             },
+            "/redfish/v1/Managers": {"Members": [{"@odata.id": "/redfish/v1/Managers/1"}]},
             "/redfish/v1/Managers/": {"Members": [{"@odata.id": "/redfish/v1/Managers/1"}]},
             "/redfish/v1/Managers/1": {"@odata.id": "/redfish/v1/Managers/1", "Model": "iLO 5", "FirmwareVersion": "2.99"},
+            "/redfish/v1/Systems": {"Members": [{"@odata.id": "/redfish/v1/Systems/1"}]},
             "/redfish/v1/Systems/": {"Members": [{"@odata.id": "/redfish/v1/Systems/1"}]},
             "/redfish/v1/Systems/1": {
                 "@odata.id": "/redfish/v1/Systems/1",
@@ -450,6 +452,66 @@ class FakeGen10RealBoxSmartStorageILOClient(ILOClient):
         if path in self.docs:
             return self.docs[path]
         raise ILOError(f"GET {path} failed with HTTP 404")
+
+
+class FakeGen10StorageApplyClient:
+    def __init__(self, cfg, fail_on: str = ""):
+        self.cfg = cfg
+        self.fail_on = fail_on
+        self.discovery = planner_gen10_apply_discovery(existing_volumes=True)
+
+    def get_storage_discovery(self, deep_smart_storage_scan=False):
+        del deep_smart_storage_scan
+        return self.discovery
+
+    def delete_storage_logical_drive(self, volume_path: str):
+        if self.fail_on == "delete":
+            raise ILOError(f"simulated delete failure for {volume_path}")
+        hpe = self.discovery["summary"]["hpe_smart_storage"]
+        hpe["volumes"] = [item for item in hpe["volumes"] if item.get("path") != volume_path]
+        return {"deleted_path": volume_path, "reboot_required": False}
+
+    def create_gen10_logical_drive(self, settings_path: str, logical_drive_kind: str, intent: dict):
+        if self.fail_on == logical_drive_kind:
+            raise ILOError(f"simulated {logical_drive_kind} create failure")
+        hpe = self.discovery["summary"]["hpe_smart_storage"]
+        if logical_drive_kind == "os_raid1":
+            hpe["volumes"].append(
+                {
+                    "path": "/redfish/v1/Systems/1/SmartStorage/ArrayControllers/0/LogicalDrives/10",
+                    "id": "10",
+                    "name": "OS RAID 1",
+                    "raid_type": "RAID1",
+                    "capacity_gib": 500,
+                    "status": "OK / Enabled",
+                }
+            )
+        elif logical_drive_kind == "data_raid6":
+            hpe["volumes"].append(
+                {
+                    "path": "/redfish/v1/Systems/1/SmartStorage/ArrayControllers/0/LogicalDrives/20",
+                    "id": "20",
+                    "name": "Data RAID 6",
+                    "raid_type": "RAID6",
+                    "capacity_gib": 3600,
+                    "status": "OK / Enabled",
+                }
+            )
+        return {
+            "settings_path": settings_path,
+            "logical_drive_kind": logical_drive_kind,
+            "intent": intent,
+            "reboot_required": True,
+        }
+
+    def assign_gen10_hot_spare(self, settings_path: str, intent: dict):
+        if self.fail_on == "hot_spare":
+            raise ILOError("simulated hot spare failure")
+        return {
+            "settings_path": settings_path,
+            "assigned_bay": intent.get("bay", ""),
+            "reboot_required": True,
+        }
 
 
 @pytest.fixture()
@@ -1025,6 +1087,92 @@ def planner_discovery_with_mixed_drives() -> dict:
     return discovery
 
 
+def planner_gen10_apply_discovery(existing_volumes: bool = True) -> dict:
+    volumes = []
+    if existing_volumes:
+        volumes.append(
+            {
+                "path": "/redfish/v1/Systems/1/SmartStorage/ArrayControllers/0/LogicalDrives/1",
+                "id": "1",
+                "name": "Existing OS",
+                "raid_type": "RAID1",
+                "capacity_gib": 480,
+                "status": "OK / Enabled",
+            }
+        )
+
+    diagnostics = {
+        "found_paths": [
+            {"path": "/redfish/v1/Systems/1/SmartStorage", "source": "system_oem", "key": "SmartStorage"},
+            {"path": "/redfish/v1/systems/1/smartstorageconfig", "source": "system_oem", "key": "SmartStorageConfig"},
+        ],
+        "followed_links": [
+            {"owner": "/redfish/v1/Systems/1/SmartStorage", "key": "ArrayControllers", "path": "/redfish/v1/Systems/1/SmartStorage/ArrayControllers", "phase": "fast_pass", "source": "collection_link"}
+        ],
+        "collection_counts": {
+            "ArrayControllers": {"total": 1, "populated": 1, "empty": 0, "error": 0},
+            "LogicalDrives": {"total": 1, "populated": 1 if existing_volumes else 0, "empty": 0 if existing_volumes else 1, "error": 0},
+            "DiskDrives": {"total": 1, "populated": 1, "empty": 0, "error": 0},
+        },
+        "probed_paths": [],
+        "collections": [],
+        "warnings": [],
+        "deep_scan_requested": False,
+        "deep_fallback_ran": False,
+    }
+    return {
+        "summary": {
+            "server": {
+                "model": "ProLiant DL360 Gen10",
+                "product_name": "DL360",
+                "generation": "Gen10",
+                "serial_number": "MXQ85103SX",
+            },
+            "ilo": {
+                "model": "iLO 5",
+                "version": "iLO 5",
+                "firmware": "2.99",
+            },
+            "capabilities": {
+                "standard_redfish_storage": False,
+                "hpe_smart_storage": True,
+                "standard_storage_path": "",
+                "hpe_smart_storage_paths": ["/redfish/v1/Systems/1/SmartStorage/ArrayControllers/0"],
+                "hpe_smart_storage_diagnostics": diagnostics,
+            },
+            "standard_redfish_storage": {"controllers": [], "volumes": [], "drives": []},
+            "hpe_smart_storage": {
+                "controllers": [
+                    {
+                        "path": "/redfish/v1/Systems/1/SmartStorage/ArrayControllers/0",
+                        "name": "Smart Array P408i-a SR Gen10",
+                        "model": "P408i-a",
+                        "firmware_version": "4.11",
+                        "manufacturer": "HPE",
+                        "status": "OK / Enabled",
+                    }
+                ],
+                "volumes": volumes,
+                "drives": [
+                    {"path": "/hpe/drives/1", "id": "1", "bay": "1", "name": "Drive 1", "model": "SSD-480", "size_gib": 480, "media_type": "SSD", "protocol": "SAS", "status": "OK / Enabled"},
+                    {"path": "/hpe/drives/2", "id": "2", "bay": "2", "name": "Drive 2", "model": "SSD-480", "size_gib": 480, "media_type": "SSD", "protocol": "SAS", "status": "OK / Enabled"},
+                    {"path": "/hpe/drives/3", "id": "3", "bay": "3", "name": "Drive 3", "model": "HDD-1200", "size_gib": 1200, "media_type": "HDD", "protocol": "SAS", "status": "OK / Enabled"},
+                    {"path": "/hpe/drives/4", "id": "4", "bay": "4", "name": "Drive 4", "model": "HDD-1200", "size_gib": 1200, "media_type": "HDD", "protocol": "SAS", "status": "OK / Enabled"},
+                    {"path": "/hpe/drives/5", "id": "5", "bay": "5", "name": "Drive 5", "model": "HDD-1200", "size_gib": 1200, "media_type": "HDD", "protocol": "SAS", "status": "OK / Enabled"},
+                    {"path": "/hpe/drives/6", "id": "6", "bay": "6", "name": "Drive 6", "model": "HDD-1200", "size_gib": 1200, "media_type": "HDD", "protocol": "SAS", "status": "OK / Enabled"},
+                    {"path": "/hpe/drives/7", "id": "7", "bay": "7", "name": "Drive 7", "model": "HDD-1200", "size_gib": 1200, "media_type": "HDD", "protocol": "SAS", "status": "OK / Enabled"},
+                    {"path": "/hpe/drives/8", "id": "8", "bay": "8", "name": "Drive 8", "model": "HDD-1200", "size_gib": 1200, "media_type": "HDD", "protocol": "SAS", "status": "OK / Enabled"},
+                ],
+                "diagnostics": diagnostics,
+            },
+        },
+        "raw": {
+            "source_host": "10.10.8.90",
+            "hpe_smart_storage_diagnostics": diagnostics,
+        },
+    }
+
+
 def planner_discovery_without_data_spare() -> dict:
     discovery = planner_discovery_with_mixed_drives()
     standard = discovery["summary"]["standard_redfish_storage"]
@@ -1075,10 +1223,10 @@ def test_plan_raid_layout_uses_displayed_discovery_artifact_and_saves_plan(clien
     assert "Existing Logical Volumes That Would Be Removed" in response.text
     assert "New Logical Layout That Would Be Created" in response.text
     assert "Reserved hot spare:" in response.text
-    assert "Future Apply Actions" in response.text
+    assert "Apply Actions" in response.text
     assert "Create Storage Layout" in response.text
     assert "Wipe and Rebuild Storage Layout" in response.text
-    plan_path = export_paths["directory"] / "raid-plan-20260407-170000.yml"
+    plan_path = export_paths["directory"] / "raid-plan.yml"
     assert plan_path.exists()
     plan_text = plan_path.read_text(encoding="utf-8")
     assert "source_discovery:" in plan_text
@@ -1123,4 +1271,232 @@ def test_plan_raid_layout_rejects_discovery_from_different_host(client):
 
     assert response.status_code == 200
     assert "RAID planning failed" in response.text
+    assert "host mismatch" in response.text
+
+
+def test_apply_storage_layout_blocks_create_only_when_not_ready(client, monkeypatch):
+    cfg = main.default_config()
+    cfg["site"]["name"] = "Apply Kit"
+    cfg["ilo"]["current_ip"] = "10.10.8.90"
+    cfg["ilo"]["host"] = "10.10.8.90"
+    cfg["ilo"]["username"] = "Administrator"
+    cfg["ilo"]["password"] = "kit-password"
+    main.save_kit_config(cfg)
+
+    discovery = planner_gen10_apply_discovery(existing_volumes=True)
+    export_paths = main.export_storage_discovery_snapshot(cfg, discovery, host="10.10.8.90")
+    plan = main.build_raid_plan(discovery, export_paths)
+    plan_paths = main.export_raid_plan_snapshot(cfg, plan, export_paths)
+
+    response = client.post(
+        "/apply-storage-layout",
+        data={
+            "return_page": "storage",
+            "discovery_raw_path": str(export_paths["raw"]),
+            "raid_plan_path": str(plan_paths["plan"]),
+            "apply_mode": "create_only",
+            "acknowledge_apply": "on",
+            "typed_confirmation": "CREATE STORAGE",
+        },
+    )
+
+    assert response.status_code == 200
+    assert "Storage apply failed" in response.text
+    assert "Create-only apply is not ready" in response.text
+
+
+def test_apply_storage_layout_blocks_wipe_rebuild_without_confirmation(client, monkeypatch):
+    cfg = main.default_config()
+    cfg["site"]["name"] = "Apply Kit"
+    cfg["ilo"]["current_ip"] = "10.10.8.90"
+    cfg["ilo"]["host"] = "10.10.8.90"
+    cfg["ilo"]["username"] = "Administrator"
+    cfg["ilo"]["password"] = "kit-password"
+    main.save_kit_config(cfg)
+
+    discovery = planner_gen10_apply_discovery(existing_volumes=True)
+    export_paths = main.export_storage_discovery_snapshot(cfg, discovery, host="10.10.8.90")
+    plan = main.build_raid_plan(discovery, export_paths)
+    plan_paths = main.export_raid_plan_snapshot(cfg, plan, export_paths)
+
+    response = client.post(
+        "/apply-storage-layout",
+        data={
+            "return_page": "storage",
+            "discovery_raw_path": str(export_paths["raw"]),
+            "raid_plan_path": str(plan_paths["plan"]),
+            "apply_mode": "wipe_rebuild",
+            "acknowledge_apply": "on",
+            "typed_confirmation": "WRONG VALUE",
+        },
+    )
+
+    assert response.status_code == 200
+    assert "Storage apply failed" in response.text
+    assert "requires the exact confirmation string" in response.text
+
+
+def test_apply_storage_layout_creates_artifacts_and_logs_success(client, monkeypatch):
+    def fake_strftime(fmt):
+        if fmt == "%Y%m%d-%H%M%S":
+            return "20260409-130000"
+        if fmt == "%Y-%m-%d %H:%M:%S":
+            return "2026-04-09 13:00:00"
+        raise AssertionError(f"unexpected strftime format: {fmt}")
+
+    monkeypatch.setattr(main.time, "strftime", fake_strftime)
+    monkeypatch.setattr(main, "ILOClient", lambda cfg: FakeGen10StorageApplyClient(cfg))
+    monkeypatch.setattr(
+        main,
+        "start_storage_apply_background",
+        lambda cfg, discovery_raw_path, raid_plan_path, apply_mode, apply_paths: main.execute_storage_apply_in_background(
+            cfg, discovery_raw_path, raid_plan_path, apply_mode, apply_paths
+        ),
+    )
+
+    cfg = main.default_config()
+    cfg["site"]["name"] = "Apply Kit"
+    cfg["ilo"]["current_ip"] = "10.10.8.90"
+    cfg["ilo"]["host"] = "10.10.8.90"
+    cfg["ilo"]["username"] = "Administrator"
+    cfg["ilo"]["password"] = "kit-password"
+    main.save_kit_config(cfg)
+
+    discovery = planner_gen10_apply_discovery(existing_volumes=True)
+    export_paths = main.export_storage_discovery_snapshot(cfg, discovery, host="10.10.8.90")
+    plan = main.build_raid_plan(discovery, export_paths)
+    plan_paths = main.export_raid_plan_snapshot(cfg, plan, export_paths)
+
+    response = client.post(
+        "/apply-storage-layout",
+        data={
+            "return_page": "storage",
+            "discovery_raw_path": str(export_paths["raw"]),
+            "raid_plan_path": str(plan_paths["plan"]),
+            "apply_mode": "wipe_rebuild",
+            "acknowledge_apply": "on",
+            "typed_confirmation": "WIPE STORAGE",
+        },
+    )
+
+    assert response.status_code == 200
+    assert "Apply Attempt Artifacts" in response.text
+    assert "View Apply Log" in response.text
+    assert "Live Job panel" in response.text
+    apply_dir = main.STORAGE_RAID_EXPORT_DIR / "MXQ85103SX" / "20260409-130000"
+    assert (apply_dir / "pre-change-summary.yml").exists()
+    assert (apply_dir / "pre-change-raw.json").exists()
+    assert (apply_dir / "raid-plan.yml").exists()
+    assert (apply_dir / "apply-log.yml").exists()
+    assert (apply_dir / "apply-results.json").exists()
+    assert (apply_dir / "post-change-summary.yml").exists()
+    assert (apply_dir / "post-change-raw.json").exists()
+    apply_log_text = (apply_dir / "apply-log.yml").read_text(encoding="utf-8")
+    apply_results_text = (apply_dir / "apply-results.json").read_text(encoding="utf-8")
+    job = main.load_job("Apply-Kit")
+    assert job["scope"] == "storage-apply:wipe_rebuild"
+    assert job["status"] == "Completed"
+    assert job["current_stage"] == "Finished"
+    assert job["progress_percent"] == 100
+    assert any("Validate controller and plan" in line for line in job["logs"])
+    assert any("Export pre-change storage" in line for line in job["logs"])
+    assert any("Create OS RAID 1 logical drive" in line for line in job["logs"])
+    assert any("Create Data RAID 6 logical drive" in line for line in job["logs"])
+    assert any("Assign hot spare" in line for line in job["logs"])
+    assert any("Poll controller/apply status" in line for line in job["logs"])
+    assert any("Determine whether reboot is required" in line for line in job["logs"])
+    assert any("Export post-change storage" in line for line in job["logs"])
+    assert "Delete existing logical volume" in apply_log_text
+    assert "Create OS RAID 1 logical drive" in apply_log_text
+    assert "Assign hot spare" in apply_log_text
+    assert "\"status\": \"Completed\"" in apply_results_text
+
+
+def test_apply_storage_layout_failure_logs_are_saved(client, monkeypatch):
+    def fake_strftime(fmt):
+        if fmt == "%Y%m%d-%H%M%S":
+            return "20260409-131500"
+        if fmt == "%Y-%m-%d %H:%M:%S":
+            return "2026-04-09 13:15:00"
+        raise AssertionError(f"unexpected strftime format: {fmt}")
+
+    monkeypatch.setattr(main.time, "strftime", fake_strftime)
+    monkeypatch.setattr(main, "ILOClient", lambda cfg: FakeGen10StorageApplyClient(cfg, fail_on="data_raid6"))
+    monkeypatch.setattr(
+        main,
+        "start_storage_apply_background",
+        lambda cfg, discovery_raw_path, raid_plan_path, apply_mode, apply_paths: main.execute_storage_apply_in_background(
+            cfg, discovery_raw_path, raid_plan_path, apply_mode, apply_paths
+        ),
+    )
+
+    cfg = main.default_config()
+    cfg["site"]["name"] = "Apply Kit"
+    cfg["ilo"]["current_ip"] = "10.10.8.90"
+    cfg["ilo"]["host"] = "10.10.8.90"
+    cfg["ilo"]["username"] = "Administrator"
+    cfg["ilo"]["password"] = "kit-password"
+    main.save_kit_config(cfg)
+
+    discovery = planner_gen10_apply_discovery(existing_volumes=True)
+    export_paths = main.export_storage_discovery_snapshot(cfg, discovery, host="10.10.8.90")
+    plan = main.build_raid_plan(discovery, export_paths)
+    plan_paths = main.export_raid_plan_snapshot(cfg, plan, export_paths)
+
+    response = client.post(
+        "/apply-storage-layout",
+        data={
+            "return_page": "storage",
+            "discovery_raw_path": str(export_paths["raw"]),
+            "raid_plan_path": str(plan_paths["plan"]),
+            "apply_mode": "wipe_rebuild",
+            "acknowledge_apply": "on",
+            "typed_confirmation": "WIPE STORAGE",
+        },
+    )
+
+    assert response.status_code == 200
+    apply_dir = main.STORAGE_RAID_EXPORT_DIR / "MXQ85103SX" / "20260409-131500"
+    assert (apply_dir / "apply-log.yml").exists()
+    assert (apply_dir / "apply-results.json").exists()
+    apply_log_text = (apply_dir / "apply-log.yml").read_text(encoding="utf-8")
+    apply_results_text = (apply_dir / "apply-results.json").read_text(encoding="utf-8")
+    job = main.load_job("Apply-Kit")
+    assert job["scope"] == "storage-apply:wipe_rebuild"
+    assert job["status"] == "Failed"
+    assert any("Create Data RAID 6 logical drive" in line for line in job["logs"])
+    assert any("simulated data_raid6 create failure" in line for line in job["logs"])
+    assert "simulated data_raid6 create failure" in apply_log_text
+    assert "\"status\": \"Failed\"" in apply_results_text
+    assert (apply_dir / "post-change-summary.yml").exists()
+
+
+def test_apply_storage_layout_blocks_host_mismatch(client, monkeypatch):
+    cfg = main.default_config()
+    cfg["site"]["name"] = "Apply Kit"
+    cfg["ilo"]["current_ip"] = "10.10.8.90"
+    cfg["ilo"]["host"] = "10.10.8.90"
+    cfg["ilo"]["username"] = "Administrator"
+    cfg["ilo"]["password"] = "kit-password"
+    main.save_kit_config(cfg)
+
+    discovery = planner_gen10_apply_discovery(existing_volumes=True)
+    export_paths = main.export_storage_discovery_snapshot(cfg, discovery, host="10.10.8.91")
+    plan = main.build_raid_plan(discovery, export_paths)
+    plan_paths = main.export_raid_plan_snapshot(cfg, plan, export_paths)
+
+    response = client.post(
+        "/apply-storage-layout",
+        data={
+            "return_page": "storage",
+            "discovery_raw_path": str(export_paths["raw"]),
+            "raid_plan_path": str(plan_paths["plan"]),
+            "apply_mode": "wipe_rebuild",
+            "acknowledge_apply": "on",
+            "typed_confirmation": "WIPE STORAGE",
+        },
+    )
+
+    assert response.status_code == 200
+    assert "Storage apply failed" in response.text
     assert "host mismatch" in response.text

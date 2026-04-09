@@ -91,6 +91,101 @@
         </div>
         {% endif %}
 
+        {% if storage_apply_paths %}
+        <div class="card">
+            <div class="text-lg font-semibold mb-3">Apply Attempt Artifacts</div>
+            <div class="result mb-4">Apply path: {{ storage_apply_paths.directory }}</div>
+            <div class="text-sm text-slate-400 mb-3">Use these artifacts to inspect the exact pre-change snapshot, apply log, controller responses, and post-change state for the current storage apply attempt.</div>
+            <div class="actions">
+                {% if storage_apply_paths.pre_change_summary.exists() %}
+                <form hx-post="/view-storage-artifact" hx-target="#main-content" hx-swap="outerHTML">
+                    <input type="hidden" name="return_page" value="storage">
+                    <input type="hidden" name="discovery_raw_path" value="{{ storage_export_paths.raw if storage_export_paths else '' }}">
+                    <input type="hidden" name="raid_plan_path" value="{{ storage_plan_paths.plan if storage_plan_paths else '' }}">
+                    <input type="hidden" name="apply_artifact_dir" value="{{ storage_apply_paths.directory }}">
+                    <input type="hidden" name="artifact_path" value="{{ storage_apply_paths.pre_change_summary }}">
+                    <input type="hidden" name="artifact_title" value="Pre-Change Storage Summary">
+                    <button class="btn" type="submit">View Pre-Change Summary</button>
+                </form>
+                {% endif %}
+                {% if storage_apply_paths.pre_change_raw.exists() %}
+                <form hx-post="/view-storage-artifact" hx-target="#main-content" hx-swap="outerHTML">
+                    <input type="hidden" name="return_page" value="storage">
+                    <input type="hidden" name="discovery_raw_path" value="{{ storage_export_paths.raw if storage_export_paths else '' }}">
+                    <input type="hidden" name="raid_plan_path" value="{{ storage_plan_paths.plan if storage_plan_paths else '' }}">
+                    <input type="hidden" name="apply_artifact_dir" value="{{ storage_apply_paths.directory }}">
+                    <input type="hidden" name="artifact_path" value="{{ storage_apply_paths.pre_change_raw }}">
+                    <input type="hidden" name="artifact_title" value="Pre-Change Storage Raw JSON">
+                    <button class="btn" type="submit">View Pre-Change Raw</button>
+                </form>
+                {% endif %}
+                <form hx-post="/view-storage-artifact" hx-target="#main-content" hx-swap="outerHTML">
+                    <input type="hidden" name="return_page" value="storage">
+                    <input type="hidden" name="discovery_raw_path" value="{{ storage_export_paths.raw if storage_export_paths else '' }}">
+                    <input type="hidden" name="raid_plan_path" value="{{ storage_plan_paths.plan if storage_plan_paths else '' }}">
+                    <input type="hidden" name="apply_artifact_dir" value="{{ storage_apply_paths.directory }}">
+                    <input type="hidden" name="artifact_path" value="{{ storage_apply_paths.apply_log }}">
+                    <input type="hidden" name="artifact_title" value="Storage Apply Log">
+                    <button class="btn" type="submit">View Apply Log</button>
+                </form>
+                <form hx-post="/view-storage-artifact" hx-target="#main-content" hx-swap="outerHTML">
+                    <input type="hidden" name="return_page" value="storage">
+                    <input type="hidden" name="discovery_raw_path" value="{{ storage_export_paths.raw if storage_export_paths else '' }}">
+                    <input type="hidden" name="raid_plan_path" value="{{ storage_plan_paths.plan if storage_plan_paths else '' }}">
+                    <input type="hidden" name="apply_artifact_dir" value="{{ storage_apply_paths.directory }}">
+                    <input type="hidden" name="artifact_path" value="{{ storage_apply_paths.apply_results }}">
+                    <input type="hidden" name="artifact_title" value="Storage Apply Results">
+                    <button class="btn" type="submit">View Apply Results</button>
+                </form>
+                {% if storage_apply_paths.post_change_summary.exists() %}
+                <form hx-post="/view-storage-artifact" hx-target="#main-content" hx-swap="outerHTML">
+                    <input type="hidden" name="return_page" value="storage">
+                    <input type="hidden" name="discovery_raw_path" value="{{ storage_export_paths.raw if storage_export_paths else '' }}">
+                    <input type="hidden" name="raid_plan_path" value="{{ storage_plan_paths.plan if storage_plan_paths else '' }}">
+                    <input type="hidden" name="apply_artifact_dir" value="{{ storage_apply_paths.directory }}">
+                    <input type="hidden" name="artifact_path" value="{{ storage_apply_paths.post_change_summary }}">
+                    <input type="hidden" name="artifact_title" value="Post-Change Storage Summary">
+                    <button class="btn" type="submit">View Post-Change Summary</button>
+                </form>
+                {% endif %}
+                {% if storage_apply_paths.post_change_raw.exists() %}
+                <form hx-post="/view-storage-artifact" hx-target="#main-content" hx-swap="outerHTML">
+                    <input type="hidden" name="return_page" value="storage">
+                    <input type="hidden" name="discovery_raw_path" value="{{ storage_export_paths.raw if storage_export_paths else '' }}">
+                    <input type="hidden" name="raid_plan_path" value="{{ storage_plan_paths.plan if storage_plan_paths else '' }}">
+                    <input type="hidden" name="apply_artifact_dir" value="{{ storage_apply_paths.directory }}">
+                    <input type="hidden" name="artifact_path" value="{{ storage_apply_paths.post_change_raw }}">
+                    <input type="hidden" name="artifact_title" value="Post-Change Storage Raw JSON">
+                    <button class="btn" type="submit">View Post-Change Raw</button>
+                </form>
+                {% endif %}
+            </div>
+            <div class="actions mt-3">
+                {% for item in [
+                    ('pre_change_summary', 'Download Pre-Change Summary'),
+                    ('pre_change_raw', 'Download Pre-Change Raw'),
+                    ('plan', 'Download Apply Plan Copy'),
+                    ('apply_log', 'Download Apply Log'),
+                    ('apply_results', 'Download Apply Results'),
+                    ('post_change_summary', 'Download Post-Change Summary'),
+                    ('post_change_raw', 'Download Post-Change Raw')
+                ] %}
+                {% set path_key = item[0] %}
+                {% if storage_apply_paths[path_key].exists() %}
+                <form hx-post="/download-storage-artifact">
+                    <input type="hidden" name="return_page" value="storage">
+                    <input type="hidden" name="discovery_raw_path" value="{{ storage_export_paths.raw if storage_export_paths else '' }}">
+                    <input type="hidden" name="raid_plan_path" value="{{ storage_plan_paths.plan if storage_plan_paths else '' }}">
+                    <input type="hidden" name="apply_artifact_dir" value="{{ storage_apply_paths.directory }}">
+                    <input type="hidden" name="artifact_path" value="{{ storage_apply_paths[path_key] }}">
+                    <button class="btn" type="submit">{{ item[1] }}</button>
+                </form>
+                {% endif %}
+                {% endfor %}
+            </div>
+        </div>
+        {% endif %}
+
         {% if storage_plan %}
         <div class="card">
             <div class="text-lg font-semibold mb-3">Proposed RAID Plan</div>
@@ -201,15 +296,34 @@
                 <div><strong>Reserved hot spare:</strong> bay {{ storage_plan.pre_apply_summary.planned_layout.hot_spare.bay or "not reserved" }}</div>
             </div>
             <div class="card mb-4">
-                <div class="text-sm font-bold text-slate-300 mb-2">Future Apply Actions</div>
-                <div class="text-sm text-slate-400 mb-3">These actions are placeholders only in this pass. No storage delete/create/apply Redfish writes are sent yet.</div>
-                <div class="actions mb-3">
-                    <button class="btn" type="button" disabled>Create Storage Layout</button>
-                    <button class="btn" type="button" disabled>Wipe and Rebuild Storage Layout</button>
+                <div class="text-sm font-bold text-slate-300 mb-2">Apply Actions</div>
+                <div class="text-sm text-slate-400 mb-3">These actions are the only place where storage reconfiguration may be attempted. Review the pre-apply summary above first. Live step logs, stage changes, and progress updates will stream through the existing Live Job panel while the run is active, and the apply artifacts will be saved under the storage export tree.</div>
+                <div class="grid grid-cols-1 md:grid-cols-2 gap-3">
+                    <form hx-post="/apply-storage-layout" hx-target="#main-content" hx-swap="outerHTML" class="card">
+                        <div class="text-sm font-bold text-slate-300 mb-2">Create Storage Layout</div>
+                        <div class="text-sm text-slate-400 mb-3">Use only when no existing logical volumes need to be removed.</div>
+                        <input type="hidden" name="return_page" value="storage">
+                        <input type="hidden" name="discovery_raw_path" value="{{ storage_export_paths.raw if storage_export_paths else '' }}">
+                        <input type="hidden" name="raid_plan_path" value="{{ storage_plan_paths.plan if storage_plan_paths else '' }}">
+                        <input type="hidden" name="apply_mode" value="create_only">
+                        <label class="check mb-2"><input type="checkbox" name="acknowledge_apply"> I reviewed the pre-apply summary and want to attempt create-only storage changes.</label>
+                        <div class="mb-2"><strong>Typed confirmation:</strong> {{ storage_plan.apply_readiness.create_only_confirmation }}</div>
+                        <input class="input mb-3" type="text" name="typed_confirmation" value="" placeholder="Type {{ storage_plan.apply_readiness.create_only_confirmation }}">
+                        <button class="btn" type="submit" {% if not storage_plan.apply_readiness.create_only_ready %}disabled{% endif %}>Create Storage Layout</button>
+                    </form>
+                    <form hx-post="/apply-storage-layout" hx-target="#main-content" hx-swap="outerHTML" class="card">
+                        <div class="text-sm font-bold text-slate-300 mb-2">Wipe and Rebuild Storage Layout</div>
+                        <div class="text-sm text-slate-400 mb-3">Use only when you intend to remove existing logical volumes and recreate the target layout.</div>
+                        <input type="hidden" name="return_page" value="storage">
+                        <input type="hidden" name="discovery_raw_path" value="{{ storage_export_paths.raw if storage_export_paths else '' }}">
+                        <input type="hidden" name="raid_plan_path" value="{{ storage_plan_paths.plan if storage_plan_paths else '' }}">
+                        <input type="hidden" name="apply_mode" value="wipe_rebuild">
+                        <label class="check mb-2"><input type="checkbox" name="acknowledge_apply"> I understand that wipe and rebuild may delete existing logical volumes before recreating the target layout.</label>
+                        <div class="mb-2"><strong>Typed confirmation:</strong> {{ storage_plan.apply_readiness.wipe_rebuild_confirmation }}</div>
+                        <input class="input mb-3" type="text" name="typed_confirmation" value="" placeholder="Type {{ storage_plan.apply_readiness.wipe_rebuild_confirmation }}">
+                        <button class="btn" type="submit" {% if not storage_plan.apply_readiness.wipe_rebuild_ready %}disabled{% endif %}>Wipe and Rebuild Storage Layout</button>
+                    </form>
                 </div>
-                <label class="check mb-2"><input type="checkbox" disabled> I understand that wipe and rebuild would delete existing logical volumes and recreate the target layout.</label>
-                <div class="mb-2"><strong>Typed confirmation required for future wipe/rebuild:</strong> {{ storage_plan.apply_readiness.typed_confirmation }}</div>
-                <input class="input" type="text" value="" placeholder="Type {{ storage_plan.apply_readiness.typed_confirmation }}" disabled>
             </div>
 
             <div class="text-sm font-bold text-slate-300 mb-2">Existing Logical Volumes</div>

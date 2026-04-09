@@ -6,6 +6,7 @@ import re
 import threading
 import time
 import yaml
+from typing import Any
 
 from fastapi import FastAPI, Request, Form, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse, HTMLResponse
@@ -32,6 +33,8 @@ ILO_INVENTORY_DIR = HISTORY_DIR / "ilo-inventory"
 EXPORTS_DIR = ARTIFACTS_DIR / "exports"
 ILO_LIVE_EXPORT_DIR = EXPORTS_DIR / "ilo" / "live"
 STORAGE_RAID_EXPORT_DIR = EXPORTS_DIR / "storage-raid"
+STORAGE_APPLY_CONFIRM_CREATE = "CREATE STORAGE"
+STORAGE_APPLY_CONFIRM_WIPE = "WIPE STORAGE"
 
 app = FastAPI(title="Lab Builder")
 
@@ -493,6 +496,32 @@ def live_inventory_download_headers(latest: dict[str, Path]) -> dict[str, str]:
     }
 
 
+def storage_discovery_export_payloads(cfg: dict, discovery: dict, host: str = "") -> tuple[dict, dict]:
+    kit_name = sanitize_kit_name(cfg.get("site", {}).get("name", "Kit-01"))
+    summary = discovery.get("summary", {})
+    summary_payload = {
+        "export_timestamp": time.strftime("%Y-%m-%d %H:%M:%S"),
+        "kit_name": kit_name,
+        "source_host": host,
+        **summary,
+    }
+    raw_payload = {
+        "export_timestamp": summary_payload["export_timestamp"],
+        "kit_name": kit_name,
+        "source_host": host,
+        "discovery": discovery,
+    }
+    return summary_payload, raw_payload
+
+
+def write_storage_discovery_snapshot_files(summary_path: Path, raw_path: Path, cfg: dict, discovery: dict, host: str = "") -> None:
+    summary_payload, raw_payload = storage_discovery_export_payloads(cfg, discovery, host=host)
+    with open(summary_path, "w", encoding="utf-8") as f:
+        yaml.safe_dump(summary_payload, f, sort_keys=False)
+    with open(raw_path, "w", encoding="utf-8") as f:
+        json.dump(raw_payload, f, indent=2, sort_keys=False)
+
+
 def export_storage_discovery_snapshot(cfg: dict, discovery: dict, host: str = "") -> dict[str, Path]:
     timestamp = time.strftime("%Y%m%d-%H%M%S")
     kit_name = sanitize_kit_name(cfg.get("site", {}).get("name", "Kit-01"))
@@ -510,25 +539,7 @@ def export_storage_discovery_snapshot(cfg: dict, discovery: dict, host: str = ""
     export_dir.mkdir(parents=True, exist_ok=True)
     summary_path = export_dir / "summary.yml"
     raw_path = export_dir / "raw.json"
-
-    summary_payload = {
-        "export_timestamp": time.strftime("%Y-%m-%d %H:%M:%S"),
-        "kit_name": kit_name,
-        "source_host": host,
-        **summary,
-    }
-    raw_payload = {
-        "export_timestamp": summary_payload["export_timestamp"],
-        "kit_name": kit_name,
-        "source_host": host,
-        "discovery": discovery,
-    }
-
-    with open(summary_path, "w", encoding="utf-8") as f:
-        yaml.safe_dump(summary_payload, f, sort_keys=False)
-
-    with open(raw_path, "w", encoding="utf-8") as f:
-        json.dump(raw_payload, f, indent=2, sort_keys=False)
+    write_storage_discovery_snapshot_files(summary_path, raw_path, cfg, discovery, host=host)
 
     return {
         "directory": export_dir,
@@ -563,7 +574,7 @@ def load_storage_plan_artifact(plan_path_text: str) -> tuple[dict, dict[str, Pat
     export_root = STORAGE_RAID_EXPORT_DIR.resolve()
     if not plan_path.is_relative_to(export_root):
         raise ValueError("RAID plan artifact must be under the storage export folder.")
-    if not plan_path.exists() or not plan_path.name.startswith("raid-plan-") or plan_path.suffix.lower() not in (".yml", ".yaml"):
+    if not plan_path.exists() or plan_path.name not in {"raid-plan.yml"} or plan_path.suffix.lower() not in (".yml", ".yaml"):
         raise ValueError("RAID plan artifact was not found.")
 
     payload = yaml.safe_load(plan_path.read_text(encoding="utf-8")) or {}
@@ -600,11 +611,46 @@ def restore_storage_page_state(
     return discovery, discovery_paths, plan, plan_paths
 
 
+def safe_storage_artifact_path(path_text: str) -> Path:
+    candidate = Path(path_text).expanduser().resolve()
+    export_root = STORAGE_RAID_EXPORT_DIR.resolve()
+    if not candidate.is_relative_to(export_root):
+        raise ValueError("Storage artifact must be under the storage export folder.")
+    if not candidate.exists() or not candidate.is_file():
+        raise ValueError("Storage artifact was not found.")
+    return candidate
+
+
+def storage_apply_paths_from_directory(apply_dir_text: str) -> dict[str, Path]:
+    apply_dir = Path(apply_dir_text).expanduser().resolve()
+    export_root = STORAGE_RAID_EXPORT_DIR.resolve()
+    if not apply_dir.is_relative_to(export_root):
+        raise ValueError("Storage apply artifact directory must be under the storage export folder.")
+    if not apply_dir.exists() or not apply_dir.is_dir():
+        raise ValueError("Storage apply artifact directory was not found.")
+
+    return {
+        "directory": apply_dir,
+        "pre_change_summary": apply_dir / "pre-change-summary.yml",
+        "pre_change_raw": apply_dir / "pre-change-raw.json",
+        "plan": apply_dir / "raid-plan.yml",
+        "apply_log": apply_dir / "apply-log.yml",
+        "apply_results": apply_dir / "apply-results.json",
+        "post_change_summary": apply_dir / "post-change-summary.yml",
+        "post_change_raw": apply_dir / "post-change-raw.json",
+    }
+
+
 def storage_artifact_target(
     artifact_kind: str,
     discovery_paths: dict[str, Path] | None,
     plan_paths: dict[str, Path] | None,
+    artifact_path_text: str = "",
+    artifact_title: str = "",
 ) -> tuple[Path, str]:
+    if artifact_path_text:
+        artifact_path = safe_storage_artifact_path(artifact_path_text)
+        return artifact_path, artifact_title or f"Storage Artifact: {artifact_path.name}"
     if artifact_kind == "discovery_summary":
         if not discovery_paths:
             raise ValueError("No current storage discovery summary is available.")
@@ -618,6 +664,70 @@ def storage_artifact_target(
             raise ValueError("No current RAID plan artifact is available.")
         return plan_paths["plan"], f"RAID Plan: {plan_paths['plan'].name}"
     raise ValueError("Unknown storage artifact request.")
+
+
+def storage_apply_confirmation_for_mode(apply_mode: str) -> str:
+    if apply_mode == "create_only":
+        return STORAGE_APPLY_CONFIRM_CREATE
+    if apply_mode == "wipe_rebuild":
+        return STORAGE_APPLY_CONFIRM_WIPE
+    raise ValueError("Unknown storage apply mode.")
+
+
+def storage_apply_target_base(plan: dict) -> str:
+    source = plan.get("source_discovery", {}) or {}
+    return sanitize_kit_name(
+        source.get("host")
+        or source.get("serial_number")
+        or source.get("server_model")
+        or "storage-apply"
+    )
+
+
+def initialize_storage_apply_artifacts(
+    cfg: dict,
+    plan: dict,
+    plan_paths: dict[str, Path],
+) -> dict[str, Path]:
+    del cfg, plan
+    apply_dir = plan_paths["directory"]
+    apply_dir.mkdir(parents=True, exist_ok=True)
+
+    apply_paths = {
+        "directory": apply_dir,
+        "pre_change_summary": apply_dir / "pre-change-summary.yml",
+        "pre_change_raw": apply_dir / "pre-change-raw.json",
+        "plan": plan_paths["plan"],
+        "apply_log": apply_dir / "apply-log.yml",
+        "apply_results": apply_dir / "apply-results.json",
+        "post_change_summary": apply_dir / "post-change-summary.yml",
+        "post_change_raw": apply_dir / "post-change-raw.json",
+    }
+
+    apply_log_payload = {
+        "started_at": time.strftime("%Y-%m-%d %H:%M:%S"),
+        "mode": "",
+        "status": "Queued",
+        "steps": [],
+    }
+    with open(apply_paths["apply_log"], "w", encoding="utf-8") as f:
+        yaml.safe_dump(apply_log_payload, f, sort_keys=False)
+    with open(apply_paths["apply_results"], "w", encoding="utf-8") as f:
+        json.dump(
+            {
+                "started_at": apply_log_payload["started_at"],
+                "mode": "",
+                "status": "Queued",
+                "paths": {key: str(value) for key, value in apply_paths.items()},
+                "steps": [],
+                "responses": [],
+                "errors": [],
+            },
+            f,
+            indent=2,
+            sort_keys=False,
+        )
+    return apply_paths
 
 
 def storage_status_is_eligible(status: str) -> bool:
@@ -820,7 +930,9 @@ def build_raid_plan(discovery: dict, discovery_paths: dict[str, Path]) -> dict:
         # - Gen10 / iLO 5 typically uses HPE SmartStorageConfig-style delete/create/apply semantics.
         # - Gen11 / iLO 6 typically uses the standard Redfish Storage/Volume model.
         # This pass only prepares the confirmation and action selection surface; it does not issue writes.
-        "typed_confirmation": "WIPE STORAGE",
+        "typed_confirmation": STORAGE_APPLY_CONFIRM_WIPE,
+        "create_only_confirmation": STORAGE_APPLY_CONFIRM_CREATE,
+        "wipe_rebuild_confirmation": STORAGE_APPLY_CONFIRM_WIPE,
     }
     planned_layout = {
         "os_raid1": {
@@ -882,8 +994,7 @@ def build_raid_plan(discovery: dict, discovery_paths: dict[str, Path]) -> dict:
 
 
 def export_raid_plan_snapshot(cfg: dict, plan: dict, discovery_paths: dict[str, Path]) -> dict[str, Path]:
-    timestamp = time.strftime("%Y%m%d-%H%M%S")
-    plan_path = discovery_paths["directory"] / f"raid-plan-{timestamp}.yml"
+    plan_path = discovery_paths["directory"] / "raid-plan.yml"
     payload = {
         "export_timestamp": time.strftime("%Y-%m-%d %H:%M:%S"),
         "kit_name": sanitize_kit_name(cfg.get("site", {}).get("name", "Kit-01")),
@@ -897,6 +1008,730 @@ def export_raid_plan_snapshot(cfg: dict, plan: dict, discovery_paths: dict[str, 
         "directory": discovery_paths["directory"],
         "plan": plan_path,
     }
+
+
+def append_storage_apply_history_snapshot(cfg: dict):
+    append_job_history_snapshot(cfg, "storage-apply")
+
+
+def storage_apply_step_targets_text(targets: dict[str, Any] | None) -> str:
+    if not targets:
+        return ""
+    bits = []
+    controller = (targets.get("controller") or "").strip()
+    if controller:
+        bits.append(f"controller={controller}")
+    bays = targets.get("bays")
+    if isinstance(bays, list) and bays:
+        bits.append(f"bays={', '.join(str(item) for item in bays)}")
+    elif bays:
+        bits.append(f"bays={bays}")
+    volume = (targets.get("volume") or "").strip()
+    if volume:
+        bits.append(f"volume={volume}")
+    path = (targets.get("path") or "").strip()
+    if path:
+        bits.append(f"path={path}")
+    return " | ".join(bits)
+
+
+def storage_apply_response_excerpt(response: Any) -> Any:
+    if response is None:
+        return None
+    if not isinstance(response, dict):
+        return response
+    excerpt = {}
+    for key in (
+        "@odata.id",
+        "Id",
+        "Name",
+        "Status",
+        "Messages",
+        "error",
+        "reboot_required",
+        "settings_path",
+        "logical_drive_kind",
+        "assigned_bay",
+    ):
+        if key in response:
+            excerpt[key] = response.get(key)
+    return excerpt or response
+
+
+def save_storage_apply_state(apply_state: dict[str, Any], apply_paths: dict[str, Path]) -> None:
+    log_payload = {
+        "started_at": apply_state.get("started_at", ""),
+        "finished_at": apply_state.get("finished_at", ""),
+        "mode": apply_state.get("mode", ""),
+        "status": apply_state.get("status", ""),
+        "apply_path": apply_state.get("apply_path", ""),
+        "controller": apply_state.get("controller", {}),
+        "steps": apply_state.get("steps", []),
+        "errors": apply_state.get("errors", []),
+    }
+    with open(apply_paths["apply_log"], "w", encoding="utf-8") as f:
+        yaml.safe_dump(log_payload, f, sort_keys=False)
+    with open(apply_paths["apply_results"], "w", encoding="utf-8") as f:
+        json.dump(apply_state, f, indent=2, sort_keys=False)
+
+
+def record_storage_apply_step(
+    kit_name: str,
+    job: dict[str, Any],
+    apply_state: dict[str, Any],
+    apply_paths: dict[str, Path],
+    step_name: str,
+    completed: int,
+    total: int,
+    status: str,
+    current_stage: str,
+    targets: dict[str, Any] | None = None,
+    details: str = "",
+    error: str = "",
+    response: Any = None,
+) -> None:
+    entry = {
+        "time": time.strftime("%Y-%m-%d %H:%M:%S"),
+        "step": step_name,
+        "status": status,
+        "controller": apply_state.get("controller", {}),
+        "targets": targets or {},
+        "details": details,
+        "error": error,
+        "response": storage_apply_response_excerpt(response),
+    }
+    apply_state.setdefault("steps", []).append(entry)
+    if error:
+        apply_state.setdefault("errors", []).append({"step": step_name, "error": error})
+    if response is not None:
+        apply_state.setdefault("responses", []).append({"step": step_name, "response": storage_apply_response_excerpt(response)})
+    save_storage_apply_state(apply_state, apply_paths)
+
+    status_prefix = {
+        "running": "[RUNNING]",
+        "ok": "[OK]",
+        "skip": "[SKIP]",
+        "failed": "[FAILED]",
+    }.get(status.lower(), "[INFO]")
+    target_text = storage_apply_step_targets_text(targets)
+    line = f"{status_prefix} {step_name}"
+    if target_text:
+        line += f" | {target_text}"
+    if details:
+        line += f" | {details}"
+    if error:
+        line += f" | error={error}"
+    update_job(kit_name, job, "Failed" if status.lower() == "failed" else "Running", current_stage, completed, total, line)
+
+
+def build_storage_apply_intent(plan: dict, apply_mode: str) -> dict[str, Any]:
+    controller = plan.get("source_discovery", {}).get("controller", {}) or {}
+    return {
+        "mode": apply_mode,
+        "controller": controller,
+        "os_raid1": {
+            "raid": "RAID1",
+            "target_size_gib": plan.get("os_raid1", {}).get("target_size_gib", 500),
+            "bays": [drive.get("bay") for drive in plan.get("os_raid1", {}).get("drives", [])],
+            "drive_paths": [drive.get("path") for drive in plan.get("os_raid1", {}).get("drives", [])],
+        },
+        "data_raid6": {
+            "raid": "RAID6",
+            "bays": [drive.get("bay") for drive in plan.get("data_raid6", {}).get("drives", [])],
+            "drive_paths": [drive.get("path") for drive in plan.get("data_raid6", {}).get("drives", [])],
+        },
+        "hot_spare": {
+            "bay": (plan.get("hot_spare", {}).get("drive", {}) or {}).get("bay", ""),
+            "drive_path": (plan.get("hot_spare", {}).get("drive", {}) or {}).get("path", ""),
+        },
+        "volumes_to_remove": [
+            {
+                "name": volume.get("name") or volume.get("id") or "",
+                "path": volume.get("path") or "",
+                "raid_type": volume.get("raid_type") or "",
+            }
+            for volume in plan.get("existing_logical_volumes", [])
+        ],
+    }
+
+
+def choose_storage_apply_platform(discovery: dict, plan: dict) -> dict[str, Any]:
+    summary = discovery.get("summary", {}) or {}
+    server = summary.get("server", {}) or {}
+    ilo = summary.get("ilo", {}) or {}
+    capabilities = summary.get("capabilities", {}) or {}
+    hpe_diag = capabilities.get("hpe_smart_storage_diagnostics", {}) or {}
+    found_paths = [str(item.get("path") or "") for item in hpe_diag.get("found_paths", []) if item.get("path")]
+
+    settings_path = ""
+    for path in found_paths:
+        lower = path.lower()
+        if "smartstorageconfig" in lower and lower.endswith("/settings"):
+            settings_path = path
+            break
+    if not settings_path:
+        for path in found_paths:
+            lower = path.lower()
+            if "smartstorageconfig" in lower:
+                settings_path = path.rstrip("/") + "/settings"
+                break
+
+    controller = plan.get("source_discovery", {}).get("controller", {}) or {}
+    server_gen = str(server.get("generation") or "")
+    ilo_version = str(ilo.get("version") or ilo.get("model") or "")
+    if capabilities.get("hpe_smart_storage") and ("Gen10" in server_gen or "iLO 5" in ilo_version):
+        return {
+            "id": "gen10_hpe_smartstorageconfig",
+            "label": "Gen10 / iLO 5 / HPE SmartStorageConfig",
+            "supported": True,
+            "settings_path": settings_path,
+            "controller_path": controller.get("path", ""),
+        }
+    if capabilities.get("standard_redfish_storage"):
+        return {
+            "id": "gen11_standard_redfish",
+            "label": "Gen11 / iLO 6 / standard Redfish Storage",
+            "supported": False,
+            "settings_path": "",
+            "controller_path": controller.get("path", ""),
+        }
+    return {
+        "id": "unsupported",
+        "label": "Unsupported storage apply path",
+        "supported": False,
+        "settings_path": "",
+        "controller_path": controller.get("path", ""),
+    }
+
+
+def validate_storage_apply_request(
+    plan: dict,
+    apply_mode: str,
+    typed_confirmation: str,
+    acknowledged: bool,
+) -> None:
+    if apply_mode not in {"create_only", "wipe_rebuild"}:
+        raise ValueError("Unknown storage apply mode.")
+    if not plan.get("valid", False):
+        raise ValueError("RAID plan is not valid for apply.")
+    controller = plan.get("source_discovery", {}).get("controller", {}) or {}
+    if not (controller.get("name") or controller.get("model") or controller.get("path")):
+        raise ValueError("No storage controller is selected for apply.")
+    if not plan.get("hot_spare", {}).get("reserved"):
+        raise ValueError("Storage apply requires a reserved hot spare.")
+    readiness = plan.get("apply_readiness", {}) or {}
+    if apply_mode == "create_only" and not readiness.get("create_only_ready"):
+        raise ValueError("Create-only apply is not ready for this plan.")
+    if apply_mode == "wipe_rebuild" and not readiness.get("wipe_rebuild_ready"):
+        raise ValueError("Wipe-and-rebuild apply is not ready for this plan.")
+    if not acknowledged:
+        raise ValueError("Storage apply requires the acknowledgment checkbox.")
+    expected_confirmation = storage_apply_confirmation_for_mode(apply_mode)
+    if typed_confirmation.strip() != expected_confirmation:
+        raise ValueError(f"Storage apply requires the exact confirmation string: {expected_confirmation}")
+
+
+def execute_storage_apply_gen10(
+    client: ILOClient,
+    plan: dict,
+    apply_mode: str,
+    platform: dict[str, Any],
+    kit_name: str,
+    job: dict[str, Any],
+    apply_state: dict[str, Any],
+    apply_paths: dict[str, Path],
+    starting_step: int,
+    total_steps: int,
+) -> tuple[int, list[Any]]:
+    settings_path = platform.get("settings_path", "")
+    if not settings_path:
+        raise ILOError("Gen10 SmartStorageConfig settings path could not be determined from discovery.")
+
+    responses = []
+    current = starting_step
+    if apply_mode == "wipe_rebuild":
+        for volume in plan.get("existing_logical_volumes", []) or []:
+            volume_name = volume.get("name") or volume.get("id") or "unnamed-volume"
+            targets = {
+                "controller": apply_state["controller"].get("name") or apply_state["controller"].get("model") or "",
+                "volume": volume_name,
+                "path": volume.get("path", ""),
+            }
+            record_storage_apply_step(
+                kit_name,
+                job,
+                apply_state,
+                apply_paths,
+                "Delete existing logical volume",
+                current,
+                total_steps,
+                "running",
+                "Delete existing logical volumes",
+                targets=targets,
+                details="Issuing controller-specific logical-volume delete.",
+            )
+            response = client.delete_storage_logical_drive(volume.get("path", ""))
+            responses.append(response)
+            record_storage_apply_step(
+                kit_name,
+                job,
+                apply_state,
+                apply_paths,
+                "Delete existing logical volume",
+                current,
+                total_steps,
+                "ok",
+                "Delete existing logical volumes",
+                targets=targets,
+                details="Logical volume delete completed.",
+                response=response,
+            )
+        current += 1
+    else:
+        record_storage_apply_step(
+            kit_name,
+            job,
+            apply_state,
+            apply_paths,
+            "Delete existing logical volumes",
+            current,
+            total_steps,
+            "skip",
+            "Delete existing logical volumes",
+            targets={"controller": apply_state["controller"].get("name") or apply_state["controller"].get("model") or ""},
+            details="Create-only mode selected; no existing logical volumes will be removed.",
+        )
+        current += 1
+
+    os_intent = build_storage_apply_intent(plan, apply_mode)["os_raid1"]
+    record_storage_apply_step(
+        kit_name,
+        job,
+        apply_state,
+        apply_paths,
+        "Create OS RAID 1 logical drive",
+        current,
+        total_steps,
+        "running",
+        "Create OS RAID 1 logical drive",
+        targets={"controller": apply_state["controller"].get("name") or apply_state["controller"].get("model") or "", "bays": os_intent.get("bays", [])},
+        details=f"Apply path={platform.get('label')} | settings_path={settings_path}",
+    )
+    response = client.create_gen10_logical_drive(settings_path, "os_raid1", os_intent)
+    responses.append(response)
+    record_storage_apply_step(
+        kit_name,
+        job,
+        apply_state,
+        apply_paths,
+        "Create OS RAID 1 logical drive",
+        current,
+        total_steps,
+        "ok",
+        "Create OS RAID 1 logical drive",
+        targets={"controller": apply_state["controller"].get("name") or apply_state["controller"].get("model") or "", "bays": os_intent.get("bays", [])},
+        details="OS RAID 1 creation request completed.",
+        response=response,
+    )
+    current += 1
+
+    data_intent = build_storage_apply_intent(plan, apply_mode)["data_raid6"]
+    record_storage_apply_step(
+        kit_name,
+        job,
+        apply_state,
+        apply_paths,
+        "Create Data RAID 6 logical drive",
+        current,
+        total_steps,
+        "running",
+        "Create Data RAID 6 logical drive",
+        targets={"controller": apply_state["controller"].get("name") or apply_state["controller"].get("model") or "", "bays": data_intent.get("bays", [])},
+        details=f"Apply path={platform.get('label')} | settings_path={settings_path}",
+    )
+    response = client.create_gen10_logical_drive(settings_path, "data_raid6", data_intent)
+    responses.append(response)
+    record_storage_apply_step(
+        kit_name,
+        job,
+        apply_state,
+        apply_paths,
+        "Create Data RAID 6 logical drive",
+        current,
+        total_steps,
+        "ok",
+        "Create Data RAID 6 logical drive",
+        targets={"controller": apply_state["controller"].get("name") or apply_state["controller"].get("model") or "", "bays": data_intent.get("bays", [])},
+        details="Data RAID 6 creation request completed.",
+        response=response,
+    )
+    current += 1
+
+    spare_intent = build_storage_apply_intent(plan, apply_mode)["hot_spare"]
+    record_storage_apply_step(
+        kit_name,
+        job,
+        apply_state,
+        apply_paths,
+        "Assign hot spare",
+        current,
+        total_steps,
+        "running",
+        "Assign hot spare",
+        targets={"controller": apply_state["controller"].get("name") or apply_state["controller"].get("model") or "", "bays": [spare_intent.get("bay", "")]},
+        details=f"Apply path={platform.get('label')} | settings_path={settings_path}",
+    )
+    response = client.assign_gen10_hot_spare(settings_path, spare_intent)
+    responses.append(response)
+    record_storage_apply_step(
+        kit_name,
+        job,
+        apply_state,
+        apply_paths,
+        "Assign hot spare",
+        current,
+        total_steps,
+        "ok",
+        "Assign hot spare",
+        targets={"controller": apply_state["controller"].get("name") or apply_state["controller"].get("model") or "", "bays": [spare_intent.get("bay", "")]},
+        details="Hot-spare assignment request completed.",
+        response=response,
+    )
+    current += 1
+    return current, responses
+
+
+def run_storage_apply(
+    cfg: dict,
+    discovery_raw_path: str,
+    raid_plan_path: str,
+    apply_mode: str,
+    apply_paths: dict[str, Path],
+) -> None:
+    kit_name = cfg["site"]["name"]
+    total_steps = 10
+    job = {
+        "status": "Running",
+        "scope": f"storage-apply:{apply_mode}",
+        "current_stage": "",
+        "progress_percent": 0,
+        "completed_steps": 0,
+        "total_steps": total_steps,
+        "logs": [],
+    }
+    save_job(kit_name, job)
+
+    discovery = None
+    discovery_paths = None
+    plan = None
+    plan_paths = None
+    client = None
+    apply_state = {
+        "started_at": time.strftime("%Y-%m-%d %H:%M:%S"),
+        "finished_at": "",
+        "mode": apply_mode,
+        "status": "Running",
+        "apply_path": "",
+        "controller": {},
+        "paths": {key: str(value) for key, value in apply_paths.items()},
+        "steps": [],
+        "responses": [],
+        "errors": [],
+        "reboot_required": False,
+    }
+    save_storage_apply_state(apply_state, apply_paths)
+
+    try:
+        ilo_cfg = cfg.get("ilo", {})
+        host = (ilo_cfg.get("current_ip") or ilo_cfg.get("host") or "").strip()
+        username = (ilo_cfg.get("username") or "").strip()
+        password = ilo_cfg.get("password", "")
+        if not host or not username or not password:
+            raise ValueError("Missing current iLO IP, username, or password for storage apply.")
+
+        discovery, discovery_paths, plan, plan_paths = restore_storage_page_state(
+            discovery_raw_path=discovery_raw_path,
+            raid_plan_path=raid_plan_path,
+            expected_host=host,
+        )
+        record_storage_apply_step(
+            kit_name,
+            job,
+            apply_state,
+            apply_paths,
+            "Validate controller and plan",
+            0,
+            total_steps,
+            "running",
+            "Validate controller and plan",
+            targets={"controller": (plan.get("source_discovery", {}).get("controller", {}) or {}).get("name") or (plan.get("source_discovery", {}).get("controller", {}) or {}).get("model") or ""},
+            details=f"Validating mode={apply_mode} against host={host} and current plan safety gates.",
+        )
+        validate_storage_apply_request(plan, apply_mode, storage_apply_confirmation_for_mode(apply_mode), True)
+        apply_state["controller"] = plan.get("source_discovery", {}).get("controller", {}) or {}
+        client = ILOClient(ILOConfig(host=host, username=username, password=password, verify_tls=False, timeout=15))
+        record_storage_apply_step(
+            kit_name,
+            job,
+            apply_state,
+            apply_paths,
+            "Validate controller and plan",
+            1,
+            total_steps,
+            "ok",
+            "Validate controller and plan",
+            targets={"controller": apply_state["controller"].get("name") or apply_state["controller"].get("model") or ""},
+            details="Plan, controller, host, hot spare, and confirmation gates passed.",
+        )
+
+        record_storage_apply_step(
+            kit_name,
+            job,
+            apply_state,
+            apply_paths,
+            "Export pre-change storage",
+            1,
+            total_steps,
+            "running",
+            "Export pre-change storage",
+            targets={"controller": apply_state["controller"].get("name") or apply_state["controller"].get("model") or ""},
+            details=f"Connecting to {host} and reading current storage state before apply.",
+        )
+        pre_change_discovery = client.get_storage_discovery(deep_smart_storage_scan=False)
+        write_storage_discovery_snapshot_files(
+            apply_paths["pre_change_summary"],
+            apply_paths["pre_change_raw"],
+            cfg,
+            pre_change_discovery,
+            host=host,
+        )
+        record_storage_apply_step(
+            kit_name,
+            job,
+            apply_state,
+            apply_paths,
+            "Export pre-change storage",
+            2,
+            total_steps,
+            "ok",
+            "Export pre-change storage",
+            targets={"controller": apply_state["controller"].get("name") or apply_state["controller"].get("model") or ""},
+            details=f"Saved {apply_paths['pre_change_summary'].name} and {apply_paths['pre_change_raw'].name}.",
+        )
+
+        platform = choose_storage_apply_platform(pre_change_discovery, plan)
+        apply_state["apply_path"] = platform.get("label", "")
+        record_storage_apply_step(
+            kit_name,
+            job,
+            apply_state,
+            apply_paths,
+            "Choose storage apply path",
+            3,
+            total_steps,
+            "ok",
+            "Choose storage apply path",
+            targets={"controller": apply_state["controller"].get("name") or apply_state["controller"].get("model") or "", "path": platform.get("settings_path", "")},
+            details=f"Selected {platform.get('label')} ({platform.get('id')}).",
+        )
+
+        current_step = 4
+        if platform.get("id") == "gen10_hpe_smartstorageconfig":
+            current_step, responses = execute_storage_apply_gen10(
+                client,
+                plan,
+                apply_mode,
+                platform,
+                kit_name,
+                job,
+                apply_state,
+                apply_paths,
+                current_step,
+                total_steps,
+            )
+            apply_state["responses"].extend({"step": "platform_apply", "response": storage_apply_response_excerpt(item)} for item in responses)
+            combined_response = {"responses": [storage_apply_response_excerpt(item) for item in responses]}
+        else:
+            raise ILOError(f"Storage apply path {platform.get('label')} is not implemented yet.")
+
+        record_storage_apply_step(
+            kit_name,
+            job,
+            apply_state,
+            apply_paths,
+            "Poll controller/apply status",
+            current_step,
+            total_steps,
+            "running",
+            "Poll controller/apply status",
+            targets={"controller": apply_state["controller"].get("name") or apply_state["controller"].get("model") or ""},
+            details="Capturing immediate controller/apply responses for this attempt.",
+        )
+        record_storage_apply_step(
+            kit_name,
+            job,
+            apply_state,
+            apply_paths,
+            "Record controller/apply response",
+            current_step,
+            total_steps,
+            "ok",
+            "Poll controller/apply status",
+            targets={"controller": apply_state["controller"].get("name") or apply_state["controller"].get("model") or ""},
+            details="Recorded platform-specific controller/apply responses.",
+            response=combined_response,
+        )
+        current_step += 1
+
+        reboot_required = any(
+            isinstance(item, dict) and item.get("response", {}).get("reboot_required")
+            for item in apply_state.get("responses", [])
+        )
+        apply_state["reboot_required"] = bool(reboot_required)
+        record_storage_apply_step(
+            kit_name,
+            job,
+            apply_state,
+            apply_paths,
+            "Determine whether reboot is required",
+            current_step,
+            total_steps,
+            "ok",
+            "Determine whether reboot is required",
+            targets={"controller": apply_state["controller"].get("name") or apply_state["controller"].get("model") or ""},
+            details=f"reboot_required={apply_state['reboot_required']}",
+        )
+        current_step += 1
+
+        record_storage_apply_step(
+            kit_name,
+            job,
+            apply_state,
+            apply_paths,
+            "Export post-change storage",
+            current_step,
+            total_steps,
+            "running",
+            "Export post-change storage",
+            targets={"controller": apply_state["controller"].get("name") or apply_state["controller"].get("model") or ""},
+            details=f"Reading current storage state after {apply_mode} apply.",
+        )
+        post_change_discovery = client.get_storage_discovery(deep_smart_storage_scan=False)
+        write_storage_discovery_snapshot_files(
+            apply_paths["post_change_summary"],
+            apply_paths["post_change_raw"],
+            cfg,
+            post_change_discovery,
+            host=host,
+        )
+        record_storage_apply_step(
+            kit_name,
+            job,
+            apply_state,
+            apply_paths,
+            "Export post-change storage",
+            total_steps,
+            total_steps,
+            "ok",
+            "Finished",
+            targets={"controller": apply_state["controller"].get("name") or apply_state["controller"].get("model") or ""},
+            details=f"Saved {apply_paths['post_change_summary'].name} and {apply_paths['post_change_raw'].name}.",
+        )
+        apply_state["status"] = "Completed"
+        apply_state["finished_at"] = time.strftime("%Y-%m-%d %H:%M:%S")
+        save_storage_apply_state(apply_state, apply_paths)
+        update_job(
+            kit_name,
+            job,
+            "Completed",
+            "Finished",
+            total_steps,
+            total_steps,
+            f"[DONE] Storage apply finished via {apply_state.get('apply_path')}. reboot_required={apply_state.get('reboot_required')}",
+        )
+    except Exception as e:
+        error_text = str(e).splitlines()[0]
+        apply_state["status"] = "Failed"
+        apply_state["finished_at"] = time.strftime("%Y-%m-%d %H:%M:%S")
+        record_storage_apply_step(
+            kit_name,
+            job,
+            apply_state,
+            apply_paths,
+            "Storage apply failed",
+            job.get("completed_steps", 0),
+            total_steps,
+            "failed",
+            "Storage apply failed",
+            targets={"controller": apply_state.get("controller", {}).get("name") or apply_state.get("controller", {}).get("model") or ""},
+            error=error_text,
+        )
+        if client is not None:
+            try:
+                post_failure_discovery = client.get_storage_discovery(deep_smart_storage_scan=False)
+                host = (cfg.get("ilo", {}).get("current_ip") or cfg.get("ilo", {}).get("host") or "").strip()
+                write_storage_discovery_snapshot_files(
+                    apply_paths["post_change_summary"],
+                    apply_paths["post_change_raw"],
+                    cfg,
+                    post_failure_discovery,
+                    host=host,
+                )
+                record_storage_apply_step(
+                    kit_name,
+                    job,
+                    apply_state,
+                    apply_paths,
+                    "Export post-change storage",
+                    job.get("completed_steps", 0),
+                    total_steps,
+                    "ok",
+                    "Storage apply failed",
+                    targets={"controller": apply_state.get("controller", {}).get("name") or apply_state.get("controller", {}).get("model") or ""},
+                    details=f"Saved failure-state snapshots to {apply_paths['post_change_summary'].name} and {apply_paths['post_change_raw'].name}.",
+                )
+            except Exception as post_error:
+                apply_state.setdefault("errors", []).append(
+                    {"step": "Capture post-change storage discovery", "error": str(post_error).splitlines()[0]}
+                )
+        save_storage_apply_state(apply_state, apply_paths)
+        update_job(
+            kit_name,
+            job,
+            "Failed",
+            "Storage apply failed",
+            job.get("completed_steps", 0),
+            total_steps,
+            f"[FAILED] Storage apply failed: {error_text}",
+        )
+
+
+def execute_storage_apply_in_background(
+    cfg: dict,
+    discovery_raw_path: str,
+    raid_plan_path: str,
+    apply_mode: str,
+    apply_paths: dict[str, Path],
+) -> None:
+    try:
+        run_storage_apply(cfg, discovery_raw_path, raid_plan_path, apply_mode, apply_paths)
+    finally:
+        append_storage_apply_history_snapshot(cfg)
+
+
+def start_storage_apply_background(
+    cfg: dict,
+    discovery_raw_path: str,
+    raid_plan_path: str,
+    apply_mode: str,
+    apply_paths: dict[str, Path],
+) -> None:
+    thread = threading.Thread(
+        target=execute_storage_apply_in_background,
+        args=(cfg, discovery_raw_path, raid_plan_path, apply_mode, apply_paths),
+        daemon=True,
+    )
+    thread.start()
 
 
 def render_exports_folder_listing(root: Path) -> str:
@@ -1787,6 +2622,7 @@ def render_page(
     storage_export_paths: dict[str, Path] | None = None,
     storage_plan: dict | None = None,
     storage_plan_paths: dict[str, Path] | None = None,
+    storage_apply_paths: dict[str, Path] | None = None,
 ):
     active_page = normalize_page_name(active_page)
     page_meta = PAGE_META[active_page]
@@ -1814,6 +2650,7 @@ def render_page(
         "storage_export_paths": storage_export_paths,
         "storage_plan": storage_plan,
         "storage_plan_paths": storage_plan_paths,
+        "storage_apply_paths": storage_apply_paths,
         "job": job,
         "history": history,
         "section_states": summarize_section_states(cfg),
@@ -2389,13 +3226,15 @@ async def plan_raid_layout(
         )
 
 
-@app.post("/view-storage-artifact", response_class=HTMLResponse)
-async def view_storage_artifact(
+@app.post("/apply-storage-layout", response_class=HTMLResponse)
+async def apply_storage_layout(
     request: Request,
     return_page: str = Form("storage"),
     discovery_raw_path: str = Form(""),
     raid_plan_path: str = Form(""),
-    artifact_kind: str = Form("discovery_summary"),
+    apply_mode: str = Form("create_only"),
+    acknowledge_apply: str | None = Form(None),
+    typed_confirmation: str = Form(""),
 ):
     cfg = load_kit_config()
     ilo_cfg = cfg.get("ilo", {})
@@ -2407,21 +3246,85 @@ async def view_storage_artifact(
             raid_plan_path=raid_plan_path,
             expected_host=host,
         )
-        artifact_path, viewer_title = storage_artifact_target(artifact_kind, discovery_paths, plan_paths)
-        viewer_content = artifact_path.read_text(encoding="utf-8")
-        if artifact_path.suffix.lower() == ".json":
+        if not plan_paths:
+            raise ValueError("A RAID plan artifact must be selected before apply.")
+        validate_storage_apply_request(
+            plan,
+            apply_mode,
+            typed_confirmation,
+            acknowledged=acknowledge_apply == "on",
+        )
+        apply_paths = initialize_storage_apply_artifacts(cfg, plan, plan_paths)
+        initialize_background_job(cfg["site"]["name"], f"storage-apply:{apply_mode}")
+        start_storage_apply_background(cfg, discovery_raw_path, raid_plan_path, apply_mode, apply_paths)
+        return render_page(
+            request,
+            cfg,
+            active_page=return_page,
+            message=(
+                f"Started storage apply in {apply_mode.replace('_', ' ')} mode. "
+                f"Apply artifacts will be written under {apply_paths['directory']}. "
+                "Watch the existing Live Job panel for websocket-driven step logs."
+            ),
+            storage_discovery=discovery.get("summary", {}) if discovery else None,
+            storage_export_paths=discovery_paths,
+            storage_plan=plan,
+            storage_plan_paths=plan_paths,
+            storage_apply_paths=apply_paths,
+        )
+    except Exception as e:
+        return render_page(
+            request,
+            cfg,
+            active_page=return_page,
+            error_message=f"Storage apply failed: {str(e).splitlines()[0]}",
+        )
+
+
+@app.post("/view-storage-artifact", response_class=HTMLResponse)
+async def view_storage_artifact(
+    request: Request,
+    return_page: str = Form("storage"),
+    discovery_raw_path: str = Form(""),
+    raid_plan_path: str = Form(""),
+    artifact_kind: str = Form("discovery_summary"),
+    artifact_path: str = Form(""),
+    artifact_title: str = Form(""),
+    apply_artifact_dir: str = Form(""),
+):
+    cfg = load_kit_config()
+    ilo_cfg = cfg.get("ilo", {})
+    host = (ilo_cfg.get("current_ip") or ilo_cfg.get("host") or "").strip()
+
+    try:
+        discovery, discovery_paths, plan, plan_paths = restore_storage_page_state(
+            discovery_raw_path=discovery_raw_path,
+            raid_plan_path=raid_plan_path,
+            expected_host=host,
+        )
+        apply_paths = storage_apply_paths_from_directory(apply_artifact_dir) if apply_artifact_dir else None
+        selected_artifact_path, viewer_title = storage_artifact_target(
+            artifact_kind,
+            discovery_paths,
+            plan_paths,
+            artifact_path_text=artifact_path,
+            artifact_title=artifact_title,
+        )
+        viewer_content = selected_artifact_path.read_text(encoding="utf-8")
+        if selected_artifact_path.suffix.lower() == ".json":
             viewer_content = json.dumps(json.loads(viewer_content), indent=2, sort_keys=False)
         return render_page(
             request,
             cfg,
             active_page=return_page,
-            message=f"Viewing storage artifact {artifact_path}",
+            message=f"Viewing storage artifact {selected_artifact_path}",
             config_view_title=viewer_title,
             config_view_content=viewer_content,
             storage_discovery=discovery.get("summary", {}) if discovery else None,
             storage_export_paths=discovery_paths,
             storage_plan=plan,
             storage_plan_paths=plan_paths,
+            storage_apply_paths=apply_paths,
         )
     except Exception as e:
         return render_page(request, cfg, active_page=return_page, error_message=f"Storage artifact view failed: {str(e).splitlines()[0]}")
@@ -2433,8 +3336,13 @@ async def download_storage_artifact(
     discovery_raw_path: str = Form(""),
     raid_plan_path: str = Form(""),
     artifact_kind: str = Form("discovery_summary"),
+    artifact_path: str = Form(""),
+    artifact_title: str = Form(""),
+    apply_artifact_dir: str = Form(""),
 ):
     del return_page
+    del artifact_title
+    del apply_artifact_dir
     cfg = load_kit_config()
     ilo_cfg = cfg.get("ilo", {})
     host = (ilo_cfg.get("current_ip") or ilo_cfg.get("host") or "").strip()
@@ -2445,9 +3353,14 @@ async def download_storage_artifact(
         expected_host=host,
     )
     del discovery, plan
-    artifact_path, _ = storage_artifact_target(artifact_kind, discovery_paths, plan_paths)
-    media_type = "application/json" if artifact_path.suffix.lower() == ".json" else "text/yaml; charset=utf-8"
-    return FileResponse(path=artifact_path, filename=artifact_path.name, media_type=media_type)
+    selected_artifact_path, _ = storage_artifact_target(
+        artifact_kind,
+        discovery_paths,
+        plan_paths,
+        artifact_path_text=artifact_path,
+    )
+    media_type = "application/json" if selected_artifact_path.suffix.lower() == ".json" else "text/yaml; charset=utf-8"
+    return FileResponse(path=selected_artifact_path, filename=selected_artifact_path.name, media_type=media_type)
 
 
 @app.post("/view-current-kit-config", response_class=HTMLResponse)

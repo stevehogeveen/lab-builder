@@ -33,7 +33,10 @@ class ILOClient:
             return self._get(path, timeout=timeout)
         except TypeError as e:
             if timeout is not None and "unexpected keyword argument 'timeout'" in str(e):
-                return self._get(path)
+                try:
+                    return self._get(path)
+                except Exception as inner:
+                    return {"@error": str(inner), "@path": path}
             return {"@error": str(e), "@path": path}
         except Exception as e:
             return {"@error": str(e), "@path": path}
@@ -1125,6 +1128,50 @@ class ILOClient:
             return r.json()
         except Exception:
             return None
+
+    def _delete(self, path: str) -> dict[str, Any] | None:
+        url = path if path.startswith("http") else f"{self.base}{path}"
+        r = requests.delete(
+            url,
+            auth=self.auth,
+            verify=self.cfg.verify_tls,
+            timeout=self.cfg.timeout,
+        )
+        if r.status_code >= 400:
+            raise ILOError(f"DELETE {url} failed with HTTP {r.status_code}: {r.text[:500]}")
+        if not r.text.strip():
+            return None
+        try:
+            return r.json()
+        except Exception:
+            return None
+
+    def delete_storage_logical_drive(self, volume_path: str) -> dict[str, Any] | None:
+        raise ILOError(
+            "Destructive storage delete is scaffolded, but the active ILOClient does not implement "
+            "controller-specific logical-drive deletion yet."
+        )
+
+    def create_gen10_logical_drive(
+        self,
+        settings_path: str,
+        logical_drive_kind: str,
+        intent: dict[str, Any],
+    ) -> dict[str, Any] | None:
+        raise ILOError(
+            "Gen10 / iLO 5 / HPE SmartStorageConfig apply is scaffolded, but the active ILOClient does not "
+            "implement safe logical-drive creation yet."
+        )
+
+    def assign_gen10_hot_spare(
+        self,
+        settings_path: str,
+        intent: dict[str, Any],
+    ) -> dict[str, Any] | None:
+        raise ILOError(
+            "Gen10 / iLO 5 / HPE SmartStorageConfig apply is scaffolded, but the active ILOClient does not "
+            "implement safe hot-spare assignment yet."
+        )
 
     def get_service_root(self) -> dict[str, Any]:
         return self._get("/redfish/v1/")
