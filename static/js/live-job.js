@@ -50,16 +50,16 @@
 
     function workflowLabel(data) {
         const state = data.workflow_state || "";
-        if (state === "staged_reboot_required") return "Staging completed";
+        if (state === "staged_reboot_required") return "Staging complete / reboot required";
         if (state === "reboot_requested") return "Reboot requested";
         if (state === "waiting_for_reboot_start") return "Waiting for reboot start";
         if (state === "waiting_for_server_return") return "Waiting for server to return";
         if (state === "post_reboot_validation_pending") return "Post-reboot validation pending";
-        if (state === "post_reboot_validation_complete") return "Post-reboot validation complete";
-        if (state === "apply_complete") return "Apply complete";
+        if (state === "post_reboot_validation_complete") return "Fully complete";
+        if (state === "apply_complete") return "Fully complete";
         if (state === "reboot_failed") return "Reboot failed";
         if (state === "apply_failed") return "Apply failed";
-        if (state === "running_apply") return "Applying changes";
+        if (state === "running_apply") return "Staging in progress";
         if (state === "queued") return "Queued";
         return data.status || "Idle";
     }
@@ -79,6 +79,14 @@
         window.setTimeout(function () {
             node.scrollIntoView({ behavior: "smooth", block: "center" });
         }, 60);
+    }
+
+    function scrollToHashTargetSoon() {
+        const hash = window.location.hash || "";
+        if (!hash || hash.length < 2) return;
+        const target = document.getElementById(hash.slice(1));
+        if (!target) return;
+        scrollIntoViewSoon(target);
     }
 
     window.bindStorageProgressCard = function bindStorageProgressCard(opts) {
@@ -145,4 +153,11 @@
             lastScope = scope;
         };
     };
+
+    if (document.readyState === "loading") {
+        document.addEventListener("DOMContentLoaded", scrollToHashTargetSoon);
+    } else {
+        scrollToHashTargetSoon();
+    }
+    document.body && document.body.addEventListener("htmx:afterSwap", scrollToHashTargetSoon);
 })();

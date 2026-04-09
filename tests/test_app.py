@@ -646,7 +646,7 @@ def client(tmp_path, monkeypatch):
 
 
 def test_navigation_pages_render(client):
-    for path in ["/", "/dashboard", "/execution", "/configuration", "/configs", "/storage", "/kits", "/history"]:
+    for path in ["/", "/dashboard", "/global-settings", "/ilo", "/storage", "/esxi", "/windows", "/qnap", "/execution", "/configuration", "/configs", "/kits", "/history"]:
         response = client.get(path)
         assert response.status_code == 200
 
@@ -810,6 +810,83 @@ def test_save_config_rebuilds_ip_plan_when_subnet_changes(client):
     assert cfg["ip_plan"]["ilo"] == "10.20.30.11"
 
 
+def test_save_global_settings_updates_shared_defaults(client):
+    response = client.post(
+        "/save-global-settings",
+        data={
+            "return_page": "global_settings",
+            "site_name": "Global Kit",
+            "shared_subnet": "10.30.40.0/24",
+            "gateway_ip": "10.30.40.1",
+            "switch_ip": "10.30.40.2",
+            "esxi_ip": "10.30.40.10",
+            "ilo_target_ip": "10.30.40.11",
+            "windows_ip": "10.30.40.20",
+            "qnap_ip": "10.30.40.30",
+            "iosafe_ip": "10.30.40.31",
+            "dns1": "1.1.1.1",
+            "dns2": "8.8.8.8",
+            "dns3": "",
+            "dns4": "",
+            "snmp_v3_username": "snmpuser",
+            "snmp_v3_auth_protocol": "SHA",
+            "snmp_v3_auth_password": "authsecret",
+            "snmp_v3_priv_protocol": "AES",
+            "snmp_v3_priv_password": "privsecret",
+            "included_ilo": "on",
+            "included_esxi": "on",
+            "included_windows": "on",
+            "included_storage": "on",
+        },
+    )
+
+    assert response.status_code == 200
+    cfg = main.load_kit_config("Global-Kit")
+    assert cfg["shared_network"]["subnet"] == "10.30.40.0/24"
+    assert cfg["ip_plan"]["ilo"] == "10.30.40.11"
+    assert cfg["included"]["storage"] is True
+
+
+def test_save_ilo_settings_updates_only_ilo_page_fields(client):
+    cfg = main.default_config()
+    cfg["site"]["name"] = "Ilo Page Kit"
+    main.save_kit_config(cfg)
+
+    response = client.post(
+        "/save-ilo-settings",
+        data={
+            "return_page": "ilo",
+            "ilo_current_ip": "10.10.8.50",
+            "ilo_target_ip": "10.10.8.11",
+            "ilo_hostname": "ilo-focused",
+            "ilo_username": "Administrator",
+            "ilo_password": "secret",
+            "included_ilo": "on",
+        },
+    )
+
+    assert response.status_code == 200
+    cfg = main.load_kit_config("Ilo-Page-Kit")
+    assert cfg["ilo"]["current_ip"] == "10.10.8.50"
+    assert cfg["ilo"]["hostname"] == "ilo-focused"
+    assert cfg["included"]["ilo"] is True
+
+
+def test_save_esxi_windows_and_qnap_page_settings(client):
+    cfg = main.default_config()
+    cfg["site"]["name"] = "Workflow Kit"
+    main.save_kit_config(cfg)
+
+    client.post("/save-esxi-settings", data={"return_page": "esxi", "esxi_hostname": "esxi-lab", "esxi_root_password": "secret", "included_esxi": "on"})
+    client.post("/save-windows-settings", data={"return_page": "windows", "windows_vm_name": "win-lab", "windows_admin_password": "secret", "included_windows": "on"})
+    client.post("/save-qnap-settings", data={"return_page": "qnap", "qnap_hostname": "qnap-lab", "qnap_username": "admin", "qnap_password": "secret", "included_qnap": "on"})
+
+    cfg = main.load_kit_config("Workflow-Kit")
+    assert cfg["esxi"]["hostname"] == "esxi-lab"
+    assert cfg["windows"]["vm_name"] == "win-lab"
+    assert cfg["qnap"]["hostname"] == "qnap-lab"
+
+
 def test_autofill_ip_plan_uses_entered_subnet(client):
     response = client.post(
         "/autofill-ip-plan",
@@ -971,6 +1048,7 @@ def test_read_current_storage_saves_discovery_export_and_renders_summary(client,
 
     assert response.status_code == 200
     assert "Storage / RAID" in response.text
+    assert "Review storage setup" in response.text
     assert "Gen11" in response.text
     assert "iLO 6" in response.text
     assert "MR416i-o" in response.text
@@ -979,9 +1057,13 @@ def test_read_current_storage_saves_discovery_export_and_renders_summary(client,
     assert "OS Volume" in response.text
     assert "RAID1" in response.text
     assert "HPE SSD" in response.text
-    assert "Export path:" in response.text
+    assert "Review storage setup" in response.text
+    assert "Selected server:" in response.text
+    assert "10.10.8.60" in response.text
+    assert "current kit iLO IP" in response.text
+    assert "Sign-in user:" in response.text
     assert 'hx-indicator="#read-storage-progress"' in response.text
-    assert "Reading current storage from iLO. This can take a bit on real hardware." in response.text
+    assert "Checking current storage on the server." in response.text
 
     export_dir = main.STORAGE_RAID_EXPORT_DIR / "ABC123" / "20260407-150000"
     summary_path = export_dir / "summary.yml"
@@ -1013,6 +1095,67 @@ def test_read_current_storage_warns_when_smart_storage_controller_has_no_childre
     assert "Deep fallback ran: True" in response.text
     assert "LogicalDrives" in response.text
     assert "DiskDrives" in response.text
+
+
+def test_storage_target_host_prefers_current_kit_ip_over_artifact_host():
+    cfg = main.default_config()
+    cfg["ilo"]["current_ip"] = "10.10.8.90"
+    cfg["ilo"]["host"] = "10.10.8.91"
+    cfg["storage"]["latest_host"] = "10.10.8.92"
+    cfg["storage"]["approval"]["host"] = "10.10.8.93"
+
+    resolved = main.resolve_storage_target_host(cfg)
+
+    assert resolved["resolved"] == "10.10.8.90"
+    assert resolved["source"] == "current kit iLO IP"
+    assert resolved["artifact_fallback"] is False
+
+
+def test_storage_target_host_can_fallback_to_latest_artifact_when_kit_host_is_missing():
+    cfg = main.default_config()
+    cfg["storage"]["latest_host"] = "10.10.8.92"
+
+    resolved = main.resolve_storage_target_host(cfg)
+
+    assert resolved["resolved"] == "10.10.8.92"
+    assert resolved["source"] == "latest discovery artifact"
+    assert resolved["artifact_fallback"] is True
+
+
+def test_storage_target_host_reports_clear_error_when_no_host_is_resolved():
+    cfg = main.default_config()
+    resolved = main.resolve_storage_target_host(cfg)
+
+    assert resolved["valid"] is False
+    assert resolved["resolved"] == ""
+    assert "No storage target host is resolved." in resolved["error"]
+
+
+def test_save_storage_target_persists_explicit_storage_credentials(client):
+    cfg = main.default_config()
+    cfg["site"]["name"] = "Storage Target Kit"
+    cfg["ilo"]["current_ip"] = "10.10.8.60"
+    cfg["ilo"]["host"] = "10.10.8.60"
+    cfg["ilo"]["username"] = "Administrator"
+    cfg["ilo"]["password"] = "kit-password"
+    main.save_kit_config(cfg)
+
+    response = client.post(
+        "/save-storage-target",
+        data={
+            "return_page": "storage",
+            "storage_target_host": "10.10.8.99",
+            "storage_username": "StorageAdmin",
+            "storage_password": "storage-secret",
+        },
+    )
+
+    assert response.status_code == 200
+    assert "Saved storage target settings." in response.text
+    saved = main.load_kit_config("Storage-Target-Kit")
+    assert saved["storage"]["target_host_override"] == "10.10.8.99"
+    assert saved["storage"]["username"] == "StorageAdmin"
+    assert saved["storage"]["password"] == "storage-secret"
 
 
 def test_gen10_smart_storage_traversal_follows_controller_child_collections():
@@ -1285,32 +1428,31 @@ def test_plan_raid_layout_uses_displayed_discovery_artifact_and_saves_plan(clien
     )
 
     assert response.status_code == 200
-    assert "Proposed RAID Plan" in response.text
-    assert "Source host:" in response.text
+    assert "What will happen" in response.text
+    assert "Review storage setup" in response.text
+    assert "Selected server:" in response.text
+    assert "Server:" in response.text
     assert "10.10.8.80" in response.text
-    assert "Existing logical volumes detected" in response.text
+    assert "This server already has storage set up:" in response.text
     assert "wipe and rebuild" in response.text
     assert "SSD-480" in response.text
     assert "HDD-1200" in response.text
     assert "Oddball" in response.text
-    assert "Hot Spare" in response.text
+    assert "Hot spare" in response.text
     assert "Reserved as the data-side hot spare" in response.text
-    assert "Controller firmware:" in response.text
-    assert "Planned Logical Layout" in response.text
+    assert "Planned layout" in response.text
     assert "target size 500 GiB on bays 1, 2" in response.text
     assert "3, 4, 5, 6" in response.text
     assert "remaining compatible eligible drives after reserving one hot spare" in response.text
     assert "bay 8" in response.text
-    assert "Read-Only Pre-Apply Summary" in response.text
-    assert "Existing Logical Volumes That Would Be Removed" in response.text
-    assert "New Logical Layout That Would Be Created" in response.text
+    assert "What would change" in response.text
+    assert "Existing storage that would be removed" in response.text
+    assert "New layout that would be created" in response.text
     assert "Reserved hot spare:" in response.text
-    assert "Apply Actions" in response.text
-    assert "Create Storage Layout" in response.text
-    assert "Create-only is blocked." in response.text
-    assert "Existing logical volumes are present. Create-only is disabled until the controller is empty." in response.text
-    assert 'type="submit" disabled>Create Storage Layout</button>' in response.text
-    assert "Wipe and Rebuild Storage Layout" in response.text
+    assert "Storage setup status" in response.text
+    assert "Approve this storage setup" in response.text
+    assert "Approve for setup" in response.text
+    assert "Include this approved storage plan in the later iLO run" in response.text
     plan_path = export_paths["directory"] / "raid-plan.yml"
     assert plan_path.exists()
     plan_text = plan_path.read_text(encoding="utf-8")
@@ -1320,6 +1462,169 @@ def test_plan_raid_layout_uses_displayed_discovery_artifact_and_saves_plan(clien
     assert "typed_confirmation: WIPE STORAGE" in plan_text
     assert "Reserved as the data-side hot spare" in plan_text
     assert "Not in the selected RAID 6 compatible media/protocol/capacity" in plan_text
+
+
+def test_approve_storage_plan_saves_exact_artifact_paths_for_later_ilo_run(client):
+    cfg = main.default_config()
+    cfg["site"]["name"] = "Approval Kit"
+    cfg["ilo"]["current_ip"] = "10.10.8.90"
+    cfg["ilo"]["host"] = "10.10.8.90"
+    main.save_kit_config(cfg)
+
+    discovery = planner_gen10_apply_discovery(existing_volumes=True)
+    export_paths = main.export_storage_discovery_snapshot(cfg, discovery, host="10.10.8.90")
+    plan = main.build_raid_plan(discovery, export_paths)
+    plan_paths = main.export_raid_plan_snapshot(cfg, plan, export_paths)
+
+    response = client.post(
+        "/approve-storage-plan",
+        data={
+            "return_page": "storage",
+            "discovery_raw_path": str(export_paths["raw"]),
+            "raid_plan_path": str(plan_paths["plan"]),
+            "include_in_ilo_run": "on",
+        },
+    )
+
+    assert response.status_code == 200
+    assert "Approved storage plan" in response.text
+    cfg_after = main.load_kit_config("Approval-Kit")
+    storage_cfg = cfg_after["storage"]
+    assert storage_cfg["state"] == "approved"
+    assert storage_cfg["include_in_ilo_run"] is True
+    assert storage_cfg["approval"]["discovery_raw_path"] == str(export_paths["raw"])
+    assert storage_cfg["approval"]["plan_path"] == str(plan_paths["plan"])
+    assert cfg_after["included"]["storage"] is True
+
+
+def test_storage_approval_becomes_stale_when_latest_discovery_changes():
+    cfg = main.default_config()
+    cfg["site"]["name"] = "Stale Kit"
+    discovery = planner_gen10_apply_discovery(existing_volumes=True)
+    export_paths = {
+        "directory": main.Path("/tmp/storage-approval"),
+        "summary": main.Path("/tmp/storage-approval/summary.yml"),
+        "raw": main.Path("/tmp/storage-approval/raw.json"),
+    }
+    plan = main.build_raid_plan(discovery, export_paths)
+    plan_paths = {"directory": export_paths["directory"], "plan": main.Path("/tmp/storage-approval/raid-plan.yml")}
+
+    main.approve_storage_plan_for_cfg(cfg, discovery, export_paths, plan, plan_paths, include_in_ilo_run=True)
+    changed = planner_gen10_apply_discovery(existing_volumes=False)
+    changed["summary"]["hpe_smart_storage"]["drives"][0]["status"] = "Predictive Failure"
+    main.update_storage_latest_state(cfg, discovery=changed, discovery_paths=export_paths)
+
+    assert cfg["storage"]["state"] == "stale"
+    assert cfg["storage"]["approval"]["state"] == "stale"
+    assert "approved discovery basis" in cfg["storage"]["status_reason"]
+
+
+def test_storage_approval_becomes_stale_when_storage_target_host_changes():
+    cfg = main.default_config()
+    cfg["site"]["name"] = "Stale Host Kit"
+    cfg["ilo"]["current_ip"] = "10.10.8.90"
+    cfg["ilo"]["host"] = "10.10.8.90"
+    discovery = planner_gen10_apply_discovery(existing_volumes=True)
+    export_paths = {
+        "directory": main.Path("/tmp/storage-approval-host"),
+        "summary": main.Path("/tmp/storage-approval-host/summary.yml"),
+        "raw": main.Path("/tmp/storage-approval-host/raw.json"),
+    }
+    plan = main.build_raid_plan(discovery, export_paths)
+    plan_paths = {"directory": export_paths["directory"], "plan": main.Path("/tmp/storage-approval-host/raid-plan.yml")}
+
+    main.approve_storage_plan_for_cfg(cfg, discovery, export_paths, plan, plan_paths, include_in_ilo_run=True)
+    cfg["storage"]["target_host_override"] = "10.10.8.91"
+    main.refresh_storage_approval_from_saved_state(cfg)
+
+    assert cfg["storage"]["state"] == "stale"
+    assert "differs from the approved storage host" in cfg["storage"]["status_reason"]
+
+
+def test_prepare_execute_shows_combined_storage_review_using_exact_approved_artifact(client):
+    cfg = main.default_config()
+    cfg["site"]["name"] = "Exec Kit"
+    cfg["ilo"]["current_ip"] = "10.10.8.90"
+    cfg["ilo"]["host"] = "10.10.8.90"
+    main.save_kit_config(cfg)
+
+    discovery = planner_gen10_apply_discovery(existing_volumes=True)
+    export_paths = main.export_storage_discovery_snapshot(cfg, discovery, host="10.10.8.90")
+    plan = main.build_raid_plan(discovery, export_paths)
+    plan_paths = main.export_raid_plan_snapshot(cfg, plan, export_paths)
+    cfg = main.load_kit_config("Exec-Kit")
+    main.approve_storage_plan_for_cfg(cfg, discovery, export_paths, plan, plan_paths, include_in_ilo_run=True)
+    cfg["included"]["storage"] = True
+    main.save_kit_config(cfg)
+
+    response = client.post(
+        "/prepare-execute",
+        data={"scope": "ilo", "return_page": "execution"},
+    )
+
+    assert response.status_code == 200
+    assert "Pre-run review:" in response.text
+    assert "Storage and iLO run" in response.text
+    assert "Storage approved" in response.text
+    assert "Review or remove storage approval" in response.text
+    assert "/storage#storage-approval-actions" in response.text
+    assert str(export_paths["raw"]) in response.text
+    assert str(plan_paths["plan"]) in response.text
+    assert "Storage included -&gt; Yes" in response.text or "Storage included -> Yes" in response.text
+
+
+def test_execution_page_warns_when_storage_is_not_approved(client):
+    cfg = main.default_config()
+    cfg["site"]["name"] = "Exec Warn Kit"
+    cfg["ilo"]["current_ip"] = "10.10.8.90"
+    cfg["ilo"]["host"] = "10.10.8.90"
+    cfg["included"]["storage"] = False
+    main.save_kit_config(cfg)
+
+    response = client.get("/execution")
+
+    assert response.status_code == 200
+    assert "Storage and iLO run" in response.text
+    assert "Storage not approved" in response.text
+    assert "Storage/RAID will not be configured during the iLO run until it is set up and approved" in response.text
+    assert "Go to Storage / RAID" in response.text
+    assert "/storage#storage-review-start" in response.text
+
+
+def test_execute_is_blocked_when_included_storage_plan_is_stale(client):
+    cfg = main.default_config()
+    cfg["site"]["name"] = "Exec Block Kit"
+    cfg["ilo"]["current_ip"] = "10.10.8.90"
+    cfg["ilo"]["host"] = "10.10.8.90"
+    cfg["ilo"]["username"] = "Administrator"
+    cfg["ilo"]["password"] = "kit-password"
+    discovery = planner_gen10_apply_discovery(existing_volumes=True)
+    export_paths = {
+        "directory": main.Path("/tmp/storage-stale"),
+        "summary": main.Path("/tmp/storage-stale/summary.yml"),
+        "raw": main.Path("/tmp/storage-stale/raw.json"),
+    }
+    plan = main.build_raid_plan(discovery, export_paths)
+    plan_paths = {"directory": export_paths["directory"], "plan": main.Path("/tmp/storage-stale/raid-plan.yml")}
+    main.approve_storage_plan_for_cfg(cfg, discovery, export_paths, plan, plan_paths, include_in_ilo_run=True)
+    cfg["included"]["storage"] = True
+    changed = planner_gen10_apply_discovery(existing_volumes=False)
+    main.update_storage_latest_state(cfg, discovery=changed, discovery_paths=export_paths)
+    main.save_kit_config(cfg)
+
+    response = client.post(
+        "/execute",
+        data={
+            "scope": "ilo",
+            "confirm_checkbox": "on",
+            "confirm_phrase": "EXECUTE",
+            "return_page": "execution",
+        },
+    )
+
+    assert response.status_code == 200
+    assert "Execution blocked:" in response.text
+    assert "stale" in response.text.lower()
 
 
 def test_build_raid_plan_blocks_when_no_compatible_data_spare_remains():
@@ -1356,7 +1661,15 @@ def test_plan_raid_layout_rejects_discovery_from_different_host(client):
 
     assert response.status_code == 200
     assert "RAID planning failed" in response.text
-    assert "host mismatch" in response.text
+
+
+def test_plan_raid_layout_blocks_when_storage_host_is_missing():
+    cfg = main.default_config()
+    resolved = main.resolve_storage_target_host(cfg)
+
+    assert resolved["valid"] is False
+    assert resolved["source"] == ""
+    assert "current kit iLO IP/host" in resolved["error"]
 
 
 def test_apply_storage_layout_blocks_create_only_when_not_ready(client, monkeypatch):
@@ -1467,9 +1780,9 @@ def test_apply_storage_layout_creates_artifacts_and_logs_success(client, monkeyp
     assert response.status_code == 200
     assert "Apply Attempt Artifacts" in response.text
     assert "View Apply Log" in response.text
-    assert "Storage Workflow Progress" in response.text
-    assert "Staging completed" in response.text
-    assert "Storage changes are staged only. A server reboot is required before the new layout can be validated." in response.text
+    assert "Storage setup progress" in response.text
+    assert "Restart needed to finish" in response.text
+    assert "Storage changes are staged, but they will not finish until the server restarts." in response.text
     assert "Reboot Required" in response.text
     assert "Reboot Machine Now" in response.text
     assert "This button sends a real Redfish reset request through iLO and waits for the server to return." in response.text
@@ -1488,7 +1801,8 @@ def test_apply_storage_layout_creates_artifacts_and_logs_success(client, monkeyp
     assert job["scope"] == "storage-apply:wipe_rebuild"
     assert job["status"] == "Staged"
     assert job["current_stage"] == "Reboot required"
-    assert job["progress_percent"] == 100
+    assert job["progress_percent"] < 100
+    assert job["progress_percent"] == 68
     assert any("Validate controller and plan" in line for line in job["logs"])
     assert any("Export pre-change storage" in line for line in job["logs"])
     assert any("Create OS RAID 1 logical drive" in line for line in job["logs"])
@@ -1626,7 +1940,7 @@ def test_reboot_storage_now_creates_reboot_artifacts_and_logs_success(client, mo
 
     assert response.status_code == 200
     assert "Storage Workflow Progress" in response.text
-    assert "Post-reboot validation complete" in response.text
+    assert "Fully complete" in response.text
     assert (apply_dir / "reboot-results.json").exists()
     assert (apply_dir / "post-reboot-summary.yml").exists()
     assert (apply_dir / "post-reboot-raw.json").exists()
@@ -1635,6 +1949,7 @@ def test_reboot_storage_now_creates_reboot_artifacts_and_logs_success(client, mo
     job = main.load_job("Apply-Kit")
     assert job["scope"] == "storage-reboot"
     assert job["status"] == "Completed"
+    assert job["progress_percent"] == 100
     assert any("Request server reboot" in line for line in job["logs"])
     assert any("Wait for reboot start" in line for line in job["logs"])
     assert any("Wait for server to return" in line for line in job["logs"])
@@ -1706,6 +2021,16 @@ def test_reboot_storage_now_failure_is_logged(client, monkeypatch):
     assert any("simulated reboot failure" in line for line in job["logs"])
     assert "\"status\": \"Failed\"" in reboot_results_text
     assert "\"workflow_state\": \"reboot_failed\"" in apply_results_text
+
+
+def test_storage_workflow_progress_percent_stays_below_complete_until_validation_finishes():
+    assert main.storage_workflow_progress_percent("running_apply", 5, 10) < 68
+    assert main.storage_workflow_progress_percent("staged_reboot_required", 10, 10) == 68
+    assert main.storage_workflow_progress_percent("reboot_requested", 0, 5) == 72
+    assert main.storage_workflow_progress_percent("waiting_for_reboot_start", 1, 5) == 78
+    assert main.storage_workflow_progress_percent("waiting_for_server_return", 2, 5) == 86
+    assert main.storage_workflow_progress_percent("post_reboot_validation_pending", 4, 5) == 94
+    assert main.storage_workflow_progress_percent("post_reboot_validation_complete", 5, 5) == 100
 
 
 def test_apply_storage_layout_blocks_host_mismatch(client, monkeypatch):
