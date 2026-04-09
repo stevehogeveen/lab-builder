@@ -64,7 +64,7 @@ class FakeILOClient:
                 },
                 "accounts": [{"id": "1", "username": "Administrator", "role": "Administrator"}],
                 "storage": {
-                    "controllers": [{"name": "Smart Array", "firmware_version": "1.23"}],
+                    "controllers": [{"name": "Smart Array", "firmware_version": {"Current": {"VersionString": "1.98"}}}],
                     "volumes": [{"id": "1", "name": "Volume1"}],
                     "drives": [{"id": "1", "name": "Drive1"}],
                 },
@@ -111,7 +111,7 @@ class FakeILOClient:
                             "path": "/redfish/v1/Systems/1/Storage/1",
                             "name": "Smart Array",
                             "model": "MR416i-o",
-                            "firmware_version": "1.23",
+                            "firmware_version": {"Current": {"VersionString": "1.98"}},
                             "manufacturer": "HPE",
                             "status": "OK / Enabled",
                         }
@@ -293,6 +293,163 @@ class FakeGen10FastSmartStorageILOClient(FakeGen10SmartStorageILOClient):
         controller = self.docs["/redfish/v1/Systems/1/SmartStorage/ArrayControllers/0"]
         controller["LogicalDrives"] = {"@odata.id": "/redfish/v1/Systems/1/SmartStorage/ArrayControllers/0/LogicalDrives"}
         controller["DiskDrives"] = {"@odata.id": "/redfish/v1/Systems/1/SmartStorage/ArrayControllers/0/DiskDrives"}
+
+
+class FakeGen10NestedOemSmartStorageILOClient(FakeGen10SmartStorageILOClient):
+    def __init__(self):
+        super().__init__()
+        self.docs["/redfish/v1/Systems/1"]["Oem"] = {
+            "Hp": {
+                "Links": {
+                    "SmartStorage": {"@odata.id": "/redfish/v1/Systems/1/Oem/Hp/SmartStorage"}
+                }
+            }
+        }
+        self.docs["/redfish/v1/Systems/1/Oem/Hp/SmartStorage"] = {
+            "@odata.id": "/redfish/v1/Systems/1/Oem/Hp/SmartStorage",
+            "ArrayControllers": {"@odata.id": "/redfish/v1/Systems/1/Oem/Hp/SmartStorage/ArrayControllers"},
+        }
+        self.docs["/redfish/v1/Systems/1/Oem/Hp/SmartStorage/ArrayControllers"] = {
+            "@odata.id": "/redfish/v1/Systems/1/Oem/Hp/SmartStorage/ArrayControllers",
+            "Members": [{"@odata.id": "/redfish/v1/Systems/1/Oem/Hp/SmartStorage/ArrayControllers/0"}],
+        }
+        self.docs["/redfish/v1/Systems/1/Oem/Hp/SmartStorage/ArrayControllers/0"] = {
+            "@odata.id": "/redfish/v1/Systems/1/Oem/Hp/SmartStorage/ArrayControllers/0",
+            "Name": "Smart Array P408i-a SR Gen10",
+            "Model": "P408i-a",
+            "FirmwareVersion": "4.11",
+            "LogicalDrives": {"@odata.id": "/redfish/v1/Systems/1/Oem/Hp/SmartStorage/ArrayControllers/0/LogicalDrives"},
+            "DiskDrives": {"@odata.id": "/redfish/v1/Systems/1/Oem/Hp/SmartStorage/ArrayControllers/0/DiskDrives"},
+            "Status": {"Health": "OK", "State": "Enabled"},
+        }
+        self.docs["/redfish/v1/Systems/1/Oem/Hp/SmartStorage/ArrayControllers/0/LogicalDrives"] = {
+            "@odata.id": "/redfish/v1/Systems/1/Oem/Hp/SmartStorage/ArrayControllers/0/LogicalDrives",
+            "Members": [{"@odata.id": "/redfish/v1/Systems/1/Oem/Hp/SmartStorage/ArrayControllers/0/LogicalDrives/1"}],
+        }
+        self.docs["/redfish/v1/Systems/1/Oem/Hp/SmartStorage/ArrayControllers/0/LogicalDrives/1"] = {
+            "@odata.id": "/redfish/v1/Systems/1/Oem/Hp/SmartStorage/ArrayControllers/0/LogicalDrives/1",
+            "Id": "1",
+            "Name": "Logical Drive 1",
+            "Raid": "RAID1",
+            "CapacityMiB": 102400,
+            "Status": {"Health": "OK", "State": "Enabled"},
+        }
+        self.docs["/redfish/v1/Systems/1/Oem/Hp/SmartStorage/ArrayControllers/0/DiskDrives"] = {
+            "@odata.id": "/redfish/v1/Systems/1/Oem/Hp/SmartStorage/ArrayControllers/0/DiskDrives",
+            "Members": [{"@odata.id": "/redfish/v1/Systems/1/Oem/Hp/SmartStorage/ArrayControllers/0/DiskDrives/1"}],
+        }
+        self.docs["/redfish/v1/Systems/1/Oem/Hp/SmartStorage/ArrayControllers/0/DiskDrives/1"] = {
+            "@odata.id": "/redfish/v1/Systems/1/Oem/Hp/SmartStorage/ArrayControllers/0/DiskDrives/1",
+            "Id": "1",
+            "Name": "Drive 1",
+            "Model": "HPE SAS SSD",
+            "CapacityMiB": 102400,
+            "DriveMediaType": "SSD",
+            "InterfaceType": "SAS",
+            "Status": {"Health": "OK", "State": "Enabled"},
+        }
+
+        for legacy_path in (
+            "/redfish/v1/Systems/1/SmartStorage",
+            "/redfish/v1/Systems/1/SmartStorage/ArrayControllers",
+            "/redfish/v1/Systems/1/SmartStorage/ArrayControllers/0",
+            "/redfish/v1/Systems/1/SmartStorage/ArrayControllers/0/LogicalDrives",
+            "/redfish/v1/Systems/1/SmartStorage/ArrayControllers/0/LogicalDrives/1",
+            "/redfish/v1/Systems/1/SmartStorage/ArrayControllers/0/DiskDrives",
+            "/redfish/v1/Systems/1/SmartStorage/ArrayControllers/0/DiskDrives/1",
+        ):
+            self.docs.pop(legacy_path, None)
+
+
+class FakeGen10RealBoxSmartStorageILOClient(ILOClient):
+    def __init__(self):
+        super().__init__(ILOConfig(host="ilo-realbox.example.test", username="Administrator", password="secret"))
+        self.docs = {
+            "/redfish/v1/": {
+                "Name": "Root",
+                "RedfishVersion": "1.20.0",
+                "Systems": {"@odata.id": "/redfish/v1/Systems/"},
+                "Managers": {"@odata.id": "/redfish/v1/Managers/"},
+            },
+            "/redfish/v1/Managers/": {"Members": [{"@odata.id": "/redfish/v1/Managers/1"}]},
+            "/redfish/v1/Managers/1": {"@odata.id": "/redfish/v1/Managers/1", "Model": "iLO 5", "FirmwareVersion": "2.99"},
+            "/redfish/v1/Systems/": {"Members": [{"@odata.id": "/redfish/v1/Systems/1"}]},
+            "/redfish/v1/Systems/1": {
+                "@odata.id": "/redfish/v1/Systems/1",
+                "Model": "ProLiant DL360 Gen10",
+                "ProductName": "DL360",
+                "SerialNumber": "MXQ85103SX",
+                "Oem": {
+                    "Hpe": {
+                        "Links": {
+                            "SmartStorage": {"@odata.id": "/redfish/v1/Systems/1/SmartStorage"}
+                        },
+                        "SmartStorageConfig": [
+                            {"@odata.id": "/redfish/v1/systems/1/smartstorageconfig"}
+                        ],
+                    }
+                },
+            },
+            "/redfish/v1/Systems/1/SmartStorage": {
+                "@odata.id": "/redfish/v1/Systems/1/SmartStorage",
+                "ArrayControllers": {"@odata.id": "/redfish/v1/Systems/1/SmartStorage/ArrayControllers"},
+                "Name": "Smart Storage",
+            },
+            "/redfish/v1/Systems/1/SmartStorage/ArrayControllers": {
+                "@odata.id": "/redfish/v1/Systems/1/SmartStorage/ArrayControllers",
+                "Members": [{"@odata.id": "/redfish/v1/Systems/1/SmartStorage/ArrayControllers/0"}],
+            },
+            "/redfish/v1/Systems/1/SmartStorage/ArrayControllers/0": {
+                "@odata.id": "/redfish/v1/Systems/1/SmartStorage/ArrayControllers/0",
+                "Name": "Smart Array P408i-a SR Gen10",
+                "Model": "P408i-a",
+                "FirmwareVersion": "4.11",
+                "LogicalDrives": {"@odata.id": "/redfish/v1/Systems/1/SmartStorage/ArrayControllers/0/LogicalDrives"},
+                "DiskDrives": {"@odata.id": "/redfish/v1/Systems/1/SmartStorage/ArrayControllers/0/DiskDrives"},
+                "Status": {"Health": "OK", "State": "Enabled"},
+            },
+            "/redfish/v1/Systems/1/SmartStorage/ArrayControllers/0/LogicalDrives": {
+                "@odata.id": "/redfish/v1/Systems/1/SmartStorage/ArrayControllers/0/LogicalDrives",
+                "Members": [{"@odata.id": "/redfish/v1/Systems/1/SmartStorage/ArrayControllers/0/LogicalDrives/1"}],
+            },
+            "/redfish/v1/Systems/1/SmartStorage/ArrayControllers/0/LogicalDrives/1": {
+                "@odata.id": "/redfish/v1/Systems/1/SmartStorage/ArrayControllers/0/LogicalDrives/1",
+                "Id": "1",
+                "Name": "Logical Drive 1",
+                "Raid": "RAID1",
+                "CapacityMiB": 102400,
+                "Status": {"Health": "OK", "State": "Enabled"},
+            },
+            "/redfish/v1/Systems/1/SmartStorage/ArrayControllers/0/DiskDrives": {
+                "@odata.id": "/redfish/v1/Systems/1/SmartStorage/ArrayControllers/0/DiskDrives",
+                "Members": [{"@odata.id": "/redfish/v1/Systems/1/SmartStorage/ArrayControllers/0/DiskDrives/1"}],
+            },
+            "/redfish/v1/Systems/1/SmartStorage/ArrayControllers/0/DiskDrives/1": {
+                "@odata.id": "/redfish/v1/Systems/1/SmartStorage/ArrayControllers/0/DiskDrives/1",
+                "Id": "1",
+                "Name": "Drive 1",
+                "Model": "HPE SAS SSD",
+                "CapacityMiB": 102400,
+                "DriveMediaType": "SSD",
+                "InterfaceType": "SAS",
+                "Status": {"Health": "OK", "State": "Enabled"},
+            },
+            "/redfish/v1/systems/1/smartstorageconfig": {
+                "@odata.id": "/redfish/v1/systems/1/smartstorageconfig",
+                "Name": "Smart Storage Config",
+                "Settings": {"@odata.id": "/redfish/v1/systems/1/smartstorageconfig/settings"},
+            },
+            "/redfish/v1/systems/1/smartstorageconfig/settings": {
+                "@odata.id": "/redfish/v1/systems/1/smartstorageconfig/settings",
+                "Name": "Smart Storage Config Settings",
+            },
+        }
+
+    # Match the real failure mode: a subclass _get implementation with no timeout kwarg.
+    def _get(self, path):
+        if path in self.docs:
+            return self.docs[path]
+        raise ILOError(f"GET {path} failed with HTTP 404")
 
 
 @pytest.fixture()
@@ -675,6 +832,8 @@ def test_read_current_storage_saves_discovery_export_and_renders_summary(client,
     assert "Gen11" in response.text
     assert "iLO 6" in response.text
     assert "MR416i-o" in response.text
+    assert "1.98" in response.text
+    assert "{&#39;Current&#39;:" not in response.text
     assert "OS Volume" in response.text
     assert "RAID1" in response.text
     assert "HPE SSD" in response.text
@@ -755,6 +914,99 @@ def test_gen10_smart_storage_deep_scan_can_be_forced_even_after_fast_pass_succes
     )
 
 
+def test_gen10_smart_storage_nested_oem_root_is_detected():
+    discovery = FakeGen10NestedOemSmartStorageILOClient().get_storage_discovery()
+    hpe = discovery["summary"]["hpe_smart_storage"]
+    diagnostics = discovery["raw"]["hpe_smart_storage_diagnostics"]
+
+    assert discovery["summary"]["capabilities"]["hpe_smart_storage"] is True
+    assert hpe["controllers"][0]["name"] == "Smart Array P408i-a SR Gen10"
+    assert hpe["volumes"][0]["name"] == "Logical Drive 1"
+    assert hpe["drives"][0]["model"] == "HPE SAS SSD"
+    assert any(item["path"] == "/redfish/v1/Systems/1/Oem/Hp/SmartStorage" and item["exists"] is True for item in diagnostics["probed_paths"])
+
+
+def test_gen10_real_box_shape_is_discovered_even_when_subclass_get_has_no_timeout_kwarg():
+    discovery = FakeGen10RealBoxSmartStorageILOClient().get_storage_discovery()
+    hpe = discovery["summary"]["hpe_smart_storage"]
+    diagnostics = discovery["raw"]["hpe_smart_storage_diagnostics"]
+
+    assert discovery["summary"]["capabilities"]["hpe_smart_storage"] is True
+    assert hpe["controllers"][0]["name"] == "Smart Array P408i-a SR Gen10"
+    assert hpe["volumes"][0]["name"] == "Logical Drive 1"
+    assert hpe["drives"][0]["model"] == "HPE SAS SSD"
+    assert any(item["path"] == "/redfish/v1/Systems/1/SmartStorage" and item["source"] in {"system", "system_oem"} for item in diagnostics["found_paths"])
+    assert any(item["path"] == "/redfish/v1/systems/1/smartstorageconfig" for item in diagnostics["found_paths"])
+    assert any(item["path"] == "/redfish/v1/Systems/1/SmartStorage/ArrayControllers" for item in diagnostics["followed_links"])
+    assert diagnostics["collection_counts"]["ArrayControllers"]["populated"] >= 1
+    assert diagnostics["collection_counts"]["LogicalDrives"]["populated"] >= 1
+    assert diagnostics["collection_counts"]["DiskDrives"]["populated"] >= 1
+    assert not any("unexpected keyword argument 'timeout'" in (item.get("error") or "") for item in diagnostics["probed_paths"])
+
+
+def test_storage_artifact_view_and_download_use_current_discovery_and_plan(client, monkeypatch):
+    def fake_strftime(fmt):
+        if fmt == "%Y%m%d-%H%M%S":
+            return "20260409-121500"
+        if fmt == "%Y-%m-%d %H:%M:%S":
+            return "2026-04-09 12:15:00"
+        raise AssertionError(f"unexpected strftime format: {fmt}")
+
+    monkeypatch.setattr(main.time, "strftime", fake_strftime)
+    cfg = main.default_config()
+    cfg["site"]["name"] = "Artifact Kit"
+    cfg["ilo"]["current_ip"] = "10.10.8.83"
+    cfg["ilo"]["host"] = "10.10.8.83"
+    main.save_kit_config(cfg)
+    discovery = planner_discovery_with_mixed_drives()
+    export_paths = main.export_storage_discovery_snapshot(cfg, discovery, host="10.10.8.83")
+    plan = main.build_raid_plan(discovery, export_paths)
+    plan_paths = main.export_raid_plan_snapshot(cfg, plan, export_paths)
+
+    view_response = client.post(
+        "/view-storage-artifact",
+        data={
+            "return_page": "storage",
+            "discovery_raw_path": str(export_paths["raw"]),
+            "raid_plan_path": str(plan_paths["plan"]),
+            "artifact_kind": "discovery_raw",
+        },
+    )
+
+    assert view_response.status_code == 200
+    assert "Storage Discovery Raw JSON" in view_response.text
+    assert str(export_paths["raw"]) in view_response.text
+    assert "10.10.8.83" in view_response.text
+    assert "source_host" in view_response.text
+
+    plan_view_response = client.post(
+        "/view-storage-artifact",
+        data={
+            "return_page": "storage",
+            "discovery_raw_path": str(export_paths["raw"]),
+            "raid_plan_path": str(plan_paths["plan"]),
+            "artifact_kind": "raid_plan",
+        },
+    )
+
+    assert plan_view_response.status_code == 200
+    assert "RAID Plan:" in plan_view_response.text
+    assert "default_recommendation: wipe and rebuild" in plan_view_response.text
+
+    download_response = client.post(
+        "/download-storage-artifact",
+        data={
+            "return_page": "storage",
+            "discovery_raw_path": str(export_paths["raw"]),
+            "raid_plan_path": str(plan_paths["plan"]),
+            "artifact_kind": "discovery_summary",
+        },
+    )
+
+    assert download_response.status_code == 200
+    assert "summary.yml" in download_response.headers.get("content-disposition", "")
+
+
 def planner_discovery_with_mixed_drives() -> dict:
     discovery = FakeILOClient(None).get_storage_discovery()
     standard = discovery["summary"]["standard_redfish_storage"]
@@ -770,6 +1022,13 @@ def planner_discovery_with_mixed_drives() -> dict:
         {"id": "8", "bay": "8", "model": "HDD-1200", "size_gib": 1200, "media_type": "HDD", "protocol": "SAS", "status": "OK / Enabled", "path": "/drives/8"},
         {"id": "9", "bay": "9", "model": "Oddball", "size_gib": 960, "media_type": "SSD", "protocol": "SATA", "status": "OK / Enabled", "path": "/drives/9"},
     ]
+    return discovery
+
+
+def planner_discovery_without_data_spare() -> dict:
+    discovery = planner_discovery_with_mixed_drives()
+    standard = discovery["summary"]["standard_redfish_storage"]
+    standard["drives"] = [drive for drive in standard["drives"] if drive["bay"] not in {"7", "8"}]
     return discovery
 
 
@@ -804,12 +1063,48 @@ def test_plan_raid_layout_uses_displayed_discovery_artifact_and_saves_plan(clien
     assert "SSD-480" in response.text
     assert "HDD-1200" in response.text
     assert "Oddball" in response.text
+    assert "Hot Spare" in response.text
+    assert "Reserved as the data-side hot spare" in response.text
+    assert "Controller firmware:" in response.text
+    assert "Planned Logical Layout" in response.text
+    assert "target size 500 GiB on bays 1, 2" in response.text
+    assert "3, 4, 5, 6" in response.text
+    assert "remaining compatible eligible drives after reserving one hot spare" in response.text
+    assert "bay 8" in response.text
+    assert "Read-Only Pre-Apply Summary" in response.text
+    assert "Existing Logical Volumes That Would Be Removed" in response.text
+    assert "New Logical Layout That Would Be Created" in response.text
+    assert "Reserved hot spare:" in response.text
+    assert "Future Apply Actions" in response.text
+    assert "Create Storage Layout" in response.text
+    assert "Wipe and Rebuild Storage Layout" in response.text
     plan_path = export_paths["directory"] / "raid-plan-20260407-170000.yml"
     assert plan_path.exists()
     plan_text = plan_path.read_text(encoding="utf-8")
     assert "source_discovery:" in plan_text
     assert "default_recommendation: wipe and rebuild" in plan_text
+    assert "hot_spare:" in plan_text
+    assert "typed_confirmation: WIPE STORAGE" in plan_text
+    assert "Reserved as the data-side hot spare" in plan_text
     assert "Not in the selected RAID 6 compatible media/protocol/capacity" in plan_text
+
+
+def test_build_raid_plan_blocks_when_no_compatible_data_spare_remains():
+    discovery = planner_discovery_without_data_spare()
+    discovery_paths = {
+        "directory": main.Path("/tmp/storage-plan-test"),
+        "summary": main.Path("/tmp/storage-plan-test/summary.yml"),
+        "raw": main.Path("/tmp/storage-plan-test/raw.json"),
+    }
+
+    plan = main.build_raid_plan(discovery, discovery_paths)
+
+    assert plan["data_raid6"]["drive_count"] == 4
+    assert plan["hot_spare"]["reserved"] is False
+    assert plan["apply_readiness"]["wipe_rebuild_ready"] is False
+    assert plan["planned_layout"]["hot_spare"]["bay"] == ""
+    assert plan["pre_apply_summary"]["planned_layout"]["data_raid6"]["bays"] == "3, 4, 5, 6"
+    assert any("hot spare" in blocker.lower() for blocker in plan["blockers"])
 
 
 def test_plan_raid_layout_rejects_discovery_from_different_host(client):

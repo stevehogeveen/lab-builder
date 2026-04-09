@@ -31,6 +31,10 @@ class ILOClient:
             return {}
         try:
             return self._get(path, timeout=timeout)
+        except TypeError as e:
+            if timeout is not None and "unexpected keyword argument 'timeout'" in str(e):
+                return self._get(path)
+            return {"@error": str(e), "@path": path}
         except Exception as e:
             return {"@error": str(e), "@path": path}
 
@@ -309,11 +313,83 @@ class ILOClient:
                 "phase": phase,
                 "path": path,
                 "status": "error" if doc.get("@error") else "ok",
+                "exists": not bool(doc.get("@error")),
                 "error": doc.get("@error", ""),
                 "name": doc.get("Name", ""),
                 "members": len(doc.get("Members", []) or []),
             }
         )
+
+    def _record_smart_storage_found_path(self, diagnostics: dict[str, Any], path: str, source: str, key: str) -> None:
+        if not path:
+            return
+        entry = {
+            "path": path,
+            "source": source,
+            "key": key,
+        }
+        if entry not in diagnostics["found_paths"]:
+            diagnostics["found_paths"].append(entry)
+
+    def _record_smart_storage_followed_link(
+        self,
+        diagnostics: dict[str, Any],
+        owner: str,
+        key: str,
+        path: str,
+        phase: str,
+        source: str,
+    ) -> None:
+        if not path:
+            return
+        entry = {
+            "owner": owner,
+            "key": key,
+            "path": path,
+            "phase": phase,
+            "source": source,
+        }
+        if entry not in diagnostics["followed_links"]:
+            diagnostics["followed_links"].append(entry)
+
+    def _record_smart_storage_collection_result(self, diagnostics: dict[str, Any], key: str, status: str) -> None:
+        counts = diagnostics["collection_counts"].setdefault(
+            key,
+            {"total": 0, "populated": 0, "empty": 0, "error": 0},
+        )
+        counts["total"] += 1
+        counts[status] = counts.get(status, 0) + 1
+
+    def _collect_smart_storage_candidates(
+        self,
+        value: Any,
+        diagnostics: dict[str, Any] | None = None,
+        source: str = "",
+    ) -> list[str]:
+        candidates = []
+        target_keys = {"smartstorage", "smartstorageconfig", "arraycontrollers"}
+
+        def walk(node: Any, parent_key: str = "") -> None:
+            if isinstance(node, dict):
+                lower_parent = parent_key.lower()
+                if lower_parent in target_keys and node.get("@odata.id"):
+                    candidate_path = node.get("@odata.id")
+                    candidates.append(candidate_path)
+                    if diagnostics is not None:
+                        self._record_smart_storage_found_path(diagnostics, candidate_path, source, parent_key)
+                for key, child in node.items():
+                    walk(child, key)
+            elif isinstance(node, list):
+                for child in node:
+                    walk(child, parent_key)
+
+        walk(value)
+
+        unique = []
+        for item in candidates:
+            if item and item not in unique:
+                unique.append(item)
+        return unique
 
     def _smart_storage_doc(self, path: str, seen_paths: set[str], diagnostics: dict[str, Any], phase: str) -> dict[str, Any]:
         if not path:
@@ -369,7 +445,13 @@ class ILOClient:
                     "source": "inline",
                 }
             )
+            self._record_smart_storage_collection_result(
+                diagnostics,
+                key,
+                "populated" if member_paths else "empty",
+            )
             for member_path in member_paths:
+                self._record_smart_storage_followed_link(diagnostics, owner_path, key, member_path, phase, "inline_member")
                 if member_path in seen_paths:
                     expanded.append(self._smart_storage_doc(member_path, seen_paths, diagnostics, phase))
                 else:
@@ -380,26 +462,31 @@ class ILOClient:
             if probe_key in diagnostics["_collection_probe_cache"]:
                 continue
             diagnostics["_collection_probe_cache"].add(probe_key)
+            link_source = "synthetic_collection" if synthesize and (not isinstance(value, dict) or value.get("@odata.id") != collection_path) else "collection_link"
+            self._record_smart_storage_followed_link(diagnostics, owner_path, key, collection_path, phase, link_source)
             collection = self._safe_get(collection_path, timeout=self.SMART_STORAGE_PROBE_TIMEOUT)
             members = collection.get("Members", []) if not collection.get("@error") else []
+            status = "error" if collection.get("@error") else "populated" if members else "empty"
             diagnostics["collections"].append(
                 {
                     "owner": owner_path,
                     "collection": key,
                     "phase": phase,
                     "path": collection_path,
-                    "status": "error" if collection.get("@error") else "populated" if members else "empty",
+                    "status": status,
                     "members": len(members),
                     "error": collection.get("@error", ""),
                     "source": "collection",
                 }
             )
+            self._record_smart_storage_collection_result(diagnostics, key, status)
             if collection.get("@error"):
                 continue
             for member in members:
                 member_path = member.get("@odata.id")
                 if not member_path:
                     continue
+                self._record_smart_storage_followed_link(diagnostics, collection_path, "Members", member_path, phase, "collection_member")
                 if member_path in seen_paths:
                     expanded.append(self._smart_storage_doc(member_path, seen_paths, diagnostics, phase))
                 else:
@@ -428,30 +515,50 @@ class ILOClient:
                 storage_subsystems.append(storage_doc)
 
         smart_storage_candidates = []
-        hpe_oem = system.get("Oem", {}).get("Hpe", {}) if isinstance(system.get("Oem"), dict) else {}
-        if isinstance(hpe_oem, dict):
-            for key in ("SmartStorage", "SmartStorageConfig"):
-                path = hpe_oem.get(key, {}).get("@odata.id") if isinstance(hpe_oem.get(key), dict) else None
-                if path:
-                    smart_storage_candidates.append(path)
-        smart_storage_candidates.extend([
-            f"{system_path}/SmartStorage",
-            f"{system_path}/SmartStorage/ArrayControllers",
-            f"{system_path}/SmartStorageConfig",
-            f"{system_path}/SmartStorageConfig/Settings",
-        ])
-
-        smart_storage_docs = []
-        seen_paths = set()
         smart_storage_diagnostics = {
             "probed_paths": [],
+            "found_paths": [],
+            "followed_links": [],
             "collections": [],
+            "collection_counts": {},
             "warnings": [],
             "deep_scan_requested": deep_smart_storage_scan,
             "deep_fallback_ran": False,
             "_doc_cache": {},
             "_collection_probe_cache": set(),
         }
+        smart_storage_candidates = []
+        for source_name, source_value in (
+            ("system", system),
+            ("system_oem", system.get("Oem", {})),
+            ("manager", manager),
+            ("manager_oem", manager.get("Oem", {})),
+            ("service_root", service_root),
+        ):
+            smart_storage_candidates.extend(
+                self._collect_smart_storage_candidates(
+                    source_value,
+                    diagnostics=smart_storage_diagnostics,
+                    source=source_name,
+                )
+            )
+        for source_name, path in (
+            ("guessed", f"{system_path}/SmartStorage"),
+            ("guessed", f"{system_path}/SmartStorage/ArrayControllers"),
+            ("guessed", f"{system_path}/SmartStorageConfig"),
+            ("guessed", f"{system_path}/SmartStorageConfig/Settings"),
+        ):
+            smart_storage_candidates.append(path)
+            self._record_smart_storage_found_path(smart_storage_diagnostics, path, source_name, "synthetic")
+        unique_candidates = []
+        for path in smart_storage_candidates:
+            normalized = str(path or "").rstrip("/")
+            if normalized and normalized not in unique_candidates:
+                unique_candidates.append(normalized)
+        smart_storage_candidates = unique_candidates
+
+        smart_storage_docs = []
+        seen_paths = set()
         for path in smart_storage_candidates:
             if not path or path in seen_paths:
                 continue
@@ -462,6 +569,7 @@ class ILOClient:
             for member in doc.get("Members", []) or []:
                 member_path = member.get("@odata.id")
                 if member_path and member_path not in seen_paths:
+                    self._record_smart_storage_followed_link(smart_storage_diagnostics, path, "Members", member_path, "fast_pass", "root_member")
                     smart_storage_docs.append(self._smart_storage_doc(member_path, seen_paths, smart_storage_diagnostics, "fast_pass"))
 
         for doc in list(smart_storage_docs):
@@ -966,13 +1074,14 @@ class ILOClient:
             ],
         }
         
-    def _get(self, path: str) -> dict[str, Any]:
+    def _get(self, path: str, timeout: int | float | None = None) -> dict[str, Any]:
         url = path if path.startswith("http") else f"{self.base}{path}"
+        effective_timeout = self.cfg.timeout if timeout is None else timeout
         r = requests.get(
             url,
             auth=self.auth,
             verify=self.cfg.verify_tls,
-            timeout=self.cfg.timeout,
+            timeout=effective_timeout,
         )
         if r.status_code >= 400:
             raise ILOError(f"GET {url} failed with HTTP {r.status_code}: {r.text[:300]}")

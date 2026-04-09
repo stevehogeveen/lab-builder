@@ -558,6 +558,67 @@ def load_storage_discovery_artifact(raw_path_text: str, expected_host: str = "")
         "raw": raw_path,
     }
 
+def load_storage_plan_artifact(plan_path_text: str) -> tuple[dict, dict[str, Path]]:
+    plan_path = Path(plan_path_text).expanduser().resolve()
+    export_root = STORAGE_RAID_EXPORT_DIR.resolve()
+    if not plan_path.is_relative_to(export_root):
+        raise ValueError("RAID plan artifact must be under the storage export folder.")
+    if not plan_path.exists() or not plan_path.name.startswith("raid-plan-") or plan_path.suffix.lower() not in (".yml", ".yaml"):
+        raise ValueError("RAID plan artifact was not found.")
+
+    payload = yaml.safe_load(plan_path.read_text(encoding="utf-8")) or {}
+    plan = payload.get("plan", {}) or {}
+    source_discovery = payload.get("source_discovery", {}) or {}
+    if source_discovery and not plan.get("source_discovery"):
+        plan["source_discovery"] = source_discovery
+    return plan, {
+        "directory": plan_path.parent,
+        "plan": plan_path,
+    }
+
+
+def restore_storage_page_state(
+    discovery_raw_path: str = "",
+    raid_plan_path: str = "",
+    expected_host: str = "",
+) -> tuple[dict | None, dict[str, Path] | None, dict | None, dict[str, Path] | None]:
+    discovery = None
+    discovery_paths = None
+    plan = None
+    plan_paths = None
+
+    if discovery_raw_path:
+        discovery, discovery_paths = load_storage_discovery_artifact(discovery_raw_path, expected_host=expected_host)
+
+    if raid_plan_path:
+        plan, plan_paths = load_storage_plan_artifact(raid_plan_path)
+        if discovery_paths:
+            plan_raw = str((plan.get("source_discovery", {}) or {}).get("raw", "") or "").strip()
+            if plan_raw and Path(plan_raw).expanduser().resolve() != discovery_paths["raw"].resolve():
+                raise ValueError("RAID plan artifact does not belong to the currently displayed storage discovery.")
+
+    return discovery, discovery_paths, plan, plan_paths
+
+
+def storage_artifact_target(
+    artifact_kind: str,
+    discovery_paths: dict[str, Path] | None,
+    plan_paths: dict[str, Path] | None,
+) -> tuple[Path, str]:
+    if artifact_kind == "discovery_summary":
+        if not discovery_paths:
+            raise ValueError("No current storage discovery summary is available.")
+        return discovery_paths["summary"], f"Storage Discovery Summary: {discovery_paths['summary'].name}"
+    if artifact_kind == "discovery_raw":
+        if not discovery_paths:
+            raise ValueError("No current storage discovery raw export is available.")
+        return discovery_paths["raw"], f"Storage Discovery Raw JSON: {discovery_paths['raw'].name}"
+    if artifact_kind == "raid_plan":
+        if not plan_paths:
+            raise ValueError("No current RAID plan artifact is available.")
+        return plan_paths["plan"], f"RAID Plan: {plan_paths['plan'].name}"
+    raise ValueError("Unknown storage artifact request.")
+
 
 def storage_status_is_eligible(status: str) -> bool:
     text = str(status or "").lower()
@@ -637,9 +698,9 @@ def choose_os_drive_pair(eligible_drives: list[dict]) -> tuple[list[dict], str]:
     )
 
 
-def choose_raid6_drive_set(remaining_drives: list[dict]) -> tuple[list[dict], list[dict], str, list[str]]:
+def choose_raid6_layout(remaining_drives: list[dict]) -> tuple[list[dict], dict, list[dict], str, list[str]]:
     if not remaining_drives:
-        return [], [], "No remaining eligible drives were available for RAID 6.", ["No remaining eligible drives are available for the Data RAID 6 set."]
+        return [], {}, [], "No remaining eligible drives were available for RAID 6.", ["No remaining eligible drives are available for the Data RAID 6 set."]
 
     groups: dict[tuple, list[dict]] = {}
     for drive in remaining_drives:
@@ -647,20 +708,57 @@ def choose_raid6_drive_set(remaining_drives: list[dict]) -> tuple[list[dict], li
 
     ranked_groups = sorted(groups.items(), key=lambda item: (-len(item[1]), -item[0][2], item[0][0], item[0][1]))
     selected_key, selected_group = ranked_groups[0]
-    selected = sorted(selected_group, key=storage_drive_sort_key)
+    compatible_group = sorted(selected_group, key=storage_drive_sort_key)
     excluded = [
         {**drive, "exclude_reason": "Not in the selected RAID 6 compatible media/protocol/capacity group."}
         for drive in remaining_drives
         if drive not in selected_group
     ]
     blockers = []
-    if len(selected) < 4:
+    if len(compatible_group) < 4:
         blockers.append("RAID 6 requires at least four compatible remaining drives.")
+        explanation = (
+            f"Best remaining compatible group for RAID 6 was too small: media={selected_key[0]}, "
+            f"protocol={selected_key[1]}, capacity≈{selected_key[2]} GiB, drives={len(compatible_group)}."
+        )
+        return compatible_group, {}, excluded, explanation, blockers
+
+    if len(compatible_group) < 5:
+        blockers.append("Storage policy requires one additional compatible hot spare beyond the RAID 6 drive set.")
+        explanation = (
+            f"Compatible RAID 6 group found with media={selected_key[0]}, protocol={selected_key[1]}, "
+            f"capacity≈{selected_key[2]} GiB, but only {len(compatible_group)} drives remain so no hot spare can be reserved."
+        )
+        return compatible_group, {}, excluded, explanation, blockers
+
+    spare = compatible_group[-1]
+    raid6_set = compatible_group[:-1]
     explanation = (
         f"Selected the largest compatible remaining group for RAID 6: media={selected_key[0]}, "
-        f"protocol={selected_key[1]}, capacity≈{selected_key[2]} GiB."
+        f"protocol={selected_key[1]}, capacity≈{selected_key[2]} GiB. "
+        f"Reserved bay {spare['bay'] or spare['id']} as the data-side hot spare."
     )
-    return selected, excluded, explanation, blockers
+    return raid6_set, spare, excluded, explanation, blockers
+
+
+def storage_firmware_display(value: object) -> str:
+    if isinstance(value, dict):
+        current = value.get("Current")
+        if isinstance(current, dict):
+            version = current.get("VersionString")
+            if version:
+                return str(version)
+        for key in ("VersionString", "version", "current", "firmware_version"):
+            if value.get(key):
+                return str(value.get(key))
+        return ""
+    return str(value or "")
+
+
+def plan_drive_bays(drives: list[dict]) -> str:
+    bays = [str(drive.get("bay") or drive.get("id") or "").strip() for drive in drives or []]
+    bays = [bay for bay in bays if bay]
+    return ", ".join(bays)
 
 
 def build_raid_plan(discovery: dict, discovery_paths: dict[str, Path]) -> dict:
@@ -678,6 +776,8 @@ def build_raid_plan(discovery: dict, discovery_paths: dict[str, Path]) -> dict:
     controller = controllers[0] if controllers else {}
     if not controller:
         blockers.append("No detected storage controller is available for planning.")
+    elif controller.get("firmware_version") is not None:
+        controller = {**controller, "firmware_version": storage_firmware_display(controller.get("firmware_version"))}
 
     existing_volumes = []
     for source, items in (("hpe_smart_storage", hpe.get("volumes", [])), ("standard_redfish_storage", standard.get("volumes", []))):
@@ -704,11 +804,49 @@ def build_raid_plan(discovery: dict, discovery_paths: dict[str, Path]) -> dict:
 
     os_paths = {drive["path"] for drive in os_pair}
     remaining = [drive for drive in eligible_drives if drive["path"] not in os_paths]
-    data_set, raid6_excluded, raid6_explanation, raid6_blockers = choose_raid6_drive_set(sorted(remaining, key=storage_drive_sort_key))
+    data_set, hot_spare, raid6_excluded, raid6_explanation, raid6_blockers = choose_raid6_layout(sorted(remaining, key=storage_drive_sort_key))
     blockers.extend(raid6_blockers)
 
     excluded_drives.extend({**drive, "exclude_reason": "Reserved for OS RAID 1 pair."} for drive in os_pair)
+    if hot_spare:
+        excluded_drives.append({**hot_spare, "exclude_reason": "Reserved as the data-side hot spare."})
     excluded_drives.extend(raid6_excluded)
+
+    apply_readiness = {
+        "next_action": "wipe and rebuild" if existing_volumes else "create only",
+        "create_only_ready": not existing_volumes and len(data_set) >= 4 and bool(hot_spare) and len(os_pair) == 2,
+        "wipe_rebuild_ready": len(data_set) >= 4 and bool(hot_spare) and len(os_pair) == 2,
+        # Future apply split:
+        # - Gen10 / iLO 5 typically uses HPE SmartStorageConfig-style delete/create/apply semantics.
+        # - Gen11 / iLO 6 typically uses the standard Redfish Storage/Volume model.
+        # This pass only prepares the confirmation and action selection surface; it does not issue writes.
+        "typed_confirmation": "WIPE STORAGE",
+    }
+    planned_layout = {
+        "os_raid1": {
+            "raid": "RAID 1",
+            "target_size_gib": 500,
+            "bays": plan_drive_bays(os_pair),
+            "drives": os_pair,
+        },
+        "data_raid6": {
+            "raid": "RAID 6",
+            "bays": plan_drive_bays(data_set),
+            "capacity_intent": "Use the remaining compatible eligible drives after reserving one hot spare.",
+            "drives": data_set,
+        },
+        "hot_spare": {
+            "required": True,
+            "bay": str(hot_spare.get("bay") or hot_spare.get("id") or "") if hot_spare else "",
+            "drive": hot_spare,
+        },
+    }
+    pre_apply_summary = {
+        "mode": apply_readiness["next_action"],
+        "volumes_to_remove": existing_volumes,
+        "planned_layout": planned_layout,
+        "reserved_hot_spare": hot_spare,
+    }
 
     return {
         "generated_at": time.strftime("%Y-%m-%d %H:%M:%S"),
@@ -727,10 +865,15 @@ def build_raid_plan(discovery: dict, discovery_paths: dict[str, Path]) -> dict:
         "existing_logical_volumes": existing_volumes,
         "desired_layout": {
             "os_volume": {"raid": "RAID 1", "target_size_gib": 500},
-            "data_volume": {"raid": "RAID 6", "capacity": "remaining compatible eligible drives"},
+            "data_volume": {"raid": "RAID 6", "capacity": "remaining compatible eligible drives after reserving one hot spare"},
+            "hot_spare": {"required": True, "scope": "data-side compatible spare"},
         },
+        "planned_layout": planned_layout,
         "os_raid1": {"target_size_gib": 500, "drives": os_pair, "explanation": os_explanation},
-        "data_raid6": {"feasible": len(data_set) >= 4, "drives": data_set, "drive_count": len(data_set), "explanation": raid6_explanation},
+        "data_raid6": {"feasible": len(data_set) >= 4 and bool(hot_spare), "drives": data_set, "drive_count": len(data_set), "explanation": raid6_explanation},
+        "hot_spare": {"required": True, "drive": hot_spare, "reserved": bool(hot_spare)},
+        "apply_readiness": apply_readiness,
+        "pre_apply_summary": pre_apply_summary,
         "excluded_drives": sorted(excluded_drives, key=storage_drive_sort_key),
         "warnings": warnings,
         "blockers": blockers,
@@ -2244,6 +2387,67 @@ async def plan_raid_layout(
             active_page=return_page,
             error_message=error_text,
         )
+
+
+@app.post("/view-storage-artifact", response_class=HTMLResponse)
+async def view_storage_artifact(
+    request: Request,
+    return_page: str = Form("storage"),
+    discovery_raw_path: str = Form(""),
+    raid_plan_path: str = Form(""),
+    artifact_kind: str = Form("discovery_summary"),
+):
+    cfg = load_kit_config()
+    ilo_cfg = cfg.get("ilo", {})
+    host = (ilo_cfg.get("current_ip") or ilo_cfg.get("host") or "").strip()
+
+    try:
+        discovery, discovery_paths, plan, plan_paths = restore_storage_page_state(
+            discovery_raw_path=discovery_raw_path,
+            raid_plan_path=raid_plan_path,
+            expected_host=host,
+        )
+        artifact_path, viewer_title = storage_artifact_target(artifact_kind, discovery_paths, plan_paths)
+        viewer_content = artifact_path.read_text(encoding="utf-8")
+        if artifact_path.suffix.lower() == ".json":
+            viewer_content = json.dumps(json.loads(viewer_content), indent=2, sort_keys=False)
+        return render_page(
+            request,
+            cfg,
+            active_page=return_page,
+            message=f"Viewing storage artifact {artifact_path}",
+            config_view_title=viewer_title,
+            config_view_content=viewer_content,
+            storage_discovery=discovery.get("summary", {}) if discovery else None,
+            storage_export_paths=discovery_paths,
+            storage_plan=plan,
+            storage_plan_paths=plan_paths,
+        )
+    except Exception as e:
+        return render_page(request, cfg, active_page=return_page, error_message=f"Storage artifact view failed: {str(e).splitlines()[0]}")
+
+
+@app.post("/download-storage-artifact")
+async def download_storage_artifact(
+    return_page: str = Form("storage"),
+    discovery_raw_path: str = Form(""),
+    raid_plan_path: str = Form(""),
+    artifact_kind: str = Form("discovery_summary"),
+):
+    del return_page
+    cfg = load_kit_config()
+    ilo_cfg = cfg.get("ilo", {})
+    host = (ilo_cfg.get("current_ip") or ilo_cfg.get("host") or "").strip()
+
+    discovery, discovery_paths, plan, plan_paths = restore_storage_page_state(
+        discovery_raw_path=discovery_raw_path,
+        raid_plan_path=raid_plan_path,
+        expected_host=host,
+    )
+    del discovery, plan
+    artifact_path, _ = storage_artifact_target(artifact_kind, discovery_paths, plan_paths)
+    media_type = "application/json" if artifact_path.suffix.lower() == ".json" else "text/yaml; charset=utf-8"
+    return FileResponse(path=artifact_path, filename=artifact_path.name, media_type=media_type)
 
 
 @app.post("/view-current-kit-config", response_class=HTMLResponse)

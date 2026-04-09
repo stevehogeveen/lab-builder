@@ -20,6 +20,62 @@
             Export path: {{ storage_export_paths.directory }}<br>
             Summary file: {{ storage_export_paths.summary }}<br>
             Raw file: {{ storage_export_paths.raw }}
+            {% if storage_plan_paths %}<br>Plan file: {{ storage_plan_paths.plan }}{% endif %}
+        </div>
+
+        <div class="card">
+            <div class="text-lg font-semibold mb-3">Current Artifacts</div>
+            <div class="text-sm text-slate-400 mb-3">View or download the discovery and plan artifacts for the storage scan currently shown on this page.</div>
+            <div class="actions">
+                <form hx-post="/view-storage-artifact" hx-target="#main-content" hx-swap="outerHTML">
+                    <input type="hidden" name="return_page" value="storage">
+                    <input type="hidden" name="discovery_raw_path" value="{{ storage_export_paths.raw }}">
+                    <input type="hidden" name="raid_plan_path" value="{{ storage_plan_paths.plan if storage_plan_paths else '' }}">
+                    <input type="hidden" name="artifact_kind" value="discovery_summary">
+                    <button class="btn" type="submit">View Discovery Summary</button>
+                </form>
+                <form hx-post="/view-storage-artifact" hx-target="#main-content" hx-swap="outerHTML">
+                    <input type="hidden" name="return_page" value="storage">
+                    <input type="hidden" name="discovery_raw_path" value="{{ storage_export_paths.raw }}">
+                    <input type="hidden" name="raid_plan_path" value="{{ storage_plan_paths.plan if storage_plan_paths else '' }}">
+                    <input type="hidden" name="artifact_kind" value="discovery_raw">
+                    <button class="btn" type="submit">View Raw Discovery JSON</button>
+                </form>
+                {% if storage_plan_paths %}
+                <form hx-post="/view-storage-artifact" hx-target="#main-content" hx-swap="outerHTML">
+                    <input type="hidden" name="return_page" value="storage">
+                    <input type="hidden" name="discovery_raw_path" value="{{ storage_export_paths.raw }}">
+                    <input type="hidden" name="raid_plan_path" value="{{ storage_plan_paths.plan }}">
+                    <input type="hidden" name="artifact_kind" value="raid_plan">
+                    <button class="btn" type="submit">View RAID Plan</button>
+                </form>
+                {% endif %}
+            </div>
+            <div class="actions mt-3">
+                <form hx-post="/download-storage-artifact">
+                    <input type="hidden" name="return_page" value="storage">
+                    <input type="hidden" name="discovery_raw_path" value="{{ storage_export_paths.raw }}">
+                    <input type="hidden" name="raid_plan_path" value="{{ storage_plan_paths.plan if storage_plan_paths else '' }}">
+                    <input type="hidden" name="artifact_kind" value="discovery_summary">
+                    <button class="btn" type="submit">Download Discovery Summary</button>
+                </form>
+                <form hx-post="/download-storage-artifact">
+                    <input type="hidden" name="return_page" value="storage">
+                    <input type="hidden" name="discovery_raw_path" value="{{ storage_export_paths.raw }}">
+                    <input type="hidden" name="raid_plan_path" value="{{ storage_plan_paths.plan if storage_plan_paths else '' }}">
+                    <input type="hidden" name="artifact_kind" value="discovery_raw">
+                    <button class="btn" type="submit">Download Raw Discovery JSON</button>
+                </form>
+                {% if storage_plan_paths %}
+                <form hx-post="/download-storage-artifact">
+                    <input type="hidden" name="return_page" value="storage">
+                    <input type="hidden" name="discovery_raw_path" value="{{ storage_export_paths.raw }}">
+                    <input type="hidden" name="raid_plan_path" value="{{ storage_plan_paths.plan }}">
+                    <input type="hidden" name="artifact_kind" value="raid_plan">
+                    <button class="btn" type="submit">Download RAID Plan</button>
+                </form>
+                {% endif %}
+            </div>
         </div>
 
         <div class="card">
@@ -49,6 +105,7 @@
                 </div>
                 <div>
                     <div><strong>Chosen controller:</strong> {{ storage_plan.source_discovery.controller.name or storage_plan.source_discovery.controller.model or "None" }}</div>
+                    <div><strong>Controller firmware:</strong> {{ storage_plan.source_discovery.controller.firmware_version or "Unknown" }}</div>
                     <div><strong>Existing logical volumes detected:</strong> {{ "Yes" if storage_plan.existing_logical_volumes_detected else "No" }}</div>
                     <div><strong>Default recommendation:</strong> {{ storage_plan.default_recommendation }}</div>
                 </div>
@@ -92,6 +149,68 @@
                 </tbody>
             </table>
             {% endif %}
+
+            <div class="text-sm font-bold text-slate-300 mb-2">Hot Spare</div>
+            {% if storage_plan.hot_spare.drive %}
+            <div class="muted mb-2">One compatible data-side spare is reserved for the future applied layout.</div>
+            <table class="mb-4">
+                <thead><tr><th>Bay</th><th>Model</th><th>Size GiB</th><th>Media</th><th>Protocol</th></tr></thead>
+                <tbody>
+                    <tr><td>{{ storage_plan.hot_spare.drive.bay }}</td><td>{{ storage_plan.hot_spare.drive.model or storage_plan.hot_spare.drive.name }}</td><td>{{ storage_plan.hot_spare.drive.size_gib }}</td><td>{{ storage_plan.hot_spare.drive.media_type }}</td><td>{{ storage_plan.hot_spare.drive.protocol }}</td></tr>
+                </tbody>
+            </table>
+            {% else %}
+            <div class="error mb-4">No compatible hot spare could be reserved for the data-side policy.</div>
+            {% endif %}
+
+            <div class="text-sm font-bold text-slate-300 mb-2">Planned Logical Layout</div>
+            <div class="result mb-4">
+                <div><strong>OS RAID 1:</strong> target size {{ storage_plan.planned_layout.os_raid1.target_size_gib }} GiB on bays {{ storage_plan.planned_layout.os_raid1.bays or "not selected" }}</div>
+                <div><strong>Data RAID 6:</strong> bays {{ storage_plan.planned_layout.data_raid6.bays or "not selected" }}; {{ storage_plan.planned_layout.data_raid6.capacity_intent }}</div>
+                <div><strong>Hot spare:</strong> bay {{ storage_plan.planned_layout.hot_spare.bay or "not reserved" }}</div>
+            </div>
+
+            <div class="text-sm font-bold text-slate-300 mb-2">Apply Readiness</div>
+            <div class="result mb-4">
+                <div><strong>Recommended next future path:</strong> {{ storage_plan.apply_readiness.next_action }}</div>
+                <div><strong>Create only ready:</strong> {{ "Yes" if storage_plan.apply_readiness.create_only_ready else "No" }}</div>
+                <div><strong>Wipe and rebuild ready:</strong> {{ "Yes" if storage_plan.apply_readiness.wipe_rebuild_ready else "No" }}</div>
+            </div>
+            <div class="text-sm font-bold text-slate-300 mb-2">Read-Only Pre-Apply Summary</div>
+            <div class="card mb-4">
+                <div class="text-sm text-slate-400 mb-3">This is a read-only preview of what a future wipe/rebuild action would remove and recreate. No Redfish storage writes are sent in this pass.</div>
+                <div class="mb-3"><strong>Future mode:</strong> {{ storage_plan.pre_apply_summary.mode }}</div>
+                <div class="text-sm font-bold text-slate-300 mb-2">Existing Logical Volumes That Would Be Removed</div>
+                {% if storage_plan.pre_apply_summary.volumes_to_remove %}
+                <table class="mb-4">
+                    <thead><tr><th>Name</th><th>RAID</th><th>Size GiB</th><th>Source</th></tr></thead>
+                    <tbody>
+                    {% for volume in storage_plan.pre_apply_summary.volumes_to_remove %}
+                        <tr><td>{{ volume.name or volume.id }}</td><td>{{ volume.raid_type }}</td><td>{{ volume.capacity_gib or "" }}</td><td>{{ volume.source }}</td></tr>
+                    {% endfor %}
+                    </tbody>
+                </table>
+                {% else %}
+                <div class="muted mb-4">No existing logical volumes would need to be removed.</div>
+                {% endif %}
+                <div class="text-sm font-bold text-slate-300 mb-2">New Logical Layout That Would Be Created</div>
+                <div class="result mb-4">
+                    <div><strong>OS RAID 1:</strong> 500 GiB target on bays {{ storage_plan.pre_apply_summary.planned_layout.os_raid1.bays or "not selected" }}</div>
+                    <div><strong>Data RAID 6:</strong> bays {{ storage_plan.pre_apply_summary.planned_layout.data_raid6.bays or "not selected" }}</div>
+                </div>
+                <div><strong>Reserved hot spare:</strong> bay {{ storage_plan.pre_apply_summary.planned_layout.hot_spare.bay or "not reserved" }}</div>
+            </div>
+            <div class="card mb-4">
+                <div class="text-sm font-bold text-slate-300 mb-2">Future Apply Actions</div>
+                <div class="text-sm text-slate-400 mb-3">These actions are placeholders only in this pass. No storage delete/create/apply Redfish writes are sent yet.</div>
+                <div class="actions mb-3">
+                    <button class="btn" type="button" disabled>Create Storage Layout</button>
+                    <button class="btn" type="button" disabled>Wipe and Rebuild Storage Layout</button>
+                </div>
+                <label class="check mb-2"><input type="checkbox" disabled> I understand that wipe and rebuild would delete existing logical volumes and recreate the target layout.</label>
+                <div class="mb-2"><strong>Typed confirmation required for future wipe/rebuild:</strong> {{ storage_plan.apply_readiness.typed_confirmation }}</div>
+                <input class="input" type="text" value="" placeholder="Type {{ storage_plan.apply_readiness.typed_confirmation }}" disabled>
+            </div>
 
             <div class="text-sm font-bold text-slate-300 mb-2">Existing Logical Volumes</div>
             {% if storage_plan.existing_logical_volumes %}
@@ -161,7 +280,7 @@
                     <thead><tr><th>Name</th><th>Model</th><th>Firmware</th><th>Status</th></tr></thead>
                     <tbody>
                     {% for controller in standard.controllers %}
-                        <tr><td>{{ controller.name }}</td><td>{{ controller.model }}</td><td>{{ controller.firmware_version }}</td><td>{{ controller.status }}</td></tr>
+                        <tr><td>{{ controller.name }}</td><td>{{ controller.model }}</td><td>{% if controller.firmware_version is mapping and controller.firmware_version.Current is mapping %}{{ controller.firmware_version.Current.VersionString or "" }}{% elif controller.firmware_version is mapping %}{{ controller.firmware_version.VersionString or controller.firmware_version.version or controller.firmware_version.current or "" }}{% else %}{{ controller.firmware_version }}{% endif %}</td><td>{{ controller.status }}</td></tr>
                     {% endfor %}
                     </tbody>
                 </table>
@@ -217,7 +336,7 @@
                     <thead><tr><th>Name</th><th>Model</th><th>Firmware</th><th>Status</th></tr></thead>
                     <tbody>
                     {% for controller in hpe.controllers %}
-                        <tr><td>{{ controller.name }}</td><td>{{ controller.model }}</td><td>{{ controller.firmware_version }}</td><td>{{ controller.status }}</td></tr>
+                        <tr><td>{{ controller.name }}</td><td>{{ controller.model }}</td><td>{% if controller.firmware_version is mapping and controller.firmware_version.Current is mapping %}{{ controller.firmware_version.Current.VersionString or "" }}{% elif controller.firmware_version is mapping %}{{ controller.firmware_version.VersionString or controller.firmware_version.version or controller.firmware_version.current or "" }}{% else %}{{ controller.firmware_version }}{% endif %}</td><td>{{ controller.status }}</td></tr>
                     {% endfor %}
                     </tbody>
                 </table>
@@ -260,19 +379,33 @@
             <details class="mt-4">
                 <summary class="summary-row">
                     <span class="text-sm font-bold text-slate-300">Smart Storage traversal diagnostics</span>
-                    <span class="status progress">{{ hpe_diagnostics.collections|length }} collections</span>
+                    <span class="status progress">{{ hpe_diagnostics.probed_paths|length }} root paths, {{ hpe_diagnostics.collections|length }} collections</span>
                 </summary>
-                <div class="codeblock mt-4">
-Deep scan requested: {{ hpe_diagnostics.deep_scan_requested }}
-Deep fallback ran: {{ hpe_diagnostics.deep_fallback_ran }}
+                <div class="mt-4 muted">Deep scan requested: {{ hpe_diagnostics.deep_scan_requested }} | Deep fallback ran: {{ hpe_diagnostics.deep_fallback_ran }}</div>
 
-Probed paths:
-{% for probe in hpe_diagnostics.probed_paths %}- {{ probe.phase or "unknown" }} {{ probe.status }} {{ probe.path }}{% if probe.members is defined %} (members: {{ probe.members }}){% endif %}{% if probe.error %} - {{ probe.error }}{% endif %}
-{% endfor %}
-Collections:
-{% for collection in hpe_diagnostics.collections %}- {{ collection.phase or "unknown" }} {{ collection.status }} {{ collection.collection }}{% if collection.path %} at {{ collection.path }}{% endif %} (members: {{ collection.members }}){% if collection.error %} - {{ collection.error }}{% endif %}
-{% endfor %}
-                </div>
+                {% if hpe_diagnostics.probed_paths %}
+                <div class="text-sm font-bold text-slate-300 mt-4 mb-2">Probed Smart Storage Root Paths</div>
+                <table class="mb-4">
+                    <thead><tr><th>Phase</th><th>Path</th><th>Exists</th><th>Status</th><th>Members</th></tr></thead>
+                    <tbody>
+                    {% for probe in hpe_diagnostics.probed_paths %}
+                        <tr><td>{{ probe.phase or "unknown" }}</td><td>{{ probe.path }}</td><td>{{ "Yes" if probe.exists else "No" }}</td><td>{{ probe.status }}{% if probe.error %}: {{ probe.error }}{% endif %}</td><td>{{ probe.members }}</td></tr>
+                    {% endfor %}
+                    </tbody>
+                </table>
+                {% endif %}
+
+                {% if hpe_diagnostics.collections %}
+                <div class="text-sm font-bold text-slate-300 mb-2">Child Collections Found</div>
+                <table>
+                    <thead><tr><th>Phase</th><th>Collection</th><th>Path</th><th>Status</th><th>Members</th></tr></thead>
+                    <tbody>
+                    {% for collection in hpe_diagnostics.collections %}
+                        <tr><td>{{ collection.phase or "unknown" }}</td><td>{{ collection.collection }}</td><td>{{ collection.path or collection.owner }}</td><td>{{ collection.status }}{% if collection.error %}: {{ collection.error }}{% endif %}</td><td>{{ collection.members }}</td></tr>
+                    {% endfor %}
+                    </tbody>
+                </table>
+                {% endif %}
             </details>
             {% endif %}
         </div>
