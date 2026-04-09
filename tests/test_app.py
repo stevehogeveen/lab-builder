@@ -980,6 +980,8 @@ def test_read_current_storage_saves_discovery_export_and_renders_summary(client,
     assert "RAID1" in response.text
     assert "HPE SSD" in response.text
     assert "Export path:" in response.text
+    assert 'hx-indicator="#read-storage-progress"' in response.text
+    assert "Reading current storage from iLO. This can take a bit on real hardware." in response.text
 
     export_dir = main.STORAGE_RAID_EXPORT_DIR / "ABC123" / "20260407-150000"
     summary_path = export_dir / "summary.yml"
@@ -1305,6 +1307,9 @@ def test_plan_raid_layout_uses_displayed_discovery_artifact_and_saves_plan(clien
     assert "Reserved hot spare:" in response.text
     assert "Apply Actions" in response.text
     assert "Create Storage Layout" in response.text
+    assert "Create-only is blocked." in response.text
+    assert "Existing logical volumes are present. Create-only is disabled until the controller is empty." in response.text
+    assert 'type="submit" disabled>Create Storage Layout</button>' in response.text
     assert "Wipe and Rebuild Storage Layout" in response.text
     plan_path = export_paths["directory"] / "raid-plan.yml"
     assert plan_path.exists()
@@ -1463,6 +1468,11 @@ def test_apply_storage_layout_creates_artifacts_and_logs_success(client, monkeyp
     assert "Apply Attempt Artifacts" in response.text
     assert "View Apply Log" in response.text
     assert "Storage Workflow Progress" in response.text
+    assert "Staging completed" in response.text
+    assert "Storage changes are staged only. A server reboot is required before the new layout can be validated." in response.text
+    assert "Reboot Required" in response.text
+    assert "Reboot Machine Now" in response.text
+    assert "This button sends a real Redfish reset request through iLO and waits for the server to return." in response.text
     assert "Reboot Now" in response.text
     apply_dir = main.STORAGE_RAID_EXPORT_DIR / "MXQ85103SX" / "20260409-130000"
     assert (apply_dir / "pre-change-summary.yml").exists()
@@ -1476,8 +1486,8 @@ def test_apply_storage_layout_creates_artifacts_and_logs_success(client, monkeyp
     apply_results_text = (apply_dir / "apply-results.json").read_text(encoding="utf-8")
     job = main.load_job("Apply-Kit")
     assert job["scope"] == "storage-apply:wipe_rebuild"
-    assert job["status"] == "Completed"
-    assert job["current_stage"] == "Finished"
+    assert job["status"] == "Staged"
+    assert job["current_stage"] == "Reboot required"
     assert job["progress_percent"] == 100
     assert any("Validate controller and plan" in line for line in job["logs"])
     assert any("Export pre-change storage" in line for line in job["logs"])
@@ -1490,7 +1500,7 @@ def test_apply_storage_layout_creates_artifacts_and_logs_success(client, monkeyp
     assert "Delete existing logical volume" in apply_log_text
     assert "Create OS RAID 1 logical drive" in apply_log_text
     assert "Assign hot spare" in apply_log_text
-    assert "\"status\": \"Completed\"" in apply_results_text
+    assert "\"status\": \"Staged\"" in apply_results_text
     assert "\"workflow_state\": \"staged_reboot_required\"" in apply_results_text
 
 
@@ -1616,6 +1626,7 @@ def test_reboot_storage_now_creates_reboot_artifacts_and_logs_success(client, mo
 
     assert response.status_code == 200
     assert "Storage Workflow Progress" in response.text
+    assert "Post-reboot validation complete" in response.text
     assert (apply_dir / "reboot-results.json").exists()
     assert (apply_dir / "post-reboot-summary.yml").exists()
     assert (apply_dir / "post-reboot-raw.json").exists()
@@ -1686,6 +1697,7 @@ def test_reboot_storage_now_failure_is_logged(client, monkeypatch):
     )
 
     assert response.status_code == 200
+    assert "Retry Reboot Now" in response.text
     reboot_results_text = (apply_dir / "reboot-results.json").read_text(encoding="utf-8")
     apply_results_text = (apply_dir / "apply-results.json").read_text(encoding="utf-8")
     job = main.load_job("Apply-Kit")

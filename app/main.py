@@ -775,7 +775,7 @@ def load_storage_workflow_state(storage_apply_paths: dict[str, Path] | None) -> 
 
     workflow_state = str(apply_state.get("workflow_state") or "")
     if not workflow_state:
-        if apply_state.get("status") == "Completed" and apply_state.get("reboot_required"):
+        if apply_state.get("status") in {"Completed", "Staged"} and apply_state.get("reboot_required"):
             workflow_state = "staged_reboot_required"
         elif apply_state.get("status") == "Completed":
             workflow_state = "apply_complete"
@@ -784,10 +784,18 @@ def load_storage_workflow_state(storage_apply_paths: dict[str, Path] | None) -> 
         else:
             workflow_state = "idle"
 
+    workflow_label, workflow_summary = storage_workflow_presentation(
+        workflow_state,
+        apply_state,
+        reboot_state,
+    )
+
     return {
         "apply": apply_state,
         "reboot": reboot_state,
         "workflow_state": workflow_state,
+        "workflow_label": workflow_label,
+        "workflow_summary": workflow_summary,
         "apply_path": apply_state.get("apply_path", ""),
         "reboot_required": bool(apply_state.get("reboot_required")),
         "reboot_status": reboot_state.get("status") or apply_state.get("reboot_status") or "Not requested",
@@ -1015,6 +1023,24 @@ def build_raid_plan(discovery: dict, discovery_paths: dict[str, Path]) -> dict:
         "create_only_confirmation": STORAGE_APPLY_CONFIRM_CREATE,
         "wipe_rebuild_confirmation": STORAGE_APPLY_CONFIRM_WIPE,
     }
+    create_only_blockers = []
+    if existing_volumes:
+        create_only_blockers.append("Existing logical volumes are present. Create-only is disabled until the controller is empty.")
+    if len(os_pair) != 2:
+        create_only_blockers.append("Two suitable drives were not selected for the OS RAID 1 pair.")
+    if len(data_set) < 4:
+        create_only_blockers.append("At least four compatible data drives are required for the Data RAID 6 set.")
+    if not hot_spare:
+        create_only_blockers.append("A compatible hot spare could not be reserved.")
+    wipe_rebuild_blockers = []
+    if len(os_pair) != 2:
+        wipe_rebuild_blockers.append("Two suitable drives were not selected for the OS RAID 1 pair.")
+    if len(data_set) < 4:
+        wipe_rebuild_blockers.append("At least four compatible data drives are required for the Data RAID 6 set.")
+    if not hot_spare:
+        wipe_rebuild_blockers.append("A compatible hot spare could not be reserved.")
+    apply_readiness["create_only_blockers"] = create_only_blockers
+    apply_readiness["wipe_rebuild_blockers"] = wipe_rebuild_blockers
     planned_layout = {
         "os_raid1": {
             "raid": "RAID 1",
@@ -1142,6 +1168,34 @@ def storage_apply_response_excerpt(response: Any) -> Any:
         if key in response:
             excerpt[key] = response.get(key)
     return excerpt or response
+
+
+def storage_workflow_presentation(
+    workflow_state: str,
+    apply_state: dict[str, Any] | None = None,
+    reboot_state: dict[str, Any] | None = None,
+) -> tuple[str, str]:
+    del reboot_state
+    apply_state = apply_state or {}
+    post_validation = str(apply_state.get("post_reboot_validation") or "").strip()
+    mapping = {
+        "queued": ("Queued", "Storage workflow is queued and waiting to start."),
+        "running_apply": ("Applying changes", "Storage apply is running. Review the live step log below."),
+        "staged_reboot_required": ("Staging completed", "Storage changes are staged only. A server reboot is required before the new layout can be validated."),
+        "reboot_requested": ("Reboot requested", "Reboot has been requested. Waiting for the server reboot workflow to begin."),
+        "waiting_for_reboot_start": ("Waiting for reboot start", "The reboot request was sent. Waiting for the server to leave its current running state."),
+        "waiting_for_server_return": ("Waiting for server to return", "The server has started rebooting. Waiting for Redfish and the system inventory to come back."),
+        "post_reboot_validation_pending": ("Post-reboot validation pending", "The server is back. Capturing post-reboot storage discovery and validation now."),
+        "post_reboot_validation_complete": ("Post-reboot validation complete", "Post-reboot validation is complete for this storage run."),
+        "apply_complete": ("Apply complete", "Storage apply completed and no reboot is required."),
+        "reboot_failed": ("Reboot failed", "The reboot workflow failed. Review the live log and reboot artifacts, then retry if appropriate."),
+        "apply_failed": ("Apply failed", "Storage apply failed before the workflow could complete."),
+        "idle": ("Idle", "Run Read Current Storage and Plan RAID Layout to begin a storage workflow."),
+    }
+    label, summary = mapping.get(workflow_state or "idle", ("Idle", "Storage workflow state will update here while the run is active."))
+    if workflow_state == "post_reboot_validation_pending" and post_validation:
+        summary = f"{summary} Current validation state: {post_validation}."
+    return label, summary
 
 
 def save_storage_apply_state(apply_state: dict[str, Any], apply_paths: dict[str, Path]) -> None:
@@ -1700,6 +1754,7 @@ def run_storage_apply(
         apply_state["reboot_required"] = bool(reboot_required)
         apply_state["workflow_state"] = "staged_reboot_required" if apply_state["reboot_required"] else "apply_complete"
         apply_state["post_reboot_validation"] = "Pending manual reboot" if apply_state["reboot_required"] else "Not required"
+        apply_state["status"] = "Staged" if apply_state["reboot_required"] else "Completed"
         record_storage_apply_step(
             kit_name,
             job,
@@ -1749,18 +1804,28 @@ def run_storage_apply(
             targets={"controller": apply_state["controller"].get("name") or apply_state["controller"].get("model") or ""},
             details=f"Saved {apply_paths['post_change_summary'].name} and {apply_paths['post_change_raw'].name}.",
         )
-        apply_state["status"] = "Completed"
         apply_state["finished_at"] = time.strftime("%Y-%m-%d %H:%M:%S")
         save_storage_apply_state(apply_state, apply_paths)
-        update_job(
-            kit_name,
-            job,
-            "Completed",
-            "Finished",
-            total_steps,
-            total_steps,
-            f"[DONE] Storage apply finished via {apply_state.get('apply_path')}. reboot_required={apply_state.get('reboot_required')}",
-        )
+        if apply_state.get("reboot_required"):
+            update_job(
+                kit_name,
+                job,
+                "Staged",
+                "Reboot required",
+                total_steps,
+                total_steps,
+                f"[STAGED] Storage changes were staged via {apply_state.get('apply_path')}. Reboot is required before post-reboot validation can complete.",
+            )
+        else:
+            update_job(
+                kit_name,
+                job,
+                "Completed",
+                "Finished",
+                total_steps,
+                total_steps,
+                f"[DONE] Storage apply finished via {apply_state.get('apply_path')}. reboot_required={apply_state.get('reboot_required')}",
+            )
     except Exception as e:
         error_text = str(e).splitlines()[0]
         apply_state["status"] = "Failed"
@@ -1916,7 +1981,7 @@ def run_storage_reboot(
             expected_host=host,
         )
         del discovery, discovery_paths, plan, plan_paths
-        if apply_state.get("status") != "Completed":
+        if apply_state.get("status") not in {"Completed", "Staged"}:
             raise ValueError("Storage reboot requires a completed storage apply run.")
         if not apply_state.get("reboot_required"):
             raise ValueError("Storage reboot is not available because the current run does not require reboot.")
@@ -1924,6 +1989,10 @@ def run_storage_reboot(
         client = ILOClient(ILOConfig(host=host, username=username, password=password, verify_tls=False, timeout=15))
         apply_state["apply_path"] = apply_state.get("apply_path", "")
 
+        apply_state["workflow_state"] = "reboot_requested"
+        apply_state["reboot_status"] = "Requested"
+        apply_state["post_reboot_validation"] = "Pending reboot start"
+        save_storage_apply_state(apply_state, apply_paths)
         record_storage_apply_step(
             kit_name,
             job,
@@ -1944,6 +2013,10 @@ def run_storage_reboot(
             "system_path": reboot_result.get("system_path", ""),
         }
         reboot_state["steps"].append({"step": "Request server reboot", "status": "ok", "details": reboot_state["request"]})
+        apply_state["workflow_state"] = "waiting_for_reboot_start"
+        apply_state["reboot_status"] = "Waiting for reboot start"
+        apply_state["post_reboot_validation"] = "Pending server reboot start"
+        save_storage_apply_state(apply_state, apply_paths)
         record_storage_apply_step(
             kit_name,
             job,
@@ -1960,6 +2033,10 @@ def run_storage_reboot(
         )
 
         reboot_state["steps"].append({"step": "Wait for reboot start", "status": "ok", "details": {"observed": reboot_result.get("reboot_start_observed"), "detail": reboot_result.get("reboot_start_detail", "")}})
+        apply_state["workflow_state"] = "waiting_for_server_return"
+        apply_state["reboot_status"] = "Waiting for server return"
+        apply_state["post_reboot_validation"] = "Pending server return"
+        save_storage_apply_state(apply_state, apply_paths)
         record_storage_apply_step(
             kit_name,
             job,
@@ -1975,6 +2052,10 @@ def run_storage_reboot(
         )
 
         reboot_state["steps"].append({"step": "Wait for server to return", "status": "ok", "details": {"returned": reboot_result.get("system_returned"), "detail": reboot_result.get("return_detail", "")}})
+        apply_state["workflow_state"] = "post_reboot_validation_pending"
+        apply_state["reboot_status"] = "Server returned"
+        apply_state["post_reboot_validation"] = "Capturing post-reboot storage discovery"
+        save_storage_apply_state(apply_state, apply_paths)
         record_storage_apply_step(
             kit_name,
             job,
@@ -2014,6 +2095,7 @@ def run_storage_reboot(
         reboot_state["validation"] = validation
         reboot_state["status"] = "Completed"
         reboot_state["finished_at"] = time.strftime("%Y-%m-%d %H:%M:%S")
+        apply_state["status"] = "Completed"
         apply_state["workflow_state"] = "post_reboot_validation_complete"
         apply_state["reboot_status"] = "Completed"
         apply_state["post_reboot_validation"] = "Complete"
@@ -3687,7 +3769,7 @@ async def reboot_storage_now(
         workflow_state = load_storage_workflow_state(apply_paths) or {}
         apply_state = workflow_state.get("apply", {}) or {}
         reboot_state = workflow_state.get("reboot", {}) or {}
-        if apply_state.get("status") != "Completed":
+        if apply_state.get("status") not in {"Completed", "Staged"}:
             raise ValueError("Reboot Now is only available after a completed storage apply run.")
         if not apply_state.get("reboot_required"):
             raise ValueError("Reboot Now is not available because the current storage run does not require reboot.")

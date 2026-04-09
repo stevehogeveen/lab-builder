@@ -6,6 +6,27 @@
         {% set workflow = storage_workflow_state or {} %}
         {% set apply_state = workflow.get('apply', {}) %}
         {% set reboot_state = workflow.get('reboot', {}) %}
+        <div id="storage-reboot-modal-shell" style="position: fixed; inset: 0; z-index: 60; {% if workflow.get('workflow_state') != 'staged_reboot_required' %}display: none;{% endif %}">
+            <div style="position: absolute; inset: 0; background: rgba(3, 7, 18, 0.72);"></div>
+            <div class="card" id="storage-reboot-modal" style="position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); width: min(560px, calc(100vw - 2rem)); border-color: color-mix(in srgb, var(--bad) 40%, var(--border)); box-shadow: 0 24px 64px rgba(0, 0, 0, 0.45);">
+                <div class="text-xl font-semibold mb-2">Reboot Required</div>
+                <div class="text-sm text-slate-300 mb-3">
+                    RAID changes were staged successfully, but they are not active yet.
+                    Reboot the machine now to let iLO apply the pending storage configuration and continue post-reboot validation.
+                </div>
+                <div class="result mb-4">This button sends a real Redfish reset request through iLO and waits for the server to return.</div>
+                <div class="actions">
+                    <form hx-post="/reboot-storage-now" hx-target="#main-content" hx-swap="outerHTML">
+                        <input type="hidden" name="return_page" value="storage">
+                        <input type="hidden" name="discovery_raw_path" value="{{ storage_export_paths.raw if storage_export_paths else '' }}">
+                        <input type="hidden" name="raid_plan_path" value="{{ storage_plan_paths.plan if storage_plan_paths else '' }}">
+                        <input type="hidden" name="apply_artifact_dir" value="{{ storage_apply_paths.directory }}">
+                        <button class="btn btn-danger" type="submit">Reboot Machine Now</button>
+                    </form>
+                    <button class="btn" type="button" onclick="document.getElementById('storage-reboot-modal-shell').remove()">Not Now</button>
+                </div>
+            </div>
+        </div>
         <div class="card" id="storage-progress-card"
              data-kit-name="{{ current_kit }}"
              data-job-scope="{{ job.get('scope', '') }}"
@@ -18,10 +39,10 @@
                     <div class="text-lg font-semibold">Storage Workflow Progress</div>
                     <div class="text-sm text-slate-400">Live storage-specific status for apply and manual reboot in the current run folder.</div>
                 </div>
-                <div class="job-badge" id="storage-progress-status">Status: {{ job.get('status', 'Idle') }}</div>
+                <div class="job-badge" id="storage-progress-status">Status: {{ workflow.get('workflow_label', job.get('status', 'Idle')) }}</div>
             </div>
             <div class="grid grid-cols-1 md:grid-cols-2 gap-3 text-sm mb-4">
-                <div><span class="text-slate-400">Workflow:</span> <span id="storage-workflow-state">{{ workflow.get('workflow_state', 'idle') }}</span></div>
+                <div><span class="text-slate-400">Workflow:</span> <span id="storage-workflow-state">{{ workflow.get('workflow_label', workflow.get('workflow_state', 'idle')) }}</span></div>
                 <div><span class="text-slate-400">Scope:</span> <span id="storage-progress-scope">{{ job.get('scope', '') }}</span></div>
                 <div><span class="text-slate-400">Current stage:</span> <span id="storage-progress-stage">{{ job.get('current_stage', '') }}</span></div>
                 <div><span class="text-slate-400">Completed:</span> <span id="storage-progress-completed">{{ job.get('completed_steps', 0) }} / {{ job.get('total_steps', 0) }}</span></div>
@@ -30,37 +51,21 @@
                 <div><span class="text-slate-400">Reboot required:</span> <span id="storage-progress-reboot-required">{{ 'Yes' if workflow.get('reboot_required') else 'Unknown' }}</span></div>
                 <div><span class="text-slate-400">Reboot status:</span> <span id="storage-progress-reboot-status">{{ workflow.get('reboot_status', 'Not requested') }}</span></div>
             </div>
-            <div class="result mb-3" id="storage-progress-summary">
-                {% if workflow.get('workflow_state') == 'staged_reboot_required' %}
-                Changes are staged only. Reboot is required to continue the storage workflow.
-                {% elif workflow.get('workflow_state') == 'reboot_requested' %}
-                Reboot has been requested. Waiting for reboot completion and post-reboot validation.
-                {% elif workflow.get('workflow_state') == 'post_reboot_validation_complete' %}
-                Post-reboot validation is complete for this storage run.
-                {% elif workflow.get('workflow_state') == 'reboot_failed' %}
-                Reboot failed. Review the storage progress log and reboot artifacts.
-                {% elif workflow.get('workflow_state') == 'apply_complete' %}
-                Storage apply completed without requiring reboot.
-                {% else %}
-                Storage workflow state will update here while the run is active.
-                {% endif %}
-            </div>
+            <div class="result mb-3" id="storage-progress-summary">{{ workflow.get('workflow_summary', 'Storage workflow state will update here while the run is active.') }}</div>
             <div class="progress-shell mb-3">
                 <div id="storage-progress-bar" class="progress-bar" style="width: {{ job.get('progress_percent', 0) }}%;"></div>
             </div>
             <div id="storage-progress-logs" class="codeblock max-h-80 overflow-y-auto">{% for line in job.get('logs', []) %}{{ line }}
 {% endfor %}</div>
-            {% if apply_state.get('status') == 'Completed' and apply_state.get('reboot_required') and reboot_state.get('status') != 'Running' and reboot_state.get('status') != 'Completed' %}
-            <div class="actions mt-4" id="storage-reboot-actions">
+            <div class="actions mt-4" id="storage-reboot-actions" style="{% if not (apply_state.get('status') in ['Completed', 'Staged'] and apply_state.get('reboot_required') and reboot_state.get('status') != 'Running' and reboot_state.get('status') != 'Completed') %}display: none;{% endif %}">
                 <form hx-post="/reboot-storage-now" hx-target="#main-content" hx-swap="outerHTML">
                     <input type="hidden" name="return_page" value="storage">
                     <input type="hidden" name="discovery_raw_path" value="{{ storage_export_paths.raw if storage_export_paths else '' }}">
                     <input type="hidden" name="raid_plan_path" value="{{ storage_plan_paths.plan if storage_plan_paths else '' }}">
                     <input type="hidden" name="apply_artifact_dir" value="{{ storage_apply_paths.directory }}">
-                    <button class="btn btn-danger" type="submit">Reboot Now</button>
+                    <button class="btn btn-danger" id="storage-reboot-action-button" type="submit">{% if reboot_state.get('status') == 'Failed' %}Retry Reboot Now{% else %}Reboot Now{% endif %}</button>
                 </form>
             </div>
-            {% endif %}
         </div>
         {% endif %}
 
@@ -68,11 +73,17 @@
             <div class="text-lg font-semibold mb-3">Read-Only Discovery</div>
             <div class="text-sm text-slate-400 mb-3">Read current controller, logical volume, and physical drive inventory from iLO Redfish. Phase 1 does not create, delete, or modify RAID volumes.</div>
 
-            <form hx-post="/read-current-storage" hx-target="#main-content" hx-swap="outerHTML">
+            <form id="read-current-storage-form" hx-post="/read-current-storage" hx-target="#main-content" hx-swap="outerHTML" hx-indicator="#read-storage-progress">
                 <input type="hidden" name="return_page" value="storage">
                 <label class="check mb-3"><input type="checkbox" name="deep_smart_storage_scan"> Deep Smart Storage Scan</label>
                 <div class="actions">
                     <button class="btn" type="submit">Read Current Storage</button>
+                </div>
+                <div id="read-storage-progress" class="htmx-indicator result mt-3">
+                    Reading current storage from iLO. This can take a bit on real hardware.
+                    <div class="progress-shell">
+                        <div class="progress-bar" style="width: 100%;"></div>
+                    </div>
                 </div>
             </form>
         </div>
@@ -408,6 +419,14 @@
                         <div class="mb-2"><strong>Typed confirmation:</strong> {{ storage_plan.apply_readiness.create_only_confirmation }}</div>
                         <input class="input mb-3" type="text" name="typed_confirmation" value="" placeholder="Type {{ storage_plan.apply_readiness.create_only_confirmation }}">
                         <button class="btn" type="submit" {% if not storage_plan.apply_readiness.create_only_ready %}disabled{% endif %}>Create Storage Layout</button>
+                        {% if not storage_plan.apply_readiness.create_only_ready %}
+                        <div class="error mt-3">
+                            <div><strong>Create-only is blocked.</strong></div>
+                            {% for reason in storage_plan.apply_readiness.create_only_blockers %}
+                            <div>{{ reason }}</div>
+                            {% endfor %}
+                        </div>
+                        {% endif %}
                     </form>
                     <form hx-post="/apply-storage-layout" hx-target="#main-content" hx-swap="outerHTML" class="card">
                         <div class="text-sm font-bold text-slate-300 mb-2">Wipe and Rebuild Storage Layout</div>
@@ -420,6 +439,13 @@
                         <div class="mb-2"><strong>Typed confirmation:</strong> {{ storage_plan.apply_readiness.wipe_rebuild_confirmation }}</div>
                         <input class="input mb-3" type="text" name="typed_confirmation" value="" placeholder="Type {{ storage_plan.apply_readiness.wipe_rebuild_confirmation }}">
                         <button class="btn" type="submit" {% if not storage_plan.apply_readiness.wipe_rebuild_ready %}disabled{% endif %}>Wipe and Rebuild Storage Layout</button>
+                        {% if not storage_plan.apply_readiness.wipe_rebuild_ready and storage_plan.apply_readiness.wipe_rebuild_blockers %}
+                        <div class="error mt-3">
+                            {% for reason in storage_plan.apply_readiness.wipe_rebuild_blockers %}
+                            <div>{{ reason }}</div>
+                            {% endfor %}
+                        </div>
+                        {% endif %}
                     </form>
                 </div>
             </div>
@@ -629,5 +655,18 @@
 (function () {
     if (!window.bindStorageProgressCard) return;
     window.bindStorageProgressCard({ kitName: {{ current_kit|tojson }} });
+})();
+
+(function () {
+    const form = document.getElementById("read-current-storage-form");
+    const progress = document.getElementById("read-storage-progress");
+    if (!form || !progress || !window.document.body) return;
+
+    document.body.addEventListener("htmx:beforeRequest", function (event) {
+        if (event.target !== form) return;
+        window.setTimeout(function () {
+            progress.scrollIntoView({ behavior: "smooth", block: "center" });
+        }, 40);
+    });
 })();
 </script>
