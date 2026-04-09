@@ -21,6 +21,106 @@
             Summary file: {{ storage_export_paths.summary }}<br>
             Raw file: {{ storage_export_paths.raw }}
         </div>
+
+        <div class="card">
+            <div class="text-lg font-semibold mb-3">RAID Planning</div>
+            <div class="text-sm text-slate-400 mb-3">Build a read-only target layout proposal from the displayed storage discovery. This does not create or delete volumes.</div>
+            <form hx-post="/plan-raid-layout" hx-target="#main-content" hx-swap="outerHTML">
+                <input type="hidden" name="return_page" value="storage">
+                <input type="hidden" name="discovery_raw_path" value="{{ storage_export_paths.raw }}">
+                <div class="actions">
+                    <button class="btn" type="submit">Plan RAID Layout</button>
+                </div>
+            </form>
+        </div>
+        {% endif %}
+
+        {% if storage_plan %}
+        <div class="card">
+            <div class="text-lg font-semibold mb-3">Proposed RAID Plan</div>
+            {% if storage_plan_paths %}
+            <div class="result mb-4">Plan artifact: {{ storage_plan_paths.plan }}</div>
+            {% endif %}
+            <div class="grid grid-cols-1 md:grid-cols-2 gap-3 mb-4">
+                <div>
+                    <div><strong>Source host:</strong> {{ storage_plan.source_discovery.host or "Unknown" }}</div>
+                    <div><strong>Source serial:</strong> {{ storage_plan.source_discovery.serial_number or "Unknown" }}</div>
+                    <div><strong>Discovery artifact:</strong> {{ storage_plan.source_discovery.raw }}</div>
+                </div>
+                <div>
+                    <div><strong>Chosen controller:</strong> {{ storage_plan.source_discovery.controller.name or storage_plan.source_discovery.controller.model or "None" }}</div>
+                    <div><strong>Existing logical volumes detected:</strong> {{ "Yes" if storage_plan.existing_logical_volumes_detected else "No" }}</div>
+                    <div><strong>Default recommendation:</strong> {{ storage_plan.default_recommendation }}</div>
+                </div>
+            </div>
+
+            {% if storage_plan.warnings %}
+            <div class="result mb-4">
+                {% for warning in storage_plan.warnings %}<div>{{ warning }}</div>{% endfor %}
+            </div>
+            {% endif %}
+            {% if storage_plan.blockers %}
+            <div class="error mb-4">
+                {% for blocker in storage_plan.blockers %}<div>{{ blocker }}</div>{% endfor %}
+            </div>
+            {% endif %}
+
+            <div class="text-sm font-bold text-slate-300 mb-2">OS RAID 1 Pair</div>
+            <div class="muted mb-2">{{ storage_plan.os_raid1.explanation }}</div>
+            <div class="mb-2"><strong>Target size:</strong> about {{ storage_plan.os_raid1.target_size_gib }} GiB</div>
+            {% if storage_plan.os_raid1.drives %}
+            <table class="mb-4">
+                <thead><tr><th>Bay</th><th>Model</th><th>Size GiB</th><th>Media</th><th>Protocol</th></tr></thead>
+                <tbody>
+                {% for drive in storage_plan.os_raid1.drives %}
+                    <tr><td>{{ drive.bay }}</td><td>{{ drive.model or drive.name }}</td><td>{{ drive.size_gib }}</td><td>{{ drive.media_type }}</td><td>{{ drive.protocol }}</td></tr>
+                {% endfor %}
+                </tbody>
+            </table>
+            {% endif %}
+
+            <div class="text-sm font-bold text-slate-300 mb-2">Data RAID 6 Set</div>
+            <div class="muted mb-2">{{ storage_plan.data_raid6.explanation }}</div>
+            <div class="mb-2"><strong>Feasible:</strong> {{ "Yes" if storage_plan.data_raid6.feasible else "No" }}</div>
+            {% if storage_plan.data_raid6.drives %}
+            <table class="mb-4">
+                <thead><tr><th>Bay</th><th>Model</th><th>Size GiB</th><th>Media</th><th>Protocol</th></tr></thead>
+                <tbody>
+                {% for drive in storage_plan.data_raid6.drives %}
+                    <tr><td>{{ drive.bay }}</td><td>{{ drive.model or drive.name }}</td><td>{{ drive.size_gib }}</td><td>{{ drive.media_type }}</td><td>{{ drive.protocol }}</td></tr>
+                {% endfor %}
+                </tbody>
+            </table>
+            {% endif %}
+
+            <div class="text-sm font-bold text-slate-300 mb-2">Existing Logical Volumes</div>
+            {% if storage_plan.existing_logical_volumes %}
+            <table class="mb-4">
+                <thead><tr><th>Name</th><th>RAID</th><th>Size GiB</th><th>Source</th></tr></thead>
+                <tbody>
+                {% for volume in storage_plan.existing_logical_volumes %}
+                    <tr><td>{{ volume.name or volume.id }}</td><td>{{ volume.raid_type }}</td><td>{{ volume.capacity_gib or "" }}</td><td>{{ volume.source }}</td></tr>
+                {% endfor %}
+                </tbody>
+            </table>
+            {% else %}
+            <div class="muted mb-4">No existing logical volumes were detected.</div>
+            {% endif %}
+
+            <div class="text-sm font-bold text-slate-300 mb-2">Drives Intentionally Excluded</div>
+            {% if storage_plan.excluded_drives %}
+            <table>
+                <thead><tr><th>Bay</th><th>Model</th><th>Size GiB</th><th>Reason</th></tr></thead>
+                <tbody>
+                {% for drive in storage_plan.excluded_drives %}
+                    <tr><td>{{ drive.bay }}</td><td>{{ drive.model or drive.name }}</td><td>{{ drive.size_gib }}</td><td>{{ drive.exclude_reason }}</td></tr>
+                {% endfor %}
+                </tbody>
+            </table>
+            {% else %}
+            <div class="muted">No eligible drives were excluded.</div>
+            {% endif %}
+        </div>
         {% endif %}
 
         {% if storage_discovery %}

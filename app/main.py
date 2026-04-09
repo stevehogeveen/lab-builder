@@ -537,6 +537,225 @@ def export_storage_discovery_snapshot(cfg: dict, discovery: dict, host: str = ""
     }
 
 
+def load_storage_discovery_artifact(raw_path_text: str, expected_host: str = "") -> tuple[dict, dict[str, Path]]:
+    raw_path = Path(raw_path_text).expanduser().resolve()
+    export_root = STORAGE_RAID_EXPORT_DIR.resolve()
+    if not raw_path.is_relative_to(export_root):
+        raise ValueError("Storage discovery artifact must be under the storage export folder.")
+    if raw_path.name != "raw.json" or not raw_path.exists():
+        raise ValueError("Storage discovery raw artifact was not found.")
+
+    payload = json.loads(raw_path.read_text(encoding="utf-8"))
+    source_host = (payload.get("source_host") or "").strip()
+    if expected_host and source_host and source_host != expected_host:
+        raise ValueError(f"Storage discovery host mismatch: artifact is for {source_host}, current kit points to {expected_host}.")
+
+    discovery = payload.get("discovery", {})
+    discovery.setdefault("raw", {})["source_host"] = source_host
+    return discovery, {
+        "directory": raw_path.parent,
+        "summary": raw_path.with_name("summary.yml"),
+        "raw": raw_path,
+    }
+
+
+def storage_status_is_eligible(status: str) -> bool:
+    text = str(status or "").lower()
+    if not text:
+        return True
+    return not any(term in text for term in ("critical", "failed", "failure", "disabled", "missing", "predictive", "warning"))
+
+
+def storage_drive_sort_key(drive: dict) -> tuple:
+    bay = str(drive.get("bay") or drive.get("id") or "")
+    try:
+        bay_num = int(re.sub(r"\D+", "", bay) or "999999")
+    except Exception:
+        bay_num = 999999
+    return (bay_num, bay, drive.get("serial_number", ""), drive.get("model", ""), drive.get("path", ""))
+
+
+def normalized_plan_drive(drive: dict, source: str) -> dict:
+    try:
+        size_gib = float(drive.get("size_gib") or 0)
+    except Exception:
+        size_gib = 0.0
+    return {
+        "source": source,
+        "path": drive.get("path", ""),
+        "id": str(drive.get("id") or ""),
+        "bay": str(drive.get("bay") or drive.get("id") or ""),
+        "name": drive.get("name", ""),
+        "model": drive.get("model", ""),
+        "serial_number": drive.get("serial_number", ""),
+        "size_gib": size_gib,
+        "media_type": drive.get("media_type", "") or "Unknown",
+        "protocol": drive.get("protocol", "") or "Unknown",
+        "status": drive.get("status", ""),
+    }
+
+
+def drive_group_key(drive: dict) -> tuple:
+    return (
+        str(drive.get("media_type") or "Unknown").lower(),
+        str(drive.get("protocol") or "Unknown").lower(),
+        int(round(float(drive.get("size_gib") or 0))),
+    )
+
+
+def choose_os_drive_pair(eligible_drives: list[dict]) -> tuple[list[dict], str]:
+    candidates = []
+    for idx, left in enumerate(eligible_drives):
+        for right in eligible_drives[idx + 1:]:
+            same_media = left["media_type"].lower() == right["media_type"].lower()
+            same_protocol = left["protocol"].lower() == right["protocol"].lower()
+            capacity_delta = abs(left["size_gib"] - right["size_gib"])
+            usable_size = min(left["size_gib"], right["size_gib"])
+            acceptable_for_target = usable_size >= 450
+            target_distance = abs(usable_size - 500) if acceptable_for_target else 500 - usable_size
+            pair = sorted([left, right], key=storage_drive_sort_key)
+            candidates.append((
+                (
+                    0 if same_media else 1,
+                    0 if same_protocol else 1,
+                    capacity_delta,
+                    0 if acceptable_for_target else 1,
+                    target_distance,
+                    storage_drive_sort_key(pair[0]),
+                    storage_drive_sort_key(pair[1]),
+                ),
+                pair,
+            ))
+
+    if not candidates:
+        return [], "No eligible pair was available."
+
+    _, pair = sorted(candidates, key=lambda item: item[0])[0]
+    return pair, (
+        "Selected the best matched pair by media type, protocol, capacity, and deterministic bay/order. "
+        f"Usable mirror size is about {min(d['size_gib'] for d in pair):.0f} GiB before applying the 500 GiB target."
+    )
+
+
+def choose_raid6_drive_set(remaining_drives: list[dict]) -> tuple[list[dict], list[dict], str, list[str]]:
+    if not remaining_drives:
+        return [], [], "No remaining eligible drives were available for RAID 6.", ["No remaining eligible drives are available for the Data RAID 6 set."]
+
+    groups: dict[tuple, list[dict]] = {}
+    for drive in remaining_drives:
+        groups.setdefault(drive_group_key(drive), []).append(drive)
+
+    ranked_groups = sorted(groups.items(), key=lambda item: (-len(item[1]), -item[0][2], item[0][0], item[0][1]))
+    selected_key, selected_group = ranked_groups[0]
+    selected = sorted(selected_group, key=storage_drive_sort_key)
+    excluded = [
+        {**drive, "exclude_reason": "Not in the selected RAID 6 compatible media/protocol/capacity group."}
+        for drive in remaining_drives
+        if drive not in selected_group
+    ]
+    blockers = []
+    if len(selected) < 4:
+        blockers.append("RAID 6 requires at least four compatible remaining drives.")
+    explanation = (
+        f"Selected the largest compatible remaining group for RAID 6: media={selected_key[0]}, "
+        f"protocol={selected_key[1]}, capacity≈{selected_key[2]} GiB."
+    )
+    return selected, excluded, explanation, blockers
+
+
+def build_raid_plan(discovery: dict, discovery_paths: dict[str, Path]) -> dict:
+    summary = discovery.get("summary", {})
+    standard = summary.get("standard_redfish_storage", {}) or {}
+    hpe = summary.get("hpe_smart_storage", {}) or {}
+    server = summary.get("server", {}) or {}
+    warnings = []
+    blockers = []
+
+    controllers = []
+    for source, items in (("hpe_smart_storage", hpe.get("controllers", [])), ("standard_redfish_storage", standard.get("controllers", []))):
+        for item in items or []:
+            controllers.append({**item, "source": source})
+    controller = controllers[0] if controllers else {}
+    if not controller:
+        blockers.append("No detected storage controller is available for planning.")
+
+    existing_volumes = []
+    for source, items in (("hpe_smart_storage", hpe.get("volumes", [])), ("standard_redfish_storage", standard.get("volumes", []))):
+        for item in items or []:
+            existing_volumes.append({**item, "source": source})
+    if existing_volumes:
+        warnings.append("Existing logical volumes detected; default recommendation is wipe and rebuild before applying this target layout.")
+
+    eligible_drives = []
+    excluded_drives = []
+    for source, items in (("hpe_smart_storage", hpe.get("drives", [])), ("standard_redfish_storage", standard.get("drives", []))):
+        for item in items or []:
+            drive = normalized_plan_drive(item, source)
+            if drive["size_gib"] <= 0:
+                excluded_drives.append({**drive, "exclude_reason": "Missing or zero drive size."})
+            elif not storage_status_is_eligible(drive["status"]):
+                excluded_drives.append({**drive, "exclude_reason": f"Drive status is not eligible: {drive['status'] or 'unknown'}."})
+            else:
+                eligible_drives.append(drive)
+
+    os_pair, os_explanation = choose_os_drive_pair(sorted(eligible_drives, key=storage_drive_sort_key))
+    if len(os_pair) < 2:
+        blockers.append("Could not choose two suitable drives for the OS RAID 1 pair.")
+
+    os_paths = {drive["path"] for drive in os_pair}
+    remaining = [drive for drive in eligible_drives if drive["path"] not in os_paths]
+    data_set, raid6_excluded, raid6_explanation, raid6_blockers = choose_raid6_drive_set(sorted(remaining, key=storage_drive_sort_key))
+    blockers.extend(raid6_blockers)
+
+    excluded_drives.extend({**drive, "exclude_reason": "Reserved for OS RAID 1 pair."} for drive in os_pair)
+    excluded_drives.extend(raid6_excluded)
+
+    return {
+        "generated_at": time.strftime("%Y-%m-%d %H:%M:%S"),
+        "read_only": True,
+        "source_discovery": {
+            "host": discovery.get("raw", {}).get("source_host", ""),
+            "serial_number": server.get("serial_number", ""),
+            "server_model": server.get("model", ""),
+            "controller": controller,
+            "directory": str(discovery_paths["directory"]),
+            "summary": str(discovery_paths["summary"]),
+            "raw": str(discovery_paths["raw"]),
+        },
+        "existing_logical_volumes_detected": bool(existing_volumes),
+        "default_recommendation": "wipe and rebuild" if existing_volumes else "create only",
+        "existing_logical_volumes": existing_volumes,
+        "desired_layout": {
+            "os_volume": {"raid": "RAID 1", "target_size_gib": 500},
+            "data_volume": {"raid": "RAID 6", "capacity": "remaining compatible eligible drives"},
+        },
+        "os_raid1": {"target_size_gib": 500, "drives": os_pair, "explanation": os_explanation},
+        "data_raid6": {"feasible": len(data_set) >= 4, "drives": data_set, "drive_count": len(data_set), "explanation": raid6_explanation},
+        "excluded_drives": sorted(excluded_drives, key=storage_drive_sort_key),
+        "warnings": warnings,
+        "blockers": blockers,
+        "valid": not blockers,
+    }
+
+
+def export_raid_plan_snapshot(cfg: dict, plan: dict, discovery_paths: dict[str, Path]) -> dict[str, Path]:
+    timestamp = time.strftime("%Y%m%d-%H%M%S")
+    plan_path = discovery_paths["directory"] / f"raid-plan-{timestamp}.yml"
+    payload = {
+        "export_timestamp": time.strftime("%Y-%m-%d %H:%M:%S"),
+        "kit_name": sanitize_kit_name(cfg.get("site", {}).get("name", "Kit-01")),
+        "source_discovery": plan.get("source_discovery", {}),
+        "plan": plan,
+    }
+    with open(plan_path, "w", encoding="utf-8") as f:
+        yaml.safe_dump(payload, f, sort_keys=False)
+
+    return {
+        "directory": discovery_paths["directory"],
+        "plan": plan_path,
+    }
+
+
 def render_exports_folder_listing(root: Path) -> str:
     lines = [f"Exports Root: {root}", ""]
     servers = sorted([p for p in root.iterdir() if p.is_dir()], key=lambda p: p.name.lower())
@@ -1423,6 +1642,8 @@ def render_page(
     live_inventory_status: dict | None = None,
     storage_discovery: dict | None = None,
     storage_export_paths: dict[str, Path] | None = None,
+    storage_plan: dict | None = None,
+    storage_plan_paths: dict[str, Path] | None = None,
 ):
     active_page = normalize_page_name(active_page)
     page_meta = PAGE_META[active_page]
@@ -1448,6 +1669,8 @@ def render_page(
         "live_inventory_status": live_inventory_status,
         "storage_discovery": storage_discovery,
         "storage_export_paths": storage_export_paths,
+        "storage_plan": storage_plan,
+        "storage_plan_paths": storage_plan_paths,
         "job": job,
         "history": history,
         "section_states": summarize_section_states(cfg),
@@ -1981,6 +2204,40 @@ async def read_current_storage(
         )
     except Exception as e:
         error_text = f"Storage discovery failed: {str(e).splitlines()[0]}"
+        return render_page(
+            request,
+            cfg,
+            active_page=return_page,
+            error_message=error_text,
+        )
+
+
+@app.post("/plan-raid-layout", response_class=HTMLResponse)
+async def plan_raid_layout(
+    request: Request,
+    return_page: str = Form("storage"),
+    discovery_raw_path: str = Form(""),
+):
+    cfg = load_kit_config()
+    ilo_cfg = cfg.get("ilo", {})
+    host = (ilo_cfg.get("current_ip") or ilo_cfg.get("host") or "").strip()
+
+    try:
+        discovery, discovery_paths = load_storage_discovery_artifact(discovery_raw_path, expected_host=host)
+        plan = build_raid_plan(discovery, discovery_paths)
+        plan_paths = export_raid_plan_snapshot(cfg, plan, discovery_paths)
+        return render_page(
+            request,
+            cfg,
+            active_page=return_page,
+            message=f"Planned RAID layout from discovery artifact {discovery_paths['raw']}. Plan saved to {plan_paths['plan']}",
+            storage_discovery=discovery.get("summary", {}),
+            storage_export_paths=discovery_paths,
+            storage_plan=plan,
+            storage_plan_paths=plan_paths,
+        )
+    except Exception as e:
+        error_text = f"RAID planning failed: {str(e).splitlines()[0]}"
         return render_page(
             request,
             cfg,

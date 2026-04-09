@@ -753,3 +753,79 @@ def test_gen10_smart_storage_deep_scan_can_be_forced_even_after_fast_pass_succes
         item["collection"] == "DiskDrives" and item["status"] == "populated"
         for item in diagnostics["collections"]
     )
+
+
+def planner_discovery_with_mixed_drives() -> dict:
+    discovery = FakeILOClient(None).get_storage_discovery()
+    standard = discovery["summary"]["standard_redfish_storage"]
+    standard["volumes"] = [{"id": "1", "name": "Existing OS", "raid_type": "RAID1", "capacity_gib": 480}]
+    standard["drives"] = [
+        {"id": "1", "bay": "1", "model": "SSD-480", "size_gib": 480, "media_type": "SSD", "protocol": "SAS", "status": "OK / Enabled", "path": "/drives/1"},
+        {"id": "2", "bay": "2", "model": "SSD-480", "size_gib": 480, "media_type": "SSD", "protocol": "SAS", "status": "OK / Enabled", "path": "/drives/2"},
+        {"id": "3", "bay": "3", "model": "HDD-1200", "size_gib": 1200, "media_type": "HDD", "protocol": "SAS", "status": "OK / Enabled", "path": "/drives/3"},
+        {"id": "4", "bay": "4", "model": "HDD-1200", "size_gib": 1200, "media_type": "HDD", "protocol": "SAS", "status": "OK / Enabled", "path": "/drives/4"},
+        {"id": "5", "bay": "5", "model": "HDD-1200", "size_gib": 1200, "media_type": "HDD", "protocol": "SAS", "status": "OK / Enabled", "path": "/drives/5"},
+        {"id": "6", "bay": "6", "model": "HDD-1200", "size_gib": 1200, "media_type": "HDD", "protocol": "SAS", "status": "OK / Enabled", "path": "/drives/6"},
+        {"id": "7", "bay": "7", "model": "HDD-1200", "size_gib": 1200, "media_type": "HDD", "protocol": "SAS", "status": "OK / Enabled", "path": "/drives/7"},
+        {"id": "8", "bay": "8", "model": "HDD-1200", "size_gib": 1200, "media_type": "HDD", "protocol": "SAS", "status": "OK / Enabled", "path": "/drives/8"},
+        {"id": "9", "bay": "9", "model": "Oddball", "size_gib": 960, "media_type": "SSD", "protocol": "SATA", "status": "OK / Enabled", "path": "/drives/9"},
+    ]
+    return discovery
+
+
+def test_plan_raid_layout_uses_displayed_discovery_artifact_and_saves_plan(client, monkeypatch):
+    def fake_strftime(fmt):
+        if fmt == "%Y%m%d-%H%M%S":
+            return "20260407-170000"
+        if fmt == "%Y-%m-%d %H:%M:%S":
+            return "2026-04-07 17:00:00"
+        raise AssertionError(f"unexpected strftime format: {fmt}")
+
+    monkeypatch.setattr(main.time, "strftime", fake_strftime)
+    cfg = main.default_config()
+    cfg["site"]["name"] = "Plan Kit"
+    cfg["ilo"]["current_ip"] = "10.10.8.80"
+    cfg["ilo"]["host"] = "10.10.8.80"
+    main.save_kit_config(cfg)
+    discovery = planner_discovery_with_mixed_drives()
+    export_paths = main.export_storage_discovery_snapshot(cfg, discovery, host="10.10.8.80")
+
+    response = client.post(
+        "/plan-raid-layout",
+        data={"return_page": "storage", "discovery_raw_path": str(export_paths["raw"])},
+    )
+
+    assert response.status_code == 200
+    assert "Proposed RAID Plan" in response.text
+    assert "Source host:" in response.text
+    assert "10.10.8.80" in response.text
+    assert "Existing logical volumes detected" in response.text
+    assert "wipe and rebuild" in response.text
+    assert "SSD-480" in response.text
+    assert "HDD-1200" in response.text
+    assert "Oddball" in response.text
+    plan_path = export_paths["directory"] / "raid-plan-20260407-170000.yml"
+    assert plan_path.exists()
+    plan_text = plan_path.read_text(encoding="utf-8")
+    assert "source_discovery:" in plan_text
+    assert "default_recommendation: wipe and rebuild" in plan_text
+    assert "Not in the selected RAID 6 compatible media/protocol/capacity" in plan_text
+
+
+def test_plan_raid_layout_rejects_discovery_from_different_host(client):
+    cfg = main.default_config()
+    cfg["site"]["name"] = "Plan Kit"
+    cfg["ilo"]["current_ip"] = "10.10.8.81"
+    cfg["ilo"]["host"] = "10.10.8.81"
+    main.save_kit_config(cfg)
+    discovery = planner_discovery_with_mixed_drives()
+    export_paths = main.export_storage_discovery_snapshot(cfg, discovery, host="10.10.8.82")
+
+    response = client.post(
+        "/plan-raid-layout",
+        data={"return_page": "storage", "discovery_raw_path": str(export_paths["raw"])},
+    )
+
+    assert response.status_code == 200
+    assert "RAID planning failed" in response.text
+    assert "host mismatch" in response.text
