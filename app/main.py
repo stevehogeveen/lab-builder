@@ -636,8 +636,11 @@ def storage_apply_paths_from_directory(apply_dir_text: str) -> dict[str, Path]:
         "plan": apply_dir / "raid-plan.yml",
         "apply_log": apply_dir / "apply-log.yml",
         "apply_results": apply_dir / "apply-results.json",
+        "reboot_results": apply_dir / "reboot-results.json",
         "post_change_summary": apply_dir / "post-change-summary.yml",
         "post_change_raw": apply_dir / "post-change-raw.json",
+        "post_reboot_summary": apply_dir / "post-reboot-summary.yml",
+        "post_reboot_raw": apply_dir / "post-reboot-raw.json",
     }
 
 
@@ -700,8 +703,11 @@ def initialize_storage_apply_artifacts(
         "plan": plan_paths["plan"],
         "apply_log": apply_dir / "apply-log.yml",
         "apply_results": apply_dir / "apply-results.json",
+        "reboot_results": apply_dir / "reboot-results.json",
         "post_change_summary": apply_dir / "post-change-summary.yml",
         "post_change_raw": apply_dir / "post-change-raw.json",
+        "post_reboot_summary": apply_dir / "post-reboot-summary.yml",
+        "post_reboot_raw": apply_dir / "post-reboot-raw.json",
     }
 
     apply_log_payload = {
@@ -722,12 +728,72 @@ def initialize_storage_apply_artifacts(
                 "steps": [],
                 "responses": [],
                 "errors": [],
+                "workflow_state": "queued",
+                "reboot_status": "Not requested",
+                "reboot_requested": False,
+                "reboot_required": False,
+            },
+            f,
+            indent=2,
+            sort_keys=False,
+        )
+    with open(apply_paths["reboot_results"], "w", encoding="utf-8") as f:
+        json.dump(
+            {
+                "status": "Not requested",
+                "steps": [],
+                "errors": [],
+                "paths": {
+                    "reboot_results": str(apply_paths["reboot_results"]),
+                    "post_reboot_summary": str(apply_paths["post_reboot_summary"]),
+                    "post_reboot_raw": str(apply_paths["post_reboot_raw"]),
+                },
             },
             f,
             indent=2,
             sort_keys=False,
         )
     return apply_paths
+
+
+def load_storage_workflow_state(storage_apply_paths: dict[str, Path] | None) -> dict[str, Any] | None:
+    if not storage_apply_paths:
+        return None
+
+    apply_state = {}
+    reboot_state = {}
+    try:
+        if storage_apply_paths["apply_results"].exists():
+            apply_state = json.loads(storage_apply_paths["apply_results"].read_text(encoding="utf-8")) or {}
+    except Exception:
+        apply_state = {}
+    try:
+        if storage_apply_paths.get("reboot_results") and storage_apply_paths["reboot_results"].exists():
+            reboot_state = json.loads(storage_apply_paths["reboot_results"].read_text(encoding="utf-8")) or {}
+    except Exception:
+        reboot_state = {}
+
+    workflow_state = str(apply_state.get("workflow_state") or "")
+    if not workflow_state:
+        if apply_state.get("status") == "Completed" and apply_state.get("reboot_required"):
+            workflow_state = "staged_reboot_required"
+        elif apply_state.get("status") == "Completed":
+            workflow_state = "apply_complete"
+        elif apply_state.get("status") == "Failed":
+            workflow_state = "apply_failed"
+        else:
+            workflow_state = "idle"
+
+    return {
+        "apply": apply_state,
+        "reboot": reboot_state,
+        "workflow_state": workflow_state,
+        "apply_path": apply_state.get("apply_path", ""),
+        "reboot_required": bool(apply_state.get("reboot_required")),
+        "reboot_status": reboot_state.get("status") or apply_state.get("reboot_status") or "Not requested",
+        "reboot_requested": bool(apply_state.get("reboot_requested") or reboot_state.get("requested")),
+        "post_reboot_validation": apply_state.get("post_reboot_validation", ""),
+    }
 
 
 def storage_status_is_eligible(status: str) -> bool:
@@ -746,11 +812,24 @@ def storage_drive_sort_key(drive: dict) -> tuple:
     return (bay_num, bay, drive.get("serial_number", ""), drive.get("model", ""), drive.get("path", ""))
 
 
+def infer_smart_storage_location(drive: dict, source: str) -> tuple[str, str]:
+    location = str(drive.get("smart_storage_location") or drive.get("location") or "").strip()
+    location_format = str(drive.get("smart_storage_location_format") or drive.get("location_format") or "").strip()
+    if location:
+        return location, location_format
+
+    bay = str(drive.get("bay") or drive.get("id") or "").strip()
+    if source == "hpe_smart_storage" and re.match(r"^[A-Za-z0-9]+:[A-Za-z0-9]+:[A-Za-z0-9]+$", bay):
+        return bay, location_format or "ControllerPort:Box:Bay"
+    return "", location_format
+
+
 def normalized_plan_drive(drive: dict, source: str) -> dict:
     try:
         size_gib = float(drive.get("size_gib") or 0)
     except Exception:
         size_gib = 0.0
+    smart_storage_location, smart_storage_location_format = infer_smart_storage_location(drive, source)
     return {
         "source": source,
         "path": drive.get("path", ""),
@@ -763,6 +842,8 @@ def normalized_plan_drive(drive: dict, source: str) -> dict:
         "media_type": drive.get("media_type", "") or "Unknown",
         "protocol": drive.get("protocol", "") or "Unknown",
         "status": drive.get("status", ""),
+        "smart_storage_location": smart_storage_location,
+        "smart_storage_location_format": smart_storage_location_format,
     }
 
 
@@ -1048,6 +1129,11 @@ def storage_apply_response_excerpt(response: Any) -> Any:
         "Status",
         "Messages",
         "error",
+        "apply_mode",
+        "delete_count",
+        "create_count",
+        "hot_spare_location",
+        "deleted_volume_paths",
         "reboot_required",
         "settings_path",
         "logical_drive_kind",
@@ -1068,11 +1154,21 @@ def save_storage_apply_state(apply_state: dict[str, Any], apply_paths: dict[str,
         "controller": apply_state.get("controller", {}),
         "steps": apply_state.get("steps", []),
         "errors": apply_state.get("errors", []),
+        "workflow_state": apply_state.get("workflow_state", ""),
+        "reboot_status": apply_state.get("reboot_status", ""),
+        "reboot_requested": apply_state.get("reboot_requested", False),
+        "reboot_required": apply_state.get("reboot_required", False),
+        "post_reboot_validation": apply_state.get("post_reboot_validation", ""),
     }
     with open(apply_paths["apply_log"], "w", encoding="utf-8") as f:
         yaml.safe_dump(log_payload, f, sort_keys=False)
     with open(apply_paths["apply_results"], "w", encoding="utf-8") as f:
         json.dump(apply_state, f, indent=2, sort_keys=False)
+
+
+def save_storage_reboot_state(reboot_state: dict[str, Any], apply_paths: dict[str, Path]) -> None:
+    with open(apply_paths["reboot_results"], "w", encoding="utf-8") as f:
+        json.dump(reboot_state, f, indent=2, sort_keys=False)
 
 
 def record_storage_apply_step(
@@ -1106,6 +1202,11 @@ def record_storage_apply_step(
     if response is not None:
         apply_state.setdefault("responses", []).append({"step": step_name, "response": storage_apply_response_excerpt(response)})
     save_storage_apply_state(apply_state, apply_paths)
+    job["apply_path"] = apply_state.get("apply_path", "")
+    job["reboot_required"] = bool(apply_state.get("reboot_required"))
+    job["workflow_state"] = apply_state.get("workflow_state", "")
+    job["reboot_status"] = apply_state.get("reboot_status", "")
+    job["storage_run_directory"] = str(apply_paths.get("directory", ""))
 
     status_prefix = {
         "running": "[RUNNING]",
@@ -1134,15 +1235,18 @@ def build_storage_apply_intent(plan: dict, apply_mode: str) -> dict[str, Any]:
             "target_size_gib": plan.get("os_raid1", {}).get("target_size_gib", 500),
             "bays": [drive.get("bay") for drive in plan.get("os_raid1", {}).get("drives", [])],
             "drive_paths": [drive.get("path") for drive in plan.get("os_raid1", {}).get("drives", [])],
+            "drives": list(plan.get("os_raid1", {}).get("drives", []) or []),
         },
         "data_raid6": {
             "raid": "RAID6",
             "bays": [drive.get("bay") for drive in plan.get("data_raid6", {}).get("drives", [])],
             "drive_paths": [drive.get("path") for drive in plan.get("data_raid6", {}).get("drives", [])],
+            "drives": list(plan.get("data_raid6", {}).get("drives", []) or []),
         },
         "hot_spare": {
             "bay": (plan.get("hot_spare", {}).get("drive", {}) or {}).get("bay", ""),
             "drive_path": (plan.get("hot_spare", {}).get("drive", {}) or {}).get("path", ""),
+            "drive": dict((plan.get("hot_spare", {}).get("drive", {}) or {})),
         },
         "volumes_to_remove": [
             {
@@ -1217,6 +1321,11 @@ def validate_storage_apply_request(
     controller = plan.get("source_discovery", {}).get("controller", {}) or {}
     if not (controller.get("name") or controller.get("model") or controller.get("path")):
         raise ValueError("No storage controller is selected for apply.")
+    controllers = []
+    for source_key in ("hpe_smart_storage", "standard_redfish_storage"):
+        controllers.extend(((plan.get("source_discovery", {}) or {}).get(source_key, {}) or {}).get("controllers", []) or [])
+    if len(controllers) > 1:
+        raise ValueError("This destructive apply path only supports a single detected storage controller.")
     if not plan.get("hot_spare", {}).get("reserved"):
         raise ValueError("Storage apply requires a reserved hot spare.")
     readiness = plan.get("apply_readiness", {}) or {}
@@ -1249,43 +1358,39 @@ def execute_storage_apply_gen10(
 
     responses = []
     current = starting_step
+    intent = build_storage_apply_intent(plan, apply_mode)
+    existing_volume_paths = [str(volume.get("path") or "").strip() for volume in plan.get("existing_logical_volumes", []) or [] if str(volume.get("path") or "").strip()]
     if apply_mode == "wipe_rebuild":
-        for volume in plan.get("existing_logical_volumes", []) or []:
-            volume_name = volume.get("name") or volume.get("id") or "unnamed-volume"
-            targets = {
-                "controller": apply_state["controller"].get("name") or apply_state["controller"].get("model") or "",
-                "volume": volume_name,
-                "path": volume.get("path", ""),
-            }
-            record_storage_apply_step(
-                kit_name,
-                job,
-                apply_state,
-                apply_paths,
-                "Delete existing logical volume",
-                current,
-                total_steps,
-                "running",
-                "Delete existing logical volumes",
-                targets=targets,
-                details="Issuing controller-specific logical-volume delete.",
-            )
-            response = client.delete_storage_logical_drive(volume.get("path", ""))
-            responses.append(response)
-            record_storage_apply_step(
-                kit_name,
-                job,
-                apply_state,
-                apply_paths,
-                "Delete existing logical volume",
-                current,
-                total_steps,
-                "ok",
-                "Delete existing logical volumes",
-                targets=targets,
-                details="Logical volume delete completed.",
-                response=response,
-            )
+        targets = {
+            "controller": apply_state["controller"].get("name") or apply_state["controller"].get("model") or "",
+            "path": settings_path,
+        }
+        record_storage_apply_step(
+            kit_name,
+            job,
+            apply_state,
+            apply_paths,
+            "Delete existing logical volumes",
+            current,
+            total_steps,
+            "running",
+            "Delete existing logical volumes",
+            targets=targets,
+            details=f"Preparing {len(existing_volume_paths)} logical-volume delete actions for one consolidated SmartStorageConfig payload.",
+        )
+        record_storage_apply_step(
+            kit_name,
+            job,
+            apply_state,
+            apply_paths,
+            "Delete existing logical volumes",
+            current,
+            total_steps,
+            "ok",
+            "Delete existing logical volumes",
+            targets=targets,
+            details=f"Queued {len(existing_volume_paths)} logical-volume delete actions into the final pending config.",
+        )
         current += 1
     else:
         record_storage_apply_step(
@@ -1303,7 +1408,7 @@ def execute_storage_apply_gen10(
         )
         current += 1
 
-    os_intent = build_storage_apply_intent(plan, apply_mode)["os_raid1"]
+    os_intent = intent["os_raid1"]
     record_storage_apply_step(
         kit_name,
         job,
@@ -1315,10 +1420,8 @@ def execute_storage_apply_gen10(
         "running",
         "Create OS RAID 1 logical drive",
         targets={"controller": apply_state["controller"].get("name") or apply_state["controller"].get("model") or "", "bays": os_intent.get("bays", [])},
-        details=f"Apply path={platform.get('label')} | settings_path={settings_path}",
+        details=f"Staging OS RAID 1 into one consolidated SmartStorageConfig payload at {settings_path}.",
     )
-    response = client.create_gen10_logical_drive(settings_path, "os_raid1", os_intent)
-    responses.append(response)
     record_storage_apply_step(
         kit_name,
         job,
@@ -1330,12 +1433,11 @@ def execute_storage_apply_gen10(
         "ok",
         "Create OS RAID 1 logical drive",
         targets={"controller": apply_state["controller"].get("name") or apply_state["controller"].get("model") or "", "bays": os_intent.get("bays", [])},
-        details="OS RAID 1 creation request completed.",
-        response=response,
+        details="Queued OS RAID 1 in the final pending config.",
     )
     current += 1
 
-    data_intent = build_storage_apply_intent(plan, apply_mode)["data_raid6"]
+    data_intent = intent["data_raid6"]
     record_storage_apply_step(
         kit_name,
         job,
@@ -1347,10 +1449,8 @@ def execute_storage_apply_gen10(
         "running",
         "Create Data RAID 6 logical drive",
         targets={"controller": apply_state["controller"].get("name") or apply_state["controller"].get("model") or "", "bays": data_intent.get("bays", [])},
-        details=f"Apply path={platform.get('label')} | settings_path={settings_path}",
+        details=f"Staging Data RAID 6 into one consolidated SmartStorageConfig payload at {settings_path}.",
     )
-    response = client.create_gen10_logical_drive(settings_path, "data_raid6", data_intent)
-    responses.append(response)
     record_storage_apply_step(
         kit_name,
         job,
@@ -1362,12 +1462,11 @@ def execute_storage_apply_gen10(
         "ok",
         "Create Data RAID 6 logical drive",
         targets={"controller": apply_state["controller"].get("name") or apply_state["controller"].get("model") or "", "bays": data_intent.get("bays", [])},
-        details="Data RAID 6 creation request completed.",
-        response=response,
+        details="Queued Data RAID 6 in the final pending config.",
     )
     current += 1
 
-    spare_intent = build_storage_apply_intent(plan, apply_mode)["hot_spare"]
+    spare_intent = intent["hot_spare"]
     record_storage_apply_step(
         kit_name,
         job,
@@ -1379,9 +1478,16 @@ def execute_storage_apply_gen10(
         "running",
         "Assign hot spare",
         targets={"controller": apply_state["controller"].get("name") or apply_state["controller"].get("model") or "", "bays": [spare_intent.get("bay", "")]},
-        details=f"Apply path={platform.get('label')} | settings_path={settings_path}",
+        details=f"Submitting one consolidated SmartStorageConfig payload with the reserved hot spare at {settings_path}.",
     )
-    response = client.assign_gen10_hot_spare(settings_path, spare_intent)
+    response = client.apply_gen10_storage_layout(
+        settings_path=settings_path,
+        apply_mode=apply_mode,
+        existing_volume_paths=existing_volume_paths,
+        os_intent=os_intent,
+        data_intent=data_intent,
+        spare_intent=spare_intent,
+    )
     responses.append(response)
     record_storage_apply_step(
         kit_name,
@@ -1394,7 +1500,7 @@ def execute_storage_apply_gen10(
         "ok",
         "Assign hot spare",
         targets={"controller": apply_state["controller"].get("name") or apply_state["controller"].get("model") or "", "bays": [spare_intent.get("bay", "")]},
-        details="Hot-spare assignment request completed.",
+        details="Submitted the consolidated SmartStorageConfig pending payload with OS RAID 1, Data RAID 6, and dedicated hot spare.",
         response=response,
     )
     current += 1
@@ -1438,6 +1544,10 @@ def run_storage_apply(
         "responses": [],
         "errors": [],
         "reboot_required": False,
+        "workflow_state": "running_apply",
+        "reboot_status": "Not requested",
+        "reboot_requested": False,
+        "post_reboot_validation": "Pending reboot decision",
     }
     save_storage_apply_state(apply_state, apply_paths)
 
@@ -1588,6 +1698,8 @@ def run_storage_apply(
             for item in apply_state.get("responses", [])
         )
         apply_state["reboot_required"] = bool(reboot_required)
+        apply_state["workflow_state"] = "staged_reboot_required" if apply_state["reboot_required"] else "apply_complete"
+        apply_state["post_reboot_validation"] = "Pending manual reboot" if apply_state["reboot_required"] else "Not required"
         record_storage_apply_step(
             kit_name,
             job,
@@ -1652,6 +1764,7 @@ def run_storage_apply(
     except Exception as e:
         error_text = str(e).splitlines()[0]
         apply_state["status"] = "Failed"
+        apply_state["workflow_state"] = "apply_failed"
         apply_state["finished_at"] = time.strftime("%Y-%m-%d %H:%M:%S")
         record_storage_apply_step(
             kit_name,
@@ -1729,6 +1842,273 @@ def start_storage_apply_background(
     thread = threading.Thread(
         target=execute_storage_apply_in_background,
         args=(cfg, discovery_raw_path, raid_plan_path, apply_mode, apply_paths),
+        daemon=True,
+    )
+    thread.start()
+
+
+def build_storage_reboot_validation(post_reboot_discovery: dict, apply_state: dict[str, Any]) -> dict[str, Any]:
+    summary = post_reboot_discovery.get("summary", {}) or {}
+    hpe = summary.get("hpe_smart_storage", {}) or {}
+    standard = summary.get("standard_redfish_storage", {}) or {}
+    volumes = list(hpe.get("volumes", []) or []) + list(standard.get("volumes", []) or [])
+    controllers = list(hpe.get("controllers", []) or []) + list(standard.get("controllers", []) or [])
+    return {
+        "controller_count": len(controllers),
+        "logical_volume_count": len(volumes),
+        "reboot_required": bool(apply_state.get("reboot_required")),
+        "controller_present": bool(controllers),
+        "validation_status": "ok" if controllers else "warning",
+    }
+
+
+def run_storage_reboot(
+    cfg: dict,
+    discovery_raw_path: str,
+    raid_plan_path: str,
+    apply_paths: dict[str, Path],
+) -> None:
+    kit_name = cfg["site"]["name"]
+    total_steps = 5
+    job = {
+        "status": "Running",
+        "scope": "storage-reboot",
+        "current_stage": "",
+        "progress_percent": 0,
+        "completed_steps": 0,
+        "total_steps": total_steps,
+        "logs": [],
+        "apply_path": "",
+        "reboot_required": True,
+        "workflow_state": "reboot_requested",
+        "reboot_status": "Running",
+        "storage_run_directory": str(apply_paths["directory"]),
+    }
+    save_job(kit_name, job)
+
+    apply_state = json.loads(apply_paths["apply_results"].read_text(encoding="utf-8")) if apply_paths["apply_results"].exists() else {}
+    reboot_state = {
+        "started_at": time.strftime("%Y-%m-%d %H:%M:%S"),
+        "finished_at": "",
+        "status": "Running",
+        "requested": True,
+        "steps": [],
+        "errors": [],
+    }
+    apply_state["workflow_state"] = "reboot_requested"
+    apply_state["reboot_status"] = "Running"
+    apply_state["reboot_requested"] = True
+    apply_state["post_reboot_validation"] = "Pending reboot completion"
+    save_storage_apply_state(apply_state, apply_paths)
+    save_storage_reboot_state(reboot_state, apply_paths)
+
+    try:
+        ilo_cfg = cfg.get("ilo", {})
+        host = (ilo_cfg.get("current_ip") or ilo_cfg.get("host") or "").strip()
+        username = (ilo_cfg.get("username") or "").strip()
+        password = ilo_cfg.get("password", "")
+        if not host or not username or not password:
+            raise ValueError("Missing current iLO IP, username, or password for storage reboot.")
+
+        discovery, discovery_paths, plan, plan_paths = restore_storage_page_state(
+            discovery_raw_path=discovery_raw_path,
+            raid_plan_path=raid_plan_path,
+            expected_host=host,
+        )
+        del discovery, discovery_paths, plan, plan_paths
+        if apply_state.get("status") != "Completed":
+            raise ValueError("Storage reboot requires a completed storage apply run.")
+        if not apply_state.get("reboot_required"):
+            raise ValueError("Storage reboot is not available because the current run does not require reboot.")
+
+        client = ILOClient(ILOConfig(host=host, username=username, password=password, verify_tls=False, timeout=15))
+        apply_state["apply_path"] = apply_state.get("apply_path", "")
+
+        record_storage_apply_step(
+            kit_name,
+            job,
+            apply_state,
+            apply_paths,
+            "Request server reboot",
+            0,
+            total_steps,
+            "running",
+            "Request server reboot",
+            targets={"controller": apply_state.get("controller", {}).get("name") or apply_state.get("controller", {}).get("model") or ""},
+            details="Issuing ComputerSystem.Reset with ResetType=GracefulRestart.",
+        )
+        reboot_result = client.reboot_server_and_wait(reset_type="GracefulRestart")
+        reboot_state["request"] = {
+            "path": reboot_result.get("path", ""),
+            "reset_type": reboot_result.get("reset_type", "GracefulRestart"),
+            "system_path": reboot_result.get("system_path", ""),
+        }
+        reboot_state["steps"].append({"step": "Request server reboot", "status": "ok", "details": reboot_state["request"]})
+        record_storage_apply_step(
+            kit_name,
+            job,
+            apply_state,
+            apply_paths,
+            "Request server reboot",
+            1,
+            total_steps,
+            "ok",
+            "Wait for reboot start",
+            targets={"path": reboot_result.get("path", "")},
+            details="Reboot request accepted by iLO.",
+            response=reboot_result,
+        )
+
+        reboot_state["steps"].append({"step": "Wait for reboot start", "status": "ok", "details": {"observed": reboot_result.get("reboot_start_observed"), "detail": reboot_result.get("reboot_start_detail", "")}})
+        record_storage_apply_step(
+            kit_name,
+            job,
+            apply_state,
+            apply_paths,
+            "Wait for reboot start",
+            2,
+            total_steps,
+            "ok",
+            "Wait for reboot start",
+            targets={"path": reboot_result.get("path", "")},
+            details=reboot_result.get("reboot_start_detail", ""),
+        )
+
+        reboot_state["steps"].append({"step": "Wait for server to return", "status": "ok", "details": {"returned": reboot_result.get("system_returned"), "detail": reboot_result.get("return_detail", "")}})
+        record_storage_apply_step(
+            kit_name,
+            job,
+            apply_state,
+            apply_paths,
+            "Wait for server to return",
+            3,
+            total_steps,
+            "ok",
+            "Wait for server to return",
+            targets={"path": reboot_result.get("path", "")},
+            details=reboot_result.get("return_detail", ""),
+        )
+
+        record_storage_apply_step(
+            kit_name,
+            job,
+            apply_state,
+            apply_paths,
+            "Export post-reboot storage",
+            3,
+            total_steps,
+            "running",
+            "Export post-reboot storage",
+            targets={"controller": apply_state.get("controller", {}).get("name") or apply_state.get("controller", {}).get("model") or ""},
+            details="Reading storage state after reboot.",
+        )
+        post_reboot_discovery = client.get_storage_discovery(deep_smart_storage_scan=False)
+        write_storage_discovery_snapshot_files(
+            apply_paths["post_reboot_summary"],
+            apply_paths["post_reboot_raw"],
+            cfg,
+            post_reboot_discovery,
+            host=host,
+        )
+        validation = build_storage_reboot_validation(post_reboot_discovery, apply_state)
+        reboot_state["validation"] = validation
+        reboot_state["status"] = "Completed"
+        reboot_state["finished_at"] = time.strftime("%Y-%m-%d %H:%M:%S")
+        apply_state["workflow_state"] = "post_reboot_validation_complete"
+        apply_state["reboot_status"] = "Completed"
+        apply_state["post_reboot_validation"] = "Complete"
+        save_storage_apply_state(apply_state, apply_paths)
+        save_storage_reboot_state(reboot_state, apply_paths)
+        record_storage_apply_step(
+            kit_name,
+            job,
+            apply_state,
+            apply_paths,
+            "Export post-reboot storage",
+            4,
+            total_steps,
+            "ok",
+            "Validate post-reboot storage",
+            targets={"controller": apply_state.get("controller", {}).get("name") or apply_state.get("controller", {}).get("model") or ""},
+            details=f"Saved {apply_paths['post_reboot_summary'].name} and {apply_paths['post_reboot_raw'].name}.",
+        )
+        record_storage_apply_step(
+            kit_name,
+            job,
+            apply_state,
+            apply_paths,
+            "Validate post-reboot storage",
+            total_steps,
+            total_steps,
+            "ok",
+            "Finished",
+            targets={"controller": apply_state.get("controller", {}).get("name") or apply_state.get("controller", {}).get("model") or ""},
+            details=f"controller_present={validation['controller_present']} logical_volume_count={validation['logical_volume_count']}",
+        )
+        update_job(
+            kit_name,
+            job,
+            "Completed",
+            "Finished",
+            total_steps,
+            total_steps,
+            "[DONE] Storage reboot workflow completed and post-reboot validation was captured.",
+        )
+    except Exception as e:
+        error_text = str(e).splitlines()[0]
+        reboot_state["status"] = "Failed"
+        reboot_state["finished_at"] = time.strftime("%Y-%m-%d %H:%M:%S")
+        reboot_state.setdefault("errors", []).append(error_text)
+        apply_state["workflow_state"] = "reboot_failed"
+        apply_state["reboot_status"] = "Failed"
+        apply_state["post_reboot_validation"] = "Failed"
+        save_storage_apply_state(apply_state, apply_paths)
+        save_storage_reboot_state(reboot_state, apply_paths)
+        record_storage_apply_step(
+            kit_name,
+            job,
+            apply_state,
+            apply_paths,
+            "Storage reboot failed",
+            job.get("completed_steps", 0),
+            total_steps,
+            "failed",
+            "Storage reboot failed",
+            targets={"controller": apply_state.get("controller", {}).get("name") or apply_state.get("controller", {}).get("model") or ""},
+            error=error_text,
+        )
+        update_job(
+            kit_name,
+            job,
+            "Failed",
+            "Storage reboot failed",
+            job.get("completed_steps", 0),
+            total_steps,
+            f"[FAILED] Storage reboot failed: {error_text}",
+        )
+
+
+def execute_storage_reboot_in_background(
+    cfg: dict,
+    discovery_raw_path: str,
+    raid_plan_path: str,
+    apply_paths: dict[str, Path],
+) -> None:
+    try:
+        run_storage_reboot(cfg, discovery_raw_path, raid_plan_path, apply_paths)
+    finally:
+        append_storage_apply_history_snapshot(cfg)
+
+
+def start_storage_reboot_background(
+    cfg: dict,
+    discovery_raw_path: str,
+    raid_plan_path: str,
+    apply_paths: dict[str, Path],
+) -> None:
+    thread = threading.Thread(
+        target=execute_storage_reboot_in_background,
+        args=(cfg, discovery_raw_path, raid_plan_path, apply_paths),
         daemon=True,
     )
     thread.start()
@@ -2628,6 +3008,7 @@ def render_page(
     page_meta = PAGE_META[active_page]
     job = load_job(cfg["site"]["name"])
     history = load_history(cfg["site"]["name"])
+    storage_workflow_state = load_storage_workflow_state(storage_apply_paths)
 
     context = {
         "title": page_meta["title"],
@@ -2651,6 +3032,7 @@ def render_page(
         "storage_plan": storage_plan,
         "storage_plan_paths": storage_plan_paths,
         "storage_apply_paths": storage_apply_paths,
+        "storage_workflow_state": storage_workflow_state,
         "job": job,
         "history": history,
         "section_states": summarize_section_states(cfg),
@@ -3264,7 +3646,7 @@ async def apply_storage_layout(
             message=(
                 f"Started storage apply in {apply_mode.replace('_', ' ')} mode. "
                 f"Apply artifacts will be written under {apply_paths['directory']}. "
-                "Watch the existing Live Job panel for websocket-driven step logs."
+                "The Storage / RAID progress card and Live Job panel will update as the run advances."
             ),
             storage_discovery=discovery.get("summary", {}) if discovery else None,
             storage_export_paths=discovery_paths,
@@ -3278,6 +3660,61 @@ async def apply_storage_layout(
             cfg,
             active_page=return_page,
             error_message=f"Storage apply failed: {str(e).splitlines()[0]}",
+        )
+
+
+@app.post("/reboot-storage-now", response_class=HTMLResponse)
+async def reboot_storage_now(
+    request: Request,
+    return_page: str = Form("storage"),
+    discovery_raw_path: str = Form(""),
+    raid_plan_path: str = Form(""),
+    apply_artifact_dir: str = Form(""),
+):
+    cfg = load_kit_config()
+    ilo_cfg = cfg.get("ilo", {})
+    host = (ilo_cfg.get("current_ip") or ilo_cfg.get("host") or "").strip()
+
+    try:
+        discovery, discovery_paths, plan, plan_paths = restore_storage_page_state(
+            discovery_raw_path=discovery_raw_path,
+            raid_plan_path=raid_plan_path,
+            expected_host=host,
+        )
+        if not apply_artifact_dir:
+            raise ValueError("A storage apply run folder is required before reboot can be requested.")
+        apply_paths = storage_apply_paths_from_directory(apply_artifact_dir)
+        workflow_state = load_storage_workflow_state(apply_paths) or {}
+        apply_state = workflow_state.get("apply", {}) or {}
+        reboot_state = workflow_state.get("reboot", {}) or {}
+        if apply_state.get("status") != "Completed":
+            raise ValueError("Reboot Now is only available after a completed storage apply run.")
+        if not apply_state.get("reboot_required"):
+            raise ValueError("Reboot Now is not available because the current storage run does not require reboot.")
+        if reboot_state.get("status") == "Running":
+            raise ValueError("A storage reboot workflow is already running for this storage run.")
+        initialize_background_job(cfg["site"]["name"], "storage-reboot")
+        start_storage_reboot_background(cfg, discovery_raw_path, raid_plan_path, apply_paths)
+        return render_page(
+            request,
+            cfg,
+            active_page=return_page,
+            message=(
+                f"Requested server reboot for storage run {apply_paths['directory']}. "
+                "The Storage / RAID progress card will show reboot steps and post-reboot validation."
+            ),
+            storage_discovery=discovery.get("summary", {}) if discovery else None,
+            storage_export_paths=discovery_paths,
+            storage_plan=plan,
+            storage_plan_paths=plan_paths,
+            storage_apply_paths=apply_paths,
+        )
+    except Exception as e:
+        return render_page(
+            request,
+            cfg,
+            active_page=return_page,
+            error_message=f"Storage reboot failed: {str(e).splitlines()[0]}",
         )
 
 

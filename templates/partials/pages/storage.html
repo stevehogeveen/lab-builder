@@ -2,6 +2,68 @@
     <h2 class="text-2xl font-bold mb-4">Storage / RAID</h2>
 
     <div class="space-y-3">
+        {% if storage_apply_paths %}
+        {% set workflow = storage_workflow_state or {} %}
+        {% set apply_state = workflow.get('apply', {}) %}
+        {% set reboot_state = workflow.get('reboot', {}) %}
+        <div class="card" id="storage-progress-card"
+             data-kit-name="{{ current_kit }}"
+             data-job-scope="{{ job.get('scope', '') }}"
+             data-apply-path="{{ workflow.get('apply_path', '') }}"
+             data-reboot-required="{{ 'true' if workflow.get('reboot_required') else 'false' }}"
+             data-workflow-state="{{ workflow.get('workflow_state', '') }}"
+             data-reboot-status="{{ workflow.get('reboot_status', '') }}">
+            <div class="flex items-center justify-between gap-3 mb-3">
+                <div>
+                    <div class="text-lg font-semibold">Storage Workflow Progress</div>
+                    <div class="text-sm text-slate-400">Live storage-specific status for apply and manual reboot in the current run folder.</div>
+                </div>
+                <div class="job-badge" id="storage-progress-status">Status: {{ job.get('status', 'Idle') }}</div>
+            </div>
+            <div class="grid grid-cols-1 md:grid-cols-2 gap-3 text-sm mb-4">
+                <div><span class="text-slate-400">Workflow:</span> <span id="storage-workflow-state">{{ workflow.get('workflow_state', 'idle') }}</span></div>
+                <div><span class="text-slate-400">Scope:</span> <span id="storage-progress-scope">{{ job.get('scope', '') }}</span></div>
+                <div><span class="text-slate-400">Current stage:</span> <span id="storage-progress-stage">{{ job.get('current_stage', '') }}</span></div>
+                <div><span class="text-slate-400">Completed:</span> <span id="storage-progress-completed">{{ job.get('completed_steps', 0) }} / {{ job.get('total_steps', 0) }}</span></div>
+                <div><span class="text-slate-400">Progress:</span> <span id="storage-progress-percent">{{ job.get('progress_percent', 0) }}%</span></div>
+                <div><span class="text-slate-400">Apply path:</span> <span id="storage-progress-apply-path">{{ workflow.get('apply_path', '') or apply_state.get('apply_path', '') or 'Pending selection' }}</span></div>
+                <div><span class="text-slate-400">Reboot required:</span> <span id="storage-progress-reboot-required">{{ 'Yes' if workflow.get('reboot_required') else 'Unknown' }}</span></div>
+                <div><span class="text-slate-400">Reboot status:</span> <span id="storage-progress-reboot-status">{{ workflow.get('reboot_status', 'Not requested') }}</span></div>
+            </div>
+            <div class="result mb-3" id="storage-progress-summary">
+                {% if workflow.get('workflow_state') == 'staged_reboot_required' %}
+                Changes are staged only. Reboot is required to continue the storage workflow.
+                {% elif workflow.get('workflow_state') == 'reboot_requested' %}
+                Reboot has been requested. Waiting for reboot completion and post-reboot validation.
+                {% elif workflow.get('workflow_state') == 'post_reboot_validation_complete' %}
+                Post-reboot validation is complete for this storage run.
+                {% elif workflow.get('workflow_state') == 'reboot_failed' %}
+                Reboot failed. Review the storage progress log and reboot artifacts.
+                {% elif workflow.get('workflow_state') == 'apply_complete' %}
+                Storage apply completed without requiring reboot.
+                {% else %}
+                Storage workflow state will update here while the run is active.
+                {% endif %}
+            </div>
+            <div class="progress-shell mb-3">
+                <div id="storage-progress-bar" class="progress-bar" style="width: {{ job.get('progress_percent', 0) }}%;"></div>
+            </div>
+            <div id="storage-progress-logs" class="codeblock max-h-80 overflow-y-auto">{% for line in job.get('logs', []) %}{{ line }}
+{% endfor %}</div>
+            {% if apply_state.get('status') == 'Completed' and apply_state.get('reboot_required') and reboot_state.get('status') != 'Running' and reboot_state.get('status') != 'Completed' %}
+            <div class="actions mt-4" id="storage-reboot-actions">
+                <form hx-post="/reboot-storage-now" hx-target="#main-content" hx-swap="outerHTML">
+                    <input type="hidden" name="return_page" value="storage">
+                    <input type="hidden" name="discovery_raw_path" value="{{ storage_export_paths.raw if storage_export_paths else '' }}">
+                    <input type="hidden" name="raid_plan_path" value="{{ storage_plan_paths.plan if storage_plan_paths else '' }}">
+                    <input type="hidden" name="apply_artifact_dir" value="{{ storage_apply_paths.directory }}">
+                    <button class="btn btn-danger" type="submit">Reboot Now</button>
+                </form>
+            </div>
+            {% endif %}
+        </div>
+        {% endif %}
+
         <div class="card">
             <div class="text-lg font-semibold mb-3">Read-Only Discovery</div>
             <div class="text-sm text-slate-400 mb-3">Read current controller, logical volume, and physical drive inventory from iLO Redfish. Phase 1 does not create, delete, or modify RAID volumes.</div>
@@ -137,6 +199,17 @@
                     <input type="hidden" name="artifact_title" value="Storage Apply Results">
                     <button class="btn" type="submit">View Apply Results</button>
                 </form>
+                {% if storage_apply_paths.reboot_results.exists() %}
+                <form hx-post="/view-storage-artifact" hx-target="#main-content" hx-swap="outerHTML">
+                    <input type="hidden" name="return_page" value="storage">
+                    <input type="hidden" name="discovery_raw_path" value="{{ storage_export_paths.raw if storage_export_paths else '' }}">
+                    <input type="hidden" name="raid_plan_path" value="{{ storage_plan_paths.plan if storage_plan_paths else '' }}">
+                    <input type="hidden" name="apply_artifact_dir" value="{{ storage_apply_paths.directory }}">
+                    <input type="hidden" name="artifact_path" value="{{ storage_apply_paths.reboot_results }}">
+                    <input type="hidden" name="artifact_title" value="Storage Reboot Results">
+                    <button class="btn" type="submit">View Reboot Results</button>
+                </form>
+                {% endif %}
                 {% if storage_apply_paths.post_change_summary.exists() %}
                 <form hx-post="/view-storage-artifact" hx-target="#main-content" hx-swap="outerHTML">
                     <input type="hidden" name="return_page" value="storage">
@@ -159,6 +232,28 @@
                     <button class="btn" type="submit">View Post-Change Raw</button>
                 </form>
                 {% endif %}
+                {% if storage_apply_paths.post_reboot_summary.exists() %}
+                <form hx-post="/view-storage-artifact" hx-target="#main-content" hx-swap="outerHTML">
+                    <input type="hidden" name="return_page" value="storage">
+                    <input type="hidden" name="discovery_raw_path" value="{{ storage_export_paths.raw if storage_export_paths else '' }}">
+                    <input type="hidden" name="raid_plan_path" value="{{ storage_plan_paths.plan if storage_plan_paths else '' }}">
+                    <input type="hidden" name="apply_artifact_dir" value="{{ storage_apply_paths.directory }}">
+                    <input type="hidden" name="artifact_path" value="{{ storage_apply_paths.post_reboot_summary }}">
+                    <input type="hidden" name="artifact_title" value="Post-Reboot Storage Summary">
+                    <button class="btn" type="submit">View Post-Reboot Summary</button>
+                </form>
+                {% endif %}
+                {% if storage_apply_paths.post_reboot_raw.exists() %}
+                <form hx-post="/view-storage-artifact" hx-target="#main-content" hx-swap="outerHTML">
+                    <input type="hidden" name="return_page" value="storage">
+                    <input type="hidden" name="discovery_raw_path" value="{{ storage_export_paths.raw if storage_export_paths else '' }}">
+                    <input type="hidden" name="raid_plan_path" value="{{ storage_plan_paths.plan if storage_plan_paths else '' }}">
+                    <input type="hidden" name="apply_artifact_dir" value="{{ storage_apply_paths.directory }}">
+                    <input type="hidden" name="artifact_path" value="{{ storage_apply_paths.post_reboot_raw }}">
+                    <input type="hidden" name="artifact_title" value="Post-Reboot Storage Raw JSON">
+                    <button class="btn" type="submit">View Post-Reboot Raw</button>
+                </form>
+                {% endif %}
             </div>
             <div class="actions mt-3">
                 {% for item in [
@@ -167,8 +262,11 @@
                     ('plan', 'Download Apply Plan Copy'),
                     ('apply_log', 'Download Apply Log'),
                     ('apply_results', 'Download Apply Results'),
+                    ('reboot_results', 'Download Reboot Results'),
                     ('post_change_summary', 'Download Post-Change Summary'),
-                    ('post_change_raw', 'Download Post-Change Raw')
+                    ('post_change_raw', 'Download Post-Change Raw'),
+                    ('post_reboot_summary', 'Download Post-Reboot Summary'),
+                    ('post_reboot_raw', 'Download Post-Reboot Raw')
                 ] %}
                 {% set path_key = item[0] %}
                 {% if storage_apply_paths[path_key].exists() %}
@@ -297,7 +395,7 @@
             </div>
             <div class="card mb-4">
                 <div class="text-sm font-bold text-slate-300 mb-2">Apply Actions</div>
-                <div class="text-sm text-slate-400 mb-3">These actions are the only place where storage reconfiguration may be attempted. Review the pre-apply summary above first. Live step logs, stage changes, and progress updates will stream through the existing Live Job panel while the run is active, and the apply artifacts will be saved under the storage export tree.</div>
+                <div class="text-sm text-slate-400 mb-3">These actions are the only place where storage reconfiguration may be attempted. Review the pre-apply summary above first. The storage-specific progress card above will mirror the active workflow live, and all apply and reboot artifacts remain in the same storage run folder.</div>
                 <div class="grid grid-cols-1 md:grid-cols-2 gap-3">
                     <form hx-post="/apply-storage-layout" hx-target="#main-content" hx-swap="outerHTML" class="card">
                         <div class="text-sm font-bold text-slate-300 mb-2">Create Storage Layout</div>
@@ -526,3 +624,10 @@
         {% endif %}
     </div>
 </section>
+<script src="/static/js/live-job.js"></script>
+<script>
+(function () {
+    if (!window.bindStorageProgressCard) return;
+    window.bindStorageProgressCard({ kitName: {{ current_kit|tojson }} });
+})();
+</script>

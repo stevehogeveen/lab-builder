@@ -1,4 +1,6 @@
 import pytest
+import yaml
+from typing import Any
 from fastapi.testclient import TestClient
 
 from app.ilo import ILOClient, ILOConfig, ILOError
@@ -275,6 +277,8 @@ class FakeGen10SmartStorageILOClient(ILOClient):
                 "Name": "Drive 1",
                 "Model": "HPE SAS SSD",
                 "CapacityMiB": 102400,
+                "Location": "1I:1:1",
+                "LocationFormat": "ControllerPort:Box:Bay",
                 "DriveMediaType": "SSD",
                 "InterfaceType": "SAS",
                 "Status": {"Health": "OK", "State": "Enabled"},
@@ -432,6 +436,8 @@ class FakeGen10RealBoxSmartStorageILOClient(ILOClient):
                 "Name": "Drive 1",
                 "Model": "HPE SAS SSD",
                 "CapacityMiB": 102400,
+                "Location": "1I:1:1",
+                "LocationFormat": "ControllerPort:Box:Bay",
                 "DriveMediaType": "SSD",
                 "InterfaceType": "SAS",
                 "Status": {"Health": "OK", "State": "Enabled"},
@@ -459,17 +465,18 @@ class FakeGen10StorageApplyClient:
         self.cfg = cfg
         self.fail_on = fail_on
         self.discovery = planner_gen10_apply_discovery(existing_volumes=True)
+        self.calls = []
 
     def get_storage_discovery(self, deep_smart_storage_scan=False):
         del deep_smart_storage_scan
         return self.discovery
 
-    def delete_storage_logical_drive(self, volume_path: str):
+    def delete_storage_logical_drive(self, volume_path: str, settings_path: str = ""):
         if self.fail_on == "delete":
             raise ILOError(f"simulated delete failure for {volume_path}")
         hpe = self.discovery["summary"]["hpe_smart_storage"]
         hpe["volumes"] = [item for item in hpe["volumes"] if item.get("path") != volume_path]
-        return {"deleted_path": volume_path, "reboot_required": False}
+        return {"deleted_path": volume_path, "settings_path": settings_path, "reboot_required": True}
 
     def create_gen10_logical_drive(self, settings_path: str, logical_drive_kind: str, intent: dict):
         if self.fail_on == logical_drive_kind:
@@ -511,6 +518,79 @@ class FakeGen10StorageApplyClient:
             "settings_path": settings_path,
             "assigned_bay": intent.get("bay", ""),
             "reboot_required": True,
+        }
+
+    def apply_gen10_storage_layout(
+        self,
+        settings_path: str,
+        apply_mode: str,
+        existing_volume_paths: list[str],
+        os_intent: dict[str, Any],
+        data_intent: dict[str, Any],
+        spare_intent: dict[str, Any],
+    ):
+        self.calls.append(
+            (
+                "PUT",
+                settings_path,
+                {
+                    "apply_mode": apply_mode,
+                    "existing_volume_paths": list(existing_volume_paths),
+                    "os_intent": os_intent,
+                    "data_intent": data_intent,
+                    "spare_intent": spare_intent,
+                },
+            )
+        )
+        if self.fail_on == "data_raid6":
+            raise ILOError("simulated data_raid6 create failure")
+        if self.fail_on == "apply":
+            raise ILOError("simulated consolidated storage apply failure")
+        hpe = self.discovery["summary"]["hpe_smart_storage"]
+        if apply_mode == "wipe_rebuild":
+            hpe["volumes"] = []
+        hpe["volumes"].append(
+            {
+                "path": "/redfish/v1/Systems/1/SmartStorage/ArrayControllers/0/LogicalDrives/10",
+                "id": "10",
+                "name": "OS RAID 1",
+                "raid_type": "RAID1",
+                "capacity_gib": 500,
+                "status": "OK / Enabled",
+            }
+        )
+        hpe["volumes"].append(
+            {
+                "path": "/redfish/v1/Systems/1/SmartStorage/ArrayControllers/0/LogicalDrives/20",
+                "id": "20",
+                "name": "Data RAID 6",
+                "raid_type": "RAID6",
+                "capacity_gib": 3600,
+                "status": "OK / Enabled",
+            }
+        )
+        return {
+            "settings_path": settings_path,
+            "apply_mode": apply_mode,
+            "deleted_volume_paths": list(existing_volume_paths),
+            "delete_count": len(existing_volume_paths),
+            "create_count": 2,
+            "hot_spare_location": ((spare_intent.get("drive") or {}).get("smart_storage_location") or ""),
+            "reboot_required": True,
+        }
+
+    def reboot_server_and_wait(self, reset_type: str = "GracefulRestart", reboot_start_timeout: int = 120, return_timeout: int = 600, poll_interval: int = 10):
+        del reboot_start_timeout, return_timeout, poll_interval
+        if self.fail_on == "reboot":
+            raise ILOError("simulated reboot failure")
+        return {
+            "path": "/redfish/v1/Systems/1/Actions/ComputerSystem.Reset",
+            "system_path": "/redfish/v1/Systems/1",
+            "reset_type": reset_type,
+            "reboot_start_observed": True,
+            "reboot_start_detail": "Observed BootProgress state after reset request: POST.",
+            "system_returned": True,
+            "return_detail": "System returned with PowerState=On.",
         }
 
 
@@ -1154,14 +1234,14 @@ def planner_gen10_apply_discovery(existing_volumes: bool = True) -> dict:
                 ],
                 "volumes": volumes,
                 "drives": [
-                    {"path": "/hpe/drives/1", "id": "1", "bay": "1", "name": "Drive 1", "model": "SSD-480", "size_gib": 480, "media_type": "SSD", "protocol": "SAS", "status": "OK / Enabled"},
-                    {"path": "/hpe/drives/2", "id": "2", "bay": "2", "name": "Drive 2", "model": "SSD-480", "size_gib": 480, "media_type": "SSD", "protocol": "SAS", "status": "OK / Enabled"},
-                    {"path": "/hpe/drives/3", "id": "3", "bay": "3", "name": "Drive 3", "model": "HDD-1200", "size_gib": 1200, "media_type": "HDD", "protocol": "SAS", "status": "OK / Enabled"},
-                    {"path": "/hpe/drives/4", "id": "4", "bay": "4", "name": "Drive 4", "model": "HDD-1200", "size_gib": 1200, "media_type": "HDD", "protocol": "SAS", "status": "OK / Enabled"},
-                    {"path": "/hpe/drives/5", "id": "5", "bay": "5", "name": "Drive 5", "model": "HDD-1200", "size_gib": 1200, "media_type": "HDD", "protocol": "SAS", "status": "OK / Enabled"},
-                    {"path": "/hpe/drives/6", "id": "6", "bay": "6", "name": "Drive 6", "model": "HDD-1200", "size_gib": 1200, "media_type": "HDD", "protocol": "SAS", "status": "OK / Enabled"},
-                    {"path": "/hpe/drives/7", "id": "7", "bay": "7", "name": "Drive 7", "model": "HDD-1200", "size_gib": 1200, "media_type": "HDD", "protocol": "SAS", "status": "OK / Enabled"},
-                    {"path": "/hpe/drives/8", "id": "8", "bay": "8", "name": "Drive 8", "model": "HDD-1200", "size_gib": 1200, "media_type": "HDD", "protocol": "SAS", "status": "OK / Enabled"},
+                    {"path": "/hpe/drives/1", "id": "1", "bay": "1", "name": "Drive 1", "model": "SSD-480", "size_gib": 480, "media_type": "SSD", "protocol": "SAS", "status": "OK / Enabled", "smart_storage_location": "1I:1:1"},
+                    {"path": "/hpe/drives/2", "id": "2", "bay": "2", "name": "Drive 2", "model": "SSD-480", "size_gib": 480, "media_type": "SSD", "protocol": "SAS", "status": "OK / Enabled", "smart_storage_location": "1I:1:2"},
+                    {"path": "/hpe/drives/3", "id": "3", "bay": "3", "name": "Drive 3", "model": "HDD-1200", "size_gib": 1200, "media_type": "HDD", "protocol": "SAS", "status": "OK / Enabled", "smart_storage_location": "1I:1:3"},
+                    {"path": "/hpe/drives/4", "id": "4", "bay": "4", "name": "Drive 4", "model": "HDD-1200", "size_gib": 1200, "media_type": "HDD", "protocol": "SAS", "status": "OK / Enabled", "smart_storage_location": "1I:1:4"},
+                    {"path": "/hpe/drives/5", "id": "5", "bay": "5", "name": "Drive 5", "model": "HDD-1200", "size_gib": 1200, "media_type": "HDD", "protocol": "SAS", "status": "OK / Enabled", "smart_storage_location": "1I:1:5"},
+                    {"path": "/hpe/drives/6", "id": "6", "bay": "6", "name": "Drive 6", "model": "HDD-1200", "size_gib": 1200, "media_type": "HDD", "protocol": "SAS", "status": "OK / Enabled", "smart_storage_location": "1I:1:6"},
+                    {"path": "/hpe/drives/7", "id": "7", "bay": "7", "name": "Drive 7", "model": "HDD-1200", "size_gib": 1200, "media_type": "HDD", "protocol": "SAS", "status": "OK / Enabled", "smart_storage_location": "1I:1:7"},
+                    {"path": "/hpe/drives/8", "id": "8", "bay": "8", "name": "Drive 8", "model": "HDD-1200", "size_gib": 1200, "media_type": "HDD", "protocol": "SAS", "status": "OK / Enabled", "smart_storage_location": "1I:1:8"},
                 ],
                 "diagnostics": diagnostics,
             },
@@ -1382,7 +1462,8 @@ def test_apply_storage_layout_creates_artifacts_and_logs_success(client, monkeyp
     assert response.status_code == 200
     assert "Apply Attempt Artifacts" in response.text
     assert "View Apply Log" in response.text
-    assert "Live Job panel" in response.text
+    assert "Storage Workflow Progress" in response.text
+    assert "Reboot Now" in response.text
     apply_dir = main.STORAGE_RAID_EXPORT_DIR / "MXQ85103SX" / "20260409-130000"
     assert (apply_dir / "pre-change-summary.yml").exists()
     assert (apply_dir / "pre-change-raw.json").exists()
@@ -1410,6 +1491,7 @@ def test_apply_storage_layout_creates_artifacts_and_logs_success(client, monkeyp
     assert "Create OS RAID 1 logical drive" in apply_log_text
     assert "Assign hot spare" in apply_log_text
     assert "\"status\": \"Completed\"" in apply_results_text
+    assert "\"workflow_state\": \"staged_reboot_required\"" in apply_results_text
 
 
 def test_apply_storage_layout_failure_logs_are_saved(client, monkeypatch):
@@ -1471,6 +1553,149 @@ def test_apply_storage_layout_failure_logs_are_saved(client, monkeypatch):
     assert (apply_dir / "post-change-summary.yml").exists()
 
 
+def test_reboot_storage_now_creates_reboot_artifacts_and_logs_success(client, monkeypatch):
+    def fake_strftime(fmt):
+        if fmt == "%Y%m%d-%H%M%S":
+            return "20260409-150000"
+        if fmt == "%Y-%m-%d %H:%M:%S":
+            return "2026-04-09 15:00:00"
+        raise AssertionError(f"unexpected strftime format: {fmt}")
+
+    monkeypatch.setattr(main.time, "strftime", fake_strftime)
+    monkeypatch.setattr(main, "ILOClient", lambda cfg: FakeGen10StorageApplyClient(cfg))
+    monkeypatch.setattr(
+        main,
+        "start_storage_apply_background",
+        lambda cfg, discovery_raw_path, raid_plan_path, apply_mode, apply_paths: main.execute_storage_apply_in_background(
+            cfg, discovery_raw_path, raid_plan_path, apply_mode, apply_paths
+        ),
+    )
+    monkeypatch.setattr(
+        main,
+        "start_storage_reboot_background",
+        lambda cfg, discovery_raw_path, raid_plan_path, apply_paths: main.execute_storage_reboot_in_background(
+            cfg, discovery_raw_path, raid_plan_path, apply_paths
+        ),
+    )
+
+    cfg = main.default_config()
+    cfg["site"]["name"] = "Apply Kit"
+    cfg["ilo"]["current_ip"] = "10.10.8.90"
+    cfg["ilo"]["host"] = "10.10.8.90"
+    cfg["ilo"]["username"] = "Administrator"
+    cfg["ilo"]["password"] = "kit-password"
+    main.save_kit_config(cfg)
+
+    discovery = planner_gen10_apply_discovery(existing_volumes=True)
+    export_paths = main.export_storage_discovery_snapshot(cfg, discovery, host="10.10.8.90")
+    plan = main.build_raid_plan(discovery, export_paths)
+    plan_paths = main.export_raid_plan_snapshot(cfg, plan, export_paths)
+
+    client.post(
+        "/apply-storage-layout",
+        data={
+            "return_page": "storage",
+            "discovery_raw_path": str(export_paths["raw"]),
+            "raid_plan_path": str(plan_paths["plan"]),
+            "apply_mode": "wipe_rebuild",
+            "acknowledge_apply": "on",
+            "typed_confirmation": "WIPE STORAGE",
+        },
+    )
+
+    apply_dir = main.STORAGE_RAID_EXPORT_DIR / "MXQ85103SX" / "20260409-150000"
+    response = client.post(
+        "/reboot-storage-now",
+        data={
+            "return_page": "storage",
+            "discovery_raw_path": str(export_paths["raw"]),
+            "raid_plan_path": str(plan_paths["plan"]),
+            "apply_artifact_dir": str(apply_dir),
+        },
+    )
+
+    assert response.status_code == 200
+    assert "Storage Workflow Progress" in response.text
+    assert (apply_dir / "reboot-results.json").exists()
+    assert (apply_dir / "post-reboot-summary.yml").exists()
+    assert (apply_dir / "post-reboot-raw.json").exists()
+    reboot_results_text = (apply_dir / "reboot-results.json").read_text(encoding="utf-8")
+    apply_results_text = (apply_dir / "apply-results.json").read_text(encoding="utf-8")
+    job = main.load_job("Apply-Kit")
+    assert job["scope"] == "storage-reboot"
+    assert job["status"] == "Completed"
+    assert any("Request server reboot" in line for line in job["logs"])
+    assert any("Wait for reboot start" in line for line in job["logs"])
+    assert any("Wait for server to return" in line for line in job["logs"])
+    assert any("Export post-reboot storage" in line for line in job["logs"])
+    assert "\"status\": \"Completed\"" in reboot_results_text
+    assert "\"workflow_state\": \"post_reboot_validation_complete\"" in apply_results_text
+
+
+def test_reboot_storage_now_failure_is_logged(client, monkeypatch):
+    monkeypatch.setattr(main, "ILOClient", lambda cfg: FakeGen10StorageApplyClient(cfg, fail_on="reboot"))
+    monkeypatch.setattr(
+        main,
+        "start_storage_apply_background",
+        lambda cfg, discovery_raw_path, raid_plan_path, apply_mode, apply_paths: main.execute_storage_apply_in_background(
+            cfg, discovery_raw_path, raid_plan_path, apply_mode, apply_paths
+        ),
+    )
+    monkeypatch.setattr(
+        main,
+        "start_storage_reboot_background",
+        lambda cfg, discovery_raw_path, raid_plan_path, apply_paths: main.execute_storage_reboot_in_background(
+            cfg, discovery_raw_path, raid_plan_path, apply_paths
+        ),
+    )
+
+    cfg = main.default_config()
+    cfg["site"]["name"] = "Apply Kit"
+    cfg["ilo"]["current_ip"] = "10.10.8.90"
+    cfg["ilo"]["host"] = "10.10.8.90"
+    cfg["ilo"]["username"] = "Administrator"
+    cfg["ilo"]["password"] = "kit-password"
+    main.save_kit_config(cfg)
+
+    discovery = planner_gen10_apply_discovery(existing_volumes=True)
+    export_paths = main.export_storage_discovery_snapshot(cfg, discovery, host="10.10.8.90")
+    plan = main.build_raid_plan(discovery, export_paths)
+    plan_paths = main.export_raid_plan_snapshot(cfg, plan, export_paths)
+
+    client.post(
+        "/apply-storage-layout",
+        data={
+            "return_page": "storage",
+            "discovery_raw_path": str(export_paths["raw"]),
+            "raid_plan_path": str(plan_paths["plan"]),
+            "apply_mode": "wipe_rebuild",
+            "acknowledge_apply": "on",
+            "typed_confirmation": "WIPE STORAGE",
+        },
+    )
+
+    apply_dir = export_paths["directory"]
+    response = client.post(
+        "/reboot-storage-now",
+        data={
+            "return_page": "storage",
+            "discovery_raw_path": str(export_paths["raw"]),
+            "raid_plan_path": str(plan_paths["plan"]),
+            "apply_artifact_dir": str(apply_dir),
+        },
+    )
+
+    assert response.status_code == 200
+    reboot_results_text = (apply_dir / "reboot-results.json").read_text(encoding="utf-8")
+    apply_results_text = (apply_dir / "apply-results.json").read_text(encoding="utf-8")
+    job = main.load_job("Apply-Kit")
+    assert job["scope"] == "storage-reboot"
+    assert job["status"] == "Failed"
+    assert any("simulated reboot failure" in line for line in job["logs"])
+    assert "\"status\": \"Failed\"" in reboot_results_text
+    assert "\"workflow_state\": \"reboot_failed\"" in apply_results_text
+
+
 def test_apply_storage_layout_blocks_host_mismatch(client, monkeypatch):
     cfg = main.default_config()
     cfg["site"]["name"] = "Apply Kit"
@@ -1500,3 +1725,296 @@ def test_apply_storage_layout_blocks_host_mismatch(client, monkeypatch):
     assert response.status_code == 200
     assert "Storage apply failed" in response.text
     assert "host mismatch" in response.text
+
+
+def test_realbox_hpe_disk_location_is_preserved_in_normalized_drive():
+    discovery = FakeGen10RealBoxSmartStorageILOClient().get_storage_discovery()
+    drives = discovery["summary"]["hpe_smart_storage"]["drives"]
+
+    assert drives
+    assert drives[0]["smart_storage_location"] == "1I:1:1"
+    assert drives[0]["smart_storage_location_format"] == "ControllerPort:Box:Bay"
+
+
+def test_saved_plan_artifact_preserves_smart_storage_location_for_os_data_and_spare_drives(client, monkeypatch):
+    def fake_strftime(fmt):
+        if fmt == "%Y%m%d-%H%M%S":
+            return "20260409-140000"
+        if fmt == "%Y-%m-%d %H:%M:%S":
+            return "2026-04-09 14:00:00"
+        raise AssertionError(f"unexpected strftime format: {fmt}")
+
+    monkeypatch.setattr(main.time, "strftime", fake_strftime)
+    cfg = main.default_config()
+    cfg["site"]["name"] = "Apply Kit"
+    cfg["ilo"]["current_ip"] = "10.10.8.90"
+    cfg["ilo"]["host"] = "10.10.8.90"
+    main.save_kit_config(cfg)
+
+    discovery = planner_gen10_apply_discovery(existing_volumes=True)
+    for drive in discovery["summary"]["hpe_smart_storage"]["drives"]:
+        drive["bay"] = drive["smart_storage_location"]
+        drive.pop("smart_storage_location", None)
+        drive.pop("smart_storage_location_format", None)
+
+    export_paths = main.export_storage_discovery_snapshot(cfg, discovery, host="10.10.8.90")
+    loaded_discovery, _ = main.load_storage_discovery_artifact(str(export_paths["raw"]), expected_host="10.10.8.90")
+    plan = main.build_raid_plan(loaded_discovery, export_paths)
+    plan_paths = main.export_raid_plan_snapshot(cfg, plan, export_paths)
+
+    assert plan["os_raid1"]["drives"][0]["smart_storage_location"] == "1I:1:1"
+    assert plan["os_raid1"]["drives"][1]["smart_storage_location"] == "1I:1:2"
+    assert [drive["smart_storage_location"] for drive in plan["data_raid6"]["drives"]] == [
+        "1I:1:3",
+        "1I:1:4",
+        "1I:1:5",
+        "1I:1:6",
+        "1I:1:7",
+    ]
+    assert plan["hot_spare"]["drive"]["smart_storage_location"] == "1I:1:8"
+
+    plan_payload = yaml.safe_load(plan_paths["plan"].read_text(encoding="utf-8"))
+    exported_plan = plan_payload["plan"]
+    assert exported_plan["os_raid1"]["drives"][0]["smart_storage_location"] == "1I:1:1"
+    assert exported_plan["os_raid1"]["drives"][1]["smart_storage_location"] == "1I:1:2"
+    assert [drive["smart_storage_location"] for drive in exported_plan["data_raid6"]["drives"]] == [
+        "1I:1:3",
+        "1I:1:4",
+        "1I:1:5",
+        "1I:1:6",
+        "1I:1:7",
+    ]
+    assert exported_plan["hot_spare"]["drive"]["smart_storage_location"] == "1I:1:8"
+
+
+def test_gen10_preflight_accepts_plan_loaded_from_saved_artifact_with_location_only_in_bay(client, monkeypatch):
+    cfg = main.default_config()
+    cfg["site"]["name"] = "Apply Kit"
+    cfg["ilo"]["current_ip"] = "10.10.8.90"
+    cfg["ilo"]["host"] = "10.10.8.90"
+    main.save_kit_config(cfg)
+
+    discovery = planner_gen10_apply_discovery(existing_volumes=True)
+    for drive in discovery["summary"]["hpe_smart_storage"]["drives"]:
+        drive["bay"] = drive["smart_storage_location"]
+        drive.pop("smart_storage_location", None)
+        drive.pop("smart_storage_location_format", None)
+
+    export_paths = main.export_storage_discovery_snapshot(cfg, discovery, host="10.10.8.90")
+    loaded_discovery, loaded_paths = main.load_storage_discovery_artifact(str(export_paths["raw"]), expected_host="10.10.8.90")
+    plan = main.build_raid_plan(loaded_discovery, loaded_paths)
+    intent = main.build_storage_apply_intent(plan, "wipe_rebuild")
+    client = RecordingGen10SmartStorageWriteClient()
+
+    os_response = client.create_gen10_logical_drive(
+        "/redfish/v1/Systems/1/SmartStorageConfig/Settings",
+        "os_raid1",
+        intent["os_raid1"],
+    )
+
+    assert os_response["reboot_required"] is True
+    assert client.calls[0][2]["LogicalDrives"][0]["DataDrives"] == ["1I:1:1", "1I:1:2"]
+
+
+class RecordingGen10SmartStorageWriteClient(ILOClient):
+    def __init__(self):
+        super().__init__(ILOConfig(host="ilo-gen10.example.test", username="Administrator", password="secret"))
+        self.calls = []
+        self.settings_doc = {"@odata.id": "/redfish/v1/Systems/1/SmartStorageConfig/Settings", "LogicalDrives": []}
+        self.volume_doc = {
+            "@odata.id": "/redfish/v1/Systems/1/SmartStorage/ArrayControllers/0/LogicalDrives/1",
+            "VolumeUniqueIdentifier": "600508B1001C1F3A0B7D1A6F0E93C001",
+            "Name": "Existing OS",
+            "Raid": "RAID1",
+        }
+        self.fail_method = ""
+        self.reboot_required = True
+
+    def _get(self, path: str, timeout=None):
+        if path == "/redfish/v1/Systems/1/SmartStorageConfig/Settings":
+            return self.settings_doc
+        if path == "/redfish/v1/Systems/1/SmartStorageConfig":
+            return {"@odata.id": "/redfish/v1/Systems/1/SmartStorageConfig", "LogicalDrives": self.settings_doc["LogicalDrives"]}
+        if path == "/redfish/v1/Systems/1/SmartStorage/ArrayControllers/0/LogicalDrives/1":
+            return self.volume_doc
+        raise ILOError(f"GET {path} failed with HTTP 404")
+
+    def _put(self, path: str, payload: dict):
+        self.calls.append(("PUT", path, payload))
+        if self.fail_method == "PUT":
+            raise ILOError(f"PUT {path} failed with HTTP 400: simulated write failure")
+        self.settings_doc = {"@odata.id": path, "LogicalDrives": list(payload.get("LogicalDrives") or [])}
+        return {"Messages": [{"MessageId": "SmartStorage.ResetRequired"}], "reboot_required": self.reboot_required}
+
+    def _patch(self, path: str, payload: dict):
+        self.calls.append(("PATCH", path, payload))
+        if self.fail_method == "PATCH":
+            raise ILOError(f"PATCH {path} failed with HTTP 400: simulated write failure")
+        return {"Messages": [{"MessageId": "SmartStorage.ResetRequired"}], "reboot_required": self.reboot_required}
+
+
+def test_delete_storage_logical_drive_uses_settings_put_payload():
+    client = RecordingGen10SmartStorageWriteClient()
+
+    response = client.delete_storage_logical_drive(
+        "/redfish/v1/Systems/1/SmartStorage/ArrayControllers/0/LogicalDrives/1",
+        settings_path="/redfish/v1/Systems/1/SmartStorageConfig/Settings",
+    )
+
+    assert client.calls == [
+        (
+            "PUT",
+            "/redfish/v1/Systems/1/SmartStorageConfig/Settings",
+            {
+                "DataGuard": "Permissive",
+                "LogicalDrives": [
+                    {
+                        "VolumeUniqueIdentifier": "600508B1001C1F3A0B7D1A6F0E93C001",
+                        "Actions": [{"Action": "LogicalDriveDelete"}],
+                    }
+                ],
+            },
+        )
+    ]
+    assert response["deleted_path"].endswith("/LogicalDrives/1")
+    assert response["reboot_required"] is True
+
+
+def test_build_gen10_storage_config_payload_for_create_only_uses_single_pending_config_put_shape():
+    client = RecordingGen10SmartStorageWriteClient()
+    payload = client.build_gen10_storage_config_payload(
+        "/redfish/v1/Systems/1/SmartStorageConfig/Settings",
+        "create_only",
+        [],
+        {
+            "target_size_gib": 500,
+            "drives": [
+                {"bay": "1", "smart_storage_location": "1I:1:1"},
+                {"bay": "2", "smart_storage_location": "1I:1:2"},
+            ],
+        },
+        {
+            "drives": [
+                {"bay": "3", "smart_storage_location": "1I:1:3"},
+                {"bay": "4", "smart_storage_location": "1I:1:4"},
+                {"bay": "5", "smart_storage_location": "1I:1:5"},
+                {"bay": "6", "smart_storage_location": "1I:1:6"},
+            ]
+        },
+        {"bay": "8", "drive": {"smart_storage_location": "1I:1:8"}},
+    )
+
+    assert payload == {
+        "DataGuard": "Disabled",
+        "LogicalDrives": [
+            {
+                "LogicalDriveName": "OS RAID 1",
+                "Raid": "Raid1",
+                "CapacityGiB": 500,
+                "DataDrives": ["1I:1:1", "1I:1:2"],
+            },
+            {
+                "LogicalDriveName": "Data RAID 6",
+                "Raid": "Raid6",
+                "DataDrives": ["1I:1:3", "1I:1:4", "1I:1:5", "1I:1:6"],
+                "SpareDrives": ["1I:1:8"],
+                "SpareRebuildMode": "Dedicated",
+            },
+        ],
+    }
+
+
+def test_apply_gen10_storage_layout_submits_single_consolidated_wipe_rebuild_payload():
+    client = RecordingGen10SmartStorageWriteClient()
+    response = client.apply_gen10_storage_layout(
+        "/redfish/v1/Systems/1/SmartStorageConfig/Settings",
+        "wipe_rebuild",
+        ["/redfish/v1/Systems/1/SmartStorage/ArrayControllers/0/LogicalDrives/1"],
+        {
+            "target_size_gib": 500,
+            "drives": [
+                {"bay": "1", "smart_storage_location": "1I:1:1"},
+                {"bay": "2", "smart_storage_location": "1I:1:2"},
+            ],
+        },
+        {
+            "drives": [
+                {"bay": "3", "smart_storage_location": "1I:1:3"},
+                {"bay": "4", "smart_storage_location": "1I:1:4"},
+                {"bay": "5", "smart_storage_location": "1I:1:5"},
+                {"bay": "6", "smart_storage_location": "1I:1:6"},
+            ]
+        },
+        {"bay": "8", "drive": {"smart_storage_location": "1I:1:8"}},
+    )
+
+    assert client.calls == [
+        (
+            "PUT",
+            "/redfish/v1/Systems/1/SmartStorageConfig/Settings",
+            {
+                "DataGuard": "Permissive",
+                "LogicalDrives": [
+                    {
+                        "VolumeUniqueIdentifier": "600508B1001C1F3A0B7D1A6F0E93C001",
+                        "Actions": [{"Action": "LogicalDriveDelete"}],
+                    },
+                    {
+                        "LogicalDriveName": "OS RAID 1",
+                        "Raid": "Raid1",
+                        "CapacityGiB": 500,
+                        "DataDrives": ["1I:1:1", "1I:1:2"],
+                    },
+                    {
+                        "LogicalDriveName": "Data RAID 6",
+                        "Raid": "Raid6",
+                        "DataDrives": ["1I:1:3", "1I:1:4", "1I:1:5", "1I:1:6"],
+                        "SpareDrives": ["1I:1:8"],
+                        "SpareRebuildMode": "Dedicated",
+                    },
+                ],
+            },
+        )
+    ]
+    assert response["delete_count"] == 1
+    assert response["reboot_required"] is True
+
+
+def test_gen10_helper_write_failures_surface_cleanly():
+    client = RecordingGen10SmartStorageWriteClient()
+    client.fail_method = "PUT"
+
+    with pytest.raises(ILOError, match="simulated write failure"):
+        client.apply_gen10_storage_layout(
+            "/redfish/v1/Systems/1/SmartStorageConfig/Settings",
+            "wipe_rebuild",
+            ["/redfish/v1/Systems/1/SmartStorage/ArrayControllers/0/LogicalDrives/1"],
+            {
+                "target_size_gib": 500,
+                "drives": [
+                    {"bay": "1", "smart_storage_location": "1I:1:1"},
+                    {"bay": "2", "smart_storage_location": "1I:1:2"},
+                ],
+            },
+            {
+                "drives": [
+                    {"bay": "3", "smart_storage_location": "1I:1:3"},
+                    {"bay": "4", "smart_storage_location": "1I:1:4"},
+                    {"bay": "5", "smart_storage_location": "1I:1:5"},
+                    {"bay": "6", "smart_storage_location": "1I:1:6"},
+                ]
+            },
+            {"bay": "8", "drive": {"smart_storage_location": "1I:1:8"}},
+        )
+
+
+def test_gen10_helper_reboot_required_respects_explicit_controller_response():
+    client = RecordingGen10SmartStorageWriteClient()
+    client.reboot_required = False
+
+    response = client.delete_storage_logical_drive(
+        "/redfish/v1/Systems/1/SmartStorage/ArrayControllers/0/LogicalDrives/1",
+        settings_path="/redfish/v1/Systems/1/SmartStorageConfig/Settings",
+    )
+
+    assert response["reboot_required"] is False

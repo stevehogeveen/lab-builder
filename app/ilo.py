@@ -3,6 +3,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 import ipaddress
+import re
+import time
 import requests
 import urllib3
 from requests.auth import HTTPBasicAuth
@@ -285,10 +287,24 @@ class ILOClient:
         }
 
     def _normalize_smart_storage_drive(self, drive: dict[str, Any]) -> dict[str, Any]:
+        smart_location = str(
+            drive.get("Location")
+            or drive.get("DriveLocation")
+            or drive.get("LocationString")
+            or drive.get("SlotLocation")
+            or ""
+        ).strip()
+        bay = str(drive.get("Bay") or drive.get("BayNumber") or drive.get("Id") or "")
+        if smart_location:
+            match = re.search(r"(\d+)$", smart_location)
+            if match:
+                bay = match.group(1)
+            elif not bay:
+                bay = smart_location
         return {
             "path": drive.get("@odata.id", ""),
             "id": drive.get("Id", ""),
-            "bay": str(drive.get("Location") or drive.get("Bay") or drive.get("BayNumber") or drive.get("Id") or ""),
+            "bay": bay,
             "name": drive.get("Name", ""),
             "model": drive.get("Model") or drive.get("ModelNumber") or "",
             "serial_number": drive.get("SerialNumber", ""),
@@ -296,6 +312,8 @@ class ILOClient:
             "media_type": drive.get("MediaType") or drive.get("DriveMediaType") or "",
             "protocol": drive.get("Protocol") or drive.get("InterfaceType") or "",
             "status": self._storage_status_text(drive) or str(drive.get("Status", "")),
+            "smart_storage_location": smart_location,
+            "smart_storage_location_format": str(drive.get("LocationFormat") or drive.get("DriveLocationFormat") or "").strip(),
         }
 
     def _expand_storage_collection_ref(self, owner: dict[str, Any], key: str) -> list[dict[str, Any]]:
@@ -1146,11 +1164,199 @@ class ILOClient:
         except Exception:
             return None
 
-    def delete_storage_logical_drive(self, volume_path: str) -> dict[str, Any] | None:
-        raise ILOError(
-            "Destructive storage delete is scaffolded, but the active ILOClient does not implement "
-            "controller-specific logical-drive deletion yet."
+    def _put(self, path: str, payload: dict[str, Any]) -> dict[str, Any] | None:
+        url = path if path.startswith("http") else f"{self.base}{path}"
+        r = requests.put(
+            url,
+            json=payload,
+            auth=self.auth,
+            verify=self.cfg.verify_tls,
+            timeout=self.cfg.timeout,
         )
+        if r.status_code >= 400:
+            raise ILOError(f"PUT {url} failed with HTTP {r.status_code}: {r.text[:500]}")
+        if not r.text.strip():
+            return None
+        try:
+            return r.json()
+        except Exception:
+            return None
+
+    def _smart_storage_settings_parent(self, settings_path: str) -> str:
+        if not settings_path:
+            return ""
+        match = re.match(r"^(.*?)/settings/?$", settings_path, flags=re.IGNORECASE)
+        if match:
+            return match.group(1)
+        return settings_path.rstrip("/")
+
+    def _smart_storage_get_pending_config(self, settings_path: str) -> dict[str, Any]:
+        settings_doc = self._safe_get(settings_path)
+        if settings_doc and not settings_doc.get("@error"):
+            return settings_doc
+        current_path = self._smart_storage_settings_parent(settings_path)
+        current_doc = self._safe_get(current_path)
+        if current_doc and not current_doc.get("@error"):
+            return current_doc
+        error = settings_doc.get("@error") or current_doc.get("@error") or "unknown settings lookup error"
+        raise ILOError(f"SmartStorageConfig settings path could not be read: {settings_path} ({error})")
+
+    def _smart_storage_reboot_required(self, response: dict[str, Any] | None) -> bool:
+        if not response:
+            return True
+        if response.get("reboot_required") is not None:
+            return bool(response.get("reboot_required"))
+        messages = response.get("Messages") or response.get("messages") or []
+        if isinstance(messages, list):
+            for item in messages:
+                text = str(item.get("MessageId") or item.get("Message") or item)
+                if "reset" in text.lower() or "reboot" in text.lower():
+                    return True
+        return True
+
+    def _required_drive_locations(self, intent: dict[str, Any], expected_count: int, kind: str) -> list[str]:
+        drive_locations = []
+        for drive in intent.get("drives", []) or []:
+            location = str(drive.get("smart_storage_location") or drive.get("location") or "").strip()
+            if not location:
+                bay = str(drive.get("bay") or "").strip()
+                raise ILOError(
+                    f"{kind} drive mapping is incomplete. Missing Smart Storage location for planned bay {bay or 'unknown'}."
+                )
+            drive_locations.append(location)
+        if len(drive_locations) != expected_count:
+            raise ILOError(f"{kind} requires exactly {expected_count} mapped drives, found {len(drive_locations)}.")
+        return drive_locations
+
+    def _logical_drive_payload(self, logical_drive_kind: str, intent: dict[str, Any]) -> dict[str, Any]:
+        if logical_drive_kind == "os_raid1":
+            drive_locations = self._required_drive_locations(intent, 2, "OS RAID 1")
+            return {
+                "LogicalDriveName": "OS RAID 1",
+                "Raid": "Raid1",
+                "CapacityGiB": int(intent.get("target_size_gib") or 500),
+                "DataDrives": drive_locations,
+            }
+        if logical_drive_kind == "data_raid6":
+            drive_locations = self._required_drive_locations(
+                intent,
+                len(intent.get("drives", []) or []),
+                "Data RAID 6",
+            )
+            if len(drive_locations) < 4:
+                raise ILOError(f"Data RAID 6 requires at least 4 mapped drives, found {len(drive_locations)}.")
+            return {
+                "LogicalDriveName": "Data RAID 6",
+                "Raid": "Raid6",
+                "DataDrives": drive_locations,
+            }
+        raise ILOError(f"Unsupported Gen10 logical drive kind: {logical_drive_kind}")
+
+    def _smart_storage_delete_payload_item(self, volume_path: str) -> dict[str, Any]:
+        if not volume_path:
+            raise ILOError("Logical drive delete requires a logical drive path.")
+        volume = self._safe_get(volume_path)
+        if volume.get("@error"):
+            raise ILOError(f"Logical drive metadata could not be read before delete: {volume.get('@error')}")
+        volume_uid = str(
+            volume.get("VolumeUniqueIdentifier")
+            or volume.get("VolumeUniqueID")
+            or volume.get("LogicalDriveUniqueIdentifier")
+            or ""
+        ).strip()
+        if not volume_uid:
+            raise ILOError(f"Logical drive delete requires VolumeUniqueIdentifier at {volume_path}.")
+        return {
+            "VolumeUniqueIdentifier": volume_uid,
+            "Actions": [{"Action": "LogicalDriveDelete"}],
+        }
+
+    def build_gen10_storage_config_payload(
+        self,
+        settings_path: str,
+        apply_mode: str,
+        existing_volume_paths: list[str],
+        os_intent: dict[str, Any],
+        data_intent: dict[str, Any],
+        spare_intent: dict[str, Any],
+    ) -> dict[str, Any]:
+        if not settings_path:
+            raise ILOError("Gen10 SmartStorageConfig payload generation requires the SmartStorageConfig settings path.")
+        if apply_mode not in {"create_only", "wipe_rebuild"}:
+            raise ILOError(f"Unsupported Gen10 apply mode: {apply_mode}")
+
+        logical_drives: list[dict[str, Any]] = []
+        if apply_mode == "create_only":
+            pending = self._smart_storage_get_pending_config(settings_path)
+            logical_drives.extend(list(pending.get("LogicalDrives") or []))
+        else:
+            for volume_path in existing_volume_paths:
+                logical_drives.append(self._smart_storage_delete_payload_item(volume_path))
+
+        os_payload = self._logical_drive_payload("os_raid1", os_intent)
+        data_payload = self._logical_drive_payload("data_raid6", data_intent)
+        spare_drive = (spare_intent.get("drive") or {})
+        spare_location = str(spare_drive.get("smart_storage_location") or spare_drive.get("location") or "").strip()
+        if not spare_location:
+            raise ILOError(
+                f"Hot-spare mapping is incomplete. Missing Smart Storage location for planned bay {spare_intent.get('bay') or 'unknown'}."
+            )
+        data_payload["SpareDrives"] = [spare_location]
+        data_payload["SpareRebuildMode"] = "Dedicated"
+
+        logical_drives.extend([os_payload, data_payload])
+        return {
+            "DataGuard": "Permissive" if apply_mode == "wipe_rebuild" else "Disabled",
+            "LogicalDrives": logical_drives,
+        }
+
+    def apply_gen10_storage_layout(
+        self,
+        settings_path: str,
+        apply_mode: str,
+        existing_volume_paths: list[str],
+        os_intent: dict[str, Any],
+        data_intent: dict[str, Any],
+        spare_intent: dict[str, Any],
+    ) -> dict[str, Any] | None:
+        payload = self.build_gen10_storage_config_payload(
+            settings_path=settings_path,
+            apply_mode=apply_mode,
+            existing_volume_paths=existing_volume_paths,
+            os_intent=os_intent,
+            data_intent=data_intent,
+            spare_intent=spare_intent,
+        )
+        response = self._put(settings_path, payload)
+        return {
+            "settings_path": settings_path,
+            "apply_mode": apply_mode,
+            "deleted_volume_paths": list(existing_volume_paths),
+            "delete_count": len(existing_volume_paths),
+            "create_count": 2,
+            "hot_spare_location": ((spare_intent.get("drive") or {}).get("smart_storage_location") or ""),
+            "payload": payload,
+            "response": response,
+            "reboot_required": self._smart_storage_reboot_required(response),
+        }
+
+    def delete_storage_logical_drive(self, volume_path: str, settings_path: str = "") -> dict[str, Any] | None:
+        if not settings_path:
+            raise ILOError("Logical drive delete requires the SmartStorageConfig settings path.")
+        payload_item = self._smart_storage_delete_payload_item(volume_path)
+        payload = {
+            "DataGuard": "Permissive",
+            "LogicalDrives": [payload_item],
+        }
+        response = self._put(settings_path, payload)
+        return {
+            "settings_path": settings_path,
+            "deleted_path": volume_path,
+            "volume_unique_identifier": payload_item["VolumeUniqueIdentifier"],
+            "payload": payload,
+            "response": response,
+            "reboot_required": self._smart_storage_reboot_required(response),
+        }
 
     def create_gen10_logical_drive(
         self,
@@ -1158,20 +1364,66 @@ class ILOClient:
         logical_drive_kind: str,
         intent: dict[str, Any],
     ) -> dict[str, Any] | None:
-        raise ILOError(
-            "Gen10 / iLO 5 / HPE SmartStorageConfig apply is scaffolded, but the active ILOClient does not "
-            "implement safe logical-drive creation yet."
-        )
+        if not settings_path:
+            raise ILOError("Gen10 logical drive creation requires the SmartStorageConfig settings path.")
+        pending = self._smart_storage_get_pending_config(settings_path)
+        logical_drives = list(pending.get("LogicalDrives") or [])
+        logical_drive_payload = self._logical_drive_payload(logical_drive_kind, intent)
+        logical_drives.append(logical_drive_payload)
+        payload = {
+            "DataGuard": "Disabled",
+            "LogicalDrives": logical_drives,
+        }
+        response = self._put(settings_path, payload)
+        return {
+            "settings_path": settings_path,
+            "logical_drive_kind": logical_drive_kind,
+            "payload": payload,
+            "response": response,
+            "reboot_required": self._smart_storage_reboot_required(response),
+        }
 
     def assign_gen10_hot_spare(
         self,
         settings_path: str,
         intent: dict[str, Any],
     ) -> dict[str, Any] | None:
-        raise ILOError(
-            "Gen10 / iLO 5 / HPE SmartStorageConfig apply is scaffolded, but the active ILOClient does not "
-            "implement safe hot-spare assignment yet."
-        )
+        if not settings_path:
+            raise ILOError("Gen10 hot-spare assignment requires the SmartStorageConfig settings path.")
+        drive = (intent.get("drive") or {})
+        location = str(drive.get("smart_storage_location") or drive.get("location") or "").strip()
+        if not location:
+            raise ILOError(
+                f"Hot-spare mapping is incomplete. Missing Smart Storage location for planned bay {intent.get('bay') or 'unknown'}."
+            )
+        pending = self._smart_storage_get_pending_config(settings_path)
+        pending_drives = list(pending.get("LogicalDrives") or [])
+        target = None
+        for item in pending_drives:
+            raid = str(item.get("Raid") or item.get("RAIDType") or "").lower()
+            name = str(item.get("LogicalDriveName") or item.get("Name") or "").lower()
+            if raid == "raid6" or ("data" in name and "raid 6" in name):
+                target = item
+                break
+        if target is None:
+            raise ILOError("Hot-spare assignment could not find the pending Data RAID 6 logical drive in SmartStorageConfig.")
+        payload_item = {
+            "LogicalDriveName": target.get("LogicalDriveName") or "Data RAID 6",
+            "SpareDrives": [location],
+            "SpareRebuildMode": "Dedicated",
+        }
+        volume_uid = str(target.get("VolumeUniqueIdentifier") or "").strip()
+        if volume_uid:
+            payload_item["VolumeUniqueIdentifier"] = volume_uid
+        payload = {"LogicalDrives": [payload_item]}
+        response = self._patch(settings_path, payload)
+        return {
+            "settings_path": settings_path,
+            "assigned_bay": intent.get("bay", ""),
+            "payload": payload,
+            "response": response,
+            "reboot_required": self._smart_storage_reboot_required(response),
+        }
 
     def get_service_root(self) -> dict[str, Any]:
         return self._get("/redfish/v1/")
@@ -1469,7 +1721,7 @@ class ILOClient:
             }
         })
 
-    def power_reset(self, reset_type: str = "ForceRestart", system_path: str | None = None) -> None:
+    def power_reset(self, reset_type: str = "ForceRestart", system_path: str | None = None) -> dict[str, Any]:
         if not system_path:
             systems = self.get_systems()
             if not systems:
@@ -1481,3 +1733,78 @@ class ILOClient:
         if not target:
             raise ILOError("Reset action not available on this system.")
         self._post(target, {"ResetType": reset_type})
+        return {
+            "system_path": system_path,
+            "path": target,
+            "reset_type": reset_type,
+        }
+
+    def reboot_server_and_wait(
+        self,
+        reset_type: str = "GracefulRestart",
+        reboot_start_timeout: int = 120,
+        return_timeout: int = 600,
+        poll_interval: int = 10,
+    ) -> dict[str, Any]:
+        system_path = self.get_systems()[0]
+        baseline = self.get_system(system_path)
+        baseline_power = str(baseline.get("PowerState") or "")
+        baseline_post = str(((baseline.get("Oem") or {}).get("Hpe") or {}).get("PostState") or "")
+        reset_result = self.power_reset(reset_type=reset_type, system_path=system_path)
+
+        reboot_started = False
+        reboot_start_detail = "No observable reboot-start state change was detected before timeout."
+        reboot_start_deadline = time.time() + max(reboot_start_timeout, 1)
+        while time.time() < reboot_start_deadline:
+            time.sleep(max(poll_interval, 1))
+            try:
+                current = self.get_system(system_path)
+            except Exception as e:
+                reboot_started = True
+                reboot_start_detail = f"System read temporarily failed after reset request: {str(e).splitlines()[0]}"
+                break
+
+            current_power = str(current.get("PowerState") or "")
+            current_post = str(((current.get("Oem") or {}).get("Hpe") or {}).get("PostState") or "")
+            current_boot = str(((current.get("BootProgress") or {}).get("LastState") or ""))
+            if current_power and baseline_power and current_power != baseline_power:
+                reboot_started = True
+                reboot_start_detail = f"Observed PowerState change from {baseline_power} to {current_power}."
+                break
+            if current_post and baseline_post and current_post != baseline_post:
+                reboot_started = True
+                reboot_start_detail = f"Observed HPE PostState change from {baseline_post} to {current_post}."
+                break
+            if current_boot:
+                reboot_started = True
+                reboot_start_detail = f"Observed BootProgress state after reset request: {current_boot}."
+                break
+
+        return_deadline = time.time() + max(return_timeout, 1)
+        system_returned = False
+        return_detail = "System did not return before timeout."
+        service_root = None
+        final_system = None
+        while time.time() < return_deadline:
+            time.sleep(max(poll_interval, 1))
+            try:
+                service_root = self.get_service_root()
+                final_system = self.get_system(system_path)
+                system_returned = True
+                return_detail = f"System returned with PowerState={final_system.get('PowerState') or 'unknown'}."
+                break
+            except Exception as e:
+                return_detail = f"Waiting for Redfish/system readiness: {str(e).splitlines()[0]}"
+
+        if not system_returned:
+            raise ILOError(return_detail)
+
+        return {
+            **reset_result,
+            "reboot_start_observed": reboot_started,
+            "reboot_start_detail": reboot_start_detail,
+            "system_returned": system_returned,
+            "return_detail": return_detail,
+            "service_root": service_root or {},
+            "final_system": final_system or {},
+        }
