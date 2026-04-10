@@ -2,7 +2,25 @@
     <section class="panel xl:col-span-2">
         <div class="flex items-center justify-between mb-4">
             <h2 class="text-2xl font-bold">Execution</h2>
-            <div class="text-sm text-slate-400">Run full kit or a single stage</div>
+            <div class="text-sm text-slate-400">Review what will run, confirm the risky parts, and start only when it looks right.</div>
+        </div>
+
+        <div class="grid grid-cols-1 md:grid-cols-3 gap-3 mb-4">
+            <div class="card">
+                <div class="text-xs font-bold uppercase text-slate-400 mb-1">Selected Kit</div>
+                <div class="text-lg font-semibold">{{ current_kit }}</div>
+                <div class="text-sm text-slate-400 mt-1">The execution scope runs against this kit.</div>
+            </div>
+            <div class="card">
+                <div class="text-xs font-bold uppercase text-slate-400 mb-1">Current Job</div>
+                <div class="text-lg font-semibold">{{ job.get('status', 'Idle') }}</div>
+                <div class="text-sm text-slate-400 mt-1">{{ job.get('scope', 'No active scope yet') }}</div>
+            </div>
+            <div class="card">
+                <div class="text-xs font-bold uppercase text-slate-400 mb-1">Next Action</div>
+                <div class="text-lg font-semibold">{% if execution_preview %}Review and confirm{% else %}Choose a run type{% endif %}</div>
+                <div class="text-sm text-slate-400 mt-1">Start with a preview, then confirm only when it looks right.</div>
+            </div>
         </div>
 
         <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
@@ -11,12 +29,14 @@
                 hx-target="#main-content"
                 hx-swap="outerHTML"
                 class="card"
+                data-action-title="Reviewing full run"
+                data-action-start="Building a clean run review for every included stage."
             >
                 <input type="hidden" name="scope" value="included">
                 <input type="hidden" name="return_page" value="execution">
-                <div class="text-sm text-slate-400 mb-2">Saved scope</div>
-                <div class="text-lg font-semibold mb-4">Run Included Kit</div>
-                <button class="btn btn-danger" type="submit">Prepare Full Run</button>
+                <div class="text-sm text-slate-400 mb-2">Run everything that is included</div>
+                <div class="text-lg font-semibold mb-4">Run included kit</div>
+                <button class="btn btn-danger" type="submit">Review full run</button>
             </form>
 
             <form
@@ -24,10 +44,12 @@
                 hx-target="#main-content"
                 hx-swap="outerHTML"
                 class="card"
+                data-action-title="Reviewing selected stage"
+                data-action-start="Building a clean run review for the selected stage."
             >
                 <input type="hidden" name="return_page" value="execution">
-                <div class="text-sm text-slate-400 mb-2">Target one component</div>
-                <div class="text-lg font-semibold mb-4">Run Single Stage</div>
+                <div class="text-sm text-slate-400 mb-2">Target one workflow only</div>
+                <div class="text-lg font-semibold mb-4">Run a single stage</div>
                 <select name="scope" class="bg-slate-800 border border-slate-600 rounded-lg p-2 w-full mb-4">
                     <option value="ilo">iLO</option>
                     <option value="esxi">ESXi</option>
@@ -36,23 +58,113 @@
                     <option value="iosafe">ioSafe</option>
                     <option value="cisco_switch">Cisco Switch</option>
                 </select>
-                <button class="btn btn-danger" type="submit">Prepare Stage</button>
+                <button class="btn btn-danger" type="submit">Review selected stage</button>
             </form>
         </div>
 
-        {% if execution_preview %}
-        <div class="result mt-4">{{ execution_preview }}</div>
+        {% if execution_review %}
+        <section class="card mt-4">
+            <div class="flex items-center justify-between gap-3 mb-4">
+                <div>
+                    <div class="text-lg font-semibold">Run review</div>
+                    <div class="text-sm text-slate-400">This is the final review before the run starts.</div>
+                </div>
+                <span class="status pending">Review first</span>
+            </div>
 
-        <div class="error mt-4">
-            DANGER: This execution path may reboot equipment, overwrite boot media, reconfigure networking, or apply destructive changes.
-            Verify the target kit, IP plan, credentials, and intended scope before proceeding.
-        </div>
+            <div class="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-3 mb-5">
+                {% for item in execution_review.summary_items %}
+                <div class="card">
+                    <div class="text-xs font-bold uppercase text-slate-400 mb-1">{{ item.label }}</div>
+                    <div class="text-base font-semibold">{{ item.value }}</div>
+                </div>
+                {% endfor %}
+            </div>
+
+            <div class="text-sm font-bold text-slate-300 mb-2">Included stages</div>
+            <div class="grid grid-cols-1 xl:grid-cols-2 gap-4 mb-5">
+                {% for stage in execution_review.stages %}
+                <div class="card">
+                    <div class="flex items-center justify-between gap-3 mb-3">
+                        <div class="text-lg font-semibold">{{ stage.name }}</div>
+                        <span class="status {{ 'ready' if stage.included else 'pending' }}">{{ 'Included' if stage.included else 'Not included' }}</span>
+                    </div>
+                    <div class="space-y-2 text-sm">
+                        <div><strong>Target:</strong> {{ stage.target }}</div>
+                        <div><strong>What will happen:</strong> {{ stage.summary }}</div>
+                    </div>
+                    {% if stage.review_href %}
+                    <div class="actions mt-4">
+                        <a class="btn" href="{{ stage.review_href }}">Review {{ stage.name }}</a>
+                    </div>
+                    {% endif %}
+                </div>
+                {% endfor %}
+            </div>
+
+            <div class="grid grid-cols-1 xl:grid-cols-2 gap-4 mb-4">
+                <div class="card">
+                    <div class="text-sm font-bold text-slate-300 mb-3">Validation checks</div>
+                    <div class="space-y-2">
+                        {% for check in execution_review.validation_checks %}
+                        <div class="result" style="margin-top: 0;">
+                            <div class="flex items-center justify-between gap-3">
+                                <div class="font-semibold">{{ check.label }}</div>
+                                <span class="status {{ 'ready' if check.ok else 'pending' }}">{{ 'Ready' if check.ok else 'Blocked' }}</span>
+                            </div>
+                            <div class="text-sm mt-1">{{ check.details }}</div>
+                        </div>
+                        {% endfor %}
+                    </div>
+                </div>
+                <div class="card">
+                    <div class="text-sm font-bold text-slate-300 mb-3">Recoverability and reports</div>
+                    <div class="space-y-2 text-sm">
+                        {% for note in execution_review.recoverability %}
+                        <div class="result" style="margin-top: 0;">{{ note }}</div>
+                        {% endfor %}
+                    </div>
+                    <div class="actions mt-4">
+                        <form hx-post="/view-run-summary" hx-target="#main-content" hx-swap="outerHTML">
+                            <input type="hidden" name="scope" value="{{ confirm_scope }}">
+                            <input type="hidden" name="return_page" value="execution">
+                            <button class="btn" type="submit">View run summary</button>
+                        </form>
+                        <form action="/download-run-summary" method="post">
+                            <input type="hidden" name="scope" value="{{ confirm_scope }}">
+                            <button class="btn" type="submit">Download summary</button>
+                        </form>
+                        <button class="btn" type="button" onclick="window.print()">Print review</button>
+                    </div>
+                </div>
+            </div>
+
+            <div class="grid grid-cols-1 xl:grid-cols-2 gap-4">
+                <div class="card" style="border-color: color-mix(in srgb, var(--bad) 34%, var(--border)); background: color-mix(in srgb, var(--bad) 6%, transparent);">
+                    <div class="text-sm font-bold text-slate-300 mb-2">{{ execution_review.warning_title }}</div>
+                    <div class="space-y-2 text-sm">
+                        {% for point in execution_review.warning_points %}
+                        <div>{{ point }}</div>
+                        {% endfor %}
+                    </div>
+                </div>
+                <details class="card">
+                    <summary class="summary-row">
+                        <span class="text-sm font-bold text-slate-300">View full run details</span>
+                        <span class="status progress">details</span>
+                    </summary>
+                    <div class="codeblock mt-4">{{ execution_review.detail_text }}</div>
+                </details>
+            </div>
+        </section>
 
         <form
             hx-post="/execute"
             hx-target="#main-content"
             hx-swap="outerHTML"
             class="mt-4"
+            data-action-title="Starting run"
+            data-action-start="Starting the selected run and opening live progress."
         >
             <input type="hidden" name="scope" value="{{ confirm_scope }}">
             <input type="hidden" name="return_page" value="execution">
@@ -67,14 +179,14 @@
             </div>
 
             <div class="actions">
-                <button class="btn btn-danger" type="submit">Final Confirm and Execute</button>
+                <button class="btn btn-danger" type="submit">Start run</button>
             </div>
         </form>
         {% endif %}
     </section>
 
     <section class="panel">
-        <h2 class="text-2xl font-bold mb-4">Live Job</h2>
+        <h2 class="text-2xl font-bold mb-4">Live progress</h2>
         <div id="job-status" class="job-badge">Status: {{ job.get('status', 'Idle') }}</div>
 
         <div class="space-y-2 text-sm">
@@ -88,7 +200,13 @@
             <div id="job-progress-bar" class="progress-bar"></div>
         </div>
 
-        <div id="job-logs" class="codeblock mt-4 max-h-96 overflow-y-auto">{% for line in job.get('logs', []) %}{{ line }}
+        <details class="mt-4" open>
+            <summary class="summary-row">
+                <span class="text-sm font-bold text-slate-300">View live log</span>
+                <span class="status progress">details</span>
+            </summary>
+            <div id="job-logs" class="codeblock mt-4 max-h-96 overflow-y-auto">{% for line in job.get('logs', []) %}{{ line }}
 {% endfor %}</div>
+        </details>
     </section>
 </section>

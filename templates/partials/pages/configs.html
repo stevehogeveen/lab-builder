@@ -1,130 +1,157 @@
-<section class="panel">
-    <h2 class="text-2xl font-bold mb-4">Configs</h2>
+<section class="space-y-6">
+    <section class="panel">
+        <div class="flex flex-wrap items-start justify-between gap-4 mb-4">
+            <div>
+                <h2 class="text-2xl font-bold">Artifacts & Reports</h2>
+                <div class="text-sm text-slate-400">Search saved snapshots, exported configs, and run artifacts without leaving the app.</div>
+            </div>
+            <div class="actions">
+                <a class="btn" href="/history">Open Run History</a>
+            </div>
+        </div>
 
-    <div class="space-y-3">
-        <div class="card border border-slate-600">
-            <div class="text-xs font-bold uppercase text-slate-400 mb-1">Live State</div>
-            <div class="text-lg font-semibold mb-3">Live Inventory</div>
-            <div class="text-sm text-slate-400 mb-3">Capture the actual iLO Redfish state and keep the summary/raw export files together.</div>
+        <div class="grid grid-cols-1 md:grid-cols-3 gap-3">
+            <div class="card">
+                <div class="text-xs font-bold uppercase text-slate-400 mb-1">Report files</div>
+                <div class="text-lg font-semibold">{{ report_center.entries|length }}</div>
+                <div class="text-sm text-slate-400 mt-1">Matching the current filter.</div>
+            </div>
+            <div class="card">
+                <div class="text-xs font-bold uppercase text-slate-400 mb-1">Current kit</div>
+                <div class="text-lg font-semibold">{{ current_kit }}</div>
+                <div class="text-sm text-slate-400 mt-1">Kit snapshots and run artifacts stay grouped here.</div>
+            </div>
+            <div class="card">
+                <div class="text-xs font-bold uppercase text-slate-400 mb-1">Next action</div>
+                <div class="text-lg font-semibold">Search or open a report</div>
+                <div class="text-sm text-slate-400 mt-1">Use the filters below, then open or download what you need.</div>
+            </div>
+        </div>
+    </section>
 
-            <div id="live-inventory-status" class="border border-slate-700 rounded-lg p-3 mb-4 bg-slate-900/40" role="status" aria-live="polite">
-                <div class="flex items-center justify-between gap-3">
-                    <div class="flex items-center gap-2">
-                        <span data-live-inventory-spinner class="live-inventory-spinner {% if not live_inventory_status or not live_inventory_status.busy %}hidden{% endif %}" aria-hidden="true"></span>
-                        <div>
-                        <div class="text-xs font-bold uppercase text-slate-400">Live Inventory Status</div>
-                        <div data-live-inventory-status-title class="font-bold">
-                            {{ live_inventory_status.title if live_inventory_status else "Idle" }}
-                        </div>
-                        </div>
+    <section class="panel">
+        <div class="text-lg font-semibold mb-3">Search reports</div>
+        <form action="/configs" method="get" class="grid grid-cols-1 md:grid-cols-3 gap-3">
+            <label>
+                <div class="text-sm text-slate-300 mb-1">Search by name or folder</div>
+                <input class="input" type="text" name="report_query" value="{{ report_center.query }}" placeholder="serial, storage, summary, plan">
+            </label>
+            <label>
+                <div class="text-sm text-slate-300 mb-1">Report type</div>
+                <select class="input" name="report_type">
+                    <option value="all" {% if report_center.report_type == 'all' %}selected{% endif %}>All reports</option>
+                    <option value="storage" {% if report_center.report_type == 'storage' %}selected{% endif %}>Storage</option>
+                    <option value="ilo-live" {% if report_center.report_type == 'ilo-live' %}selected{% endif %}>Live iLO</option>
+                    <option value="config" {% if report_center.report_type == 'config' %}selected{% endif %}>Saved config</option>
+                    <option value="ilo-config" {% if report_center.report_type == 'ilo-config' %}selected{% endif %}>iLO config</option>
+                </select>
+            </label>
+            <div class="flex items-end">
+                <button class="btn btn-danger w-full" type="submit">Search reports</button>
+            </div>
+        </form>
+    </section>
+
+    <section class="panel">
+        <div class="flex items-center justify-between gap-3 mb-4">
+            <div>
+                <div class="text-lg font-semibold">Report browser</div>
+                <div class="text-sm text-slate-400">Open a file in-app for quick review, or download it for offline handoff.</div>
+            </div>
+            <span class="status progress">{{ report_center.entries|length }} found</span>
+        </div>
+        {% if report_center.entries %}
+        <div class="space-y-3">
+            {% for entry in report_center.entries %}
+            <div class="card">
+                <div class="grid grid-cols-1 xl:grid-cols-5 gap-3 items-start">
+                    <div class="xl:col-span-2">
+                        <div class="font-semibold">{{ entry.label }}</div>
+                        <div class="text-sm text-slate-400 mt-1">{{ entry.parent }}</div>
                     </div>
-                    <span data-live-inventory-status-state class="status {{ live_inventory_status.class_name if live_inventory_status else 'pending' }}">
-                        {{ live_inventory_status.state if live_inventory_status else "Idle" }}
-                    </span>
+                    <div class="text-sm">
+                        <div><strong>Type:</strong> {{ entry.kind }}</div>
+                        <div><strong>Server:</strong> {{ entry.server or 'Unknown' }}</div>
+                    </div>
+                    <div class="text-sm">
+                        <div><strong>Saved:</strong> {{ entry.mtime }}</div>
+                        <div><strong>Current kit match:</strong> {{ entry.kit_match or 'No' }}</div>
+                    </div>
+                    <div class="actions justify-end">
+                        <form hx-post="/view-report" hx-target="#main-content" hx-swap="outerHTML">
+                            <input type="hidden" name="return_page" value="configs">
+                            <input type="hidden" name="report_path" value="{{ entry.path }}">
+                            <button class="btn" type="submit">View</button>
+                        </form>
+                        <form action="/download-report" method="post">
+                            <input type="hidden" name="report_path" value="{{ entry.path }}">
+                            <button class="btn" type="submit">Download</button>
+                        </form>
+                    </div>
                 </div>
-                <div data-live-inventory-status-details class="text-sm text-slate-300 mt-3">
+            </div>
+            {% endfor %}
+        </div>
+        {% else %}
+        <div class="result">No reports matched the current filter yet.</div>
+        {% endif %}
+    </section>
+
+    <section class="grid grid-cols-1 xl:grid-cols-2 gap-6">
+        <div class="panel">
+            <div class="text-lg font-semibold mb-3">Capture current iLO</div>
+            <div class="text-sm text-slate-400 mb-3">Use this when you want a fresh live snapshot before a review or change.</div>
+            <form hx-post="/export-ilo-inventory" hx-target="#main-content" hx-swap="outerHTML" data-live-inventory-action data-live-inventory-start="Connecting to iLO" data-live-inventory-progress="Reading Redfish inventory" data-live-inventory-saving="Saving summary and raw files">
+                <input type="hidden" name="return_page" value="configs">
+                <div class="actions">
+                    <button class="btn btn-danger" type="submit">Capture current iLO</button>
+                </div>
+            </form>
+            <div class="actions mt-3">
+                <form hx-post="/view-latest-live-summary" hx-target="#main-content" hx-swap="outerHTML">
+                    <input type="hidden" name="return_page" value="configs">
+                    <button class="btn" type="submit">View latest summary</button>
+                </form>
+                <form action="/download-latest-live-summary" method="post">
+                    <button class="btn" type="submit">Download latest summary</button>
+                </form>
+                <form action="/download-latest-live-raw" method="post">
+                    <button class="btn" type="submit">Download latest raw JSON</button>
+                </form>
+            </div>
+            <div id="live-inventory-status" class="result mt-4" role="status" aria-live="polite">
+                <div class="font-semibold">{{ live_inventory_status.title if live_inventory_status else "Idle" }}</div>
+                <div class="text-sm mt-2">
                     {% if live_inventory_status and live_inventory_status.details %}
                         {% for detail in live_inventory_status.details %}
-                            <div>{{ detail }}</div>
+                        <div>{{ detail }}</div>
                         {% endfor %}
                     {% else %}
-                        <div>No Live Inventory action is running.</div>
+                        <div>No live inventory action is running.</div>
                     {% endif %}
                 </div>
             </div>
-
-            <form hx-post="/export-ilo-inventory" hx-target="#main-content" hx-swap="outerHTML" class="mb-4"
-                  data-live-inventory-action
-                  data-live-inventory-start="Connecting to iLO"
-                  data-live-inventory-progress="Reading Redfish inventory"
-                  data-live-inventory-saving="Saving summary/raw files">
-                <input type="hidden" name="return_page" value="configs">
-                <div class="actions">
-                    <button class="btn" type="submit">Capture Current iLO</button>
-                </div>
-            </form>
-
-            <div class="grid grid-cols-1 md:grid-cols-4 gap-3">
-                <form hx-post="/view-latest-live-summary" hx-target="#main-content" hx-swap="outerHTML"
-                      data-live-inventory-action
-                      data-live-inventory-start="Starting..."
-                      data-live-inventory-progress="Reading latest live summary">
-                    <input type="hidden" name="return_page" value="configs">
-                    <button class="btn w-full" type="submit">View Summary</button>
-                </form>
-
-                <form action="/download-latest-live-summary" method="post"
-                      data-live-inventory-action
-                      data-live-inventory-download
-                      data-live-inventory-start="Starting..."
-                      data-live-inventory-progress="Downloading latest live summary YAML">
-                    <button class="btn w-full" type="submit">Download YAML</button>
-                </form>
-
-                <form action="/download-latest-live-raw" method="post"
-                      data-live-inventory-action
-                      data-live-inventory-download
-                      data-live-inventory-start="Starting..."
-                      data-live-inventory-progress="Downloading latest live raw JSON">
-                    <button class="btn w-full" type="submit">Download Raw JSON</button>
-                </form>
-
-                <form hx-post="/open-exports-folder" hx-target="#main-content" hx-swap="outerHTML">
-                    <input type="hidden" name="return_page" value="configs">
-                    <button class="btn w-full" type="submit">Open Exports Folder</button>
-                </form>
-            </div>
         </div>
 
-        <div class="card">
-            <div class="text-lg font-semibold mb-3">Ad Hoc iLO Inventory</div>
-            <div class="text-sm text-slate-400 mb-3">Capture live inventory from another iLO temporarily without overwriting the current kit by default.</div>
-            <form hx-post="/export-ad-hoc-ilo-inventory" hx-target="#main-content" hx-swap="outerHTML"
-                  data-live-inventory-action
-                  data-live-inventory-start="Connecting to iLO"
-                  data-live-inventory-progress="Reading Redfish inventory"
-                  data-live-inventory-saving="Saving summary/raw files">
-                <input type="hidden" name="return_page" value="configs">
-                <div class="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-4">
-                    <div>
-                        <label class="block text-sm font-bold text-slate-300 mb-2">iLO IP / Hostname</label>
-                        <input type="text" name="ad_hoc_ilo_host" class="bg-slate-800 border border-slate-600 rounded-lg p-2 w-full" placeholder="10.10.8.50">
-                    </div>
-                    <div>
-                        <label class="block text-sm font-bold text-slate-300 mb-2">Username</label>
-                        <input type="text" name="ad_hoc_ilo_username" class="bg-slate-800 border border-slate-600 rounded-lg p-2 w-full" placeholder="Administrator">
-                    </div>
-                    <div>
-                        <label class="block text-sm font-bold text-slate-300 mb-2">Password</label>
-                        <input type="password" name="ad_hoc_ilo_password" class="bg-slate-800 border border-slate-600 rounded-lg p-2 w-full">
-                    </div>
-                    <div>
-                        <label class="block text-sm font-bold text-slate-300 mb-2">Optional Label</label>
-                        <input type="text" name="ad_hoc_ilo_label" class="bg-slate-800 border border-slate-600 rounded-lg p-2 w-full" placeholder="spare-node-01">
-                    </div>
-                </div>
-                <label class="check mt-4"><input type="checkbox" name="save_to_current_kit"> Save these values to current kit</label>
-                <div class="actions">
-                    <button class="btn" type="submit">Capture Ad Hoc iLO</button>
-                </div>
-            </form>
-        </div>
-
-        <div class="card border border-slate-700">
-            <div class="text-xs font-bold uppercase text-slate-400 mb-1">Saved Intent</div>
-            <div class="text-lg font-semibold mb-3">Intended Config</div>
-            <div class="text-sm text-slate-400 mb-3">View or download the saved configuration the app intends to apply.</div>
-
+        <div class="panel">
+            <div class="text-lg font-semibold mb-3">Saved intended config</div>
+            <div class="text-sm text-slate-400 mb-3">Open the current saved kit config or a point-in-time iLO snapshot.</div>
             <div class="grid grid-cols-1 md:grid-cols-2 gap-3">
                 <form hx-post="/view-current-kit-config" hx-target="#main-content" hx-swap="outerHTML">
                     <input type="hidden" name="return_page" value="configs">
-                    <button class="btn w-full" type="submit">View Config</button>
+                    <button class="btn w-full" type="submit">View kit config</button>
                 </form>
-
                 <form action="/download-current-kit-config" method="post">
-                    <button class="btn w-full" type="submit">Download YAML</button>
+                    <button class="btn w-full" type="submit">Download kit config</button>
+                </form>
+                <form hx-post="/view-ilo-config-snapshot" hx-target="#main-content" hx-swap="outerHTML">
+                    <input type="hidden" name="return_page" value="configs">
+                    <button class="btn w-full" type="submit">View iLO snapshot</button>
+                </form>
+                <form action="/download-ilo-config-snapshot" method="post">
+                    <button class="btn w-full" type="submit">Download iLO snapshot</button>
                 </form>
             </div>
         </div>
-    </div>
+    </section>
 </section>

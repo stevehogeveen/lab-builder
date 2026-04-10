@@ -1,36 +1,62 @@
 <section class="panel">
-    <h2 class="text-2xl font-bold mb-4">Kit Library</h2>
-
-    <form
-        hx-post="/load-kit"
-        hx-target="#main-content"
-        hx-swap="outerHTML"
-        class="mb-4"
-    >
-        <input type="hidden" name="return_page" value="kits">
-        <label class="block text-sm font-bold text-slate-300 mb-2">Load Existing Kit</label>
-        <select name="selected_kit" class="bg-slate-800 border border-slate-600 rounded-lg p-2 w-full">
-            {% for kit in kits %}
-            <option value="{{ kit }}" {% if kit == current_kit %}selected{% endif %}>{{ kit }}</option>
-            {% endfor %}
-        </select>
-        <div class="actions">
-            <button class="btn" type="submit">Load Kit</button>
+    <div class="flex items-center justify-between mb-4">
+        <div>
+            <h2 class="text-2xl font-bold">Kits</h2>
+            <div class="text-sm text-slate-400">Switch between kits or create a new one without leaving the current workspace flow.</div>
         </div>
-    </form>
+    </div>
 
-    <form
-        hx-post="/new-kit"
-        hx-target="#main-content"
-        hx-swap="outerHTML"
-    >
-        <input type="hidden" name="return_page" value="kits">
-        <label class="block text-sm font-bold text-slate-300 mb-2">Create New Kit</label>
-        <input name="new_kit_name" placeholder="Kit-02" class="bg-slate-800 border border-slate-600 rounded-lg p-2 w-full">
-        <div class="actions">
-            <button class="btn" type="submit">Create Kit</button>
+    <div class="grid grid-cols-1 md:grid-cols-3 gap-3 mb-4">
+        <div class="card">
+            <div class="text-xs font-bold uppercase text-slate-400 mb-1">Current Kit</div>
+            <div class="text-lg font-semibold">{{ current_kit }}</div>
+            <div class="text-sm text-slate-400 mt-1">All pages in the app use this active kit.</div>
         </div>
-    </form>
+        <div class="card">
+            <div class="text-xs font-bold uppercase text-slate-400 mb-1">Network</div>
+            <div class="text-lg font-semibold">{{ cfg.get('ip_plan', {}).get('subnet', '') or 'Not set' }}</div>
+            <div class="text-sm text-slate-400 mt-1">Shared network details for the loaded kit.</div>
+        </div>
+        <div class="card">
+            <div class="text-xs font-bold uppercase text-slate-400 mb-1">Next Action</div>
+            <div class="text-lg font-semibold">Load or create</div>
+            <div class="text-sm text-slate-400 mt-1">Pick the kit you want to work in before changing workflow settings.</div>
+        </div>
+    </div>
+
+    <div class="grid grid-cols-1 xl:grid-cols-2 gap-4">
+        <form
+            hx-post="/load-kit"
+            hx-target="#main-content"
+            hx-swap="outerHTML"
+            class="card"
+        >
+            <input type="hidden" name="return_page" value="kits">
+            <label class="block text-sm font-bold text-slate-300 mb-2">Load existing kit</label>
+            <select name="selected_kit" class="bg-slate-800 border border-slate-600 rounded-lg p-2 w-full">
+                {% for kit in kits %}
+                <option value="{{ kit }}" {% if kit == current_kit %}selected{% endif %}>{{ kit }}</option>
+                {% endfor %}
+            </select>
+            <div class="actions">
+                <button class="btn" type="submit">Load kit</button>
+            </div>
+        </form>
+
+        <form
+            hx-post="/new-kit"
+            hx-target="#main-content"
+            hx-swap="outerHTML"
+            class="card"
+        >
+            <input type="hidden" name="return_page" value="kits">
+            <label class="block text-sm font-bold text-slate-300 mb-2">Create new kit</label>
+            <input name="new_kit_name" placeholder="Kit-02" class="bg-slate-800 border border-slate-600 rounded-lg p-2 w-full">
+            <div class="actions">
+                <button class="btn" type="submit">Create kit</button>
+            </div>
+        </form>
+    </div>
 
     <div class="mt-6 text-sm text-slate-300 space-y-2">
         <div><span class="text-slate-400">Subnet:</span> {{ cfg.get('ip_plan', {}).get('subnet', '') }}</div>

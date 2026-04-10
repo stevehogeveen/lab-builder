@@ -1,0 +1,63 @@
+<section class="panel">
+    <div class="flex items-center justify-between mb-4">
+        <div>
+            <h2 class="text-2xl font-bold">QNAP</h2>
+            <div class="text-sm text-slate-400">Review inherited network defaults, then save the QNAP-specific details here.</div>
+        </div>
+        <span class="status {{ qnap_inclusion.tone }}">{{ qnap_inclusion.label }}</span>
+    </div>
+
+    <div class="grid grid-cols-1 md:grid-cols-3 gap-3 mb-4">
+        <div class="card">
+            <div class="text-xs font-bold uppercase text-slate-400 mb-1">Target</div>
+            <div class="text-lg font-semibold">{{ cfg.get('qnap', {}).get('ip', '') or cfg.get('ip_plan', {}).get('qnap', '') or 'Not set' }}</div>
+            <div class="text-sm text-slate-400 mt-1">Planned QNAP address.</div>
+        </div>
+        <div class="card">
+            <div class="text-xs font-bold uppercase text-slate-400 mb-1">Current State</div>
+            <div class="text-lg font-semibold">{{ cfg.get('qnap', {}).get('hostname', '') or 'Needs review' }}</div>
+            <div class="text-sm text-slate-400 mt-1">Local hostname and credentials live here.</div>
+        </div>
+        <div class="card">
+            <div class="text-xs font-bold uppercase text-slate-400 mb-1">Next Action</div>
+            <div class="text-lg font-semibold">Review and save</div>
+            <div class="text-sm text-slate-400 mt-1">Confirm the local QNAP credentials before the final run.</div>
+        </div>
+    </div>
+
+    <div class="grid grid-cols-1 xl:grid-cols-2 gap-4">
+        <div class="card">
+            <div class="text-lg font-semibold mb-3">Inherited defaults</div>
+            <div class="space-y-2 text-sm">
+                <div><strong>IP address:</strong> {{ cfg.get('qnap', {}).get('ip', '') or cfg.get('ip_plan', {}).get('qnap', '') }}</div>
+                <div><strong>Gateway:</strong> {{ cfg.get('ip_plan', {}).get('gateway', '') }}</div>
+                <div><strong>DNS:</strong> {{ (cfg.get('shared_network', {}).get('dns_servers', []))|join(', ') }}</div>
+            </div>
+            <div class="result mt-4">Network values inherit from Global Settings unless you change the shared plan.</div>
+        </div>
+
+        <div class="card">
+            <div class="text-lg font-semibold mb-3">Local setup</div>
+            <form hx-post="/save-qnap-settings" hx-target="#main-content" hx-swap="outerHTML" class="space-y-4">
+                <input type="hidden" name="return_page" value="qnap">
+                <div>
+                    <label class="block text-sm font-bold text-slate-300 mb-2">Hostname</label>
+                    <input type="text" name="qnap_hostname" value="{{ cfg.get('qnap', {}).get('hostname', '') }}" class="bg-slate-800 border border-slate-600 rounded-lg p-2 w-full">
+                </div>
+                <div>
+                    <label class="block text-sm font-bold text-slate-300 mb-2">Username</label>
+                    <input type="text" name="qnap_username" value="{{ cfg.get('qnap', {}).get('username', '') }}" class="bg-slate-800 border border-slate-600 rounded-lg p-2 w-full">
+                </div>
+                <div>
+                    <label class="block text-sm font-bold text-slate-300 mb-2">Password</label>
+                    <input type="password" name="qnap_password" value="{{ cfg.get('qnap', {}).get('password', '') }}" class="bg-slate-800 border border-slate-600 rounded-lg p-2 w-full">
+                </div>
+                <label class="check"><input type="checkbox" name="included_qnap" {% if cfg.get('included', {}).get('qnap') %}checked{% endif %}> Include QNAP in this kit</label>
+                <div class="actions">
+                    <button class="btn btn-danger" type="submit">Save QNAP setup</button>
+                    <a class="btn" href="/global-settings">Adjust global defaults</a>
+                </div>
+            </form>
+        </div>
+    </div>
+</section>

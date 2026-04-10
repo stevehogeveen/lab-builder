@@ -1,66 +1,119 @@
-<section class="panel">
-    <div class="flex items-center justify-between mb-4">
-        <h2 class="text-2xl font-bold">Recent Runs</h2>
-        <div class="text-sm text-slate-400">Latest 25 entries</div>
-    </div>
+<section class="space-y-6">
+    <section class="panel">
+        <div class="flex flex-wrap items-start justify-between gap-4 mb-4">
+            <div>
+                <h2 class="text-2xl font-bold">Run History</h2>
+                <div class="text-sm text-slate-400">A friendlier activity feed first, with deeper execution detail still available when you need it.</div>
+            </div>
+            <a class="btn" href="/configs">Open Reports</a>
+        </div>
 
-    {% if history %}
+        <div class="grid grid-cols-1 md:grid-cols-3 gap-3">
+            <div class="card">
+                <div class="text-xs font-bold uppercase text-slate-400 mb-1">Recent entries</div>
+                <div class="text-lg font-semibold">{{ history|length }}</div>
+                <div class="text-sm text-slate-400 mt-1">Latest 25 items for this kit.</div>
+            </div>
+            <div class="card">
+                <div class="text-xs font-bold uppercase text-slate-400 mb-1">Latest event</div>
+                <div class="text-lg font-semibold">{{ activity_feed[0].title if activity_feed else 'Nothing yet' }}</div>
+                <div class="text-sm text-slate-400 mt-1">{{ activity_feed[0].summary if activity_feed else 'Run something to start building history.' }}</div>
+            </div>
+            <div class="card">
+                <div class="text-xs font-bold uppercase text-slate-400 mb-1">Next action</div>
+                <div class="text-lg font-semibold">Review, reopen, or export</div>
+                <div class="text-sm text-slate-400 mt-1">Use the cards below for a quick summary, then expand only when you need the full detail.</div>
+            </div>
+        </div>
+    </section>
+
+    <section class="panel">
+        <div class="text-lg font-semibold mb-4">Activity feed</div>
+        {% if activity_feed %}
+        <div class="space-y-3">
+            {% for item in activity_feed %}
+            <div class="card">
+                <div class="flex items-center justify-between gap-3">
+                    <div class="font-semibold">{{ item.title }}</div>
+                    <span class="status {{ item.tone }}">{{ item.label }}</span>
+                </div>
+                <div class="text-sm mt-2">{{ item.summary }}</div>
+                <div class="text-xs text-slate-400 mt-2">{{ item.time }}{% if item.target %} | {{ item.target }}{% endif %}</div>
+                {% if item.details %}
+                <details class="mt-3">
+                    <summary class="summary-row">
+                        <span class="text-sm font-bold text-slate-300">View details</span>
+                        <span class="status progress">details</span>
+                    </summary>
+                    <div class="mt-3 space-y-2 text-sm">
+                        {% for detail in item.details %}
+                        <div class="result" style="margin-top: 0;">{{ detail }}</div>
+                        {% endfor %}
+                    </div>
+                </details>
+                {% endif %}
+            </div>
+            {% endfor %}
+        </div>
+        {% else %}
+        <div class="result">No activity yet for this kit.</div>
+        {% endif %}
+    </section>
+
+    <section class="panel">
+        <div class="text-lg font-semibold mb-4">Detailed run log</div>
+        {% if history %}
         <div class="space-y-3">
             {% for item in history %}
             <details class="card">
-                <summary class="cursor-pointer flex items-center justify-between">
+                <summary class="summary-row">
                     <span class="font-semibold">{{ item.get('time', '') }} | {{ item.get('scope', '') }}</span>
-                    <span class="text-sm text-slate-400">{{ item.get('status', '') }} | {{ item.get('progress_percent', 0) }}%</span>
+                    <span class="text-sm text-slate-400">{{ item.get('status', '') }}{% if item.get('progress_percent') %} | {{ item.get('progress_percent', 0) }}%{% endif %}</span>
                 </summary>
-                <div class="mt-4 text-sm text-slate-300 space-y-2">
-                    <div><span class="text-slate-400">Final Stage:</span> {{ item.get('current_stage', '') }}</div>
+                <div class="mt-4 text-sm text-slate-300 space-y-3">
+                    {% if item.get('summary') %}
+                    <div class="result" style="margin-top: 0;">{{ item.get('summary') }}</div>
+                    {% endif %}
+                    <div><span class="text-slate-400">Final stage:</span> {{ item.get('current_stage', '') or item.get('event', '') or 'Not recorded' }}</div>
                     <div><span class="text-slate-400">Completed:</span> {{ item.get('completed_steps', 0) }} / {{ item.get('total_steps', 0) }}</div>
-
                     {% if item.get('config_summary') %}
                     <div class="card">
-                        <div class="font-semibold mb-2">Config Used</div>
+                        <div class="font-semibold mb-2">Config used</div>
                         <div class="space-y-1">
-                            {% if item.get('config_summary', {}).get('login_ip') %}<div><span class="text-slate-400">Login IP:</span> {{ item.get('config_summary', {}).get('login_ip', '') }}</div>{% endif %}
-                            {% if item.get('config_summary', {}).get('target_ip') %}<div><span class="text-slate-400">Target IP:</span> {{ item.get('config_summary', {}).get('target_ip', '') }}</div>{% endif %}
-                            {% if item.get('config_summary', {}).get('hostname') %}<div><span class="text-slate-400">Hostname:</span> {{ item.get('config_summary', {}).get('hostname', '') }}</div>{% endif %}
-                            {% if item.get('config_summary', {}).get('gateway') %}<div><span class="text-slate-400">Gateway:</span> {{ item.get('config_summary', {}).get('gateway', '') }}</div>{% endif %}
-                            {% if item.get('config_summary', {}).get('dns_servers') %}<div><span class="text-slate-400">DNS:</span> {{ item.get('config_summary', {}).get('dns_servers', [])|join(', ') }}</div>{% endif %}
-                            {% if item.get('config_summary', {}).get('snmp_v3_username') %}<div><span class="text-slate-400">SNMP v3 User:</span> {{ item.get('config_summary', {}).get('snmp_v3_username', '') }}</div>{% endif %}
-                            {% if item.get('config_summary', {}).get('snmp_v3_auth_protocol') %}<div><span class="text-slate-400">SNMP Auth:</span> {{ item.get('config_summary', {}).get('snmp_v3_auth_protocol', '') }}</div>{% endif %}
-                            {% if item.get('config_summary', {}).get('snmp_v3_priv_protocol') %}<div><span class="text-slate-400">SNMP Privacy:</span> {{ item.get('config_summary', {}).get('snmp_v3_priv_protocol', '') }}</div>{% endif %}
+                            {% for key, value in item.get('config_summary', {}).items() %}
+                            {% if value %}
+                            <div><span class="text-slate-400">{{ key.replace('_', ' ').title() }}:</span> {{ value if value is string else value|join(', ') }}</div>
+                            {% endif %}
+                            {% endfor %}
                         </div>
                     </div>
                     {% endif %}
-
                     {% if item.get('issues') %}
-                    <div>
-                        <div class="font-semibold mb-2">Issues / Warnings</div>
-                        <div class="codeblock">
-{% for line in item.get('issues', []) %}{{ line }}
-{% endfor %}
-                        </div>
-                    </div>
+                    <details>
+                        <summary class="summary-row">
+                            <span class="text-sm font-bold text-slate-300">Warnings</span>
+                            <span class="status pending">details</span>
+                        </summary>
+                        <div class="codeblock mt-3">{% for line in item.get('issues', []) %}{{ line }}
+{% endfor %}</div>
+                    </details>
                     {% endif %}
-
-                    {% if item.get('logs') %}
-                    <div>
-                        <div class="font-semibold mb-2">Full Execution Log</div>
-                        <div class="codeblock">
-{% for line in item.get('logs', []) %}{{ line }}
-{% endfor %}
-                        </div>
-                    </div>
-                    {% elif item.get('log_tail') %}
-                    <div class="codeblock">
-{% for line in item.get('log_tail', []) %}{{ line }}
-{% endfor %}
-                    </div>
+                    {% if item.get('logs') or item.get('log_tail') %}
+                    <details>
+                        <summary class="summary-row">
+                            <span class="text-sm font-bold text-slate-300">Execution log</span>
+                            <span class="status progress">details</span>
+                        </summary>
+                        <div class="codeblock mt-3">{% for line in item.get('logs', item.get('log_tail', [])) %}{{ line }}
+{% endfor %}</div>
+                    </details>
                     {% endif %}
                 </div>
             </details>
             {% endfor %}
         </div>
-    {% else %}
-        <div class="result">No history yet for this kit.</div>
-    {% endif %}
+        {% else %}
+        <div class="result">No run history yet for this kit.</div>
+        {% endif %}
+    </section>
 </section>

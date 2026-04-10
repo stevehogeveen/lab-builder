@@ -1,0 +1,59 @@
+<section class="panel">
+    <div class="flex items-center justify-between mb-4">
+        <div>
+            <h2 class="text-2xl font-bold">Windows</h2>
+            <div class="text-sm text-slate-400">Review inherited network defaults, then save the Windows-specific details here.</div>
+        </div>
+        <span class="status {{ windows_inclusion.tone }}">{{ windows_inclusion.label }}</span>
+    </div>
+
+    <div class="grid grid-cols-1 md:grid-cols-3 gap-3 mb-4">
+        <div class="card">
+            <div class="text-xs font-bold uppercase text-slate-400 mb-1">Target</div>
+            <div class="text-lg font-semibold">{{ cfg.get('windows', {}).get('ip_address', '') or cfg.get('ip_plan', {}).get('windows', '') or 'Not set' }}</div>
+            <div class="text-sm text-slate-400 mt-1">Planned Windows address.</div>
+        </div>
+        <div class="card">
+            <div class="text-xs font-bold uppercase text-slate-400 mb-1">Current State</div>
+            <div class="text-lg font-semibold">{{ cfg.get('windows', {}).get('vm_name', '') or 'Needs review' }}</div>
+            <div class="text-sm text-slate-400 mt-1">VM name and credentials are local to this page.</div>
+        </div>
+        <div class="card">
+            <div class="text-xs font-bold uppercase text-slate-400 mb-1">Next Action</div>
+            <div class="text-lg font-semibold">Review and save</div>
+            <div class="text-sm text-slate-400 mt-1">Make sure the final VM name and admin password are correct.</div>
+        </div>
+    </div>
+
+    <div class="grid grid-cols-1 xl:grid-cols-2 gap-4">
+        <div class="card">
+            <div class="text-lg font-semibold mb-3">Inherited defaults</div>
+            <div class="space-y-2 text-sm">
+                <div><strong>IP address:</strong> {{ cfg.get('windows', {}).get('ip_address', '') or cfg.get('ip_plan', {}).get('windows', '') }}</div>
+                <div><strong>Gateway:</strong> {{ cfg.get('windows', {}).get('gateway', '') or cfg.get('ip_plan', {}).get('gateway', '') }}</div>
+                <div><strong>DNS:</strong> {{ (cfg.get('windows', {}).get('dns_servers', []) or cfg.get('shared_network', {}).get('dns_servers', []))|join(', ') }}</div>
+            </div>
+            <div class="result mt-4">These network values inherit from Global Settings.</div>
+        </div>
+
+        <div class="card">
+            <div class="text-lg font-semibold mb-3">Local setup</div>
+            <form hx-post="/save-windows-settings" hx-target="#main-content" hx-swap="outerHTML" class="space-y-4">
+                <input type="hidden" name="return_page" value="windows">
+                <div>
+                    <label class="block text-sm font-bold text-slate-300 mb-2">VM name</label>
+                    <input type="text" name="windows_vm_name" value="{{ cfg.get('windows', {}).get('vm_name', '') }}" class="bg-slate-800 border border-slate-600 rounded-lg p-2 w-full">
+                </div>
+                <div>
+                    <label class="block text-sm font-bold text-slate-300 mb-2">Administrator password</label>
+                    <input type="password" name="windows_admin_password" value="{{ cfg.get('windows', {}).get('admin_password', '') }}" class="bg-slate-800 border border-slate-600 rounded-lg p-2 w-full">
+                </div>
+                <label class="check"><input type="checkbox" name="included_windows" {% if cfg.get('included', {}).get('windows') %}checked{% endif %}> Include Windows in this kit</label>
+                <div class="actions">
+                    <button class="btn btn-danger" type="submit">Save Windows setup</button>
+                    <a class="btn" href="/global-settings">Adjust global defaults</a>
+                </div>
+            </form>
+        </div>
+    </div>
+</section>

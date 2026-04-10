@@ -2,18 +2,30 @@
     <div class="brand-block">
         <div class="eyebrow">Offline Provisioning</div>
         <div class="brand">Lab Builder</div>
-        <div class="muted">Per-kit deployment dashboard for repeatable lab builds.</div>
+        <div class="muted">A cleaner per-kit workspace for repeatable lab builds.</div>
     </div>
 
     <div class="nav-group">
-        <div class="nav-label">Main</div>
+        <div class="nav-label">Overview</div>
         <a class="nav-link{% if active_page == 'dashboard' %} nav-link-active{% endif %}" href="/dashboard">Dashboard</a>
-        <a class="nav-link{% if active_page == 'execution' %} nav-link-active{% endif %}" href="/execution">Execution</a>
-        <a class="nav-link{% if active_page == 'configuration' %} nav-link-active{% endif %}" href="/configuration">Configuration</a>
-        <a class="nav-link{% if active_page == 'configs' %} nav-link-active{% endif %}" href="/configs">Configs</a>
+        <a class="nav-link{% if active_page in ['global_settings', 'configuration'] %} nav-link-active{% endif %}" href="/global-settings">Global Settings</a>
+    </div>
+
+    <div class="nav-group">
+        <div class="nav-label">Workflows</div>
+        <a class="nav-link{% if active_page == 'ilo' %} nav-link-active{% endif %}" href="/ilo">iLO</a>
         <a class="nav-link{% if active_page == 'storage' %} nav-link-active{% endif %}" href="/storage">Storage / RAID</a>
+        <a class="nav-link{% if active_page == 'esxi' %} nav-link-active{% endif %}" href="/esxi">ESXi</a>
+        <a class="nav-link{% if active_page == 'windows' %} nav-link-active{% endif %}" href="/windows">Windows</a>
+        <a class="nav-link{% if active_page == 'qnap' %} nav-link-active{% endif %}" href="/qnap">QNAP</a>
+    </div>
+
+    <div class="nav-group">
+        <div class="nav-label">Tools</div>
+        <a class="nav-link{% if active_page == 'execution' %} nav-link-active{% endif %}" href="/execution">Run Center</a>
+        <a class="nav-link{% if active_page == 'configs' %} nav-link-active{% endif %}" href="/configs">Artifacts & Reports</a>
         <a class="nav-link{% if active_page == 'kits' %} nav-link-active{% endif %}" href="/kits">Kits</a>
-        <a class="nav-link{% if active_page == 'history' %} nav-link-active{% endif %}" href="/history">History</a>
+        <a class="nav-link{% if active_page == 'history' %} nav-link-active{% endif %}" href="/history">Run History</a>
     </div>
 
     <div class="nav-group">
@@ -23,6 +35,6 @@
 
     <div class="nav-group">
         <div class="nav-label">Layout</div>
-        <button class="btn w-full mb-2" onclick="resetDashboardLayout()">Reset Layout</button>
+        <button class="btn w-full mb-2" onclick="resetDashboardLayout()">Reset dashboard layout</button>
     </div>
 </aside>

@@ -2362,3 +2362,67 @@ def test_gen10_helper_reboot_required_respects_explicit_controller_response():
     )
 
     assert response["reboot_required"] is False
+
+
+def test_dashboard_shows_recommended_next_step_and_workflow_cards(client):
+    cfg = main.default_config()
+    cfg["site"]["name"] = "Dash Kit"
+    cfg["ilo"]["current_ip"] = ""
+    cfg["ilo"]["host"] = ""
+    cfg["ilo"]["target_ip"] = ""
+    cfg["ip_plan"]["ilo"] = ""
+    main.save_kit_config(cfg)
+
+    response = client.get("/dashboard")
+
+    assert response.status_code == 200
+    assert "Recommended next step" in response.text
+    assert "Set the iLO target" in response.text or "Review the run" in response.text
+    assert "Workflow readiness" in response.text
+    assert "Recent activity" in response.text
+
+
+def test_report_center_lists_storage_reports_and_view_report(client):
+    cfg = main.default_config()
+    cfg["site"]["name"] = "Report Kit"
+    cfg["ilo"]["current_ip"] = "10.10.8.90"
+    cfg["ilo"]["host"] = "10.10.8.90"
+    main.save_kit_config(cfg)
+
+    discovery = planner_gen10_apply_discovery(existing_volumes=True)
+    export_paths = main.export_storage_discovery_snapshot(cfg, discovery, host="10.10.8.90")
+
+    response = client.get("/configs?report_type=storage")
+
+    assert response.status_code == 200
+    assert "Search reports" in response.text
+    assert "Report browser" in response.text
+    assert "View" in response.text
+
+    view_response = client.post(
+        "/view-report",
+        data={"return_page": "configs", "report_path": str(export_paths["summary"])},
+    )
+    assert view_response.status_code == 200
+    assert "Report: summary.yml" in view_response.text
+    assert "source_host" in view_response.text
+
+
+def test_view_run_summary_builds_exportable_review(client):
+    cfg = main.default_config()
+    cfg["site"]["name"] = "Summary Kit"
+    cfg["ilo"]["current_ip"] = "10.10.8.90"
+    cfg["ilo"]["host"] = "10.10.8.90"
+    cfg["included"]["ilo"] = True
+    main.save_kit_config(cfg)
+
+    response = client.post(
+        "/view-run-summary",
+        data={"scope": "ilo", "return_page": "execution"},
+    )
+
+    assert response.status_code == 200
+    assert "Run Summary: ilo" in response.text
+    assert "Run summary ready" in response.text
+    assert "validation_checks" in response.text
+    assert "recoverability" in response.text
