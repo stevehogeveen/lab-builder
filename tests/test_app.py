@@ -890,6 +890,33 @@ def test_save_esxi_windows_and_qnap_page_settings(client):
     assert cfg["qnap"]["hostname"] == "qnap-lab"
 
 
+def test_global_settings_and_workflow_pages_show_defaults_and_dependencies(client):
+    cfg = main.default_config()
+    cfg["site"]["name"] = "Workspace Kit"
+    cfg["shared_network"]["subnet"] = "10.55.66.0/24"
+    cfg["shared_network"]["dns_servers"] = ["1.1.1.1", "8.8.8.8"]
+    cfg["ip_plan"]["gateway"] = "10.55.66.1"
+    cfg["ip_plan"]["esxi"] = "10.55.66.10"
+    cfg["ip_plan"]["windows"] = "10.55.66.20"
+    cfg["ip_plan"]["qnap"] = "10.55.66.30"
+    cfg["esxi"]["hostname"] = "esxi-workspace"
+    main.save_kit_config(cfg)
+
+    global_response = client.get("/global-settings")
+    assert global_response.status_code == 200
+    assert "How shared defaults feed the workspaces" in global_response.text
+    assert "Run Center reads the saved values from each dedicated page" in global_response.text
+    assert "Using global value" in global_response.text
+    assert "Overridden on this page" in global_response.text
+
+    esxi_response = client.get("/esxi")
+    assert esxi_response.status_code == 200
+    assert "Dependencies and guidance" in esxi_response.text
+    assert "ESXi depends on iLO readiness" in esxi_response.text
+    assert "Using global value" in esxi_response.text
+    assert "Open Run Center" in esxi_response.text
+
+
 def test_autofill_ip_plan_uses_entered_subnet(client):
     response = client.post(
         "/autofill-ip-plan",
@@ -1063,7 +1090,8 @@ def test_read_current_storage_saves_discovery_export_and_renders_summary(client,
     assert "Review storage setup" in response.text
     assert "Using right now:" in response.text
     assert "10.10.8.60" in response.text
-    assert "current kit iLO IP" in response.text
+    assert "Using the current iLO address." in response.text
+    assert "currently responding on" in response.text
     assert "Sign-in user:" in response.text
     assert 'hx-indicator="#read-storage-progress"' in response.text
     assert "Checking current storage on the server." in response.text
@@ -1492,6 +1520,7 @@ def test_approve_storage_plan_saves_exact_artifact_paths_for_later_ilo_run(clien
     assert response.status_code == 200
     assert "Storage approved" in response.text
     assert "Included in iLO run: Yes" in response.text
+    assert "Unapprove current storage plan" in response.text
     cfg_after = main.load_kit_config("Approval-Kit")
     storage_cfg = cfg_after["storage"]
     assert storage_cfg["state"] == "approved"
@@ -1567,9 +1596,11 @@ def test_prepare_execute_shows_combined_storage_review_using_exact_approved_arti
     )
 
     assert response.status_code == 200
-    assert "Run review" in response.text
+    assert "What will happen" in response.text
     assert "Included stages" in response.text
     assert "View full run details" in response.text
+    assert "Ready checks" in response.text
+    assert "Reports and rollback notes" in response.text
     assert "Pre-run review:" in response.text
     assert "Storage in the upcoming iLO run" in response.text
     assert "Storage approved" in response.text
@@ -1596,6 +1627,20 @@ def test_execution_page_warns_when_storage_is_not_approved(client):
     assert "Storage and RAID will not be configured during the iLO run until they are reviewed and approved" in response.text
     assert "Open Storage / RAID" in response.text
     assert "/storage#storage-review-start" in response.text
+
+
+def test_ilo_page_warns_clearly_when_storage_is_not_approved(client):
+    cfg = main.default_config()
+    cfg["site"]["name"] = "ILO Warn Kit"
+    cfg["ilo"]["current_ip"] = "10.10.8.90"
+    cfg["ilo"]["host"] = "10.10.8.90"
+    main.save_kit_config(cfg)
+
+    response = client.get("/ilo")
+
+    assert response.status_code == 200
+    assert "Storage and RAID will not be configured during this iLO run" in response.text
+    assert "Open Storage / RAID" in response.text
 
 
 def test_execute_is_blocked_when_included_storage_plan_is_stale(client):

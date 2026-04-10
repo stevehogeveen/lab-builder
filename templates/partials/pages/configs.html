@@ -6,7 +6,7 @@
                 <div class="text-sm text-slate-400">Search saved snapshots, exported configs, and run artifacts without leaving the app.</div>
             </div>
             <div class="actions">
-                <a class="btn" href="/history">Open Run History</a>
+                <a class="btn btn-primary" href="/history">Open Run History</a>
             </div>
         </div>
 
@@ -47,7 +47,7 @@
                 </select>
             </label>
             <div class="flex items-end">
-                <button class="btn btn-danger w-full" type="submit">Search reports</button>
+                <button class="btn btn-primary w-full" type="submit">Search reports</button>
             </div>
         </form>
     </section>
@@ -104,7 +104,7 @@
             <form hx-post="/export-ilo-inventory" hx-target="#main-content" hx-swap="outerHTML" data-live-inventory-action data-live-inventory-start="Connecting to iLO" data-live-inventory-progress="Reading Redfish inventory" data-live-inventory-saving="Saving summary and raw files">
                 <input type="hidden" name="return_page" value="configs">
                 <div class="actions">
-                    <button class="btn btn-danger" type="submit">Capture current iLO</button>
+                    <button class="btn btn-primary" type="submit">Capture current iLO</button>
                 </div>
             </form>
             <div class="actions mt-3">

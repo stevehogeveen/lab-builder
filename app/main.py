@@ -1301,45 +1301,120 @@ def mask_secret(value: str) -> str:
     return "Saved" if str(value or "") else "Not set"
 
 
+def source_label(kind: str) -> str:
+    mapping = {
+        "global": "Using global value",
+        "override": "Overridden on this page",
+        "local": "Saved on this page",
+        "current": "Using current iLO address",
+        "storage_override": "Overridden on this page",
+        "storage_fallback": "Using previously saved address",
+    }
+    return mapping.get(kind, kind)
+
+
 def build_settings_sources(cfg: dict[str, Any]) -> dict[str, list[dict[str, str]]]:
     storage_target = resolve_storage_target_host(cfg)
     storage_credentials = resolve_storage_target_credentials(cfg)
     ilo_cfg = cfg.get("ilo", {}) or {}
     return {
         "global_settings": [
-            {"label": "Shared subnet", "value": cfg.get("shared_network", {}).get("subnet", "") or "Not set", "source": "Global Settings"},
-            {"label": "Shared gateway", "value": cfg.get("ip_plan", {}).get("gateway", "") or "Not set", "source": "Global Settings"},
-            {"label": "Shared DNS", "value": ", ".join([item for item in cfg.get("shared_network", {}).get("dns_servers", []) if item]) or "Not set", "source": "Global Settings"},
+            {"label": "Shared subnet", "value": cfg.get("shared_network", {}).get("subnet", "") or "Not set", "source": "Feeds iLO, ESXi, Windows, QNAP, and Run Center"},
+            {"label": "Shared gateway", "value": cfg.get("ip_plan", {}).get("gateway", "") or "Not set", "source": "Feeds every workflow that inherits the shared network"},
+            {"label": "Shared DNS", "value": ", ".join([item for item in cfg.get("shared_network", {}).get("dns_servers", []) if item]) or "Not set", "source": "Used unless a workflow page overrides it later"},
         ],
         "ilo": [
-            {"label": "Current iLO address", "value": ilo_cfg.get("current_ip") or ilo_cfg.get("host") or "Not set", "source": "This page"},
-            {"label": "Planned final iLO IP", "value": ilo_cfg.get("target_ip") or cfg.get("ip_plan", {}).get("ilo", "") or "Not set", "source": "Page override" if ilo_cfg.get("target_ip") and ilo_cfg.get("target_ip") != cfg.get("ip_plan", {}).get("ilo", "") else "Global default"},
-            {"label": "Gateway", "value": ilo_cfg.get("gateway") or cfg.get("ip_plan", {}).get("gateway", "") or "Not set", "source": "Page override" if ilo_cfg.get("gateway") and ilo_cfg.get("gateway") != cfg.get("ip_plan", {}).get("gateway", "") else "Global default"},
-            {"label": "Username", "value": ilo_cfg.get("username") or "Not set", "source": "This page"},
-            {"label": "Password", "value": mask_secret(ilo_cfg.get("password") or ""), "source": "This page"},
+            {"label": "Current iLO address", "value": ilo_cfg.get("current_ip") or ilo_cfg.get("host") or "Not set", "source": source_label("local")},
+            {"label": "Planned final iLO IP", "value": ilo_cfg.get("target_ip") or cfg.get("ip_plan", {}).get("ilo", "") or "Not set", "source": source_label("override") if ilo_cfg.get("target_ip") and ilo_cfg.get("target_ip") != cfg.get("ip_plan", {}).get("ilo", "") else source_label("global")},
+            {"label": "Gateway", "value": ilo_cfg.get("gateway") or cfg.get("ip_plan", {}).get("gateway", "") or "Not set", "source": source_label("override") if ilo_cfg.get("gateway") and ilo_cfg.get("gateway") != cfg.get("ip_plan", {}).get("gateway", "") else source_label("global")},
+            {"label": "Username", "value": ilo_cfg.get("username") or "Not set", "source": source_label("local")},
+            {"label": "Password", "value": mask_secret(ilo_cfg.get("password") or ""), "source": source_label("local")},
         ],
         "storage": [
-            {"label": "Using right now", "value": storage_target.get("resolved") or "Not set", "source": storage_target.get("source") or "Not resolved"},
-            {"label": "Username", "value": storage_credentials.get("username") or "Not set", "source": storage_credentials.get("username_source") or "Not resolved"},
-            {"label": "Password", "value": mask_secret(storage_credentials.get("password") or ""), "source": storage_credentials.get("password_source") or "Not resolved"},
+            {
+                "label": "Using right now",
+                "value": storage_target.get("resolved") or "Not set",
+                "source": source_label("storage_override") if storage_target.get("override_active") else source_label("current") if storage_target.get("source") in {"current kit iLO IP", "current kit iLO host"} else source_label("storage_fallback"),
+            },
+            {"label": "Username", "value": storage_credentials.get("username") or "Not set", "source": source_label("override") if storage_credentials.get("username_source") == "storage page override" else source_label("local")},
+            {"label": "Password", "value": mask_secret(storage_credentials.get("password") or ""), "source": source_label("override") if storage_credentials.get("password_source") == "storage page override" else source_label("local")},
         ],
         "esxi": [
-            {"label": "Target IP", "value": cfg.get("esxi", {}).get("management_ip") or cfg.get("ip_plan", {}).get("esxi", "") or "Not set", "source": "Page override" if cfg.get("esxi", {}).get("management_ip") else "Global default"},
-            {"label": "Hostname", "value": cfg.get("esxi", {}).get("hostname", "") or "Not set", "source": "This page"},
-            {"label": "Root password", "value": mask_secret(cfg.get("esxi", {}).get("root_password", "")), "source": "This page"},
+            {"label": "Target IP", "value": cfg.get("esxi", {}).get("management_ip") or cfg.get("ip_plan", {}).get("esxi", "") or "Not set", "source": source_label("global")},
+            {"label": "Hostname", "value": cfg.get("esxi", {}).get("hostname", "") or "Not set", "source": source_label("local")},
+            {"label": "Root password", "value": mask_secret(cfg.get("esxi", {}).get("root_password", "")), "source": source_label("local")},
         ],
         "windows": [
-            {"label": "Target IP", "value": cfg.get("windows", {}).get("ip_address") or cfg.get("ip_plan", {}).get("windows", "") or "Not set", "source": "Page override" if cfg.get("windows", {}).get("ip_address") else "Global default"},
-            {"label": "VM name", "value": cfg.get("windows", {}).get("vm_name", "") or "Not set", "source": "This page"},
-            {"label": "Admin password", "value": mask_secret(cfg.get("windows", {}).get("admin_password", "")), "source": "This page"},
+            {"label": "Target IP", "value": cfg.get("windows", {}).get("ip_address") or cfg.get("ip_plan", {}).get("windows", "") or "Not set", "source": source_label("global")},
+            {"label": "VM name", "value": cfg.get("windows", {}).get("vm_name", "") or "Not set", "source": source_label("local")},
+            {"label": "Admin password", "value": mask_secret(cfg.get("windows", {}).get("admin_password", "")), "source": source_label("local")},
         ],
         "qnap": [
-            {"label": "Target IP", "value": cfg.get("qnap", {}).get("ip") or cfg.get("ip_plan", {}).get("qnap", "") or "Not set", "source": "Page override" if cfg.get("qnap", {}).get("ip") else "Global default"},
-            {"label": "Hostname", "value": cfg.get("qnap", {}).get("hostname", "") or "Not set", "source": "This page"},
-            {"label": "Username", "value": cfg.get("qnap", {}).get("username", "") or "Not set", "source": "This page"},
-            {"label": "Password", "value": mask_secret(cfg.get("qnap", {}).get("password", "")), "source": "This page"},
+            {"label": "Target IP", "value": cfg.get("qnap", {}).get("ip") or cfg.get("ip_plan", {}).get("qnap", "") or "Not set", "source": source_label("global")},
+            {"label": "Hostname", "value": cfg.get("qnap", {}).get("hostname", "") or "Not set", "source": source_label("local")},
+            {"label": "Username", "value": cfg.get("qnap", {}).get("username", "") or "Not set", "source": source_label("local")},
+            {"label": "Password", "value": mask_secret(cfg.get("qnap", {}).get("password", "")), "source": source_label("local")},
         ],
     }
+
+
+def build_page_dependencies(cfg: dict[str, Any], workflow_contexts: dict[str, dict[str, Any]]) -> dict[str, list[dict[str, str]]]:
+    storage_review = build_storage_review_context(cfg)
+    storage_target = resolve_storage_target_host(cfg)
+    shared_subnet = cfg.get("shared_network", {}).get("subnet", "")
+    deps: dict[str, list[dict[str, str]]] = {
+        "global_settings": [
+            {"title": "Shared defaults feed every workspace", "summary": "Save the shared network, gateway, DNS, and included workflows here before fine-tuning the dedicated pages.", "tone": "progress"},
+        ],
+        "storage": [
+            {
+                "title": "Storage depends on iLO target",
+                "summary": "Storage review uses the current iLO address and credentials. Set or confirm them on the iLO page first." if not storage_target.get("valid") else "Storage is using the current iLO target and can read the server from this page.",
+                "tone": "pending" if not storage_target.get("valid") else "ready",
+            },
+        ],
+        "ilo": [
+            {
+                "title": "Storage approval is optional but visible here",
+                "summary": "This iLO run will skip storage until Storage / RAID is reviewed and approved." if not storage_review.get("approved") else "The approved storage plan can be included when you prepare the iLO run.",
+                "tone": "pending" if not storage_review.get("approved") else "ready",
+            },
+        ],
+        "esxi": [
+            {
+                "title": "ESXi uses shared network defaults",
+                "summary": "The target IP, gateway, and DNS come from Global Settings.",
+                "tone": "ready" if shared_subnet else "pending",
+            },
+            {
+                "title": "ESXi depends on iLO readiness",
+                "summary": "Set the current iLO address first so the hardware workflow is pointed at the right server." if not (cfg.get("ilo", {}).get("current_ip") or cfg.get("ilo", {}).get("host")) else "The iLO target is already saved for this kit.",
+                "tone": "pending" if not (cfg.get("ilo", {}).get("current_ip") or cfg.get("ilo", {}).get("host")) else "ready",
+            },
+        ],
+        "windows": [
+            {
+                "title": "Windows uses shared network defaults",
+                "summary": "The target IP, gateway, and DNS come from Global Settings unless the shared plan changes.",
+                "tone": "ready" if shared_subnet else "pending",
+            },
+        ],
+        "qnap": [
+            {
+                "title": "QNAP uses shared network defaults",
+                "summary": "The target IP and gateway come from Global Settings unless the shared plan changes.",
+                "tone": "ready" if shared_subnet else "pending",
+            },
+        ],
+        "execution": [
+            {
+                "title": "Run Center consumes saved workspace settings",
+                "summary": "This page reviews and runs the settings already saved on the dedicated workflow pages. It does not silently rebuild them here.",
+                "tone": "progress",
+            },
+        ],
+    }
+    return deps
 
 
 def collect_report_entries(cfg: dict[str, Any], query: str = "", report_type: str = "all", limit: int = 120) -> list[dict[str, str]]:
@@ -3482,25 +3557,25 @@ def build_execution_review(cfg: dict, scope: str):
         "ilo": {
             "name": "iLO",
             "target": cfg["ilo"].get("current_ip") or cfg["ilo"].get("host", "") or "Not set",
-            "summary": "Apply the planned iLO network, hostname, and hardening settings.",
+            "summary": "Update the iLO network settings, hostname, and saved hardening settings.",
             "review_href": "/ilo",
         },
         "esxi": {
             "name": "ESXi",
             "target": cfg["esxi"].get("management_ip", "") or cfg.get("ip_plan", {}).get("esxi", "") or "Not set",
-            "summary": "Use the saved ESXi setup values and generated install inputs.",
+            "summary": "Use the saved ESXi setup and generated install inputs.",
             "review_href": "/esxi",
         },
         "windows": {
             "name": "Windows",
             "target": cfg["windows"].get("ip_address", "") or cfg.get("ip_plan", {}).get("windows", "") or "Not set",
-            "summary": "Use the saved Windows VM name, network plan, and admin settings.",
+            "summary": "Use the saved Windows VM name, network plan, and admin sign-in settings.",
             "review_href": "/windows",
         },
         "qnap": {
             "name": "QNAP",
             "target": cfg["qnap"].get("ip", "") or cfg.get("ip_plan", {}).get("qnap", "") or "Not set",
-            "summary": "Use the saved QNAP hostname and credential settings.",
+            "summary": "Use the saved QNAP hostname and sign-in settings.",
             "review_href": "/qnap",
         },
         "iosafe": {
@@ -3518,7 +3593,7 @@ def build_execution_review(cfg: dict, scope: str):
         "storage": {
             "name": "Storage / RAID",
             "target": storage_review.get("approval", {}).get("host") or storage_review.get("latest", {}).get("host") or "Not set",
-            "summary": "Apply the exact approved storage artifact if storage is included in this run.",
+            "summary": "Use the exact approved storage plan if storage is included in this run.",
             "review_href": "/storage#storage-approval-actions" if storage_review.get("approved") else "/storage#storage-review-start",
         },
     }
@@ -3608,8 +3683,8 @@ def build_execution_review(cfg: dict, scope: str):
         {"label": "Restart expected", "value": "Yes" if storage_review.get("approval", {}).get("reboot_expected") and any(stage["key"] == "storage" and stage["included"] for stage in included_stages) else "No"},
     ]
     warning_points = [
-        "Review the selected targets, credentials, and included stages before starting.",
-        "This run can reboot equipment and apply destructive changes.",
+        "Review the selected targets, sign-in details, and included stages before starting.",
+        "This run can restart equipment and make destructive changes.",
     ]
     if storage_validation_error:
         warning_points.append(f"Storage is blocked right now: {storage_validation_error}")
@@ -4261,6 +4336,7 @@ def render_page(
     )
     page_runbook = PAGE_RUNBOOKS.get(active_page, {})
     settings_sources = build_settings_sources(cfg)
+    page_dependencies = build_page_dependencies(cfg, workflow_contexts)
     ilo_inclusion = component_inclusion_status(cfg, "ilo")
     esxi_inclusion = component_inclusion_status(cfg, "esxi")
     windows_inclusion = component_inclusion_status(cfg, "windows")
@@ -4326,6 +4402,7 @@ def render_page(
         "report_center": report_center,
         "page_runbook": page_runbook,
         "settings_sources": settings_sources,
+        "page_dependencies": page_dependencies,
         "ilo_inclusion": ilo_inclusion,
         "esxi_inclusion": esxi_inclusion,
         "windows_inclusion": windows_inclusion,

@@ -1,56 +1,61 @@
-<section class="grid grid-cols-1 xl:grid-cols-3 gap-6">
-    <section class="panel xl:col-span-2">
-        <div class="flex items-center justify-between mb-4">
-            <h2 class="text-2xl font-bold">Execution</h2>
-            <div class="text-sm text-slate-400">Review what will run, confirm the risky parts, and start only when it looks right.</div>
+<section class="grid grid-cols-1 xl:grid-cols-[minmax(0,1.6fr)_minmax(320px,0.9fr)] gap-6">
+    <section class="panel xl:col-span-1">
+        <div class="flex flex-wrap items-start justify-between gap-4 mb-4">
+            <div>
+                <h2 class="text-2xl font-bold">Run Center</h2>
+                <div class="text-sm text-slate-400">Pick a run, review what will happen, then start only when it looks safe and clear.</div>
+            </div>
+            <span class="status {% if execution_review %}pending{% else %}progress{% endif %}">{% if execution_review %}Review ready{% else %}Choose a run{% endif %}</span>
         </div>
 
         <div class="grid grid-cols-1 md:grid-cols-3 gap-3 mb-4">
             <div class="card">
-                <div class="text-xs font-bold uppercase text-slate-400 mb-1">Selected Kit</div>
+                <div class="text-xs font-bold uppercase text-slate-400 mb-1">Selected kit</div>
                 <div class="text-lg font-semibold">{{ current_kit }}</div>
-                <div class="text-sm text-slate-400 mt-1">The execution scope runs against this kit.</div>
+                <div class="text-sm text-slate-400 mt-1">Every stage and report on this page uses this kit.</div>
             </div>
             <div class="card">
-                <div class="text-xs font-bold uppercase text-slate-400 mb-1">Current Job</div>
+                <div class="text-xs font-bold uppercase text-slate-400 mb-1">Current activity</div>
                 <div class="text-lg font-semibold">{{ job.get('status', 'Idle') }}</div>
-                <div class="text-sm text-slate-400 mt-1">{{ job.get('scope', 'No active scope yet') }}</div>
+                <div class="text-sm text-slate-400 mt-1">{{ job.get('scope', 'Nothing is running right now') }}</div>
             </div>
             <div class="card">
-                <div class="text-xs font-bold uppercase text-slate-400 mb-1">Next Action</div>
-                <div class="text-lg font-semibold">{% if execution_preview %}Review and confirm{% else %}Choose a run type{% endif %}</div>
-                <div class="text-sm text-slate-400 mt-1">Start with a preview, then confirm only when it looks right.</div>
+                <div class="text-xs font-bold uppercase text-slate-400 mb-1">Next step</div>
+                <div class="text-lg font-semibold">{% if execution_preview %}Review and confirm{% else %}Choose a run{% endif %}</div>
+                <div class="text-sm text-slate-400 mt-1">Start with a review first, not the real run.</div>
             </div>
         </div>
 
-        <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+        <div class="grid grid-cols-1 md:grid-cols-2 gap-4 execution-picker-grid">
             <form
                 hx-post="/prepare-execute"
                 hx-target="#main-content"
                 hx-swap="outerHTML"
-                class="card"
-                data-action-title="Reviewing full run"
-                data-action-start="Building a clean run review for every included stage."
+                class="card action-card action-card-primary"
+                data-action-title="Preparing full run review"
+                data-action-start="Building a step-by-step review for everything included in this kit."
             >
                 <input type="hidden" name="scope" value="included">
                 <input type="hidden" name="return_page" value="execution">
-                <div class="text-sm text-slate-400 mb-2">Run everything that is included</div>
-                <div class="text-lg font-semibold mb-4">Run included kit</div>
-                <button class="btn btn-danger" type="submit">Review full run</button>
+                <div class="text-sm text-slate-400 mb-2">Everything that is turned on for this kit</div>
+                <div class="text-lg font-semibold mb-2">Review full run</div>
+                <div class="text-sm text-slate-400 mb-4">Best when you want one final check before running the whole build.</div>
+                <button class="btn btn-primary action-button" type="submit">Review full run</button>
             </form>
 
             <form
                 hx-post="/prepare-execute"
                 hx-target="#main-content"
                 hx-swap="outerHTML"
-                class="card"
-                data-action-title="Reviewing selected stage"
-                data-action-start="Building a clean run review for the selected stage."
+                class="card action-card"
+                data-action-title="Preparing single-stage review"
+                data-action-start="Building a focused review for the stage you selected."
             >
                 <input type="hidden" name="return_page" value="execution">
-                <div class="text-sm text-slate-400 mb-2">Target one workflow only</div>
-                <div class="text-lg font-semibold mb-4">Run a single stage</div>
-                <select name="scope" class="bg-slate-800 border border-slate-600 rounded-lg p-2 w-full mb-4">
+                <div class="text-sm text-slate-400 mb-2">One workflow at a time</div>
+                <div class="text-lg font-semibold mb-2">Review one stage</div>
+                <div class="text-sm text-slate-400 mb-4">Useful when you only want to review iLO, ESXi, Windows, or QNAP by itself.</div>
+                <select name="scope" class="input mb-4">
                     <option value="ilo">iLO</option>
                     <option value="esxi">ESXi</option>
                     <option value="windows">Windows</option>
@@ -58,7 +63,7 @@
                     <option value="iosafe">ioSafe</option>
                     <option value="cisco_switch">Cisco Switch</option>
                 </select>
-                <button class="btn btn-danger" type="submit">Review selected stage</button>
+                <button class="btn btn-primary action-button" type="submit">Review selected stage</button>
             </form>
         </div>
 
@@ -66,15 +71,15 @@
         <section class="card mt-4">
             <div class="flex items-center justify-between gap-3 mb-4">
                 <div>
-                    <div class="text-lg font-semibold">Run review</div>
-                    <div class="text-sm text-slate-400">This is the final review before the run starts.</div>
+                    <div class="text-lg font-semibold">What will happen</div>
+                    <div class="text-sm text-slate-400">This is the final review before anything starts for real.</div>
                 </div>
-                <span class="status pending">Review first</span>
+                <span class="status pending">Confirm before running</span>
             </div>
 
             <div class="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-3 mb-5">
                 {% for item in execution_review.summary_items %}
-                <div class="card">
+                <div class="card card-compact">
                     <div class="text-xs font-bold uppercase text-slate-400 mb-1">{{ item.label }}</div>
                     <div class="text-base font-semibold">{{ item.value }}</div>
                 </div>
@@ -82,12 +87,12 @@
             </div>
 
             <div class="text-sm font-bold text-slate-300 mb-2">Included stages</div>
-            <div class="grid grid-cols-1 xl:grid-cols-2 gap-4 mb-5">
+            <div class="grid grid-cols-1 lg:grid-cols-2 gap-4 mb-5">
                 {% for stage in execution_review.stages %}
-                <div class="card">
+                <div class="card stage-card">
                     <div class="flex items-center justify-between gap-3 mb-3">
                         <div class="text-lg font-semibold">{{ stage.name }}</div>
-                        <span class="status {{ 'ready' if stage.included else 'pending' }}">{{ 'Included' if stage.included else 'Not included' }}</span>
+                        <span class="status {{ 'ready' if stage.included else 'pending' }}">{{ 'Included in this run' if stage.included else 'Not included' }}</span>
                     </div>
                     <div class="space-y-2 text-sm">
                         <div><strong>Target:</strong> {{ stage.target }}</div>
@@ -95,7 +100,7 @@
                     </div>
                     {% if stage.review_href %}
                     <div class="actions mt-4">
-                        <a class="btn" href="{{ stage.review_href }}">Review {{ stage.name }}</a>
+                        <a class="btn stage-link" href="{{ stage.review_href }}">{{ 'Open setup page' if stage.included else 'Review this stage' }}</a>
                     </div>
                     {% endif %}
                 </div>
@@ -104,7 +109,7 @@
 
             <div class="grid grid-cols-1 xl:grid-cols-2 gap-4 mb-4">
                 <div class="card">
-                    <div class="text-sm font-bold text-slate-300 mb-3">Validation checks</div>
+                    <div class="text-sm font-bold text-slate-300 mb-3">Ready checks</div>
                     <div class="space-y-2">
                         {% for check in execution_review.validation_checks %}
                         <div class="result" style="margin-top: 0;">
@@ -118,7 +123,7 @@
                     </div>
                 </div>
                 <div class="card">
-                    <div class="text-sm font-bold text-slate-300 mb-3">Recoverability and reports</div>
+                    <div class="text-sm font-bold text-slate-300 mb-3">Reports and rollback notes</div>
                     <div class="space-y-2 text-sm">
                         {% for note in execution_review.recoverability %}
                         <div class="result" style="margin-top: 0;">{{ note }}</div>
@@ -128,7 +133,7 @@
                         <form hx-post="/view-run-summary" hx-target="#main-content" hx-swap="outerHTML">
                             <input type="hidden" name="scope" value="{{ confirm_scope }}">
                             <input type="hidden" name="return_page" value="execution">
-                            <button class="btn" type="submit">View run summary</button>
+                            <button class="btn btn-primary" type="submit">View run summary</button>
                         </form>
                         <form action="/download-run-summary" method="post">
                             <input type="hidden" name="scope" value="{{ confirm_scope }}">
@@ -140,7 +145,7 @@
             </div>
 
             <div class="grid grid-cols-1 xl:grid-cols-2 gap-4">
-                <div class="card" style="border-color: color-mix(in srgb, var(--bad) 34%, var(--border)); background: color-mix(in srgb, var(--bad) 6%, transparent);">
+                <div class="card soft-warning">
                     <div class="text-sm font-bold text-slate-300 mb-2">{{ execution_review.warning_title }}</div>
                     <div class="space-y-2 text-sm">
                         {% for point in execution_review.warning_points %}
@@ -162,24 +167,31 @@
             hx-post="/execute"
             hx-target="#main-content"
             hx-swap="outerHTML"
-            class="mt-4"
+            class="mt-4 card execute-confirm"
             data-action-title="Starting run"
             data-action-start="Starting the selected run and opening live progress."
         >
             <input type="hidden" name="scope" value="{{ confirm_scope }}">
             <input type="hidden" name="return_page" value="execution">
-            <label class="block mb-3">
+            <div class="flex items-center justify-between gap-3 mb-4">
+                <div>
+                    <div class="text-lg font-semibold">Start the run</div>
+                    <div class="text-sm text-slate-400">Only do this after the stage cards, ready checks, and warning card all look right.</div>
+                </div>
+                <span class="status pending">Real changes start here</span>
+            </div>
+            <label class="check mb-3">
                 <input type="checkbox" name="confirm_checkbox">
-                <span class="ml-2">I understand this may be destructive.</span>
+                <span>I understand this run may restart systems and make destructive changes.</span>
             </label>
 
-            <div class="max-w-sm">
+            <div class="max-w-sm mb-4">
                 <label class="block text-sm font-bold text-slate-300 mb-2">Type EXECUTE to continue</label>
-                <input type="text" name="confirm_phrase" placeholder="EXECUTE" class="bg-slate-800 border border-slate-600 rounded-lg p-2 w-full">
+                <input type="text" name="confirm_phrase" placeholder="EXECUTE" class="input">
             </div>
 
             <div class="actions">
-                <button class="btn btn-danger" type="submit">Start run</button>
+                <button class="btn btn-danger action-button" type="submit">Start run</button>
             </div>
         </form>
         {% endif %}

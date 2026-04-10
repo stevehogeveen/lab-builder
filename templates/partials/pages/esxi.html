@@ -27,17 +27,29 @@
 
     <div class="grid grid-cols-1 xl:grid-cols-2 gap-4">
         <div class="card">
-            <div class="text-lg font-semibold mb-3">Inherited defaults</div>
-            <div class="space-y-2 text-sm">
-                <div><strong>Management IP:</strong> {{ cfg.get('esxi', {}).get('management_ip', '') or cfg.get('ip_plan', {}).get('esxi', '') }}</div>
-                <div><strong>Gateway:</strong> {{ cfg.get('esxi', {}).get('gateway', '') or cfg.get('ip_plan', {}).get('gateway', '') }}</div>
-                <div><strong>DNS:</strong> {{ (cfg.get('esxi', {}).get('dns_servers', []) or cfg.get('shared_network', {}).get('dns_servers', []))|join(', ') }}</div>
+            <div class="text-lg font-semibold mb-3">Target and shared defaults</div>
+            <div class="space-y-3 text-sm">
+                <div class="result" style="margin-top: 0;">
+                    <div class="font-semibold">Management IP</div>
+                    <div>{{ cfg.get('esxi', {}).get('management_ip', '') or cfg.get('ip_plan', {}).get('esxi', '') or 'Not set' }}</div>
+                    <div class="text-slate-400 mt-1">{{ 'Overridden on this page' if cfg.get('esxi', {}).get('management_ip') else 'Using global value' }}</div>
+                </div>
+                <div class="result" style="margin-top: 0;">
+                    <div class="font-semibold">Gateway</div>
+                    <div>{{ cfg.get('esxi', {}).get('gateway', '') or cfg.get('ip_plan', {}).get('gateway', '') or 'Not set' }}</div>
+                    <div class="text-slate-400 mt-1">{{ 'Overridden on this page' if cfg.get('esxi', {}).get('gateway') else 'Using global value' }}</div>
+                </div>
+                <div class="result" style="margin-top: 0;">
+                    <div class="font-semibold">DNS servers</div>
+                    <div>{{ (cfg.get('esxi', {}).get('dns_servers', []) or cfg.get('shared_network', {}).get('dns_servers', []))|join(', ') or 'Not set' }}</div>
+                    <div class="text-slate-400 mt-1">{{ 'Overridden on this page' if cfg.get('esxi', {}).get('dns_servers') else 'Using global value' }}</div>
+                </div>
             </div>
-            <div class="result mt-4">These network values inherit from Global Settings.</div>
+            <div class="result mt-4">Global Settings provides the shared address plan. This page keeps the ESXi-specific name, password, and inclusion choice.</div>
         </div>
 
         <div class="card">
-            <div class="text-lg font-semibold mb-3">Local setup</div>
+            <div class="text-lg font-semibold mb-3">Local ESXi setup</div>
             <form hx-post="/save-esxi-settings" hx-target="#main-content" hx-swap="outerHTML" class="space-y-4">
                 <input type="hidden" name="return_page" value="esxi">
                 <div>
@@ -55,6 +67,24 @@
                     <a class="btn" href="/global-settings">Adjust global defaults</a>
                 </div>
             </form>
+        </div>
+    </div>
+
+    <div class="grid grid-cols-1 xl:grid-cols-2 gap-4 mt-4">
+        <div class="card">
+            <div class="text-lg font-semibold mb-3">Readiness</div>
+            <div class="space-y-3 text-sm">
+                <div class="result" style="margin-top: 0;">This workspace is ready when the shared network defaults are set and the ESXi hostname and password are saved here.</div>
+                <div class="result" style="margin-top: 0;">Run Center will use the saved values from this page. It does not create a different ESXi setup on its own.</div>
+            </div>
+        </div>
+        <div class="card">
+            <div class="text-lg font-semibold mb-3">Reports and next step</div>
+            <div class="text-sm text-slate-400 mb-3">After saving, you can move to Run Center for the final review or come back here to regenerate the kickstart file.</div>
+            <div class="actions">
+                <a class="btn btn-primary action-button" href="/execution">Open Run Center</a>
+                <a class="btn" href="/configs?report_type=ks">Open reports</a>
+            </div>
         </div>
     </div>
 </section>

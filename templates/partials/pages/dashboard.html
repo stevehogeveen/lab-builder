@@ -5,7 +5,7 @@
                 <h2 class="text-2xl font-bold">Dashboard</h2>
                 <div class="text-sm text-slate-400">Your command center for readiness, recent activity, and the best next move.</div>
             </div>
-            <a class="btn btn-danger" href="{{ recommended_next_step.href }}">{{ recommended_next_step.title }}</a>
+            <a class="btn btn-primary" href="{{ recommended_next_step.href }}">{{ recommended_next_step.title }}</a>
         </div>
 
         <div class="grid grid-cols-1 md:grid-cols-3 gap-3">
@@ -33,7 +33,7 @@
                 <div class="text-lg font-semibold">Workflow readiness</div>
                 <div class="text-sm text-slate-400">Each workflow uses the same state model so it is easier to see what is ready, stale, running, or blocked.</div>
             </div>
-            <a class="btn" href="/execution">Open Run Center</a>
+            <a class="btn btn-primary" href="/execution">Open Run Center</a>
         </div>
         <div class="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
             {% for key in ["ilo", "storage", "esxi", "windows", "qnap"] %}

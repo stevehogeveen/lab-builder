@@ -11,12 +11,12 @@
         <div class="card">
             <div class="text-xs font-bold uppercase text-slate-400 mb-1">Target</div>
             <div class="text-lg font-semibold">{{ cfg.get('ilo', {}).get('current_ip', cfg.get('ilo', {}).get('host', '')) or "Not set" }}</div>
-            <div class="text-sm text-slate-400 mt-1">Current iLO sign-in address</div>
+            <div class="text-sm text-slate-400 mt-1">This is the iLO address the app will talk to right now.</div>
         </div>
         <div class="card">
             <div class="text-xs font-bold uppercase text-slate-400 mb-1">Current State</div>
             <div class="text-lg font-semibold">{% if cfg.get('ilo', {}).get('target_ip') or cfg.get('ilo', {}).get('hostname') %}Ready to review{% else %}Needs setup{% endif %}</div>
-            <div class="text-sm text-slate-400 mt-1">Target IP and hostname can be refined here.</div>
+            <div class="text-sm text-slate-400 mt-1">You can set the final address, hostname, and sign-in here.</div>
         </div>
         <div class="card">
             <div class="text-xs font-bold uppercase text-slate-400 mb-1">Next Action</div>
@@ -33,36 +33,36 @@
                 <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
                     <div>
                         <label class="block text-sm font-bold text-slate-300 mb-2">Login IP / hostname</label>
-                        <input type="text" name="ilo_current_ip" value="{{ cfg.get('ilo', {}).get('current_ip', cfg.get('ilo', {}).get('host', '')) }}" class="bg-slate-800 border border-slate-600 rounded-lg p-2 w-full">
-                        <div class="text-xs text-slate-400 mt-1">Local on this page.</div>
+                        <input type="text" name="ilo_current_ip" value="{{ cfg.get('ilo', {}).get('current_ip', cfg.get('ilo', {}).get('host', '')) }}" class="input">
+                        <div class="text-xs text-slate-400 mt-1">Change this here when the server is currently answering somewhere else.</div>
                     </div>
                     <div>
                         <label class="block text-sm font-bold text-slate-300 mb-2">Final iLO IP</label>
-                        <input type="text" name="ilo_target_ip" value="{{ cfg.get('ilo', {}).get('target_ip', cfg.get('ip_plan', {}).get('ilo', '')) }}" class="bg-slate-800 border border-slate-600 rounded-lg p-2 w-full">
-                        <div class="text-xs text-slate-400 mt-1">Usually inherited from Global Settings.</div>
+                        <input type="text" name="ilo_target_ip" value="{{ cfg.get('ilo', {}).get('target_ip', cfg.get('ip_plan', {}).get('ilo', '')) }}" class="input">
+                        <div class="text-xs text-slate-400 mt-1">Usually inherited from Global Settings unless you override it here.</div>
                     </div>
                     <div>
                         <label class="block text-sm font-bold text-slate-300 mb-2">Desired hostname</label>
-                        <input type="text" name="ilo_hostname" value="{{ cfg.get('ilo', {}).get('hostname', '') }}" class="bg-slate-800 border border-slate-600 rounded-lg p-2 w-full">
-                        <div class="text-xs text-slate-400 mt-1">Local override for this workflow.</div>
+                        <input type="text" name="ilo_hostname" value="{{ cfg.get('ilo', {}).get('hostname', '') }}" class="input">
+                        <div class="text-xs text-slate-400 mt-1">Saved only for the iLO workflow.</div>
                     </div>
                     <div>
                         <label class="block text-sm font-bold text-slate-300 mb-2">Gateway</label>
-                        <input type="text" name="ilo_gateway" value="{{ cfg.get('ilo', {}).get('gateway', cfg.get('ip_plan', {}).get('gateway', '')) }}" class="bg-slate-800 border border-slate-600 rounded-lg p-2 w-full">
+                        <input type="text" name="ilo_gateway" value="{{ cfg.get('ilo', {}).get('gateway', cfg.get('ip_plan', {}).get('gateway', '')) }}" class="input">
                         <div class="text-xs text-slate-400 mt-1">This is the gateway iLO should use after its network settings are applied.</div>
                     </div>
                     <div>
                         <label class="block text-sm font-bold text-slate-300 mb-2">Username</label>
-                        <input type="text" name="ilo_username" value="{{ cfg.get('ilo', {}).get('username', '') }}" class="bg-slate-800 border border-slate-600 rounded-lg p-2 w-full">
+                        <input type="text" name="ilo_username" value="{{ cfg.get('ilo', {}).get('username', '') }}" class="input">
                     </div>
                     <div>
                         <label class="block text-sm font-bold text-slate-300 mb-2">Password</label>
-                        <input type="password" name="ilo_password" value="{{ cfg.get('ilo', {}).get('password', '') }}" class="bg-slate-800 border border-slate-600 rounded-lg p-2 w-full">
+                        <input type="password" name="ilo_password" value="{{ cfg.get('ilo', {}).get('password', '') }}" class="input">
                     </div>
                 </div>
                 <label class="check"><input type="checkbox" name="included_ilo" {% if cfg.get('included', {}).get('ilo') %}checked{% endif %}> Include iLO in this kit</label>
                 <div class="actions">
-                    <button class="btn btn-danger" type="submit">Save iLO setup</button>
+                    <button class="btn btn-primary action-button" type="submit">Save iLO setup</button>
                     <a class="btn" href="/global-settings">Adjust global defaults</a>
                 </div>
             </form>
@@ -84,12 +84,12 @@
             <div class="actions mt-4">
                 <form hx-post="/export-ilo-inventory" hx-target="#main-content" hx-swap="outerHTML" data-action-title="Reading current iLO" data-action-start="Connecting to iLO and collecting the latest live settings.">
                     <input type="hidden" name="return_page" value="ilo">
-                    <button class="btn" type="submit">Read current iLO</button>
+                    <button class="btn btn-primary action-button" type="submit">Read current iLO</button>
                 </form>
                 <form hx-post="/prepare-execute" hx-target="#main-content" hx-swap="outerHTML" data-action-title="Preparing iLO review" data-action-start="Building the iLO run review and warning summary.">
                     <input type="hidden" name="scope" value="ilo">
                     <input type="hidden" name="return_page" value="ilo">
-                    <button class="btn btn-danger" type="submit">Prepare iLO run</button>
+                    <button class="btn btn-primary action-button" type="submit">Prepare iLO run</button>
                 </form>
             </div>
         </div>
@@ -102,12 +102,12 @@
                 <div class="text-sm text-slate-300">Storage status: {{ storage_execution_status.summary }}</div>
                 {% if storage_review.approved and not storage_review.stale %}
                 <div class="result mt-3">
-                    <div><strong>Storage approved:</strong> This iLO run can include the approved storage setup.</div>
+                    <div><strong>Approved for setup:</strong> This iLO run can include the saved storage plan.</div>
                     <div><strong>Included in run:</strong> {{ "Yes" if storage_review.include_in_ilo_run else "No" }}</div>
                 </div>
                 {% else %}
                 <div class="error mt-3">
-                    Storage and RAID will not be configured during the iLO run until the setup is reviewed and approved on the Storage / RAID page.
+                    Storage and RAID will not be configured during this iLO run until you go to Storage / RAID, review the current layout, and approve the plan.
                 </div>
                 {% endif %}
             </div>
@@ -115,13 +115,13 @@
                 <div class="text-sm font-bold text-slate-300 mb-2">Next action</div>
                 <div class="text-sm text-slate-400 mb-3">
                     {% if storage_review.approved and not storage_review.stale %}
-                    Storage is already approved. You can mark it for review again there if you want another pass before running.
+                    Storage is already approved. If you want another pass before the run, you can remove the approval on the Storage / RAID page.
                     {% else %}
                     Open Storage / RAID, confirm the current server, build the plan, and approve it before the final iLO run.
                     {% endif %}
                 </div>
                 <div class="actions">
-                    <a class="btn" href="/storage#{% if storage_review.approved %}storage-approval-actions{% else %}storage-review-start{% endif %}">Open Storage / RAID</a>
+                    <a class="btn btn-primary action-button" href="/storage#{% if storage_review.approved %}storage-approval-actions{% else %}storage-review-start{% endif %}">{% if storage_review.approved %}Review storage approval{% else %}Open Storage / RAID{% endif %}</a>
                     <a class="btn" href="/execution">Advanced runs and live job view</a>
                 </div>
             </div>

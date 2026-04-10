@@ -9,7 +9,7 @@
             <div class="card">
                 <div class="text-xs font-bold uppercase text-slate-400 mb-1">Server</div>
                 <div class="text-lg font-semibold">{{ storage_target.resolved or "Not set" }}</div>
-                <div class="text-sm text-slate-400 mt-1">{% if storage_target.source %}Using {{ storage_target.source }}{% else %}Choose the iLO host for storage review{% endif %}</div>
+                <div class="text-sm text-slate-400 mt-1">{% if storage_target.override_active %}Using the address you set on this page.{% elif storage_target.source == 'current kit iLO IP' or storage_target.source == 'current kit iLO host' %}Using the current iLO address.{% elif storage_target.source %}Using a previously saved address for storage review.{% else %}Choose the iLO host for storage review.{% endif %}</div>
             </div>
             <div class="card">
                 <div class="text-xs font-bold uppercase text-slate-400 mb-1">Current State</div>
@@ -140,17 +140,17 @@
                     </label>
                 </div>
                 <div class="actions mt-3">
-                    <button class="btn" type="submit" style="border-color: color-mix(in srgb, var(--ok) 40%, var(--border));">Save storage target</button>
+                    <button class="btn btn-primary action-button" type="submit" style="border-color: color-mix(in srgb, var(--ok) 40%, var(--border));">Save storage target</button>
                 </div>
-                <div class="text-sm text-slate-400 mt-2">Leave the host blank to use the current iLO address. This is the address the server is responding on right now. If you want to change it, update the iLO page or override it here just for storage.</div>
+                <div class="text-sm text-slate-400 mt-2">Leave the host blank to use the current iLO address. This is the address the server is currently responding on. If you want to change it, update the iLO page or override it here just for storage.</div>
             </form>
             <div class="result mb-3">
                 <div><strong>Using right now:</strong> {{ storage_target.resolved or "Not resolved" }}</div>
                 <div><strong>Why this address was chosen:</strong>
                     {% if storage_target.override_active %}
-                    Using the storage page override.
+                    You set a storage-only override on this page.
                     {% elif storage_target.source == 'current kit iLO IP' or storage_target.source == 'current kit iLO host' %}
-                    Using the current iLO address for this kit. This is the address the server is expected to answer on right now.
+                    Using the current iLO address for this kit. This is the address the server is currently responding on.
                     {% elif storage_target.source == 'latest discovery artifact' %}
                     Using the last address this page successfully talked to because the current iLO address is not set.
                     {% elif storage_target.source == 'approved storage artifact' %}
@@ -193,7 +193,7 @@
                 <input type="hidden" name="return_page" value="storage">
                 <label class="check mb-3"><input type="checkbox" name="deep_smart_storage_scan"> Deep Smart Storage Scan</label>
                 <div class="actions">
-                    <button class="btn btn-danger" type="submit" {% if not storage_target.valid or not storage_credentials.valid %}disabled{% endif %} style="{% if storage_target.valid and storage_credentials.valid %}border-color: color-mix(in srgb, var(--ok) 35%, var(--border));{% else %}opacity: 0.55; cursor: not-allowed;{% endif %}">Read current storage</button>
+                    <button class="btn btn-primary action-button" type="submit" {% if not storage_target.valid or not storage_credentials.valid %}disabled{% endif %} style="{% if storage_target.valid and storage_credentials.valid %}border-color: color-mix(in srgb, var(--ok) 35%, var(--border));{% else %}opacity: 0.55; cursor: not-allowed;{% endif %}">Read current storage</button>
                 </div>
                 {% if storage_target.valid %}
                 <div class="text-sm text-slate-400 mt-2">This will connect to {{ storage_target.resolved }}.</div>
@@ -247,7 +247,7 @@
                 <input type="hidden" name="return_page" value="storage">
                 <input type="hidden" name="discovery_raw_path" value="{{ storage_export_paths.raw }}">
                 <div class="actions">
-                    <button class="btn btn-danger" type="submit" {% if not storage_target.valid %}disabled{% endif %} style="{% if storage_target.valid %}border-color: color-mix(in srgb, var(--ok) 35%, var(--border));{% else %}opacity: 0.55; cursor: not-allowed;{% endif %}">Plan storage layout</button>
+                    <button class="btn btn-primary action-button" type="submit" {% if not storage_target.valid %}disabled{% endif %} style="{% if storage_target.valid %}border-color: color-mix(in srgb, var(--ok) 35%, var(--border));{% else %}opacity: 0.55; cursor: not-allowed;{% endif %}">Plan storage layout</button>
                 </div>
                 {% if not storage_target.valid %}
                 <div class="text-sm text-amber-300 mt-2">Disabled because the target server is not set yet.</div>
@@ -475,7 +475,7 @@
                     <input type="hidden" name="discovery_raw_path" value="{{ storage_export_paths.raw if storage_export_paths else '' }}">
                     <input type="hidden" name="raid_plan_path" value="{{ storage_plan_paths.plan if storage_plan_paths else '' }}">
                     <label class="check mb-3"><input type="checkbox" name="include_in_ilo_run" {% if storage_review.include_in_ilo_run %}checked{% endif %}> Include this approved storage plan in the later iLO run</label>
-                    <button class="btn btn-danger" type="submit" {% if not storage_plan.valid or not storage_target.valid %}disabled{% endif %} style="{% if storage_review.approved and not storage_review.stale %}background: color-mix(in srgb, var(--ok) 70%, #0f172a); border-color: color-mix(in srgb, var(--ok) 55%, var(--border));{% elif not storage_plan.valid or not storage_target.valid %}opacity: 0.55; cursor: not-allowed;{% endif %}">{% if storage_review.approved and not storage_review.stale %}Approved for setup{% else %}Approve for setup{% endif %}</button>
+                    <button class="btn btn-primary action-button" type="submit" {% if not storage_plan.valid or not storage_target.valid or not storage_credentials.valid %}disabled{% endif %} style="{% if storage_review.approved and not storage_review.stale %}background: color-mix(in srgb, var(--ok) 70%, #0f172a); border-color: color-mix(in srgb, var(--ok) 55%, var(--border)); color: white;{% elif not storage_plan.valid or not storage_target.valid or not storage_credentials.valid %}opacity: 0.55; cursor: not-allowed;{% endif %}">{% if storage_review.approved and not storage_review.stale %}Approved for setup{% else %}Approve for setup{% endif %}</button>
                 </form>
                 {% if not storage_target.valid %}
                 <div class="text-sm text-amber-300 mt-2">Disabled because the target server is not set yet.</div>
@@ -489,9 +489,9 @@
                     <input type="hidden" name="return_page" value="storage">
                     <input type="hidden" name="discovery_raw_path" value="{{ storage_export_paths.raw if storage_export_paths else '' }}">
                     <input type="hidden" name="raid_plan_path" value="{{ storage_plan_paths.plan if storage_plan_paths else '' }}">
-                    <button class="btn" type="submit">Unapprove current storage plan</button>
+                    <button class="btn action-button" type="submit">Unapprove current storage plan</button>
                 </form>
-                <div class="text-sm text-slate-400 mt-2">Use this if you do not want the current approval to be trusted for the next iLO run.</div>
+                <div class="text-sm text-slate-400 mt-2">Use this if you want the storage plan reviewed again before the next iLO run.</div>
                 {% endif %}
             </div>
 

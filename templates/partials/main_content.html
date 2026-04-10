@@ -98,6 +98,30 @@
     </section>
     {% endif %}
 
+    {% set dependency_rows = page_dependencies.get(active_page, []) %}
+    {% if dependency_rows %}
+    <section class="card">
+        <div class="flex items-center justify-between gap-3 mb-3">
+            <div>
+                <div class="text-lg font-semibold">Dependencies and guidance</div>
+                <div class="text-sm text-slate-400">What this page depends on, and what it feeds next.</div>
+            </div>
+            <span class="status progress">Guidance</span>
+        </div>
+        <div class="grid grid-cols-1 md:grid-cols-2 gap-3">
+            {% for item in dependency_rows %}
+            <div class="result" style="margin-top: 0;">
+                <div class="flex items-center justify-between gap-3">
+                    <div class="font-semibold">{{ item.title }}</div>
+                    <span class="status {{ item.tone }}">{{ item.label }}</span>
+                </div>
+                <div class="text-sm mt-1">{{ item.summary }}</div>
+            </div>
+            {% endfor %}
+        </div>
+    </section>
+    {% endif %}
+
     {% if page_comparisons.get(active_page) %}
     <section class="card">
         <div class="flex items-center justify-between gap-3 mb-3">
@@ -126,26 +150,21 @@
         {% include "partials/pages/ilo.html" %}
     {% elif active_page == "execution" %}
         <section class="card">
-            <div class="flex items-center justify-between gap-3 mb-2">
-                <div class="text-lg font-semibold">Storage in the upcoming iLO run</div>
+            <div class="flex flex-wrap items-center justify-between gap-3 mb-2">
+                <div>
+                    <div class="text-lg font-semibold">Storage in the upcoming iLO run</div>
+                    <div class="text-sm text-slate-400">Quick answer first, then use the stage cards below for the full review.</div>
+                </div>
                 <span class="status {{ storage_execution_status.tone or 'warning' }}">{{ storage_execution_status.badge or 'Storage not approved' }}</span>
             </div>
             <div class="text-sm mb-2">{{ storage_execution_status.summary }}</div>
-            <div class="text-sm text-slate-400">
-                Will storage be part of the next iLO run?
-                {% if cfg.included.storage and storage_review.approved %}
-                Yes. The approved storage setup can be included in the run.
-                {% elif cfg.included.storage and not storage_review.approved %}
-                Not yet. Storage is selected in kit config, but it still needs review and approval.
-                {% else %}
-                No. Storage is not selected for the upcoming run.
-                {% endif %}
-            </div>
             {% if not storage_review.approved %}
             <div class="error mt-3">Storage and RAID will not be configured during the iLO run until they are reviewed and approved on the Storage / RAID page.</div>
+            {% else %}
+            <div class="result mt-3">The approved storage plan is available for inclusion in the iLO run.</div>
             {% endif %}
             <div class="actions mt-4">
-                <a class="btn {% if storage_review.approved %}btn-danger{% endif %}" href="/storage#{% if storage_review.approved %}storage-approval-actions{% else %}storage-review-start{% endif %}">
+                <a class="btn btn-primary action-button {% if storage_review.approved %}btn-danger{% endif %}" href="/storage#{% if storage_review.approved %}storage-approval-actions{% else %}storage-review-start{% endif %}">
                     {% if storage_review.approved %}Review approved storage{% else %}Open Storage / RAID{% endif %}
                 </a>
             </div>

@@ -87,6 +87,7 @@
             label.className = `status ${payload.tone || "progress"}`;
         }
         if (summary) summary.textContent = payload.summary || "";
+        scrollIntoViewSoon(card);
     }
 
     function deriveActionPayload(source) {
