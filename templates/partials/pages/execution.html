@@ -77,6 +77,31 @@
                 <span class="status pending">Confirm before running</span>
             </div>
 
+            <div class="card mb-5">
+                <div class="flex items-center justify-between gap-3 mb-3">
+                    <div>
+                        <div class="text-sm font-bold text-slate-300">Readiness matrix</div>
+                        <div class="text-sm text-slate-400">Quick answer first: what is ready, what is blocked, and what is out of scope for this run.</div>
+                    </div>
+                    <span class="status progress">Readiness</span>
+                </div>
+                <div class="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-3">
+                    {% for item in execution_review.readiness_matrix %}
+                    <div class="result" style="margin-top: 0;">
+                        <div class="flex items-center justify-between gap-3">
+                            <div class="font-semibold">{{ item.name }}</div>
+                            <span class="status {{ item.tone }}">{{ item.label }}</span>
+                        </div>
+                        <div class="text-sm mt-1">{{ item.summary }}</div>
+                        <div class="text-sm text-slate-400 mt-1">{{ item.action }}</div>
+                        <div class="actions mt-3">
+                            <a class="btn" href="{{ item.href }}">Open {{ item.name }}</a>
+                        </div>
+                    </div>
+                    {% endfor %}
+                </div>
+            </div>
+
             <div class="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-3 mb-5">
                 {% for item in execution_review.summary_items %}
                 <div class="card card-compact">
@@ -86,21 +111,74 @@
                 {% endfor %}
             </div>
 
+            <div class="grid grid-cols-1 xl:grid-cols-2 gap-4 mb-5">
+                <div class="card">
+                    <div class="text-sm font-bold text-slate-300 mb-3">Final review summary</div>
+                    <div class="space-y-3 text-sm">
+                        <div class="result" style="margin-top: 0;">
+                            <div class="font-semibold">What will run</div>
+                            <div>{{ execution_review.final_summary.will_run|join(', ') }}</div>
+                        </div>
+                        <div class="result" style="margin-top: 0;">
+                            <div class="font-semibold">What will not run</div>
+                            <div>{{ execution_review.final_summary.will_not_run|join(', ') }}</div>
+                        </div>
+                        <div class="result" style="margin-top: 0;">
+                            <div class="font-semibold">Restart impact</div>
+                            <div>{{ execution_review.final_summary.restart_impact }}</div>
+                        </div>
+                    </div>
+                </div>
+                <div class="card">
+                    <div class="text-sm font-bold text-slate-300 mb-3">Plans and saved settings in use</div>
+                    <div class="space-y-2 text-sm">
+                        {% for item in execution_review.final_summary.plans_in_use %}
+                        <div class="result" style="margin-top: 0;">{{ item }}</div>
+                        {% endfor %}
+                    </div>
+                </div>
+            </div>
+
             <div class="text-sm font-bold text-slate-300 mb-2">Included stages</div>
             <div class="grid grid-cols-1 lg:grid-cols-2 gap-4 mb-5">
                 {% for stage in execution_review.stages %}
                 <div class="card stage-card">
                     <div class="flex items-center justify-between gap-3 mb-3">
                         <div class="text-lg font-semibold">{{ stage.name }}</div>
-                        <span class="status {{ 'ready' if stage.included else 'pending' }}">{{ 'Included in this run' if stage.included else 'Not included' }}</span>
+                        <span class="status {{ stage.status_tone }}">{{ stage.status_label }}</span>
                     </div>
-                    <div class="space-y-2 text-sm">
+                    <div class="space-y-3 text-sm">
                         <div><strong>Target:</strong> {{ stage.target }}</div>
                         <div><strong>What will happen:</strong> {{ stage.summary }}</div>
+                        <div><strong>Saved state in use:</strong> {{ stage.state_used }}</div>
+                        <div><strong>Depends on:</strong> {{ stage.dependencies|join(', ') }}</div>
+                        <div><strong>Restart expected:</strong> {{ 'Yes' if stage.restart_expected else 'No' }}</div>
+                        <div><strong>Preflight status:</strong> {{ stage.status_label }}</div>
+                        {% if stage.preflight_ready %}
+                        <div class="result" style="margin-top: 0;">
+                            <div class="font-semibold mb-1">Already ready</div>
+                            <div>{{ stage.preflight_ready|join(', ') }}</div>
+                        </div>
+                        {% endif %}
+                        {% if stage.blocked_reason and stage.status_label in ['Blocked', 'Needs review'] %}
+                        <div class="result" style="margin-top: 0; border-color: color-mix(in srgb, var(--warn) 45%, var(--border)); background: color-mix(in srgb, var(--warn) 10%, transparent);">
+                            <div class="font-semibold mb-1">{{ stage.status_label }}</div>
+                            <div><strong>What is wrong:</strong> {{ stage.blocked_reason }}</div>
+                            {% if stage.why_blocked %}
+                            <div class="mt-1"><strong>Why it matters:</strong> {{ stage.why_blocked }}</div>
+                            {% endif %}
+                            <div class="text-slate-400 mt-1"><strong>Shortest fix:</strong> {{ stage.corrective_action }}</div>
+                        </div>
+                        {% endif %}
                     </div>
-                    {% if stage.review_href %}
+                    {% if stage.review_href or (stage.blocked_reason and stage.fix_href) %}
                     <div class="actions mt-4">
-                        <a class="btn stage-link" href="{{ stage.review_href }}">{{ 'Open setup page' if stage.included else 'Review this stage' }}</a>
+                        {% if stage.review_href %}
+                        <a class="btn stage-link" href="{{ stage.review_href }}">{{ 'Review this stage' if stage.included else 'Open setup page' }}</a>
+                        {% endif %}
+                        {% if stage.blocked_reason and stage.fix_href %}
+                        <a class="btn btn-primary action-button" href="{{ stage.fix_href }}">{{ stage.fix_label }}</a>
+                        {% endif %}
                     </div>
                     {% endif %}
                 </div>
@@ -118,6 +196,17 @@
                                 <span class="status {{ 'ready' if check.ok else 'pending' }}">{{ 'Ready' if check.ok else 'Blocked' }}</span>
                             </div>
                             <div class="text-sm mt-1">{{ check.details }}</div>
+                            {% if not check.ok and check.why %}
+                            <div class="text-sm text-slate-400 mt-1"><strong>Why it matters:</strong> {{ check.why }}</div>
+                            {% endif %}
+                            {% if not check.ok and check.fix %}
+                            <div class="text-sm text-slate-400 mt-1"><strong>Shortest fix:</strong> {{ check.fix }}</div>
+                            {% endif %}
+                            {% if not check.ok and check.href %}
+                            <div class="actions mt-3">
+                                <a class="btn" href="{{ check.href }}">Open fix page</a>
+                            </div>
+                            {% endif %}
                         </div>
                         {% endfor %}
                     </div>
@@ -129,6 +218,17 @@
                         <div class="result" style="margin-top: 0;">{{ note }}</div>
                         {% endfor %}
                     </div>
+                    {% if execution_review.summary_artifacts %}
+                    <div class="space-y-2 text-sm mt-4">
+                        {% for item in execution_review.summary_artifacts %}
+                        <div class="result" style="margin-top: 0;">
+                            <div class="font-semibold">{{ item.label }}</div>
+                            <div>{{ item.summary }}</div>
+                            <div class="text-slate-400 mt-1">{{ item.path }}</div>
+                        </div>
+                        {% endfor %}
+                    </div>
+                    {% endif %}
                     <div class="actions mt-4">
                         <form hx-post="/view-run-summary" hx-target="#main-content" hx-swap="outerHTML">
                             <input type="hidden" name="scope" value="{{ confirm_scope }}">

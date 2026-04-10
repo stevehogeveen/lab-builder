@@ -911,10 +911,10 @@ def test_global_settings_and_workflow_pages_show_defaults_and_dependencies(clien
 
     esxi_response = client.get("/esxi")
     assert esxi_response.status_code == 200
-    assert "Dependencies and guidance" in esxi_response.text
-    assert "ESXi depends on iLO readiness" in esxi_response.text
-    assert "Using global value" in esxi_response.text
+    assert "Network defaults" in esxi_response.text
+    assert "This page uses the shared ESXi address, gateway, and DNS from Global Settings." in esxi_response.text
     assert "Open Run Center" in esxi_response.text
+    assert "Generate KS.CFG" not in esxi_response.text
 
 
 def test_autofill_ip_plan_uses_entered_subnet(client):
@@ -1461,7 +1461,7 @@ def test_plan_raid_layout_uses_displayed_discovery_artifact_and_saves_plan(clien
     assert response.status_code == 200
     assert "What will happen" in response.text
     assert "Review storage setup" in response.text
-    assert "Selected server:" in response.text
+    assert "Using right now:" in response.text
     assert "Server:" in response.text
     assert "10.10.8.80" in response.text
     assert "This server already has storage set up:" in response.text
@@ -1480,9 +1480,8 @@ def test_plan_raid_layout_uses_displayed_discovery_artifact_and_saves_plan(clien
     assert "Existing storage that would be removed" in response.text
     assert "New layout that would be created" in response.text
     assert "Reserved hot spare:" in response.text
-    assert "Storage setup status" in response.text
-    assert "Approve this storage setup" in response.text
-    assert "Approve for setup" in response.text
+    assert "Storage plan status" in response.text
+    assert "Approve this plan" in response.text
     assert "Include this approved storage plan in the later iLO run" in response.text
     plan_path = export_paths["directory"] / "raid-plan.yml"
     assert plan_path.exists()
@@ -1520,7 +1519,7 @@ def test_approve_storage_plan_saves_exact_artifact_paths_for_later_ilo_run(clien
     assert response.status_code == 200
     assert "Storage approved" in response.text
     assert "Included in iLO run: Yes" in response.text
-    assert "Unapprove current storage plan" in response.text
+    assert "Remove approval" in response.text
     cfg_after = main.load_kit_config("Approval-Kit")
     storage_cfg = cfg_after["storage"]
     assert storage_cfg["state"] == "approved"
@@ -1601,6 +1600,8 @@ def test_prepare_execute_shows_combined_storage_review_using_exact_approved_arti
     assert "View full run details" in response.text
     assert "Ready checks" in response.text
     assert "Reports and rollback notes" in response.text
+    assert "Readiness matrix" in response.text
+    assert "Final review summary" in response.text
     assert "Pre-run review:" in response.text
     assert "Storage in the upcoming iLO run" in response.text
     assert "Storage approved" in response.text
@@ -1609,6 +1610,9 @@ def test_prepare_execute_shows_combined_storage_review_using_exact_approved_arti
     assert str(export_paths["raw"]) in response.text
     assert str(plan_paths["plan"]) in response.text
     assert "Storage included -&gt; Yes" in response.text or "Storage included -> Yes" in response.text
+    assert "Saved state in use:" in response.text
+    assert "Depends on:" in response.text
+    assert "Restart expected:" in response.text
 
 
 def test_execution_page_warns_when_storage_is_not_approved(client):
@@ -1627,6 +1631,48 @@ def test_execution_page_warns_when_storage_is_not_approved(client):
     assert "Storage and RAID will not be configured during the iLO run until they are reviewed and approved" in response.text
     assert "Open Storage / RAID" in response.text
     assert "/storage#storage-review-start" in response.text
+
+
+def test_prepare_execute_shows_blocked_stage_guidance(client):
+    cfg = main.default_config()
+    cfg["site"]["name"] = "Exec Blocked Guidance Kit"
+    cfg["included"]["esxi"] = True
+    cfg["ip_plan"]["esxi"] = "10.10.8.10"
+    main.save_kit_config(cfg)
+
+    response = client.post(
+        "/prepare-execute",
+        data={"scope": "included", "return_page": "execution"},
+    )
+
+    assert response.status_code == 200
+    assert "Readiness matrix" in response.text
+    assert "Blocked" in response.text
+    assert "Fix on iLO" in response.text
+    assert "Open ESXi" in response.text
+    assert "Why it matters:" in response.text
+    assert "Shortest fix:" in response.text
+    assert "Open fix page" in response.text
+
+
+def test_prepare_execute_blocks_windows_when_saved_credentials_are_missing(client):
+    cfg = main.default_config()
+    cfg["site"]["name"] = "Exec Windows Block Kit"
+    cfg["included"]["windows"] = True
+    cfg["windows"]["admin_password"] = ""
+    main.save_kit_config(cfg)
+
+    response = client.post(
+        "/prepare-execute",
+        data={"scope": "windows", "return_page": "execution"},
+    )
+
+    assert response.status_code == 200
+    assert "Saved credentials" in response.text
+    assert "Administrator password is missing." in response.text
+    assert "The Windows workflow needs the saved administrator password before a real run." in response.text
+    assert "Open the Windows page and save the administrator password." in response.text
+    assert "/windows" in response.text
 
 
 def test_ilo_page_warns_clearly_when_storage_is_not_approved(client):
@@ -2440,6 +2486,7 @@ def test_report_center_lists_storage_reports_and_view_report(client):
     response = client.get("/configs?report_type=storage")
 
     assert response.status_code == 200
+    assert "Run bundles" in response.text
     assert "Search reports" in response.text
     assert "Report browser" in response.text
     assert "View" in response.text
@@ -2471,3 +2518,64 @@ def test_view_run_summary_builds_exportable_review(client):
     assert "Run summary ready" in response.text
     assert "validation_checks" in response.text
     assert "recoverability" in response.text
+    assert "readiness_matrix" in response.text
+    assert "final_summary" in response.text
+    assert "artifacts" in response.text
+
+
+def test_history_and_report_center_show_run_bundle_links(client):
+    cfg = main.default_config()
+    cfg["site"]["name"] = "Bundle Kit"
+    cfg["ilo"]["current_ip"] = "10.10.8.90"
+    cfg["ilo"]["host"] = "10.10.8.90"
+    cfg["included"]["ilo"] = True
+    main.save_kit_config(cfg)
+
+    main.save_job(
+        "Bundle Kit",
+        {
+            "status": "Completed",
+            "scope": "ilo",
+            "current_stage": "Finished",
+            "progress_percent": 100,
+            "completed_steps": 3,
+            "total_steps": 3,
+            "logs": ["[DONE] iLO run finished."],
+        },
+    )
+    main.append_job_history_snapshot(cfg, "ilo")
+
+    history_response = client.get("/history")
+    assert history_response.status_code == 200
+    assert "Run bundles" in history_response.text
+    assert "Open run summary" in history_response.text
+    assert "Related reports" in history_response.text
+
+    configs_response = client.get("/configs")
+    assert configs_response.status_code == 200
+    assert "Run bundles" in configs_response.text
+    assert "Open bundle" in configs_response.text
+    assert "Load a saved kit config" in configs_response.text
+
+
+def test_import_kit_config_loads_uploaded_config(client):
+    payload = yaml.safe_dump(
+        {
+            "site": {"name": "Imported Kit"},
+            "ip_plan": {"gateway": "10.44.55.1", "ilo": "10.44.55.11"},
+            "ilo": {"current_ip": "10.44.55.90", "host": "10.44.55.90", "username": "Administrator"},
+        },
+        sort_keys=False,
+    ).encode("utf-8")
+
+    response = client.post(
+        "/import-kit-config",
+        data={"return_page": "configs"},
+        files={"import_file": ("imported-kit.yml", payload, "application/x-yaml")},
+    )
+
+    assert response.status_code == 200
+    assert "Config imported" in response.text
+    assert "Current kit: Imported-Kit" in response.text
+    cfg = main.load_kit_config("Imported-Kit")
+    assert cfg["ilo"]["current_ip"] == "10.44.55.90"

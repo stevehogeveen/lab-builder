@@ -54,13 +54,13 @@
     {% endif %}
 
     {% if active_page not in ["dashboard", "history", "kits"] and page_runbook %}
-    <section class="grid grid-cols-1 xl:grid-cols-3 gap-4">
-        <div class="card xl:col-span-2">
-            <div class="flex items-center justify-between gap-3 mb-3">
-                <div class="text-lg font-semibold">{{ page_runbook.title }}</div>
-                <span class="status progress">Guide</span>
-            </div>
-            <div class="grid grid-cols-1 md:grid-cols-2 gap-3 text-sm">
+    <details class="card">
+        <summary class="summary-row">
+            <span class="text-lg font-semibold">{{ page_runbook.title }}</span>
+            <span class="status progress">Guide</span>
+        </summary>
+        <div class="grid grid-cols-1 xl:grid-cols-3 gap-4 mt-4">
+            <div class="xl:col-span-2 grid grid-cols-1 md:grid-cols-2 gap-3 text-sm">
                 <div class="result" style="margin-top: 0;">
                     <div class="font-semibold mb-1">What this page controls</div>
                     <div>{{ page_runbook.what }}</div>
@@ -79,47 +79,23 @@
                     <div class="mt-1 text-slate-400">{{ page_runbook.reports }}</div>
                 </div>
             </div>
-        </div>
-        {% set source_rows = settings_sources.get(active_page, settings_sources.get('global_settings', [])) %}
-        {% if source_rows %}
-        <div class="card">
-            <div class="text-lg font-semibold mb-3">Defaults and overrides</div>
-            <div class="space-y-3 text-sm">
-                {% for row in source_rows %}
-                <div class="result" style="margin-top: 0;">
-                    <div class="font-semibold">{{ row.label }}</div>
-                    <div>{{ row.value }}</div>
-                    <div class="text-slate-400 mt-1">{{ row.source }}</div>
+            {% set source_rows = settings_sources.get(active_page, settings_sources.get('global_settings', [])) %}
+            {% if source_rows %}
+            <div class="card">
+                <div class="text-lg font-semibold mb-3">Defaults and overrides</div>
+                <div class="space-y-2 text-sm">
+                    {% for row in source_rows %}
+                    <div>
+                        <div class="font-semibold">{{ row.label }}</div>
+                        <div>{{ row.value }}</div>
+                        <div class="text-slate-400">{{ row.source }}</div>
+                    </div>
+                    {% endfor %}
                 </div>
-                {% endfor %}
             </div>
+            {% endif %}
         </div>
-        {% endif %}
-    </section>
-    {% endif %}
-
-    {% set dependency_rows = page_dependencies.get(active_page, []) %}
-    {% if dependency_rows %}
-    <section class="card">
-        <div class="flex items-center justify-between gap-3 mb-3">
-            <div>
-                <div class="text-lg font-semibold">Dependencies and guidance</div>
-                <div class="text-sm text-slate-400">What this page depends on, and what it feeds next.</div>
-            </div>
-            <span class="status progress">Guidance</span>
-        </div>
-        <div class="grid grid-cols-1 md:grid-cols-2 gap-3">
-            {% for item in dependency_rows %}
-            <div class="result" style="margin-top: 0;">
-                <div class="flex items-center justify-between gap-3">
-                    <div class="font-semibold">{{ item.title }}</div>
-                    <span class="status {{ item.tone }}">{{ item.label }}</span>
-                </div>
-                <div class="text-sm mt-1">{{ item.summary }}</div>
-            </div>
-            {% endfor %}
-        </div>
-    </section>
+    </details>
     {% endif %}
 
     {% if page_comparisons.get(active_page) %}

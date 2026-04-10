@@ -30,6 +30,51 @@
     </section>
 
     <section class="panel">
+        <div class="flex items-center justify-between gap-3 mb-4">
+            <div>
+                <div class="text-lg font-semibold">Run bundles</div>
+                <div class="text-sm text-slate-400">Open a run as one handoff bundle first, then drop into raw files only if you need them.</div>
+            </div>
+            <span class="status progress">{{ report_center.bundles|length }} bundles</span>
+        </div>
+        {% if report_center.bundles %}
+        <div class="space-y-3">
+            {% for bundle in report_center.bundles %}
+            <div class="card">
+                <div class="grid grid-cols-1 xl:grid-cols-[minmax(0,1.3fr)_minmax(0,0.9fr)_auto] gap-3 items-start">
+                    <div>
+                        <div class="flex items-center gap-3 flex-wrap">
+                            <div class="font-semibold">{{ bundle.name }}</div>
+                            <span class="status {{ bundle.tone }}">{{ bundle.result }}</span>
+                        </div>
+                        <div class="text-sm text-slate-400 mt-1">{{ bundle.time }}{% if bundle.target %} | {{ bundle.target }}{% endif %}</div>
+                        <div class="text-sm mt-2">{{ bundle.summary }}</div>
+                    </div>
+                    <div class="text-sm space-y-1">
+                        <div><strong>Workflow:</strong> {{ bundle.scope }}</div>
+                        <div><strong>Target:</strong> {{ bundle.target }}</div>
+                        <div><strong>Kit:</strong> {{ current_kit }}</div>
+                    </div>
+                    <div class="actions justify-end">
+                        {% if bundle.run_summary_path %}
+                        <form hx-post="/view-report" hx-target="#main-content" hx-swap="outerHTML">
+                            <input type="hidden" name="return_page" value="configs">
+                            <input type="hidden" name="report_path" value="{{ bundle.run_summary_path }}">
+                            <button class="btn btn-primary" type="submit">Open bundle</button>
+                        </form>
+                        {% endif %}
+                        <a class="btn" href="/configs?report_query={{ bundle.related_reports_query | urlencode }}">Related reports</a>
+                    </div>
+                </div>
+            </div>
+            {% endfor %}
+        </div>
+        {% else %}
+        <div class="result">No run bundles have been recorded for this kit yet.</div>
+        {% endif %}
+    </section>
+
+    <section class="panel">
         <div class="text-lg font-semibold mb-3">Search reports</div>
         <form action="/configs" method="get" class="grid grid-cols-1 md:grid-cols-3 gap-3">
             <label>
@@ -56,7 +101,7 @@
         <div class="flex items-center justify-between gap-3 mb-4">
             <div>
                 <div class="text-lg font-semibold">Report browser</div>
-                <div class="text-sm text-slate-400">Open a file in-app for quick review, or download it for offline handoff.</div>
+                <div class="text-sm text-slate-400">Raw files are still here when you need them, but the bundle view above is the quickest way to reopen a run.</div>
             </div>
             <span class="status progress">{{ report_center.entries|length }} found</span>
         </div>
@@ -135,7 +180,7 @@
 
         <div class="panel">
             <div class="text-lg font-semibold mb-3">Saved intended config</div>
-            <div class="text-sm text-slate-400 mb-3">Open the current saved kit config or a point-in-time iLO snapshot.</div>
+            <div class="text-sm text-slate-400 mb-3">Open the current saved kit config, download it for handoff, or load a saved config back into the app.</div>
             <div class="grid grid-cols-1 md:grid-cols-2 gap-3">
                 <form hx-post="/view-current-kit-config" hx-target="#main-content" hx-swap="outerHTML">
                     <input type="hidden" name="return_page" value="configs">
@@ -152,6 +197,15 @@
                     <button class="btn w-full" type="submit">Download iLO snapshot</button>
                 </form>
             </div>
+            <form action="/import-kit-config" method="post" enctype="multipart/form-data" class="mt-4 space-y-3">
+                <input type="hidden" name="return_page" value="configs">
+                <label>
+                    <div class="text-sm text-slate-300 mb-1">Load a saved kit config</div>
+                    <input class="input" type="file" name="import_file" accept=".yml,.yaml,.json" required>
+                </label>
+                <button class="btn btn-primary" type="submit">Import config into app</button>
+            </form>
+            <div class="text-sm text-slate-400 mt-3">Imported configs become the current kit in the app, and a copy is saved into the current build folder for this kit.</div>
         </div>
     </section>
 </section>

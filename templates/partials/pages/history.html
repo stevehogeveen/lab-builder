@@ -61,6 +61,45 @@
     </section>
 
     <section class="panel">
+        <div class="text-lg font-semibold mb-4">Run bundles</div>
+        {% if report_center.bundles %}
+        <div class="space-y-3">
+            {% for bundle in report_center.bundles %}
+            <div class="card">
+                <div class="grid grid-cols-1 xl:grid-cols-[minmax(0,1.3fr)_minmax(0,0.9fr)_auto] gap-3 items-start">
+                    <div>
+                        <div class="flex items-center gap-3 flex-wrap">
+                            <div class="font-semibold">{{ bundle.name }}</div>
+                            <span class="status {{ bundle.tone }}">{{ bundle.result }}</span>
+                        </div>
+                        <div class="text-sm text-slate-400 mt-1">{{ bundle.time }}{% if bundle.target %} | {{ bundle.target }}{% endif %}</div>
+                        <div class="text-sm mt-2">{{ bundle.summary }}</div>
+                    </div>
+                    <div class="text-sm space-y-1">
+                        <div><strong>Workflow:</strong> {{ bundle.scope }}</div>
+                        <div><strong>Target:</strong> {{ bundle.target }}</div>
+                        <div><strong>Kit:</strong> {{ current_kit }}</div>
+                    </div>
+                    <div class="actions justify-end">
+                        {% if bundle.run_summary_path %}
+                        <form hx-post="/view-report" hx-target="#main-content" hx-swap="outerHTML">
+                            <input type="hidden" name="return_page" value="history">
+                            <input type="hidden" name="report_path" value="{{ bundle.run_summary_path }}">
+                            <button class="btn btn-primary" type="submit">Open run summary</button>
+                        </form>
+                        {% endif %}
+                        <a class="btn" href="/configs?report_query={{ bundle.related_reports_query | urlencode }}">Related reports</a>
+                    </div>
+                </div>
+            </div>
+            {% endfor %}
+        </div>
+        {% else %}
+        <div class="result">No run bundles have been recorded for this kit yet.</div>
+        {% endif %}
+    </section>
+
+    <section class="panel">
         <div class="text-lg font-semibold mb-4">Detailed run log</div>
         {% if history %}
         <div class="space-y-3">
@@ -74,6 +113,23 @@
                     {% if item.get('summary') %}
                     <div class="result" style="margin-top: 0;">{{ item.get('summary') }}</div>
                     {% endif %}
+                    <div class="actions">
+                        {% if item.get('run_summary_path') %}
+                        <form hx-post="/view-report" hx-target="#main-content" hx-swap="outerHTML">
+                            <input type="hidden" name="return_page" value="history">
+                            <input type="hidden" name="report_path" value="{{ item.get('run_summary_path') }}">
+                            <button class="btn btn-primary" type="submit">Open run summary</button>
+                        </form>
+                        {% endif %}
+                        <a class="btn" href="/configs?report_query={{ (item.get('config_summary', {}).get('storage_plan_path') or item.get('scope', '')) | urlencode }}">Related reports</a>
+                        {% if item.get('config_summary', {}).get('storage_plan_path') %}
+                        <form hx-post="/view-report" hx-target="#main-content" hx-swap="outerHTML">
+                            <input type="hidden" name="return_page" value="history">
+                            <input type="hidden" name="report_path" value="{{ item.get('config_summary', {}).get('storage_plan_path') }}">
+                            <button class="btn" type="submit">Open storage plan used</button>
+                        </form>
+                        {% endif %}
+                    </div>
                     <div><span class="text-slate-400">Final stage:</span> {{ item.get('current_stage', '') or item.get('event', '') or 'Not recorded' }}</div>
                     <div><span class="text-slate-400">Completed:</span> {{ item.get('completed_steps', 0) }} / {{ item.get('total_steps', 0) }}</div>
                     {% if item.get('config_summary') %}

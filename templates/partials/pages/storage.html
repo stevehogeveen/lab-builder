@@ -16,11 +16,13 @@
                 <div class="text-lg font-semibold">{{ storage_review.state_label or "not configured" }}</div>
                 <div class="text-sm text-slate-400 mt-1">
                     {% if storage_review.approved and not storage_review.stale %}
-                    Approved for setup and ready for an iLO run.
+                    Storage plan approved and ready for an iLO run.
                     {% elif storage_review.stale %}
                     Needs review again before it can be trusted.
+                    {% elif storage_review.state == 'planned' %}
+                    A storage plan is ready, but it has not been approved yet.
                     {% else %}
-                    {{ storage_review.status_reason or "Read current storage to begin." }}
+                    {{ storage_review.status_reason or "No storage plan has been approved yet. Read current storage to begin." }}
                     {% endif %}
                 </div>
             </div>
@@ -214,30 +216,30 @@
 
         {% if storage_export_paths %}
         <div class="card" id="storage-approval-status" style="{% if storage_review.approved and not storage_review.stale %}border-color: color-mix(in srgb, var(--ok) 45%, var(--border)); background: color-mix(in srgb, var(--ok) 8%, transparent);{% elif storage_review.stale %}border-color: color-mix(in srgb, var(--bad) 45%, var(--border)); background: color-mix(in srgb, var(--bad) 8%, transparent);{% endif %}">
-            <div class="text-lg font-semibold mb-3">Storage setup status</div>
-            <div class="result mb-3">
+            <div class="text-lg font-semibold mb-3">Storage plan status</div>
+            <div class="text-sm space-y-2">
                 <div class="flex items-center justify-between gap-3">
                     <div><strong>Current state:</strong> {{ storage_review.state_label or "not configured" }}</div>
                     <span class="status {{ storage_review.state_tone or 'warning' }}">{{ storage_review.state_label or "not configured" }}</span>
                 </div>
                 <div><strong>Will be included in the iLO run:</strong> {{ "Yes" if storage_review.include_in_ilo_run else "No" }}</div>
                 {% if storage_review.approved and not storage_review.stale %}
-                <div><strong>Approved:</strong> This storage plan is ready to be included in the next iLO run.</div>
+                <div><strong>Approval:</strong> This exact plan has been approved for later use in the iLO run.</div>
                 {% elif storage_review.stale %}
-                <div><strong>Needs review again:</strong> The saved approval no longer matches the current discovery or current target address.</div>
+                <div><strong>Approval:</strong> The last approval is no longer trusted because the storage view or target changed.</div>
                 {% elif storage_review.state == 'planned' %}
-                <div><strong>Next step:</strong> Review the plan below and approve it if it looks right.</div>
+                <div><strong>Approval:</strong> Nothing has been approved yet. Review the plan below and approve it if it looks right.</div>
                 {% elif storage_review.state == 'discovered' %}
-                <div><strong>Next step:</strong> Build a storage plan from the current discovery.</div>
+                <div><strong>Approval:</strong> Nothing has been approved yet because there is no plan to approve.</div>
                 {% else %}
-                <div><strong>Next step:</strong> Read the current storage to get started.</div>
+                <div><strong>Approval:</strong> Nothing has been approved yet because storage has not been read and planned.</div>
                 {% endif %}
                 {% if storage_review.status_reason %}<div><strong>Why:</strong> {{ storage_review.status_reason }}</div>{% endif %}
                 {% if storage_review.approval and storage_review.approval.plan_path %}
                 <div><strong>Approved at:</strong> {{ storage_review.approval.approved_at or "Unknown" }}</div>
                 {% endif %}
             </div>
-            <div class="text-sm text-slate-400">This page is where storage gets reviewed and approved before it is allowed into a later iLO run.</div>
+            <div class="text-sm text-slate-400 mt-3">Approval only means this saved storage plan is allowed to join a later iLO run. Nothing is approved until you read storage, build a plan, and approve that exact plan here.</div>
         </div>
 
         <div class="card">
@@ -462,20 +464,20 @@
             </div>
             <div class="card mb-4" id="storage-approval-actions" style="{% if storage_review.approved and not storage_review.stale %}border-color: color-mix(in srgb, var(--ok) 45%, var(--border)); background: color-mix(in srgb, var(--ok) 8%, transparent);{% elif storage_review.stale %}border-color: color-mix(in srgb, var(--bad) 45%, var(--border)); background: color-mix(in srgb, var(--bad) 8%, transparent);{% endif %}">
                 <div class="flex items-center justify-between gap-3 mb-2">
-                    <div class="text-sm font-bold text-slate-300">{% if storage_review.approved and not storage_review.stale %}Approved for setup{% else %}Approve this storage setup{% endif %}</div>
+                    <div class="text-sm font-bold text-slate-300">{% if storage_review.approved and not storage_review.stale %}Storage plan approved{% else %}Approve this plan{% endif %}</div>
                     {% if storage_review.approved and not storage_review.stale %}
                     <span class="status ready">approved</span>
                     {% elif storage_review.stale %}
                     <span class="status pending">needs review again</span>
                     {% endif %}
                 </div>
-                <div class="text-sm text-slate-400 mb-3">Once approved, this exact storage plan can be used later by the iLO run.</div>
-                <form hx-post="/approve-storage-plan" hx-target="#main-content" hx-swap="outerHTML" class="card" data-action-title="Approving storage plan" data-action-start="Saving the approved storage plan for the later iLO run." data-action-complete="Storage approval saved.">
+                <div class="text-sm text-slate-400 mb-3">Approval is based on the exact storage plan shown below. Once approved, that same saved plan can be used later by the iLO run.</div>
+                <form hx-post="/approve-storage-plan" hx-target="#main-content" hx-swap="outerHTML" data-action-title="Approving storage plan" data-action-start="Saving the approved storage plan for the later iLO run." data-action-complete="Storage approval saved.">
                     <input type="hidden" name="return_page" value="storage">
                     <input type="hidden" name="discovery_raw_path" value="{{ storage_export_paths.raw if storage_export_paths else '' }}">
                     <input type="hidden" name="raid_plan_path" value="{{ storage_plan_paths.plan if storage_plan_paths else '' }}">
                     <label class="check mb-3"><input type="checkbox" name="include_in_ilo_run" {% if storage_review.include_in_ilo_run %}checked{% endif %}> Include this approved storage plan in the later iLO run</label>
-                    <button class="btn btn-primary action-button" type="submit" {% if not storage_plan.valid or not storage_target.valid or not storage_credentials.valid %}disabled{% endif %} style="{% if storage_review.approved and not storage_review.stale %}background: color-mix(in srgb, var(--ok) 70%, #0f172a); border-color: color-mix(in srgb, var(--ok) 55%, var(--border)); color: white;{% elif not storage_plan.valid or not storage_target.valid or not storage_credentials.valid %}opacity: 0.55; cursor: not-allowed;{% endif %}">{% if storage_review.approved and not storage_review.stale %}Approved for setup{% else %}Approve for setup{% endif %}</button>
+                    <button class="btn btn-primary action-button" type="submit" {% if not storage_plan.valid or not storage_target.valid or not storage_credentials.valid %}disabled{% endif %} style="{% if storage_review.approved and not storage_review.stale %}background: color-mix(in srgb, var(--ok) 70%, #0f172a); border-color: color-mix(in srgb, var(--ok) 55%, var(--border)); color: white;{% elif not storage_plan.valid or not storage_target.valid or not storage_credentials.valid %}opacity: 0.55; cursor: not-allowed;{% endif %}">{% if storage_review.approved and not storage_review.stale %}Approved{% else %}Approve this plan{% endif %}</button>
                 </form>
                 {% if not storage_target.valid %}
                 <div class="text-sm text-amber-300 mt-2">Disabled because the target server is not set yet.</div>
@@ -489,9 +491,9 @@
                     <input type="hidden" name="return_page" value="storage">
                     <input type="hidden" name="discovery_raw_path" value="{{ storage_export_paths.raw if storage_export_paths else '' }}">
                     <input type="hidden" name="raid_plan_path" value="{{ storage_plan_paths.plan if storage_plan_paths else '' }}">
-                    <button class="btn action-button" type="submit">Unapprove current storage plan</button>
+                    <button class="btn action-button" type="submit">Remove approval</button>
                 </form>
-                <div class="text-sm text-slate-400 mt-2">Use this if you want the storage plan reviewed again before the next iLO run.</div>
+                <div class="text-sm text-slate-400 mt-2">Use this if you want the plan reviewed again before the next iLO run.</div>
                 {% endif %}
             </div>
 

@@ -9,7 +9,7 @@ import time
 import yaml
 from typing import Any
 
-from fastapi import FastAPI, Request, Form, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, Request, Form, WebSocket, WebSocketDisconnect, UploadFile, File
 from fastapi.responses import FileResponse, HTMLResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
@@ -34,6 +34,7 @@ ILO_INVENTORY_DIR = HISTORY_DIR / "ilo-inventory"
 EXPORTS_DIR = ARTIFACTS_DIR / "exports"
 ILO_LIVE_EXPORT_DIR = EXPORTS_DIR / "ilo" / "live"
 STORAGE_RAID_EXPORT_DIR = EXPORTS_DIR / "storage-raid"
+BUILD_OUTPUT_DIR = EXPORTS_DIR / "builds"
 STORAGE_APPLY_CONFIRM_CREATE = "CREATE STORAGE"
 STORAGE_APPLY_CONFIRM_WIPE = "WIPE STORAGE"
 
@@ -51,6 +52,7 @@ LIVE_ILO_CONFIG_DIR.mkdir(parents=True, exist_ok=True)
 ILO_INVENTORY_DIR.mkdir(parents=True, exist_ok=True)
 ILO_LIVE_EXPORT_DIR.mkdir(parents=True, exist_ok=True)
 STORAGE_RAID_EXPORT_DIR.mkdir(parents=True, exist_ok=True)
+BUILD_OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
 app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
 templates = Jinja2Templates(directory=str(TEMPLATES_DIR))
@@ -255,6 +257,62 @@ def build_history_config_summary(cfg: dict, scope: str) -> dict:
     }
 
 
+def build_run_summary_artifacts(cfg: dict[str, Any], review: dict[str, Any], scope: str) -> list[dict[str, str]]:
+    artifacts: list[dict[str, str]] = []
+    storage_review = build_storage_review_context(cfg)
+    target_server = (cfg.get("ilo", {}).get("current_ip") or cfg.get("ilo", {}).get("host") or "").strip()
+
+    artifacts.append(
+        {
+            "label": "Reports root",
+            "path": str(EXPORTS_DIR),
+            "summary": "Saved exports, snapshots, and bundle files live here.",
+        }
+    )
+    if target_server:
+        artifacts.append(
+            {
+                "label": "Target server",
+                "path": target_server,
+                "summary": "The iLO address used for this review.",
+            }
+        )
+    if any(stage.get("key") == "storage" and stage.get("included") for stage in review.get("stages", [])):
+        approval = storage_review.get("approval", {}) or {}
+        if approval.get("discovery_raw_path"):
+            artifacts.append(
+                {
+                    "label": "Approved storage snapshot",
+                    "path": str(approval.get("discovery_raw_path")),
+                    "summary": "Exact raw discovery used for the approved storage plan.",
+                }
+            )
+        if approval.get("plan_path"):
+            artifacts.append(
+                {
+                    "label": "Approved storage plan",
+                    "path": str(approval.get("plan_path")),
+                    "summary": "Exact storage plan approved for the run.",
+                }
+            )
+    if scope in {"ilo", "included"}:
+        artifacts.append(
+            {
+                "label": "Current kit config",
+                "path": str(kit_path(cfg.get("site", {}).get("name", ""))),
+                "summary": "Saved kit settings used as the source for this run review.",
+            }
+        )
+    return artifacts
+
+
+def current_build_output_dir(cfg: dict[str, Any]) -> Path:
+    kit_name = sanitize_kit_name(cfg.get("site", {}).get("name", "Kit-01"))
+    path = BUILD_OUTPUT_DIR / kit_name
+    path.mkdir(parents=True, exist_ok=True)
+    return path
+
+
 def export_ilo_config_snapshot(cfg: dict) -> Path:
     kit_name = sanitize_kit_name(cfg.get("site", {}).get("name", "Kit-01"))
     ilo_cfg = cfg.get("ilo", {})
@@ -294,6 +352,8 @@ def export_ilo_config_snapshot(cfg: dict) -> Path:
 
     with open(snapshot_path, "w", encoding="utf-8") as f:
         yaml.safe_dump(snapshot, f, sort_keys=False)
+    build_copy = current_build_output_dir(cfg) / f"ilo-config-{timestamp}.yml"
+    build_copy.write_text(yaml.safe_dump(snapshot, sort_keys=False), encoding="utf-8")
 
     return snapshot_path
 
@@ -305,6 +365,8 @@ def export_current_kit_config_snapshot(cfg: dict) -> Path:
 
     with open(snapshot_path, "w", encoding="utf-8") as f:
         yaml.safe_dump(cfg, f, sort_keys=False)
+    build_copy = current_build_output_dir(cfg) / f"kit-config-{timestamp}.yml"
+    build_copy.write_text(yaml.safe_dump(cfg, sort_keys=False), encoding="utf-8")
 
     return snapshot_path
 
@@ -1130,43 +1192,198 @@ def build_activity_feed(history: list[dict[str, Any]], limit: int = 8) -> list[d
     return feed
 
 
+def validation_check(
+    label: str,
+    ok: bool,
+    details: str,
+    *,
+    why: str = "",
+    fix: str = "",
+    href: str = "",
+) -> dict[str, Any]:
+    return {
+        "label": label,
+        "ok": ok,
+        "details": details,
+        "why": why,
+        "fix": fix,
+        "href": href,
+    }
+
+
 def build_validation_checks(cfg: dict[str, Any], workflow: str) -> list[dict[str, Any]]:
     checks: list[dict[str, Any]] = []
+    shared_subnet = (cfg.get("shared_network", {}).get("subnet") or "").strip()
+    shared_gateway = (cfg.get("ip_plan", {}).get("gateway") or "").strip()
     if workflow in {"ilo", "storage"}:
         ilo_cfg = cfg.get("ilo", {}) or {}
         host = (ilo_cfg.get("current_ip") or ilo_cfg.get("host") or "").strip()
         username = (ilo_cfg.get("username") or "").strip()
         password = str(ilo_cfg.get("password") or "")
-        checks.append({"label": "Target address", "ok": bool(host), "details": host or "Current iLO address is missing."})
-        checks.append({"label": "Credentials", "ok": bool(username and password), "details": "Ready" if (username and password) else "Username or password is missing."})
+        checks.append(
+            validation_check(
+                "Target address",
+                bool(host),
+                host or "Current iLO address is missing.",
+                why="The app cannot connect to the server without the current iLO address.",
+                fix="Open the iLO page and save the current iLO address.",
+                href="/ilo",
+            )
+        )
+        checks.append(
+            validation_check(
+                "Credentials",
+                bool(username and password),
+                "Ready" if (username and password) else "Username or password is missing.",
+                why="Run Center cannot talk to iLO without saved sign-in details.",
+                fix="Open the iLO page and save the username and password.",
+                href="/ilo",
+            )
+        )
+    if workflow in {"ilo", "esxi", "windows", "qnap"}:
+        checks.append(
+            validation_check(
+                "Shared defaults",
+                bool(shared_subnet and shared_gateway),
+                "Ready" if (shared_subnet and shared_gateway) else "Shared subnet or gateway is missing.",
+                why="Shared network defaults feed the workflow pages and the final run review.",
+                fix="Open Global Settings and save the shared subnet and gateway.",
+                href="/global-settings",
+            )
+        )
     if workflow == "storage":
         storage_review = build_storage_review_context(cfg)
-        checks.append({"label": "Approved plan", "ok": storage_review.get("approved"), "details": "Ready" if storage_review.get("approved") else "No approved storage plan is saved yet."})
-        checks.append({"label": "Stale check", "ok": not storage_review.get("stale"), "details": "Ready" if not storage_review.get("stale") else "Storage approval no longer matches the latest discovery."})
+        approval = storage_review.get("approval", {}) or {}
+        resolved_host = resolve_storage_target_host(cfg)
+        checks.append(
+            validation_check(
+                "Approved plan",
+                storage_review.get("approved"),
+                "Ready" if storage_review.get("approved") else "No approved storage plan is saved yet.",
+                why="Storage cannot be included safely unless the exact plan has been reviewed and approved.",
+                fix="Open Storage / RAID, review the plan, and approve it.",
+                href="/storage#storage-review-start",
+            )
+        )
+        checks.append(
+            validation_check(
+                "Latest review match",
+                not storage_review.get("stale"),
+                "Ready" if not storage_review.get("stale") else "Storage approval no longer matches the latest discovery.",
+                why="A stale storage plan could target the wrong hardware state.",
+                fix="Read current storage again and approve the refreshed plan.",
+                href="/storage#storage-review-start",
+            )
+        )
+        checks.append(
+            validation_check(
+                "Approved host match",
+                not approval.get("host") or approval.get("host") == resolved_host.get("resolved"),
+                "Ready" if (not approval.get("host") or approval.get("host") == resolved_host.get("resolved")) else "The approved storage plan was saved for a different server address.",
+                why="The approved plan must still point at the same server before it can be trusted.",
+                fix="Open Storage / RAID and confirm the current storage target before approving again.",
+                href="/storage#storage-review-start",
+            )
+        )
     if workflow == "ilo":
         try:
             storage_ready = validate_storage_ready_for_ilo_run(cfg)
             checks.append(
-                {
-                    "label": "Storage dependency",
-                    "ok": True,
-                    "details": "Ready" if storage_ready.get("included") else "Storage is not included in this run.",
-                }
+                validation_check(
+                    "Storage dependency",
+                    True,
+                    "Ready" if storage_ready.get("included") else "Storage is not included in this run.",
+                    why="Storage must be approved before it can safely join an iLO run.",
+                    fix="Open Storage / RAID if you want storage included in this run.",
+                    href="/storage#storage-review-start",
+                )
             )
         except Exception as e:
-            checks.append({"label": "Storage dependency", "ok": False, "details": str(e).splitlines()[0]})
+            checks.append(
+                validation_check(
+                    "Storage dependency",
+                    False,
+                    str(e).splitlines()[0],
+                    why="The iLO run would otherwise use a storage plan that is missing or no longer trusted.",
+                    fix="Open Storage / RAID, refresh the storage review, and approve the latest plan.",
+                    href="/storage#storage-review-start",
+                )
+            )
     if workflow in {"esxi", "windows", "qnap"}:
         target_map = {
             "esxi": cfg.get("esxi", {}).get("management_ip") or cfg.get("ip_plan", {}).get("esxi", ""),
             "windows": cfg.get("windows", {}).get("ip_address") or cfg.get("ip_plan", {}).get("windows", ""),
             "qnap": cfg.get("qnap", {}).get("ip") or cfg.get("ip_plan", {}).get("qnap", ""),
         }
-        checks.append({"label": "Target address", "ok": bool(target_map.get(workflow)), "details": target_map.get(workflow) or "Target address is missing."})
+        checks.append(
+            validation_check(
+                "Target address",
+                bool(target_map.get(workflow)),
+                target_map.get(workflow) or "Target address is missing.",
+                why="This stage needs a target address before it can be reviewed or run safely.",
+                fix=f"Open the {workflow.upper() if workflow == 'esxi' else workflow.title()} page and save the target settings.",
+                href=f"/{workflow}",
+            )
+        )
         if workflow == "esxi":
-            checks.append({"label": "Depends on iLO setup", "ok": bool((cfg.get("ilo", {}).get("current_ip") or "").strip()), "details": "Ready" if (cfg.get("ilo", {}).get("current_ip") or "").strip() else "Set the current iLO address first."})
+            checks.append(
+                validation_check(
+                    "Depends on iLO setup",
+                    bool((cfg.get("ilo", {}).get("current_ip") or "").strip()),
+                    "Ready" if (cfg.get("ilo", {}).get("current_ip") or "").strip() else "Set the current iLO address first.",
+                    why="ESXi orchestration depends on the hardware workflow pointing at the right server first.",
+                    fix="Open the iLO page and save the current iLO address.",
+                    href="/ilo",
+                )
+            )
         if workflow == "esxi" and cfg.get("included", {}).get("storage"):
             storage_review = build_storage_review_context(cfg)
-            checks.append({"label": "Storage readiness", "ok": storage_review.get("approved") and not storage_review.get("stale"), "details": "Ready" if storage_review.get("approved") and not storage_review.get("stale") else "Review storage first if ESXi depends on the approved storage layout."})
+            checks.append(
+                validation_check(
+                    "Storage readiness",
+                    storage_review.get("approved") and not storage_review.get("stale"),
+                    "Ready" if storage_review.get("approved") and not storage_review.get("stale") else "Review storage first if ESXi depends on the approved storage layout.",
+                    why="If ESXi depends on storage, the approved storage plan must still be current.",
+                    fix="Open Storage / RAID and approve the latest storage plan.",
+                    href="/storage#storage-review-start",
+                )
+            )
+        if workflow == "esxi":
+            esxi_cfg = cfg.get("esxi", {}) or {}
+            checks.append(
+                validation_check(
+                    "Saved credentials",
+                    bool(str(esxi_cfg.get("root_password") or "")),
+                    "Ready" if str(esxi_cfg.get("root_password") or "") else "Root password is missing.",
+                    why="The ESXi workflow needs the saved install credentials before a real run.",
+                    fix="Open the ESXi page and save the root password.",
+                    href="/esxi",
+                )
+            )
+        if workflow == "windows":
+            windows_cfg = cfg.get("windows", {}) or {}
+            checks.append(
+                validation_check(
+                    "Saved credentials",
+                    bool(str(windows_cfg.get("admin_password") or "")),
+                    "Ready" if str(windows_cfg.get("admin_password") or "") else "Administrator password is missing.",
+                    why="The Windows workflow needs the saved administrator password before a real run.",
+                    fix="Open the Windows page and save the administrator password.",
+                    href="/windows",
+                )
+            )
+        if workflow == "qnap":
+            qnap_cfg = cfg.get("qnap", {}) or {}
+            checks.append(
+                validation_check(
+                    "Saved credentials",
+                    bool(str(qnap_cfg.get("username") or "").strip() and str(qnap_cfg.get("password") or "")),
+                    "Ready" if (str(qnap_cfg.get("username") or "").strip() and str(qnap_cfg.get("password") or "")) else "QNAP username or password is missing.",
+                    why="The QNAP workflow needs saved sign-in details before a real run.",
+                    fix="Open the QNAP page and save the username and password.",
+                    href="/qnap",
+                )
+            )
     return checks
 
 
@@ -1438,27 +1655,87 @@ def collect_report_entries(cfg: dict[str, Any], query: str = "", report_type: st
             text = f"{kind} {path.name} {path.parent.name} {path.parent.parent.name if path.parent.parent else ''}".lower()
             if needle and needle not in text:
                 continue
-                modified = datetime.fromtimestamp(path.stat().st_mtime)
-                entries.append(
-                    {
-                        "kind": kind,
-                        "label": path.name,
-                        "path": str(path),
-                        "parent": str(path.parent),
-                        "server": path.parent.parent.name if path.parent.parent != path.parent else "",
-                        "mtime": f"{modified.year:04d}-{modified.month:02d}-{modified.day:02d} {modified.hour:02d}:{modified.minute:02d}:{modified.second:02d}",
-                        "kit_match": "Yes" if kit_name in str(path) else "",
-                    }
-                )
+            modified = datetime.fromtimestamp(path.stat().st_mtime)
+            entries.append(
+                {
+                    "kind": kind,
+                    "label": path.name,
+                    "path": str(path),
+                    "parent": str(path.parent),
+                    "server": path.parent.parent.name if path.parent.parent != path.parent else "",
+                    "mtime": f"{modified.year:04d}-{modified.month:02d}-{modified.day:02d} {modified.hour:02d}:{modified.minute:02d}:{modified.second:02d}",
+                    "kit_match": "Yes" if kit_name in str(path) else "",
+                }
+            )
     entries.sort(key=lambda item: item["mtime"], reverse=True)
     return entries[:limit]
 
 
+def history_scope_bundle_name(scope: str) -> str:
+    mapping = {
+        "included": "Full kit run",
+        "ilo": "iLO run",
+        "storage-apply": "Storage apply run",
+        "storage-reboot": "Storage restart follow-up",
+        "esxi": "ESXi run",
+        "windows": "Windows run",
+        "qnap": "QNAP run",
+    }
+    return mapping.get(scope, scope.replace("_", " ").title())
+
+
+def related_reports_query_for_history_item(item: dict[str, Any]) -> str:
+    config_summary = item.get("config_summary", {}) or {}
+    if config_summary.get("storage_plan_path"):
+        return Path(str(config_summary["storage_plan_path"])).parent.name
+    scope = str(item.get("scope") or "")
+    target = str(config_summary.get("target_ip") or config_summary.get("login_ip") or "")
+    if target:
+        return target
+    return scope
+
+
+def build_run_bundles(cfg: dict[str, Any], history: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    bundles: list[dict[str, Any]] = []
+    for item in history:
+        if item.get("kind") == "event":
+            continue
+        scope = str(item.get("scope") or "")
+        config_summary = item.get("config_summary", {}) or {}
+        target = str(config_summary.get("target_ip") or config_summary.get("login_ip") or "") or "Not set"
+        result = str(item.get("status") or "Recorded")
+        run_summary_path = str(item.get("run_summary_path") or "")
+        related_reports_query = related_reports_query_for_history_item(item)
+        related_reports = []
+        if run_summary_path:
+            related_reports.append({"label": "Run summary", "path": run_summary_path})
+        if config_summary.get("storage_plan_path"):
+            related_reports.append({"label": "Storage plan used", "path": str(config_summary["storage_plan_path"])})
+        bundles.append(
+            {
+                "name": history_scope_bundle_name(scope),
+                "scope": scope,
+                "target": target,
+                "time": item.get("time", ""),
+                "result": result,
+                "tone": "ready" if "Complete" in result else "pending" if ("Fail" in result or "Blocked" in result) else "progress",
+                "summary": item.get("current_stage") or item.get("summary") or "Run recorded",
+                "run_summary_path": run_summary_path,
+                "related_reports_query": related_reports_query,
+                "related_reports": related_reports,
+                "config_summary": config_summary,
+            }
+        )
+    return bundles[:12]
+
+
 def build_report_center(cfg: dict[str, Any], query: str = "", report_type: str = "all") -> dict[str, Any]:
+    history = load_history(cfg.get("site", {}).get("name", ""))
     return {
         "query": query,
         "report_type": report_type,
         "entries": collect_report_entries(cfg, query=query, report_type=report_type),
+        "bundles": build_run_bundles(cfg, history),
     }
 
 
@@ -1485,13 +1762,13 @@ def build_execution_validation_overview(cfg: dict[str, Any], scope: str, stages:
     deduped: list[dict[str, Any]] = []
     seen = set()
     for item in checks:
-        marker = (item.get("label"), item.get("details"))
+        marker = (item.get("label"), item.get("details"), item.get("href"))
         if marker in seen:
             continue
         seen.add(marker)
         deduped.append(item)
     if scope == "included" and not deduped:
-        deduped.append({"label": "Included stages", "ok": False, "details": "No included stages are ready yet."})
+        deduped.append(validation_check("Included stages", False, "No included stages are ready yet."))
     return deduped
 
 
@@ -1505,9 +1782,115 @@ def build_recoverability_notes(cfg: dict[str, Any], scope: str, stages: list[dic
     return notes
 
 
+def build_run_center_readiness_matrix(cfg: dict[str, Any], scope: str) -> list[dict[str, Any]]:
+    included_cfg = cfg.get("included", {}) or {}
+    storage_review = build_storage_review_context(cfg)
+
+    def stage_in_scope(key: str) -> bool:
+        if scope == "included":
+            if key == "storage":
+                return bool(included_cfg.get("storage"))
+            return bool(included_cfg.get(key))
+        if scope == "ilo":
+            return key in {"ilo", "storage"}
+        return key == scope
+
+    shared_subnet = (cfg.get("shared_network", {}).get("subnet") or "").strip()
+    shared_gateway = (cfg.get("ip_plan", {}).get("gateway") or "").strip()
+    matrix: list[dict[str, Any]] = [
+        {
+            "name": "Global Settings",
+            "label": "Ready" if (shared_subnet and shared_gateway) else "Blocked",
+            "tone": "ready" if (shared_subnet and shared_gateway) else "pending",
+            "summary": "Shared defaults are saved." if (shared_subnet and shared_gateway) else "Shared subnet or gateway is missing.",
+            "action": "Finish shared defaults.",
+            "href": "/global-settings",
+        }
+    ]
+
+    for key, name in [("ilo", "iLO"), ("storage", "Storage"), ("esxi", "ESXi"), ("windows", "Windows"), ("qnap", "QNAP")]:
+        included = stage_in_scope(key)
+        if not included:
+            matrix.append(
+                {
+                    "name": name,
+                    "label": "Not included",
+                    "tone": "progress",
+                    "summary": "This stage is not part of the selected run.",
+                    "action": "Turn it on in its workspace if needed.",
+                    "href": "/storage" if key == "storage" else f"/{key}",
+                }
+            )
+            continue
+
+        if key == "storage":
+            if storage_review.get("stale"):
+                matrix.append(
+                    {
+                        "name": name,
+                        "label": "Needs review",
+                        "tone": "pending",
+                        "summary": storage_review.get("status_reason") or "The approved storage plan no longer matches the latest storage view.",
+                        "action": "Re-read storage and approve the plan again.",
+                        "href": "/storage#storage-review-start",
+                    }
+                )
+                continue
+            if not storage_review.get("approved"):
+                matrix.append(
+                    {
+                        "name": name,
+                        "label": "Blocked",
+                        "tone": "pending",
+                        "summary": "No approved storage plan is available for this run.",
+                        "action": "Open Storage / RAID and approve the current plan.",
+                        "href": "/storage#storage-review-start",
+                    }
+                )
+                continue
+            matrix.append(
+                {
+                    "name": name,
+                    "label": "Ready",
+                    "tone": "ready",
+                    "summary": "The approved storage plan is ready to use.",
+                    "action": "Review the approved storage plan if you want another pass.",
+                    "href": "/storage#storage-approval-actions",
+                }
+            )
+            continue
+
+        checks = build_validation_checks(cfg, key)
+        blocked_check = next((item for item in checks if not item.get("ok")), None)
+        if blocked_check:
+            matrix.append(
+                {
+                    "name": name,
+                    "label": "Blocked",
+                    "tone": "pending",
+                    "summary": blocked_check.get("details") or "This stage still needs setup.",
+                    "action": "Open the workspace and fix the missing setup.",
+                    "href": f"/{key}",
+                }
+            )
+        else:
+            matrix.append(
+                {
+                    "name": name,
+                    "label": "Ready",
+                    "tone": "ready",
+                    "summary": "Saved settings are ready for this run.",
+                    "action": "Open the workspace if you want to review it again.",
+                    "href": f"/{key}",
+                }
+            )
+    return matrix
+
+
 def build_run_summary(cfg: dict[str, Any], scope: str) -> dict[str, Any]:
     review = build_execution_review(cfg, scope)
     latest = latest_history_entry_for_scope(load_history(cfg.get("site", {}).get("name", "")), [scope, "included", "ilo", "storage-apply", "storage-reboot"]) or {}
+    artifacts = build_run_summary_artifacts(cfg, review, scope)
     return {
         "generated_at": time.strftime("%Y-%m-%d %H:%M:%S"),
         "kit": cfg.get("site", {}).get("name", ""),
@@ -1515,13 +1898,26 @@ def build_run_summary(cfg: dict[str, Any], scope: str) -> dict[str, Any]:
         "target_server": (cfg.get("ilo", {}).get("current_ip") or cfg.get("ilo", {}).get("host") or ""),
         "summary_items": review.get("summary_items", []),
         "stages": review.get("stages", []),
+        "readiness_matrix": review.get("readiness_matrix", []),
+        "final_summary": review.get("final_summary", {}),
         "result": latest.get("status", "No run recorded yet."),
         "restart_occurred": "Yes" if review.get("restart_expected") else "No",
         "detail_text": review.get("detail_text", ""),
         "validation_checks": review.get("validation_checks", []),
         "recoverability": review.get("recoverability", []),
+        "artifacts": artifacts,
         "reports_root": str(EXPORTS_DIR),
     }
+
+
+def write_run_summary_artifact(cfg: dict[str, Any], scope: str, *, timestamp: str | None = None) -> Path:
+    summary = build_run_summary(cfg, scope)
+    stamp = timestamp or time.strftime("%Y%m%d-%H%M%S")
+    path = GENERATED_DIR / f"run-summary-{sanitize_kit_name(cfg.get('site', {}).get('name', 'kit'))}-{scope}-{stamp}.yml"
+    path.write_text(yaml.safe_dump(summary, sort_keys=False), encoding="utf-8")
+    build_copy = current_build_output_dir(cfg) / f"run-summary-{scope}-{stamp}.yml"
+    build_copy.write_text(yaml.safe_dump(summary, sort_keys=False), encoding="utf-8")
+    return path
 
 
 def validate_storage_ready_for_ilo_run(cfg: dict[str, Any]) -> dict[str, Any]:
@@ -3598,6 +3994,86 @@ def build_execution_review(cfg: dict, scope: str):
         },
     }
 
+    def stage_state(key: str, included: bool) -> tuple[str, str, str, str | None]:
+        if not included:
+            return "not_included", "Not included", "progress", "This stage is not part of the selected run."
+        if key == "storage":
+            if storage_review.get("stale"):
+                return "needs_review", "Needs review", "pending", storage_review.get("status_reason") or "The storage plan must be reviewed again."
+            if storage_validation_error:
+                return "blocked", "Blocked", "pending", storage_validation_error
+            if not storage_review.get("approved"):
+                return "blocked", "Blocked", "pending", "No approved storage plan is available."
+            return "ready", "Ready", "ready", None
+        checks = build_validation_checks(cfg, key)
+        blocked_check = next((item for item in checks if not item.get("ok")), None)
+        if blocked_check:
+            return "blocked", "Blocked", "pending", blocked_check.get("details") or "This stage needs more setup."
+        return "ready", "Ready", "ready", None
+
+    def stage_checks(key: str, included: bool) -> list[dict[str, Any]]:
+        if not included:
+            return []
+        if key == "storage":
+            return build_validation_checks(cfg, "storage")
+        if key in {"ilo", "esxi", "windows", "qnap"}:
+            return build_validation_checks(cfg, key)
+        return []
+
+    def stage_state_used(key: str) -> str:
+        if key == "ilo":
+            return (
+                f"Saved iLO target {cfg['ilo'].get('current_ip') or cfg['ilo'].get('host') or 'Not set'}"
+                f" -> final IP {cfg['ilo'].get('target_ip') or '(unchanged)'}"
+            )
+        if key == "esxi":
+            return f"Saved ESXi host {cfg['esxi'].get('hostname') or '(not set)'} at {cfg['esxi'].get('management_ip') or cfg.get('ip_plan', {}).get('esxi', '') or 'Not set'}"
+        if key == "windows":
+            return f"Saved Windows VM {cfg['windows'].get('vm_name') or '(not set)'} at {cfg['windows'].get('ip_address') or cfg.get('ip_plan', {}).get('windows', '') or 'Not set'}"
+        if key == "qnap":
+            return f"Saved QNAP host {cfg['qnap'].get('hostname') or '(not set)'} at {cfg['qnap'].get('ip') or cfg.get('ip_plan', {}).get('qnap', '') or 'Not set'}"
+        if key == "storage":
+            approval = storage_review.get("approval", {}) or {}
+            plan_summary = approval.get("plan_summary", {}) or {}
+            mode = plan_summary.get("mode") or "Approved layout"
+            return f"{mode} from {approval.get('plan_path') or '(missing approved plan path)'}"
+        return "Saved workspace settings"
+
+    def stage_dependencies(key: str) -> list[str]:
+        if key == "ilo":
+            return ["Global Settings", "Saved iLO target and credentials"]
+        if key == "storage":
+            return ["Current iLO target", "Approved storage plan"]
+        if key == "esxi":
+            deps = ["Global Settings", "Saved ESXi host details", "iLO target ready"]
+            if cfg.get("included", {}).get("storage"):
+                deps.append("Storage ready if the install depends on the approved layout")
+            return deps
+        if key == "windows":
+            return ["Global Settings", "Saved Windows VM details"]
+        if key == "qnap":
+            return ["Global Settings", "Saved QNAP host details"]
+        return ["Saved workspace settings"]
+
+    def stage_restart_expected(key: str) -> bool:
+        if key == "storage":
+            return bool(storage_review.get("approval", {}).get("reboot_expected"))
+        if key == "ilo":
+            return bool(storage_review.get("include_in_ilo_run") and storage_review.get("approval", {}).get("reboot_expected"))
+        return False
+
+    def stage_fix_href(key: str) -> str:
+        if key == "storage":
+            return "/storage#storage-review-start"
+        return f"/{key}"
+
+    def stage_fix_label(key: str) -> str:
+        if key == "storage":
+            return "Fix on Storage / RAID"
+        if key == "ilo":
+            return "Fix on iLO"
+        return f"Fix on {components[key]['name']}"
+
     def stage_entry(key: str, included: bool) -> dict:
         meta = components[key]
         summary = meta["summary"]
@@ -3617,6 +4093,23 @@ def build_execution_review(cfg: dict, scope: str):
                     summary = "Storage will be checked against the approved layout."
                 if storage_review.get("approval", {}).get("reboot_expected"):
                     summary += " Restart required."
+        state_key, status_label, status_tone, blocked_reason = stage_state(key, included)
+        checks = stage_checks(key, included)
+        blockers = [item for item in checks if not item.get("ok")]
+        ready_items = [item for item in checks if item.get("ok")]
+        corrective_action = ""
+        fix_href = stage_fix_href(key)
+        fix_label = stage_fix_label(key)
+        why_blocked = ""
+        if blockers:
+            primary = blockers[0]
+            corrective_action = primary.get("fix") or "Open the workspace and fix the missing setup."
+            why_blocked = primary.get("why") or ""
+            fix_href = primary.get("href") or fix_href
+        elif state_key == "needs_review":
+            corrective_action = "Review the latest saved state and approve it again."
+        elif state_key == "not_included":
+            corrective_action = "Turn this stage on if you want it in the run."
         return {
             "key": key,
             "name": meta["name"],
@@ -3624,6 +4117,19 @@ def build_execution_review(cfg: dict, scope: str):
             "included": included,
             "summary": summary,
             "review_href": meta["review_href"],
+            "status_label": status_label,
+            "status_tone": status_tone,
+            "state_used": stage_state_used(key),
+            "dependencies": stage_dependencies(key),
+            "restart_expected": stage_restart_expected(key),
+            "blocked_reason": blocked_reason,
+            "why_blocked": why_blocked,
+            "corrective_action": corrective_action,
+            "fix_href": fix_href,
+            "fix_label": fix_label,
+            "preflight_checks": checks,
+            "preflight_ready": [item.get("label") for item in ready_items],
+            "preflight_blockers": blockers,
         }
 
     included_stages = []
@@ -3676,6 +4182,11 @@ def build_execution_review(cfg: dict, scope: str):
             lines.append(f"- Storage readiness -> blocked: {storage_validation_error}")
     lines.append("")
     lines.append("WARNING: This may reboot, reconfigure, overwrite, or otherwise make destructive changes.")
+    readiness_matrix = build_run_center_readiness_matrix(cfg, scope)
+    will_run = [stage["name"] for stage in included_stages if stage["included"]]
+    will_not_run = [stage["name"] for stage in included_stages if not stage["included"]]
+    if storage_validation_error and "Storage / RAID" not in will_not_run and any(stage["key"] == "storage" for stage in included_stages):
+        will_not_run.append("Storage / RAID until it is reviewed again")
     summary_items = [
         {"label": "Run type", "value": "Full kit run" if scope == "included" else f"Single stage: {components.get(scope, {'name': scope}).get('name', scope)}"},
         {"label": "Selected kit", "value": cfg.get("site", {}).get("name", "") or "Unknown"},
@@ -3690,10 +4201,20 @@ def build_execution_review(cfg: dict, scope: str):
         warning_points.append(f"Storage is blocked right now: {storage_validation_error}")
     validation_checks = build_execution_validation_overview(cfg, scope, included_stages)
     recoverability = build_recoverability_notes(cfg, scope, included_stages)
+    final_summary = {
+        "will_run": will_run or ["Nothing yet"],
+        "will_not_run": will_not_run or ["Everything selected is in scope"],
+        "restart_impact": "A restart is expected during this run." if any(stage.get("restart_expected") and stage.get("included") for stage in included_stages) else "No restart is expected from the selected stages.",
+        "plans_in_use": [stage["state_used"] for stage in included_stages if stage.get("included")],
+    }
+    summary_artifacts = build_run_summary_artifacts(cfg, {"stages": included_stages}, scope)
     return {
         "scope": scope,
         "summary_items": summary_items,
         "stages": included_stages,
+        "readiness_matrix": readiness_matrix,
+        "final_summary": final_summary,
+        "summary_artifacts": summary_artifacts,
         "warning_title": "Review before you start",
         "warning_points": warning_points,
         "validation_checks": validation_checks,
@@ -3818,6 +4339,9 @@ def append_job_history_snapshot(cfg: dict, scope: str):
         line for line in logs
         if "[FAILED]" in line or "[SKIP" in line or "[ERROR]" in line or "[WARN]" in line
     ]
+    timestamp = time.strftime("%Y%m%d-%H%M%S")
+    summary_scope = "included" if str(finished_job.get("scope", scope)) == "included" else scope
+    run_summary_path = write_run_summary_artifact(cfg, summary_scope, timestamp=timestamp)
     append_history_entry(
         kit_name,
         {
@@ -3831,6 +4355,7 @@ def append_job_history_snapshot(cfg: dict, scope: str):
             "issues": issue_lines,
             "logs": logs,
             "config_summary": build_history_config_summary(cfg, scope),
+            "run_summary_path": str(run_summary_path),
         },
     )
 
@@ -5047,6 +5572,8 @@ async def generate_ks(request: Request, return_page: str = Form("configuration")
         ks_content = render_ks_cfg(cfg)
         with open(KS_OUTPUT_PATH, "w", encoding="utf-8") as f:
             f.write(ks_content)
+        build_copy = current_build_output_dir(cfg) / "KS.CFG"
+        build_copy.write_text(ks_content, encoding="utf-8")
         result = f"KS.CFG generated successfully at {KS_OUTPUT_PATH}"
     except Exception as e:
         ks_content = None
@@ -5762,6 +6289,50 @@ async def download_current_kit_config():
     return FileResponse(path=snapshot_path, filename=snapshot_path.name, media_type="application/x-yaml")
 
 
+@app.post("/import-kit-config", response_class=HTMLResponse)
+async def import_kit_config(
+    request: Request,
+    return_page: str = Form("configs"),
+    import_file: UploadFile = File(...),
+):
+    current_cfg = load_kit_config()
+    try:
+        raw = await import_file.read()
+        if not raw:
+            raise ValueError("The uploaded file was empty.")
+        imported = yaml.safe_load(raw.decode("utf-8")) or {}
+        if not isinstance(imported, dict):
+            raise ValueError("The uploaded file must contain a YAML or JSON object.")
+        imported = merge_defaults(imported)
+        imported_name = sanitize_kit_name(imported.get("site", {}).get("name", "") or current_cfg.get("site", {}).get("name", "Kit-01"))
+        imported.setdefault("site", {})["name"] = imported_name
+        save_kit_config(imported)
+        imported_snapshot = current_build_output_dir(imported) / f"imported-config-{time.strftime('%Y%m%d-%H%M%S')}.yml"
+        imported_snapshot.write_text(yaml.safe_dump(imported, sort_keys=False), encoding="utf-8")
+        cfg = load_kit_config(imported_name)
+        return render_page(
+            request,
+            cfg,
+            active_page=return_page,
+            action_feedback=build_action_feedback(
+                "Config imported",
+                "Loaded the uploaded config into the app and switched the current kit to it.",
+                tone="ready",
+                status_label="Imported",
+                outcomes=[
+                    f"Current kit: {imported_name}",
+                    f"Build folder: {current_build_output_dir(cfg)}",
+                ],
+                links=[
+                    {"label": "Open Global Settings", "href": "/global-settings"},
+                    {"label": "Open Run Center", "href": "/execution"},
+                ],
+            ),
+        )
+    except Exception as e:
+        return render_page(request, current_cfg, active_page=return_page, error_message=f"Config import failed: {str(e).splitlines()[0]}")
+
+
 @app.post("/view-ilo-config-snapshot", response_class=HTMLResponse)
 async def view_ilo_config_snapshot(request: Request, return_page: str = Form("configs")):
     cfg = load_kit_config()
@@ -5838,6 +6409,7 @@ async def view_run_summary(
             outcomes=[
                 f"Scope: {scope}",
                 f"Target server: {summary.get('target_server') or 'Not set'}",
+                f"Included stages: {', '.join(summary.get('final_summary', {}).get('will_run', []))}",
             ],
         ),
         config_view_title=f"Run Summary: {scope}",
@@ -5851,9 +6423,7 @@ async def view_run_summary(
 @app.post("/download-run-summary")
 async def download_run_summary(scope: str = Form(...)):
     cfg = load_kit_config()
-    summary = build_run_summary(cfg, scope)
-    path = GENERATED_DIR / f"run-summary-{sanitize_kit_name(cfg.get('site', {}).get('name', 'kit'))}-{scope}.yml"
-    path.write_text(yaml.safe_dump(summary, sort_keys=False), encoding="utf-8")
+    path = write_run_summary_artifact(cfg, scope)
     return FileResponse(path=path, filename=path.name, media_type="application/x-yaml")
 
 
