@@ -850,6 +850,7 @@ def test_save_global_settings_updates_shared_defaults(client):
 def test_save_ilo_settings_updates_only_ilo_page_fields(client):
     cfg = main.default_config()
     cfg["site"]["name"] = "Ilo Page Kit"
+    cfg["ip_plan"]["gateway"] = "10.10.8.1"
     main.save_kit_config(cfg)
 
     response = client.post(
@@ -858,6 +859,7 @@ def test_save_ilo_settings_updates_only_ilo_page_fields(client):
             "return_page": "ilo",
             "ilo_current_ip": "10.10.8.50",
             "ilo_target_ip": "10.10.8.11",
+            "ilo_gateway": "10.10.8.254",
             "ilo_hostname": "ilo-focused",
             "ilo_username": "Administrator",
             "ilo_password": "secret",
@@ -868,6 +870,7 @@ def test_save_ilo_settings_updates_only_ilo_page_fields(client):
     assert response.status_code == 200
     cfg = main.load_kit_config("Ilo-Page-Kit")
     assert cfg["ilo"]["current_ip"] == "10.10.8.50"
+    assert cfg["ilo"]["gateway"] == "10.10.8.254"
     assert cfg["ilo"]["hostname"] == "ilo-focused"
     assert cfg["included"]["ilo"] is True
 
@@ -1058,7 +1061,7 @@ def test_read_current_storage_saves_discovery_export_and_renders_summary(client,
     assert "RAID1" in response.text
     assert "HPE SSD" in response.text
     assert "Review storage setup" in response.text
-    assert "Selected server:" in response.text
+    assert "Using right now:" in response.text
     assert "10.10.8.60" in response.text
     assert "current kit iLO IP" in response.text
     assert "Sign-in user:" in response.text
@@ -1487,7 +1490,8 @@ def test_approve_storage_plan_saves_exact_artifact_paths_for_later_ilo_run(clien
     )
 
     assert response.status_code == 200
-    assert "Approved storage plan" in response.text
+    assert "Storage approved" in response.text
+    assert "Included in iLO run: Yes" in response.text
     cfg_after = main.load_kit_config("Approval-Kit")
     storage_cfg = cfg_after["storage"]
     assert storage_cfg["state"] == "approved"
@@ -1563,10 +1567,13 @@ def test_prepare_execute_shows_combined_storage_review_using_exact_approved_arti
     )
 
     assert response.status_code == 200
+    assert "Run review" in response.text
+    assert "Included stages" in response.text
+    assert "View full run details" in response.text
     assert "Pre-run review:" in response.text
-    assert "Storage and iLO run" in response.text
+    assert "Storage in the upcoming iLO run" in response.text
     assert "Storage approved" in response.text
-    assert "Review or remove storage approval" in response.text
+    assert "Review approved storage" in response.text
     assert "/storage#storage-approval-actions" in response.text
     assert str(export_paths["raw"]) in response.text
     assert str(plan_paths["plan"]) in response.text
@@ -1584,10 +1591,10 @@ def test_execution_page_warns_when_storage_is_not_approved(client):
     response = client.get("/execution")
 
     assert response.status_code == 200
-    assert "Storage and iLO run" in response.text
+    assert "Storage in the upcoming iLO run" in response.text
     assert "Storage not approved" in response.text
-    assert "Storage/RAID will not be configured during the iLO run until it is set up and approved" in response.text
-    assert "Go to Storage / RAID" in response.text
+    assert "Storage and RAID will not be configured during the iLO run until they are reviewed and approved" in response.text
+    assert "Open Storage / RAID" in response.text
     assert "/storage#storage-review-start" in response.text
 
 
@@ -1778,7 +1785,7 @@ def test_apply_storage_layout_creates_artifacts_and_logs_success(client, monkeyp
     )
 
     assert response.status_code == 200
-    assert "Apply Attempt Artifacts" in response.text
+    assert "Apply attempt artifacts" in response.text
     assert "View Apply Log" in response.text
     assert "Storage setup progress" in response.text
     assert "Restart needed to finish" in response.text

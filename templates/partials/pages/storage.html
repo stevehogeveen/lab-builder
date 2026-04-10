@@ -5,6 +5,43 @@
         {% set storage_review = storage_review or {} %}
         {% set storage_target = storage_target or {} %}
         {% set storage_credentials = storage_credentials or {} %}
+        <div class="grid grid-cols-1 md:grid-cols-3 gap-3">
+            <div class="card">
+                <div class="text-xs font-bold uppercase text-slate-400 mb-1">Server</div>
+                <div class="text-lg font-semibold">{{ storage_target.resolved or "Not set" }}</div>
+                <div class="text-sm text-slate-400 mt-1">{% if storage_target.source %}Using {{ storage_target.source }}{% else %}Choose the iLO host for storage review{% endif %}</div>
+            </div>
+            <div class="card">
+                <div class="text-xs font-bold uppercase text-slate-400 mb-1">Current State</div>
+                <div class="text-lg font-semibold">{{ storage_review.state_label or "not configured" }}</div>
+                <div class="text-sm text-slate-400 mt-1">
+                    {% if storage_review.approved and not storage_review.stale %}
+                    Approved for setup and ready for an iLO run.
+                    {% elif storage_review.stale %}
+                    Needs review again before it can be trusted.
+                    {% else %}
+                    {{ storage_review.status_reason or "Read current storage to begin." }}
+                    {% endif %}
+                </div>
+            </div>
+            <div class="card">
+                <div class="text-xs font-bold uppercase text-slate-400 mb-1">Next Action</div>
+                <div class="text-lg font-semibold">
+                    {% if storage_review.approved and not storage_review.stale %}Ready to run{% elif storage_review.state == 'planned' %}Review storage setup{% elif storage_review.state == 'discovered' %}Build the plan{% else %}Read current storage{% endif %}
+                </div>
+                <div class="text-sm text-slate-400 mt-1">
+                    {% if storage_review.approved and not storage_review.stale %}
+                    The approved plan can now feed the later iLO run.
+                    {% elif storage_review.state == 'planned' %}
+                    Check the preview below, then approve it if it looks right.
+                    {% elif storage_review.state == 'discovered' %}
+                    Turn the live discovery into a proposed layout.
+                    {% else %}
+                    Start with a read-only storage scan from the selected server.
+                    {% endif %}
+                </div>
+            </div>
+        </div>
         {% if storage_apply_paths %}
         {% set workflow = storage_workflow_state or {} %}
         {% set apply_state = workflow.get('apply', {}) %}
@@ -19,7 +56,7 @@
                 </div>
                 <div class="result mb-4">This button sends a real Redfish reset request through iLO and waits for the server to return.</div>
                 <div class="actions">
-                    <form hx-post="/reboot-storage-now" hx-target="#main-content" hx-swap="outerHTML">
+                    <form hx-post="/reboot-storage-now" hx-target="#main-content" hx-swap="outerHTML" data-action-title="Requesting restart" data-action-start="Requesting a server restart to continue the storage workflow.">
                         <input type="hidden" name="return_page" value="storage">
                         <input type="hidden" name="discovery_raw_path" value="{{ storage_export_paths.raw if storage_export_paths else '' }}">
                         <input type="hidden" name="raid_plan_path" value="{{ storage_plan_paths.plan if storage_plan_paths else '' }}">
@@ -67,7 +104,7 @@
 {% endfor %}</div>
             </details>
             <div class="actions mt-4" id="storage-reboot-actions" style="{% if not (apply_state.get('status') in ['Completed', 'Staged'] and apply_state.get('reboot_required') and reboot_state.get('status') != 'Running' and reboot_state.get('status') != 'Completed') %}display: none;{% endif %}">
-                <form hx-post="/reboot-storage-now" hx-target="#main-content" hx-swap="outerHTML">
+                <form hx-post="/reboot-storage-now" hx-target="#main-content" hx-swap="outerHTML" data-action-title="Requesting restart" data-action-start="Requesting a server restart to continue the storage workflow.">
                     <input type="hidden" name="return_page" value="storage">
                     <input type="hidden" name="discovery_raw_path" value="{{ storage_export_paths.raw if storage_export_paths else '' }}">
                     <input type="hidden" name="raid_plan_path" value="{{ storage_plan_paths.plan if storage_plan_paths else '' }}">
@@ -82,11 +119,11 @@
             <div class="flex items-center justify-between gap-3 mb-3">
                 <div>
                     <div class="text-lg font-semibold">Review storage setup</div>
-                    <div class="text-sm text-slate-400">Pick the server, confirm the sign-in details, then read the current storage before planning changes.</div>
+                    <div class="text-sm text-slate-400">Choose the server, confirm sign-in details, then read the current storage before planning anything.</div>
                 </div>
                 <span class="status {{ storage_review.state_tone or 'warning' }}">{{ storage_review.state_label or "not configured" }}</span>
             </div>
-            <form hx-post="/save-storage-target" hx-target="#main-content" hx-swap="outerHTML" class="mb-4">
+            <form hx-post="/save-storage-target" hx-target="#main-content" hx-swap="outerHTML" class="mb-4" data-action-title="Saving storage target" data-action-start="Saving the selected storage host and sign-in details.">
                 <input type="hidden" name="return_page" value="storage">
                 <div class="grid grid-cols-1 md:grid-cols-3 gap-3">
                     <label>
@@ -105,14 +142,26 @@
                 <div class="actions mt-3">
                     <button class="btn" type="submit" style="border-color: color-mix(in srgb, var(--ok) 40%, var(--border));">Save storage target</button>
                 </div>
-                <div class="text-sm text-slate-400 mt-2">Leave the host blank to follow the current kit iLO address. Use these fields when storage needs to talk to a different target or sign in differently.</div>
+                <div class="text-sm text-slate-400 mt-2">Leave the host blank to use the current iLO address. This is the address the server is responding on right now. If you want to change it, update the iLO page or override it here just for storage.</div>
             </form>
             <div class="result mb-3">
-                <div><strong>Selected server:</strong> {{ storage_target.resolved or "Not resolved" }}</div>
-                <div><strong>Using:</strong> {{ storage_target.source or "No saved source yet" }}</div>
-                <div><strong>Sign-in user:</strong> {{ storage_credentials.username or "Not resolved" }} ({{ storage_credentials.username_source or "none" }})</div>
+                <div><strong>Using right now:</strong> {{ storage_target.resolved or "Not resolved" }}</div>
+                <div><strong>Why this address was chosen:</strong>
+                    {% if storage_target.override_active %}
+                    Using the storage page override.
+                    {% elif storage_target.source == 'current kit iLO IP' or storage_target.source == 'current kit iLO host' %}
+                    Using the current iLO address for this kit. This is the address the server is expected to answer on right now.
+                    {% elif storage_target.source == 'latest discovery artifact' %}
+                    Using the last address this page successfully talked to because the current iLO address is not set.
+                    {% elif storage_target.source == 'approved storage artifact' %}
+                    Using the approved storage run address because the current iLO address is not set.
+                    {% else %}
+                    {{ storage_target.source or "No saved source yet" }}
+                    {% endif %}
+                </div>
+                <div><strong>Sign-in user:</strong> {{ storage_credentials.username or "Not resolved" }}</div>
                 {% if storage_target.artifact_fallback %}
-                <div><strong>Heads up:</strong> This page is falling back to a host remembered from storage artifacts because the current kit iLO host is not set.</div>
+                <div><strong>Heads up:</strong> This page is using a previously remembered address because the main iLO page does not have a current address saved yet.</div>
                 {% endif %}
             </div>
             {% if not storage_target.valid %}
@@ -126,12 +175,12 @@
             {% endif %}
             <details class="mt-3">
                 <summary class="summary-row">
-                    <span class="text-sm font-bold text-slate-300">View technical source details</span>
+                    <span class="text-sm font-bold text-slate-300">See saved address history</span>
                     <span class="status progress">details</span>
                 </summary>
                 <div class="result mt-3">
-                    {% if storage_target.latest_artifact_host %}<div><strong>Latest discovery artifact host:</strong> {{ storage_target.latest_artifact_host }}</div>{% endif %}
-                    {% if storage_target.approved_host %}<div><strong>Approved storage artifact host:</strong> {{ storage_target.approved_host }}</div>{% endif %}
+                    {% if storage_target.latest_artifact_host %}<div><strong>Last address this page read successfully:</strong> {{ storage_target.latest_artifact_host }}</div>{% endif %}
+                    {% if storage_target.approved_host %}<div><strong>Address saved with the approved storage plan:</strong> {{ storage_target.approved_host }}</div>{% endif %}
                 </div>
             </details>
         </div>
@@ -140,7 +189,7 @@
             <div class="text-lg font-semibold mb-3">Check current storage</div>
             <div class="text-sm text-slate-400 mb-3">This only reads what is already on the server. Nothing is changed here.</div>
 
-            <form id="read-current-storage-form" hx-post="/read-current-storage" hx-target="#main-content" hx-swap="outerHTML" hx-indicator="#read-storage-progress">
+            <form id="read-current-storage-form" hx-post="/read-current-storage" hx-target="#main-content" hx-swap="outerHTML" hx-indicator="#read-storage-progress" data-action-title="Reading current storage" data-action-start="Connecting to iLO and reading the current storage layout." data-action-complete="Current storage read complete.">
                 <input type="hidden" name="return_page" value="storage">
                 <label class="check mb-3"><input type="checkbox" name="deep_smart_storage_scan"> Deep Smart Storage Scan</label>
                 <div class="actions">
@@ -173,9 +222,9 @@
                 </div>
                 <div><strong>Will be included in the iLO run:</strong> {{ "Yes" if storage_review.include_in_ilo_run else "No" }}</div>
                 {% if storage_review.approved and not storage_review.stale %}
-                <div><strong>Approved for setup:</strong> This storage plan is ready to be included in the next iLO run.</div>
+                <div><strong>Approved:</strong> This storage plan is ready to be included in the next iLO run.</div>
                 {% elif storage_review.stale %}
-                <div><strong>Needs review again:</strong> The saved approval no longer matches the current discovery or target host.</div>
+                <div><strong>Needs review again:</strong> The saved approval no longer matches the current discovery or current target address.</div>
                 {% elif storage_review.state == 'planned' %}
                 <div><strong>Next step:</strong> Review the plan below and approve it if it looks right.</div>
                 {% elif storage_review.state == 'discovered' %}
@@ -188,13 +237,13 @@
                 <div><strong>Approved at:</strong> {{ storage_review.approval.approved_at or "Unknown" }}</div>
                 {% endif %}
             </div>
-            <div class="text-sm text-slate-400">Storage is set up here, reviewed here, and then optionally used later by the iLO run.</div>
+            <div class="text-sm text-slate-400">This page is where storage gets reviewed and approved before it is allowed into a later iLO run.</div>
         </div>
 
         <div class="card">
             <div class="text-lg font-semibold mb-3">Build a storage plan</div>
             <div class="text-sm text-slate-400 mb-3">Create a suggested layout from the current storage details. This is still read-only.</div>
-            <form hx-post="/plan-raid-layout" hx-target="#main-content" hx-swap="outerHTML">
+            <form hx-post="/plan-raid-layout" hx-target="#main-content" hx-swap="outerHTML" data-action-title="Building storage plan" data-action-start="Reviewing the latest discovery and building a proposed layout." data-action-complete="Storage plan ready for review.">
                 <input type="hidden" name="return_page" value="storage">
                 <input type="hidden" name="discovery_raw_path" value="{{ storage_export_paths.raw }}">
                 <div class="actions">
@@ -208,10 +257,14 @@
         {% endif %}
 
         {% if storage_apply_paths %}
-        <div class="card">
-            <div class="text-lg font-semibold mb-3">Apply Attempt Artifacts</div>
+        <details class="card">
+            <summary class="summary-row">
+                <span class="text-lg font-semibold">Apply attempt artifacts</span>
+                <span class="status progress">details</span>
+            </summary>
+            <div class="mt-4">
             <div class="result mb-4">Apply path: {{ storage_apply_paths.directory }}</div>
-            <div class="text-sm text-slate-400 mb-3">Use these artifacts to inspect the exact pre-change snapshot, apply log, controller responses, and post-change state for the current storage apply attempt.</div>
+            <div class="text-sm text-slate-400 mb-3">Use these artifacts when you need the exact pre-change snapshot, apply log, controller responses, and post-change state.</div>
             <div class="actions">
                 {% if storage_apply_paths.pre_change_summary.exists() %}
                 <form hx-post="/view-storage-artifact" hx-target="#main-content" hx-swap="outerHTML">
@@ -335,7 +388,8 @@
                 {% endif %}
                 {% endfor %}
             </div>
-        </div>
+            </div>
+        </details>
         {% endif %}
 
         {% if storage_plan %}
@@ -364,18 +418,23 @@
             </div>
             {% endif %}
 
-            <div class="text-sm font-bold text-slate-300 mb-2">Planned layout</div>
-            <div class="result mb-4">
-                <div><strong>OS RAID 1:</strong> target size {{ storage_plan.planned_layout.os_raid1.target_size_gib }} GiB on bays {{ storage_plan.planned_layout.os_raid1.bays or "not selected" }}</div>
-                <div><strong>Data RAID 6:</strong> bays {{ storage_plan.planned_layout.data_raid6.bays or "not selected" }}; {{ storage_plan.planned_layout.data_raid6.capacity_intent }}</div>
-                <div><strong>Hot spare:</strong> bay {{ storage_plan.planned_layout.hot_spare.bay or "not reserved" }}</div>
-            </div>
-
-            <div class="text-sm font-bold text-slate-300 mb-2">Ready for setup</div>
-            <div class="result mb-4">
-                <div><strong>Recommended next step:</strong> {{ storage_plan.apply_readiness.next_action }}</div>
-                <div><strong>Create only:</strong> {{ "Ready" if storage_plan.apply_readiness.create_only_ready else "Not ready" }}</div>
-                <div><strong>Wipe and rebuild:</strong> {{ "Ready" if storage_plan.apply_readiness.wipe_rebuild_ready else "Not ready" }}</div>
+            <div class="grid grid-cols-1 md:grid-cols-2 gap-3 mb-4">
+                <div class="card">
+                    <div class="text-sm font-bold text-slate-300 mb-2">Planned layout</div>
+                    <div class="space-y-2 text-sm">
+                        <div><strong>OS RAID 1:</strong> target size {{ storage_plan.planned_layout.os_raid1.target_size_gib }} GiB on bays {{ storage_plan.planned_layout.os_raid1.bays or "not selected" }}</div>
+                        <div><strong>Data RAID 6:</strong> bays {{ storage_plan.planned_layout.data_raid6.bays or "not selected" }}; {{ storage_plan.planned_layout.data_raid6.capacity_intent }}</div>
+                        <div><strong>Hot spare:</strong> bay {{ storage_plan.planned_layout.hot_spare.bay or "not reserved" }}</div>
+                    </div>
+                </div>
+                <div class="card">
+                    <div class="text-sm font-bold text-slate-300 mb-2">Ready for setup</div>
+                    <div class="space-y-2 text-sm">
+                        <div><strong>Recommended next step:</strong> {{ storage_plan.apply_readiness.next_action }}</div>
+                        <div><strong>Create only:</strong> {{ "Ready" if storage_plan.apply_readiness.create_only_ready else "Not ready" }}</div>
+                        <div><strong>Wipe and rebuild:</strong> {{ "Ready" if storage_plan.apply_readiness.wipe_rebuild_ready else "Not ready" }}</div>
+                    </div>
+                </div>
             </div>
             <div class="text-sm font-bold text-slate-300 mb-2">What would change</div>
             <div class="card mb-4">
@@ -402,9 +461,16 @@
                 <div><strong>Reserved hot spare:</strong> bay {{ storage_plan.pre_apply_summary.planned_layout.hot_spare.bay or "not reserved" }}</div>
             </div>
             <div class="card mb-4" id="storage-approval-actions" style="{% if storage_review.approved and not storage_review.stale %}border-color: color-mix(in srgb, var(--ok) 45%, var(--border)); background: color-mix(in srgb, var(--ok) 8%, transparent);{% elif storage_review.stale %}border-color: color-mix(in srgb, var(--bad) 45%, var(--border)); background: color-mix(in srgb, var(--bad) 8%, transparent);{% endif %}">
-                <div class="text-sm font-bold text-slate-300 mb-2">{% if storage_review.approved and not storage_review.stale %}Approved for setup{% else %}Approve this storage setup{% endif %}</div>
+                <div class="flex items-center justify-between gap-3 mb-2">
+                    <div class="text-sm font-bold text-slate-300">{% if storage_review.approved and not storage_review.stale %}Approved for setup{% else %}Approve this storage setup{% endif %}</div>
+                    {% if storage_review.approved and not storage_review.stale %}
+                    <span class="status ready">approved</span>
+                    {% elif storage_review.stale %}
+                    <span class="status pending">needs review again</span>
+                    {% endif %}
+                </div>
                 <div class="text-sm text-slate-400 mb-3">Once approved, this exact storage plan can be used later by the iLO run.</div>
-                <form hx-post="/approve-storage-plan" hx-target="#main-content" hx-swap="outerHTML" class="card">
+                <form hx-post="/approve-storage-plan" hx-target="#main-content" hx-swap="outerHTML" class="card" data-action-title="Approving storage plan" data-action-start="Saving the approved storage plan for the later iLO run." data-action-complete="Storage approval saved.">
                     <input type="hidden" name="return_page" value="storage">
                     <input type="hidden" name="discovery_raw_path" value="{{ storage_export_paths.raw if storage_export_paths else '' }}">
                     <input type="hidden" name="raid_plan_path" value="{{ storage_plan_paths.plan if storage_plan_paths else '' }}">
@@ -419,13 +485,13 @@
                 <div class="text-sm text-amber-300 mt-2">Disabled because the current storage plan still has blockers that need to be resolved.</div>
                 {% endif %}
                 {% if storage_review.approved %}
-                <form hx-post="/clear-storage-approval" hx-target="#main-content" hx-swap="outerHTML" class="mt-3">
+                <form hx-post="/clear-storage-approval" hx-target="#main-content" hx-swap="outerHTML" class="mt-3" data-action-title="Marking storage for review again" data-action-start="Removing the current approval so the storage plan can be reviewed again.">
                     <input type="hidden" name="return_page" value="storage">
                     <input type="hidden" name="discovery_raw_path" value="{{ storage_export_paths.raw if storage_export_paths else '' }}">
                     <input type="hidden" name="raid_plan_path" value="{{ storage_plan_paths.plan if storage_plan_paths else '' }}">
-                    <button class="btn" type="submit">Remove approval</button>
+                    <button class="btn" type="submit">Unapprove current storage plan</button>
                 </form>
-                <div class="text-sm text-slate-400 mt-2">Use this if you want to mark the storage setup for review again before the next iLO run.</div>
+                <div class="text-sm text-slate-400 mt-2">Use this if you do not want the current approval to be trusted for the next iLO run.</div>
                 {% endif %}
             </div>
 
@@ -519,26 +585,32 @@
         {% set hpe = storage_discovery.hpe_smart_storage or {} %}
         {% set hpe_diagnostics = hpe.diagnostics or capabilities.hpe_smart_storage_diagnostics or {} %}
 
-        <div class="grid grid-cols-1 md:grid-cols-3 gap-3">
-            <div class="card">
-                <div class="text-xs font-bold uppercase text-slate-400 mb-1">Server</div>
-                <div><strong>Model:</strong> {{ server.model or "Unknown" }}</div>
-                <div><strong>Generation:</strong> {{ server.generation or "Unknown" }}</div>
-                <div><strong>Serial:</strong> {{ server.serial_number or "Unknown" }}</div>
+        <details class="card">
+            <summary class="summary-row">
+                <span class="text-lg font-semibold">Storage discovery details</span>
+                <span class="status progress">details</span>
+            </summary>
+            <div class="mt-4">
+            <div class="grid grid-cols-1 md:grid-cols-3 gap-3 mb-4">
+                <div class="card">
+                    <div class="text-xs font-bold uppercase text-slate-400 mb-1">Server</div>
+                    <div><strong>Model:</strong> {{ server.model or "Unknown" }}</div>
+                    <div><strong>Generation:</strong> {{ server.generation or "Unknown" }}</div>
+                    <div><strong>Serial:</strong> {{ server.serial_number or "Unknown" }}</div>
+                </div>
+                <div class="card">
+                    <div class="text-xs font-bold uppercase text-slate-400 mb-1">iLO</div>
+                    <div><strong>Version:</strong> {{ ilo.version or "Unknown" }}</div>
+                    <div><strong>Model:</strong> {{ ilo.model or "Unknown" }}</div>
+                    <div><strong>Firmware:</strong> {{ ilo.firmware or "Unknown" }}</div>
+                </div>
+                <div class="card">
+                    <div class="text-xs font-bold uppercase text-slate-400 mb-1">Detected Resources</div>
+                    <div><strong>Standard Redfish Storage:</strong> {{ "Yes" if capabilities.standard_redfish_storage else "No" }}</div>
+                    <div><strong>HPE Smart Storage:</strong> {{ "Yes" if capabilities.hpe_smart_storage else "No" }}</div>
+                    <div><strong>Storage path:</strong> {{ capabilities.standard_storage_path or "Not exposed" }}</div>
+                </div>
             </div>
-            <div class="card">
-                <div class="text-xs font-bold uppercase text-slate-400 mb-1">iLO</div>
-                <div><strong>Version:</strong> {{ ilo.version or "Unknown" }}</div>
-                <div><strong>Model:</strong> {{ ilo.model or "Unknown" }}</div>
-                <div><strong>Firmware:</strong> {{ ilo.firmware or "Unknown" }}</div>
-            </div>
-            <div class="card">
-                <div class="text-xs font-bold uppercase text-slate-400 mb-1">Detected Resources</div>
-                <div><strong>Standard Redfish Storage:</strong> {{ "Yes" if capabilities.standard_redfish_storage else "No" }}</div>
-                <div><strong>HPE Smart Storage:</strong> {{ "Yes" if capabilities.hpe_smart_storage else "No" }}</div>
-                <div><strong>Storage path:</strong> {{ capabilities.standard_storage_path or "Not exposed" }}</div>
-            </div>
-        </div>
 
         <details class="card">
             <summary class="summary-row">
@@ -594,7 +666,7 @@
             </div>
         </details>
 
-        <details class="card">
+        <details class="card mt-4">
             <summary class="summary-row">
                 <span class="text-lg font-semibold">View HPE Smart Storage details</span>
                 <span class="status progress">{{ (hpe.controllers or [])|length }} controllers</span>
@@ -686,6 +758,8 @@
                 {% endif %}
             </details>
             {% endif %}
+            </div>
+        </details>
             </div>
         </details>
 

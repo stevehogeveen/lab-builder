@@ -2968,7 +2968,28 @@ def build_cards():
     ]
 
 
-def build_execution_preview(cfg: dict, scope: str):
+def build_action_feedback(
+    title: str,
+    summary: str,
+    *,
+    tone: str = "progress",
+    status_label: str | None = None,
+    outcomes: list[str] | None = None,
+    details: list[str] | None = None,
+    links: list[dict[str, str]] | None = None,
+):
+    return {
+        "title": title,
+        "summary": summary,
+        "tone": tone,
+        "status_label": status_label or ("Done" if tone == "ready" else "Working" if tone == "progress" else "Needs attention"),
+        "outcomes": outcomes or [],
+        "details": details or [],
+        "links": links or [],
+    }
+
+
+def build_execution_review(cfg: dict, scope: str):
     lines = [f"Execution scope: {scope}", ""]
     storage_review = build_storage_review_context(cfg)
     storage_validation_error = None
@@ -2977,55 +2998,149 @@ def build_execution_preview(cfg: dict, scope: str):
     except Exception as e:
         storage_execution = {"included": bool(storage_review.get("include_in_ilo_run"))}
         storage_validation_error = str(e).splitlines()[0]
+    components = {
+        "ilo": {
+            "name": "iLO",
+            "target": cfg["ilo"].get("current_ip") or cfg["ilo"].get("host", "") or "Not set",
+            "summary": "Apply the planned iLO network, hostname, and hardening settings.",
+            "review_href": "/ilo",
+        },
+        "esxi": {
+            "name": "ESXi",
+            "target": cfg["esxi"].get("management_ip", "") or cfg.get("ip_plan", {}).get("esxi", "") or "Not set",
+            "summary": "Use the saved ESXi setup values and generated install inputs.",
+            "review_href": "/esxi",
+        },
+        "windows": {
+            "name": "Windows",
+            "target": cfg["windows"].get("ip_address", "") or cfg.get("ip_plan", {}).get("windows", "") or "Not set",
+            "summary": "Use the saved Windows VM name, network plan, and admin settings.",
+            "review_href": "/windows",
+        },
+        "qnap": {
+            "name": "QNAP",
+            "target": cfg["qnap"].get("ip", "") or cfg.get("ip_plan", {}).get("qnap", "") or "Not set",
+            "summary": "Use the saved QNAP hostname and credential settings.",
+            "review_href": "/qnap",
+        },
+        "iosafe": {
+            "name": "ioSafe",
+            "target": cfg["iosafe"].get("ip", "") or cfg.get("ip_plan", {}).get("iosafe", "") or "Not set",
+            "summary": "Run the saved ioSafe setup for the selected management target.",
+            "review_href": "/global-settings",
+        },
+        "cisco_switch": {
+            "name": "Cisco Switch",
+            "target": cfg["cisco_switch"].get("ip", "") or cfg.get("ip_plan", {}).get("switch", "") or "Not set",
+            "summary": "Run the saved switch management setup and template-driven changes.",
+            "review_href": "/global-settings",
+        },
+        "storage": {
+            "name": "Storage / RAID",
+            "target": storage_review.get("approval", {}).get("host") or storage_review.get("latest", {}).get("host") or "Not set",
+            "summary": "Apply the exact approved storage artifact if storage is included in this run.",
+            "review_href": "/storage#storage-approval-actions" if storage_review.get("approved") else "/storage#storage-review-start",
+        },
+    }
+
+    def stage_entry(key: str, included: bool) -> dict:
+        meta = components[key]
+        summary = meta["summary"]
+        if key == "storage":
+            if not storage_review.get("include_in_ilo_run"):
+                summary = "Storage will be skipped in this run."
+            elif storage_validation_error:
+                summary = f"Storage setup is blocked until it is reviewed again: {storage_validation_error}"
+            elif storage_review.get("approved") and not storage_review.get("stale"):
+                plan_summary = storage_review.get("approval", {}).get("plan_summary", {}) or {}
+                mode = str(plan_summary.get("mode") or "").lower()
+                if "wipe" in mode or "rebuild" in mode:
+                    summary = "Storage will be erased and rebuilt using the approved layout."
+                elif plan_summary.get("os_bays") or plan_summary.get("data_bays"):
+                    summary = "Storage will be set up using the approved layout."
+                else:
+                    summary = "Storage will be checked against the approved layout."
+                if storage_review.get("approval", {}).get("reboot_expected"):
+                    summary += " Restart required."
+        return {
+            "key": key,
+            "name": meta["name"],
+            "target": meta["target"],
+            "included": included,
+            "summary": summary,
+            "review_href": meta["review_href"],
+        }
+
+    included_stages = []
     if scope == "included":
         included = cfg.get("included", {})
         lines.append("Will act on all included components in this kit:")
-        if included.get("ilo"):
-            lines.append(f"- iLO -> {cfg['ilo'].get('current_ip') or cfg['ilo'].get('host', '')}")
-        if included.get("esxi"):
-            lines.append(f"- ESXi -> {cfg['esxi'].get('management_ip', '')}")
-        if included.get("windows"):
-            lines.append(f"- Windows -> {cfg['windows'].get('ip_address', '')}")
-        if included.get("qnap"):
-            lines.append(f"- QNAP -> {cfg['qnap'].get('ip', '')}")
-        if included.get("iosafe"):
-            lines.append(f"- ioSafe -> {cfg['iosafe'].get('ip', '')}")
-        if included.get("cisco_switch"):
-            lines.append(f"- Cisco Switch -> {cfg['cisco_switch'].get('ip', '')}")
-        if included.get("storage"):
+        for key in ["ilo", "esxi", "windows", "qnap", "iosafe", "cisco_switch"]:
+            if included.get(key):
+                lines.append(f"- {components[key]['name']} -> {components[key]['target']}")
+            included_stages.append(stage_entry(key, bool(included.get(key))))
+        storage_included = bool(included.get("storage"))
+        if storage_included:
             lines.append(f"- Storage plan -> {'approved exact artifact' if storage_execution.get('included') else 'not ready'}")
+        included_stages.append(stage_entry("storage", storage_included))
     else:
         lines.append(f"Will act only on stage: {scope}")
         if scope == "ilo":
             lines.append(f"- Storage included in iLO run: {'Yes' if storage_review.get('include_in_ilo_run') else 'No'}")
+            included_stages.append(stage_entry("ilo", True))
+            included_stages.append(stage_entry("storage", bool(storage_review.get("include_in_ilo_run"))))
+        else:
+            included_stages.append(stage_entry(scope, True))
     lines.append("")
     if scope in {"ilo", "included"}:
         lines.append("Pre-run review:")
         lines.append(
-            f"- iLO settings -> login_ip={cfg['ilo'].get('current_ip') or cfg['ilo'].get('host', '')} | "
-            f"target_ip={cfg['ilo'].get('target_ip') or '(unchanged)'} | hostname={cfg['ilo'].get('hostname') or '(unchanged)'}"
+            f"- Sign in to iLO at {cfg['ilo'].get('current_ip') or cfg['ilo'].get('host', '') or '(not set)'}"
+        )
+        lines.append(
+            f"- iLO network changes -> final IP {cfg['ilo'].get('target_ip') or '(unchanged)'} | "
+            f"gateway {cfg['ilo'].get('gateway') or '(unchanged)'} | hostname {cfg['ilo'].get('hostname') or '(unchanged)'}"
         )
         if storage_review.get("include_in_ilo_run"):
             approval = storage_review.get("approval", {}) or {}
-            lines.append(f"- Storage included -> Yes")
-            lines.append(f"- Approved discovery artifact -> {approval.get('discovery_raw_path') or '(missing)'}")
-            lines.append(f"- Approved storage plan artifact -> {approval.get('plan_path') or '(missing)'}")
-            lines.append(f"- Expected storage reboot -> {'Yes' if approval.get('reboot_expected') else 'No'}")
+            lines.append("- Storage included -> Yes")
+            lines.append(f"- Approved storage snapshot -> {approval.get('discovery_raw_path') or '(missing)'}")
+            lines.append(f"- Approved storage plan -> {approval.get('plan_path') or '(missing)'}")
+            lines.append(f"- Restart expected after storage -> {'Yes' if approval.get('reboot_expected') else 'No'}")
             if approval.get("plan_summary"):
                 plan_summary = approval.get("plan_summary", {})
                 lines.append(
-                    f"- Storage plan summary -> controller={plan_summary.get('controller') or '(unknown)'} | "
-                    f"os_bays={plan_summary.get('os_bays') or '(none)'} | "
-                    f"data_bays={plan_summary.get('data_bays') or '(none)'} | "
-                    f"spare_bay={plan_summary.get('spare_bay') or '(none)'}"
+                    f"- Storage layout -> controller {plan_summary.get('controller') or '(unknown)'} | "
+                    f"OS bays {plan_summary.get('os_bays') or '(none)'} | "
+                    f"data bays {plan_summary.get('data_bays') or '(none)'} | "
+                    f"spare bay {plan_summary.get('spare_bay') or '(none)'}"
                 )
         else:
             lines.append("- Storage included -> No")
         if storage_validation_error:
-            lines.append(f"- Storage readiness -> BLOCKED: {storage_validation_error}")
+            lines.append(f"- Storage readiness -> blocked: {storage_validation_error}")
     lines.append("")
     lines.append("WARNING: This may reboot, reconfigure, overwrite, or otherwise make destructive changes.")
-    return "\n".join(lines)
+    summary_items = [
+        {"label": "Run type", "value": "Full kit run" if scope == "included" else f"Single stage: {components.get(scope, {'name': scope}).get('name', scope)}"},
+        {"label": "Selected kit", "value": cfg.get("site", {}).get("name", "") or "Unknown"},
+        {"label": "Storage in run", "value": "Yes" if (scope == "included" and cfg.get("included", {}).get("storage")) or (scope == "ilo" and storage_review.get("include_in_ilo_run")) else "No"},
+        {"label": "Restart expected", "value": "Yes" if storage_review.get("approval", {}).get("reboot_expected") and any(stage["key"] == "storage" and stage["included"] for stage in included_stages) else "No"},
+    ]
+    warning_points = [
+        "Review the selected targets, credentials, and included stages before starting.",
+        "This run can reboot equipment and apply destructive changes.",
+    ]
+    if storage_validation_error:
+        warning_points.append(f"Storage is blocked right now: {storage_validation_error}")
+    return {
+        "scope": scope,
+        "summary_items": summary_items,
+        "stages": included_stages,
+        "warning_title": "Review before you start",
+        "warning_points": warning_points,
+        "detail_text": "\n".join(lines),
+    }
 
 
 def get_steps_for_scope(cfg: dict, scope: str):
@@ -3613,9 +3728,11 @@ def render_page(
     ks_content: str | None = None,
     error_message: str | None = None,
     execution_preview: str | None = None,
+    execution_review: dict | None = None,
     confirm_scope: str | None = None,
     config_view_title: str | None = None,
     config_view_content: str | None = None,
+    action_feedback: dict | None = None,
     live_inventory_status: dict | None = None,
     storage_discovery: dict | None = None,
     storage_export_paths: dict[str, Path] | None = None,
@@ -3636,6 +3753,30 @@ def render_page(
     esxi_inclusion = component_inclusion_status(cfg, "esxi")
     windows_inclusion = component_inclusion_status(cfg, "windows")
     qnap_inclusion = component_inclusion_status(cfg, "qnap")
+    if action_feedback is None:
+        if error_message:
+            action_feedback = build_action_feedback(
+                "Needs attention",
+                error_message,
+                tone="pending",
+                status_label="Warning",
+            )
+        elif ks_result:
+            tone = "ready" if not ks_result.lower().startswith("failed") else "pending"
+            action_feedback = build_action_feedback(
+                "Kickstart result",
+                ks_result,
+                tone=tone,
+                status_label="Ready" if tone == "ready" else "Warning",
+                details=["The full kickstart content is available below."] if ks_content else [],
+            )
+        elif message:
+            action_feedback = build_action_feedback(
+                "Update complete",
+                message,
+                tone="ready",
+                status_label="Done",
+            )
 
     context = {
         "title": page_meta["title"],
@@ -3650,9 +3791,11 @@ def render_page(
         "ks_content": ks_content,
         "error_message": error_message,
         "execution_preview": execution_preview,
+        "execution_review": execution_review,
         "confirm_scope": confirm_scope,
         "config_view_title": config_view_title,
         "config_view_content": config_view_content,
+        "action_feedback": action_feedback,
         "live_inventory_status": live_inventory_status,
         "storage_discovery": storage_discovery,
         "storage_export_paths": storage_export_paths,
@@ -3990,7 +4133,20 @@ async def save_config_route(
     try:
         cfg = apply_ip_plan(cfg)
         save_kit_config(cfg)
-        return render_page(request, cfg, active_page=return_page, message=f"Saved kit: {cfg['site']['name']}")
+        return render_page(
+            request,
+            cfg,
+            active_page=return_page,
+            action_feedback=build_action_feedback(
+                "Kit saved",
+                f"Saved the kit and refreshed the shared address plan for {cfg['site']['name']}.",
+                tone="ready",
+                outcomes=[
+                    f"Kit: {cfg['site']['name']}",
+                    f"Shared subnet: {cfg['shared_network'].get('subnet', '') or 'Not set'}",
+                ],
+            ),
+        )
     except Exception as e:
         return render_page(request, cfg, active_page=return_page, error_message=f"Could not apply IP plan: {e}")
 
@@ -4063,7 +4219,21 @@ async def save_global_settings_route(
     try:
         cfg = apply_ip_plan(cfg)
         save_kit_config(cfg)
-        return render_page(request, cfg, active_page=return_page, message="Saved global settings.")
+        return render_page(
+            request,
+            cfg,
+            active_page=return_page,
+            action_feedback=build_action_feedback(
+                "Shared defaults saved",
+                "Updated the global settings that feed the workflow pages.",
+                tone="ready",
+                outcomes=[
+                    f"Kit: {cfg['site'].get('name', '') or 'Unknown'}",
+                    f"Shared subnet: {cfg['shared_network'].get('subnet', '') or 'Not set'}",
+                ],
+                links=[{"label": "Review iLO", "href": "/ilo"}, {"label": "Review Storage / RAID", "href": "/storage"}],
+            ),
+        )
     except Exception as e:
         return render_page(request, cfg, active_page=return_page, error_message=f"Could not save global settings: {e}")
 
@@ -4074,6 +4244,7 @@ async def save_ilo_settings_route(
     return_page: str = Form("ilo"),
     ilo_current_ip: str = Form(""),
     ilo_target_ip: str = Form(""),
+    ilo_gateway: str = Form(""),
     ilo_hostname: str = Form(""),
     ilo_username: str = Form(""),
     ilo_password: str = Form(""),
@@ -4085,13 +4256,29 @@ async def save_ilo_settings_route(
     if ilo_target_ip.strip():
         cfg["ilo"]["target_ip"] = ilo_target_ip.strip()
         cfg["ip_plan"]["ilo"] = ilo_target_ip.strip()
+    cfg["ilo"]["gateway"] = ilo_gateway.strip()
     cfg["ilo"]["hostname"] = ilo_hostname
     cfg["ilo"]["username"] = ilo_username
     cfg["ilo"]["password"] = ilo_password
     cfg["included"]["ilo"] = included_ilo == "on"
     cfg = apply_ip_plan(cfg)
     save_kit_config(cfg)
-    return render_page(request, cfg, active_page=return_page, message="Saved iLO settings.")
+    return render_page(
+        request,
+        cfg,
+        active_page=return_page,
+        action_feedback=build_action_feedback(
+            "iLO setup saved",
+            "Updated the saved iLO target and local sign-in settings for this kit.",
+            tone="ready",
+            outcomes=[
+                f"Target: {cfg['ilo'].get('current_ip') or cfg['ilo'].get('host', '') or 'Not set'}",
+                f"Planned final IP: {cfg['ilo'].get('target_ip') or 'Unchanged'}",
+                f"Gateway: {cfg['ilo'].get('gateway') or 'Not set'}",
+            ],
+            links=[{"label": "Review run prep", "href": "/execution"}],
+        ),
+    )
 
 
 @app.post("/save-esxi-settings", response_class=HTMLResponse)
@@ -4108,7 +4295,20 @@ async def save_esxi_settings_route(
     cfg["included"]["esxi"] = included_esxi == "on"
     cfg = apply_ip_plan(cfg)
     save_kit_config(cfg)
-    return render_page(request, cfg, active_page=return_page, message="Saved ESXi settings.")
+    return render_page(
+        request,
+        cfg,
+        active_page=return_page,
+        action_feedback=build_action_feedback(
+            "ESXi setup saved",
+            "Updated the local ESXi setup values for this kit.",
+            tone="ready",
+            outcomes=[
+                f"Hostname: {cfg['esxi'].get('hostname', '') or 'Not set'}",
+                f"Target: {cfg['esxi'].get('management_ip', '') or cfg.get('ip_plan', {}).get('esxi', '') or 'Not set'}",
+            ],
+        ),
+    )
 
 
 @app.post("/save-windows-settings", response_class=HTMLResponse)
@@ -4125,7 +4325,20 @@ async def save_windows_settings_route(
     cfg["included"]["windows"] = included_windows == "on"
     cfg = apply_ip_plan(cfg)
     save_kit_config(cfg)
-    return render_page(request, cfg, active_page=return_page, message="Saved Windows settings.")
+    return render_page(
+        request,
+        cfg,
+        active_page=return_page,
+        action_feedback=build_action_feedback(
+            "Windows setup saved",
+            "Updated the local Windows setup values for this kit.",
+            tone="ready",
+            outcomes=[
+                f"VM name: {cfg['windows'].get('vm_name', '') or 'Not set'}",
+                f"Target: {cfg['windows'].get('ip_address', '') or cfg.get('ip_plan', {}).get('windows', '') or 'Not set'}",
+            ],
+        ),
+    )
 
 
 @app.post("/save-qnap-settings", response_class=HTMLResponse)
@@ -4144,7 +4357,20 @@ async def save_qnap_settings_route(
     cfg["included"]["qnap"] = included_qnap == "on"
     cfg = apply_ip_plan(cfg)
     save_kit_config(cfg)
-    return render_page(request, cfg, active_page=return_page, message="Saved QNAP settings.")
+    return render_page(
+        request,
+        cfg,
+        active_page=return_page,
+        action_feedback=build_action_feedback(
+            "QNAP setup saved",
+            "Updated the local QNAP setup values for this kit.",
+            tone="ready",
+            outcomes=[
+                f"Hostname: {cfg['qnap'].get('hostname', '') or 'Not set'}",
+                f"Target: {cfg['qnap'].get('ip', '') or cfg.get('ip_plan', {}).get('qnap', '') or 'Not set'}",
+            ],
+        ),
+    )
 
 
 @app.post("/autofill-ip-plan", response_class=HTMLResponse)
@@ -4226,9 +4452,15 @@ async def export_ilo_inventory(request: Request, return_page: str = Form("config
             request,
             cfg,
             active_page=return_page,
-            message=(
-                f"Captured live inventory from {host}. "
-                f"Latest export path: {export_paths['summary'].parent}"
+            action_feedback=build_action_feedback(
+                "Current iLO inventory captured",
+                "Read the live iLO state and saved a fresh summary and raw export.",
+                tone="ready",
+                outcomes=[
+                    f"Target: {host}",
+                    f"Saved under: {export_paths['summary'].parent}",
+                ],
+                links=[{"label": "Open artifacts page", "href": "/configs"}],
             ),
             live_inventory_status=live_inventory_success_status("Complete", export_paths, host=host),
             config_view_title=f"Latest Live Summary: {export_paths['summary'].parent.name}",
@@ -4295,10 +4527,16 @@ async def export_ad_hoc_ilo_inventory(
             request,
             cfg,
             active_page=return_page,
-            message=(
-                f"Captured live inventory from {host}. "
-                f"Latest export path: {export_paths['summary'].parent}"
-                f"{saved_msg}"
+            action_feedback=build_action_feedback(
+                "Ad hoc iLO inventory captured",
+                "Read the live iLO state from the temporary target and saved fresh exports.",
+                tone="ready",
+                outcomes=[
+                    f"Target: {host}",
+                    f"Saved under: {export_paths['summary'].parent}",
+                    saved_msg.strip() or "Current kit settings were left unchanged.",
+                ],
+                links=[{"label": "Open artifacts page", "href": "/configs"}],
             ),
             live_inventory_status=live_inventory_success_status("Complete", export_paths, host=host, label=label),
             config_view_title=f"Latest Live Summary: {export_paths['summary'].parent.name}",
@@ -4333,7 +4571,12 @@ async def view_latest_live_summary(request: Request, return_page: str = Form("co
         request,
         cfg,
         active_page=return_page,
-        message=f"Viewing latest live summary from {latest['directory']}",
+        action_feedback=build_action_feedback(
+            "Latest live summary opened",
+            "Showing the newest saved live inventory summary for this kit.",
+            tone="ready",
+            outcomes=[f"Source folder: {latest['directory']}"],
+        ),
         live_inventory_status=live_inventory_success_status("Complete", latest),
         config_view_title=f"Latest Live Summary: {latest['directory'].name}",
         config_view_content=latest["summary"].read_text(encoding="utf-8"),
@@ -4373,7 +4616,12 @@ async def open_exports_folder(request: Request, return_page: str = Form("configs
         request,
         cfg,
         active_page=return_page,
-        message=f"Exports folder: {ILO_LIVE_EXPORT_DIR}",
+        action_feedback=build_action_feedback(
+            "Exports folder opened",
+            "Showing the current exports folder listing for quick review.",
+            tone="ready",
+            outcomes=[f"Folder: {ILO_LIVE_EXPORT_DIR}"],
+        ),
         config_view_title="Exports Folder",
         config_view_content=render_exports_folder_listing(ILO_LIVE_EXPORT_DIR),
     )
@@ -4410,7 +4658,17 @@ async def read_current_storage(
             request,
             cfg,
             active_page=return_page,
-            message=f"Read current storage from {host} ({storage_target.get('source')}). Export path: {export_paths['directory']}",
+            action_feedback=build_action_feedback(
+                "Current storage read complete",
+                "Read the current storage layout and refreshed the latest discovery snapshot.",
+                tone="ready",
+                outcomes=[
+                    f"Target: {host}",
+                    f"Source: {storage_target.get('source')}",
+                    f"Run folder: {export_paths['directory']}",
+                ],
+                links=[{"label": "Review storage setup", "href": "/storage#storage-approval-status"}],
+            ),
             storage_discovery=discovery.get("summary", {}),
             storage_export_paths=export_paths,
         )
@@ -4451,7 +4709,16 @@ async def plan_raid_layout(
             request,
             cfg,
             active_page=return_page,
-            message=f"Planned RAID layout from discovery artifact {discovery_paths['raw']}. Plan saved to {plan_paths['plan']}",
+            action_feedback=build_action_feedback(
+                "Storage plan ready",
+                "Built a read-only storage plan from the latest discovery snapshot.",
+                tone="ready",
+                outcomes=[
+                    f"Discovery source: {discovery_paths['raw']}",
+                    f"Plan saved to: {plan_paths['plan']}",
+                ],
+                links=[{"label": "Review storage setup", "href": "/storage#storage-approval-actions"}],
+            ),
             storage_discovery=discovery.get("summary", {}),
             storage_export_paths=discovery_paths,
             storage_plan=plan,
@@ -4507,9 +4774,16 @@ async def approve_storage_plan(
             request,
             cfg,
             active_page=return_page,
-            message=(
-                f"Approved storage plan {plan_paths['plan']} for host {cfg['storage']['approval'].get('host') or host}. "
-                f"Storage will {'be' if cfg['storage']['include_in_ilo_run'] else 'not be'} included in the later iLO run."
+            action_feedback=build_action_feedback(
+                "Storage approved",
+                "The exact storage plan is now approved for later use in the iLO run.",
+                tone="ready",
+                outcomes=[
+                    f"Approved plan: {plan_paths['plan']}",
+                    f"Target host: {cfg['storage']['approval'].get('host') or host}",
+                    f"Included in iLO run: {'Yes' if cfg['storage']['include_in_ilo_run'] else 'No'}",
+                ],
+                links=[{"label": "Review run center", "href": "/execution"}],
             ),
             storage_discovery=discovery.get("summary", {}) if discovery else None,
             storage_export_paths=discovery_paths,
@@ -4555,7 +4829,12 @@ async def clear_storage_approval(
         request,
         cfg,
         active_page=return_page,
-        message="Cleared the approved storage plan for this kit.",
+        action_feedback=build_action_feedback(
+            "Storage marked for review again",
+            "Removed the current storage approval so the plan can be reviewed again before a later run.",
+            tone="ready",
+            outcomes=["Storage will not be included in the iLO run until it is approved again."],
+        ),
         storage_discovery=discovery.get("summary", {}) if discovery else None,
         storage_export_paths=discovery_paths,
         storage_plan=plan,
@@ -4600,10 +4879,17 @@ async def apply_storage_layout(
             request,
             cfg,
             active_page=return_page,
-            message=(
-                f"Started storage apply in {apply_mode.replace('_', ' ')} mode. "
-                f"Apply artifacts will be written under {apply_paths['directory']}. "
-                "The Storage / RAID progress card and Live Job panel will update as the run advances."
+            action_feedback=build_action_feedback(
+                "Storage apply started",
+                f"Applying the approved storage plan in {apply_mode.replace('_', ' ')} mode.",
+                tone="progress",
+                status_label="Running",
+                outcomes=[
+                    f"Target: {host}",
+                    f"Run folder: {apply_paths['directory']}",
+                ],
+                details=["Use the storage progress card and the live log below to follow each step."],
+                links=[{"label": "Jump to storage progress", "href": "/storage#storage-progress-card"}],
             ),
             storage_discovery=discovery.get("summary", {}) if discovery else None,
             storage_export_paths=discovery_paths,
@@ -4658,9 +4944,14 @@ async def reboot_storage_now(
             request,
             cfg,
             active_page=return_page,
-            message=(
-                f"Requested server reboot for storage run {apply_paths['directory']}. "
-                "The Storage / RAID progress card will show reboot steps and post-reboot validation."
+            action_feedback=build_action_feedback(
+                "Restart requested",
+                "Requested the server restart so the staged storage changes can continue.",
+                tone="progress",
+                status_label="Running",
+                outcomes=[f"Run folder: {apply_paths['directory']}"],
+                details=["The storage progress card will now track restart and post-reboot validation."],
+                links=[{"label": "Jump to storage progress", "href": "/storage#storage-progress-card"}],
             ),
             storage_discovery=discovery.get("summary", {}) if discovery else None,
             storage_export_paths=discovery_paths,
@@ -4815,14 +5106,15 @@ async def prepare_execute(request: Request, scope: str = Form(...), return_page:
         validate_execution_scope(cfg, scope)
     except Exception as e:
         preview_error = str(e).splitlines()[0]
-    preview = build_execution_preview(cfg, scope)
+    review = build_execution_review(cfg, scope)
     return render_page(
         request,
         cfg,
         active_page=return_page,
-        execution_preview=preview,
+        execution_preview=review.get("detail_text"),
+        execution_review=review,
         confirm_scope=scope,
-        error_message=preview_error or "WARNING: Execution may modify, reboot, overwrite, or reconfigure equipment. Review carefully before continuing.",
+        error_message=preview_error,
     )
 
 
@@ -4843,7 +5135,8 @@ async def execute_scope(
             cfg,
             active_page=return_page,
             error_message=f"Execution blocked: {str(e).splitlines()[0]}",
-            execution_preview=build_execution_preview(cfg, scope),
+            execution_preview=build_execution_review(cfg, scope).get("detail_text"),
+            execution_review=build_execution_review(cfg, scope),
             confirm_scope=scope,
         )
 
@@ -4853,7 +5146,8 @@ async def execute_scope(
             cfg,
             active_page=return_page,
             error_message="Execution blocked: you must check the confirmation box.",
-            execution_preview=build_execution_preview(cfg, scope),
+            execution_preview=build_execution_review(cfg, scope).get("detail_text"),
+            execution_review=build_execution_review(cfg, scope),
             confirm_scope=scope,
         )
 
@@ -4863,7 +5157,8 @@ async def execute_scope(
             cfg,
             active_page=return_page,
             error_message='Execution blocked: confirmation phrase must be exactly EXECUTE.',
-            execution_preview=build_execution_preview(cfg, scope),
+            execution_preview=build_execution_review(cfg, scope).get("detail_text"),
+            execution_review=build_execution_review(cfg, scope),
             confirm_scope=scope,
         )
 

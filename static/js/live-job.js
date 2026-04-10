@@ -74,6 +74,32 @@
         if (node) node.style.display = visible ? "" : "none";
     }
 
+    function updateActionStatusCard(payload) {
+        const card = document.getElementById("page-action-status");
+        if (!card) return;
+        const title = document.getElementById("page-action-status-title");
+        const label = document.getElementById("page-action-status-label");
+        const summary = document.getElementById("page-action-status-summary");
+        card.style.display = "";
+        if (title) title.textContent = payload.title || "Working";
+        if (label) {
+            label.textContent = payload.label || "Working";
+            label.className = `status ${payload.tone || "progress"}`;
+        }
+        if (summary) summary.textContent = payload.summary || "";
+    }
+
+    function deriveActionPayload(source) {
+        const trigger = source && source.triggeringEvent && source.triggeringEvent.detail ? source.triggeringEvent.detail.elt : null;
+        const form = trigger && typeof trigger.closest === "function" ? trigger.closest("form") : null;
+        const node = trigger || form || source;
+        const buttonLabel = trigger && trigger.textContent ? trigger.textContent.trim() : "";
+        const title = (node && node.dataset && node.dataset.actionTitle) || buttonLabel || "Working";
+        const summary = (node && node.dataset && node.dataset.actionStart) || `${buttonLabel || "The action"} is running.`;
+        const complete = (node && node.dataset && node.dataset.actionComplete) || `${buttonLabel || "The action"} finished.`;
+        return { title: title, start: summary, complete: complete };
+    }
+
     function scrollIntoViewSoon(node) {
         if (!node || typeof node.scrollIntoView !== "function") return;
         window.setTimeout(function () {
@@ -160,4 +186,24 @@
         scrollToHashTargetSoon();
     }
     document.body && document.body.addEventListener("htmx:afterSwap", scrollToHashTargetSoon);
+    if (document.body) {
+        document.body.addEventListener("htmx:beforeRequest", function (event) {
+            const target = event.detail && event.detail.target;
+            if (!target || target.id !== "main-content") return;
+            const payload = deriveActionPayload(event.detail.requestConfig || {});
+            updateActionStatusCard({ title: payload.title, summary: payload.start, label: "Working", tone: "progress" });
+        });
+        document.body.addEventListener("htmx:afterRequest", function (event) {
+            const target = event.detail && event.detail.target;
+            if (!target || target.id !== "main-content") return;
+            const payload = deriveActionPayload(event.detail.requestConfig || {});
+            const successful = event.detail.xhr && event.detail.xhr.status >= 200 && event.detail.xhr.status < 400;
+            updateActionStatusCard({
+                title: payload.title,
+                summary: successful ? payload.complete : "The action needs attention. Review the message on the page for details.",
+                label: successful ? "Done" : "Warning",
+                tone: successful ? "ready" : "pending",
+            });
+        });
+    }
 })();

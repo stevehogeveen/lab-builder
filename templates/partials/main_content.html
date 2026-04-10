@@ -1,7 +1,47 @@
 <div id="main-content" class="space-y-6">
-    {% if message %}<div class="msg">{{ message }}</div>{% endif %}
-    {% if error_message %}<div class="error">{{ error_message }}</div>{% endif %}
-    {% if ks_result %}<div class="result">{{ ks_result }}</div>{% endif %}
+    <div id="page-action-status" class="card" style="display: none;">
+        <div class="flex items-center justify-between gap-3 mb-2">
+            <div class="text-lg font-semibold" id="page-action-status-title">Working</div>
+            <span class="status progress" id="page-action-status-label">Working</span>
+        </div>
+        <div class="text-sm text-slate-300" id="page-action-status-summary">The page will update when this action finishes.</div>
+    </div>
+    {% if action_feedback %}
+    <section class="card">
+        <div class="flex items-center justify-between gap-3 mb-3">
+            <div class="text-lg font-semibold">{{ action_feedback.title }}</div>
+            <span class="status {{ action_feedback.tone }}">{{ action_feedback.status_label }}</span>
+        </div>
+        <div class="text-sm">{{ action_feedback.summary }}</div>
+        {% if action_feedback.outcomes %}
+        <div class="grid grid-cols-1 md:grid-cols-2 gap-3 mt-4">
+            {% for outcome in action_feedback.outcomes %}
+            <div class="result" style="margin-top: 0;">{{ outcome }}</div>
+            {% endfor %}
+        </div>
+        {% endif %}
+        {% if action_feedback.links %}
+        <div class="actions mt-4">
+            {% for link in action_feedback.links %}
+            <a class="btn" href="{{ link.href }}">{{ link.label }}</a>
+            {% endfor %}
+        </div>
+        {% endif %}
+        {% if action_feedback.details %}
+        <details class="mt-4">
+            <summary class="summary-row">
+                <span class="text-sm font-bold text-slate-300">View details</span>
+                <span class="status progress">details</span>
+            </summary>
+            <div class="mt-4 space-y-2 text-sm text-slate-300">
+                {% for detail in action_feedback.details %}
+                <div>{{ detail }}</div>
+                {% endfor %}
+            </div>
+        </details>
+        {% endif %}
+    </section>
+    {% endif %}
     {% if ks_content %}<div class="codeblock">{{ ks_content }}</div>{% endif %}
     {% if config_view_title and config_view_content %}
     <details class="card" open>
@@ -15,10 +55,43 @@
 
     {% if active_page == "dashboard" %}
         {% include "partials/pages/dashboard.html" %}
-    {% elif active_page == "execution" %}
-        {% include "partials/pages/execution.html" %}
-    {% elif active_page == "configuration" %}
+    {% elif active_page in ["global_settings", "configuration"] %}
         {% include "partials/pages/configuration.html" %}
+    {% elif active_page == "ilo" %}
+        {% include "partials/pages/ilo.html" %}
+    {% elif active_page == "execution" %}
+        <section class="card">
+            <div class="flex items-center justify-between gap-3 mb-2">
+                <div class="text-lg font-semibold">Storage in the upcoming iLO run</div>
+                <span class="status {{ storage_execution_status.tone or 'warning' }}">{{ storage_execution_status.badge or 'Storage not approved' }}</span>
+            </div>
+            <div class="text-sm mb-2">{{ storage_execution_status.summary }}</div>
+            <div class="text-sm text-slate-400">
+                Will storage be part of the next iLO run?
+                {% if cfg.included.storage and storage_review.approved %}
+                Yes. The approved storage setup can be included in the run.
+                {% elif cfg.included.storage and not storage_review.approved %}
+                Not yet. Storage is selected in kit config, but it still needs review and approval.
+                {% else %}
+                No. Storage is not selected for the upcoming run.
+                {% endif %}
+            </div>
+            {% if not storage_review.approved %}
+            <div class="error mt-3">Storage and RAID will not be configured during the iLO run until they are reviewed and approved on the Storage / RAID page.</div>
+            {% endif %}
+            <div class="actions mt-4">
+                <a class="btn {% if storage_review.approved %}btn-danger{% endif %}" href="/storage#{% if storage_review.approved %}storage-approval-actions{% else %}storage-review-start{% endif %}">
+                    {% if storage_review.approved %}Review approved storage{% else %}Open Storage / RAID{% endif %}
+                </a>
+            </div>
+        </section>
+        {% include "partials/pages/execution.html" %}
+    {% elif active_page == "esxi" %}
+        {% include "partials/pages/esxi.html" %}
+    {% elif active_page == "windows" %}
+        {% include "partials/pages/windows.html" %}
+    {% elif active_page == "qnap" %}
+        {% include "partials/pages/qnap.html" %}
     {% elif active_page == "configs" %}
         {% include "partials/pages/configs.html" %}
     {% elif active_page == "storage" %}
