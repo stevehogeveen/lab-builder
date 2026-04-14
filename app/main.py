@@ -3656,7 +3656,7 @@ def run_storage_reboot(
             apply_paths["post_reboot_raw"],
             cfg,
             post_reboot_discovery,
-            host=host,
+            host=active_host,
         )
         validation = build_storage_reboot_validation(post_reboot_discovery, apply_state)
         reboot_state["validation"] = validation
@@ -3775,7 +3775,8 @@ def combined_progress_percent(completed: int, total: int) -> int:
 def run_storage_as_part_of_real_run(
     cfg: dict[str, Any],
     client: ILOClient,
-    host: str,
+    validation_host: str,
+    active_host: str,
     storage_execution: dict[str, Any],
     kit_name: str,
     job: dict[str, Any],
@@ -3787,7 +3788,7 @@ def run_storage_as_part_of_real_run(
     discovery, _discovery_paths, plan, plan_paths = restore_storage_page_state(
         discovery_raw_path=discovery_raw_path,
         raid_plan_path=raid_plan_path,
-        expected_host=host,
+        expected_host=validation_host,
     )
     if not plan_paths:
         raise ValueError("Approved storage plan artifact is missing for the real run.")
@@ -3828,7 +3829,7 @@ def run_storage_as_part_of_real_run(
         "running",
         "Validate controller and plan",
         targets={"controller": apply_state["controller"].get("name") or apply_state["controller"].get("model") or ""},
-        details=f"Validating approved storage plan for host={host} in {apply_mode.replace('_', ' ')} mode.",
+        details=f"Validating approved storage plan for saved host={validation_host} while using active iLO endpoint {active_host} in {apply_mode.replace('_', ' ')} mode.",
         progress_percent=combined_progress_percent(current_step, total_steps),
     )
     validate_storage_apply_request(plan, apply_mode, storage_apply_confirmation_for_mode(apply_mode), True)
@@ -3860,7 +3861,7 @@ def run_storage_as_part_of_real_run(
         "running",
         "Export pre-change storage",
         targets={"controller": apply_state["controller"].get("name") or apply_state["controller"].get("model") or ""},
-        details=f"Reading current storage state from {host} before the real storage apply.",
+        details=f"Reading current storage state from active iLO endpoint {active_host} before the real storage apply.",
         progress_percent=combined_progress_percent(current_step, total_steps),
     )
     pre_change_discovery = client.get_storage_discovery(deep_smart_storage_scan=False)
@@ -3869,7 +3870,7 @@ def run_storage_as_part_of_real_run(
         apply_paths["pre_change_raw"],
         cfg,
         pre_change_discovery,
-        host=host,
+        host=active_host,
     )
     current_step += 1
     record_storage_apply_step(
@@ -3986,7 +3987,7 @@ def run_storage_as_part_of_real_run(
         apply_paths["post_change_raw"],
         cfg,
         post_change_discovery,
-        host=host,
+        host=active_host,
     )
     current_step += 1
     record_storage_apply_step(
@@ -4076,7 +4077,7 @@ def run_storage_as_part_of_real_run(
             apply_paths["post_reboot_raw"],
             cfg,
             post_reboot_discovery,
-            host=host,
+            host=active_host,
         )
         validation = build_storage_reboot_validation(post_reboot_discovery, apply_state)
         apply_state["status"] = "Completed"
@@ -5044,22 +5045,80 @@ def run_ilo_real(cfg: dict):
     }
     save_job(kit_name, job)
 
-    host = (ilo_cfg.get("current_ip") or ilo_cfg.get("host") or "").strip()
+    login_ip = (ilo_cfg.get("current_ip") or ilo_cfg.get("host") or "").strip()
     username = ilo_cfg.get("username", "").strip()
     password = ilo_cfg.get("password", "")
     desired_hostname = ilo_cfg.get("hostname", "").strip()
     target_ip = (ilo_cfg.get("target_ip") or "").strip()
     desired_gateway = (ilo_cfg.get("gateway") or "").strip()
     desired_subnet_mask = (ilo_cfg.get("subnet_mask") or "").strip()
+    active_ip = login_ip
     config_changes_attempted = False
     config_changes_succeeded = True
+    reconnect_failed = False
 
-    if not host or not username or not password:
+    if not login_ip or not username or not password:
         update_job(kit_name, job, "Failed", "Validation failed", 0, total, "[FAILED] Missing iLO host, username, or password.")
         return
 
+    def build_ilo_client(hostname: str) -> ILOClient:
+        return ILOClient(ILOConfig(host=hostname, username=username, password=password, verify_tls=False, timeout=15))
+
+    def reconnect_to_active_ip(next_ip: str, *, stage_name: str, step_index: int, retries: int = 6, wait_seconds: float = 5.0):
+        nonlocal client, active_ip
+        notes: list[str] = []
+        for attempt in range(1, retries + 1):
+            try:
+                candidate = build_ilo_client(next_ip)
+                candidate.get_summary()
+                notes.append(f"Attempt {attempt}: connected to {next_ip}.")
+                if hasattr(client, "cfg"):
+                    client.cfg.host = next_ip
+                if hasattr(client, "base") and hasattr(candidate, "base"):
+                    client.base = candidate.base
+                if hasattr(client, "redfish_root") and hasattr(candidate, "redfish_root"):
+                    client.redfish_root = candidate.redfish_root
+                if hasattr(client, "auth") and hasattr(candidate, "auth"):
+                    client.auth = candidate.auth
+                active_ip = next_ip
+                update_job(
+                    kit_name,
+                    job,
+                    "Running",
+                    stage_name,
+                    step_index,
+                    total,
+                    f"[OK] Reconnected to iLO on new IP {next_ip}",
+                )
+                return {"connected": True, "attempts": attempt, "notes": notes}
+            except Exception as e:
+                detail = str(e).splitlines()[0]
+                notes.append(f"Attempt {attempt}: {detail}")
+                if attempt < retries:
+                    update_job(
+                        kit_name,
+                        job,
+                        "Running",
+                        stage_name,
+                        step_index,
+                        total,
+                        f"[RUNNING] Waiting for iLO to come up on new IP {next_ip} (attempt {attempt}/{retries})",
+                    )
+                    time.sleep(wait_seconds)
+                else:
+                    update_job(
+                        kit_name,
+                        job,
+                        "Running",
+                        stage_name,
+                        step_index,
+                        total,
+                        f"[WARN] iLO IP change may have applied, but reconnect to new IP {next_ip} failed | last_error={detail}",
+                    )
+        return {"connected": False, "attempts": retries, "notes": notes}
+
     try:
-        update_job(kit_name, job, "Running", "Validate configuration", 0, total, f"[RUNNING] Validating iLO config for {host}")
+        update_job(kit_name, job, "Running", "Validate configuration", 0, total, f"[RUNNING] Validating iLO config for {login_ip}")
         update_job(
             kit_name,
             job,
@@ -5068,7 +5127,7 @@ def run_ilo_real(cfg: dict):
             0,
             total,
             (
-                f"[CONFIG] login_ip={host} | target_ip={target_ip or '(unchanged)'} | "
+                f"[CONFIG] login_ip={login_ip} | target_ip={target_ip or '(unchanged)'} | active_ip={active_ip} | "
                 f"hostname={desired_hostname or '(unchanged)'} | "
                 f"subnet_mask={desired_subnet_mask or '(shared/default)'} | "
                 f"gateway={desired_gateway or '(shared/default)'}"
@@ -5089,9 +5148,9 @@ def run_ilo_real(cfg: dict):
                 f"priv_password={'set' if snmp_cfg.get('v3_priv_password') else 'missing'}"
             ),
         )
-        client = ILOClient(ILOConfig(host=host, username=username, password=password, verify_tls=False, timeout=15))
+        client = build_ilo_client(active_ip)
 
-        update_job(kit_name, job, "Running", "Connect to Redfish", 1, total, f"[RUNNING] Connecting to https://{host}/redfish/v1/")
+        update_job(kit_name, job, "Running", "Connect to Redfish", 1, total, f"[RUNNING] Connecting to https://{active_ip}/redfish/v1/")
         summary = client.get_summary()
         update_job(kit_name, job, "Running", "Read service root", 2, total, f"[OK] Redfish version: {summary.get('redfish_version', '')}")
 
@@ -5134,6 +5193,16 @@ def run_ilo_real(cfg: dict):
         if target_ip and desired_subnet_mask and desired_gateway:
             config_changes_attempted = True
             try:
+                if target_ip != active_ip:
+                    update_job(
+                        kit_name,
+                        job,
+                        "Running",
+                        "Apply static IPv4",
+                        5,
+                        total,
+                        f"[RUNNING] Applying iLO IP change from {active_ip} to {target_ip}",
+                    )
                 update_job(
                     kit_name,
                     job,
@@ -5162,6 +5231,23 @@ def run_ilo_real(cfg: dict):
                         f"after_ipv4={ip_result.get('after_ipv4_addresses') or ip_result.get('after_static_addresses')}"
                     ),
                 )
+                if target_ip and target_ip != active_ip:
+                    reconnect_result = reconnect_to_active_ip(
+                        target_ip,
+                        stage_name="Reconnect to iLO",
+                        step_index=6,
+                    )
+                    if reconnect_result.get("connected"):
+                        job["active_ip"] = active_ip
+                        save_job(kit_name, job)
+                    else:
+                        active_ip = target_ip
+                        reconnect_failed = True
+                        config_changes_succeeded = False
+                        job["active_ip"] = active_ip
+                        job["ip_reconnect_failed"] = True
+                        job["ip_reconnect_notes"] = reconnect_result.get("notes", [])
+                        save_job(kit_name, job)
             except Exception as e:
                 config_changes_succeeded = False
                 update_job(
@@ -5184,7 +5270,17 @@ def run_ilo_real(cfg: dict):
                 "[SKIP] Missing target IP, subnet mask, or gateway for static IPv4 update."
             )
 
-        if desired_hostname:
+        if reconnect_failed:
+            update_job(
+                kit_name,
+                job,
+                "Running",
+                "Skip hostname",
+                8,
+                total,
+                f"[SKIP] iLO endpoint moved to {active_ip}, but reconnect did not succeed. Hostname apply was not retried on the new IP.",
+            )
+        elif desired_hostname:
             config_changes_attempted = True
             update_job(
                 kit_name,
@@ -5218,7 +5314,19 @@ def run_ilo_real(cfg: dict):
                 "[SKIP] No desired iLO hostname configured."
             )
 
-        if shared_dns:
+        if reconnect_failed:
+            job["dns_apply_status"] = "Skipped"
+            save_job(kit_name, job)
+            update_job(
+                kit_name,
+                job,
+                "Running",
+                "Skip DNS",
+                10,
+                total,
+                f"[SKIP] DNS was not applied because iLO did not come back on the new IP {active_ip}.",
+            )
+        elif shared_dns:
             config_changes_attempted = True
             try:
                 update_job(
@@ -5231,7 +5339,7 @@ def run_ilo_real(cfg: dict):
                     (
                         "[RUNNING] DNS apply attempt | "
                         "source=shared_network.dns_servers | "
-                        f"target={host} | values={', '.join(shared_dns)}"
+                        f"target={active_ip} | values={', '.join(shared_dns)}"
                     )
                 )
                 dns_result = client.set_dns_servers_best_effort(shared_dns)
@@ -5290,7 +5398,7 @@ def run_ilo_real(cfg: dict):
                     (
                         "[FAILED] DNS apply failed | "
                         "source=shared_network.dns_servers | "
-                        f"target={host} | values={', '.join(shared_dns)} | error={e}"
+                        f"target={active_ip} | values={', '.join(shared_dns)} | error={e}"
                     )
                 )
         else:
@@ -5307,7 +5415,7 @@ def run_ilo_real(cfg: dict):
                 "[SKIP] No shared DNS servers configured."
             )
 
-        try:
+        if reconnect_failed:
             update_job(
                 kit_name,
                 job,
@@ -5315,31 +5423,43 @@ def run_ilo_real(cfg: dict):
                 "Disable IPv6",
                 11,
                 total,
-                "[RUNNING] Attempting to disable IPv6 where supported"
+                f"[SKIP] IPv6 hardening was not attempted because iLO did not come back on the new IP {active_ip}.",
             )
-            ipv6_result = client.disable_ipv6_best_effort()
-            update_job(
-                kit_name,
-                job,
-                "Running",
-                "Disable IPv6",
-                11,
-                total,
-                f"[OK] IPv6 hardening via {ipv6_result.get('method')} at {ipv6_result.get('path')}"
-            )
-        except Exception as e:
-            update_job(
-                kit_name,
-                job,
-                "Running",
-                "Disable IPv6",
-                11,
-                total,
-                f"[SKIP/INFO] IPv6 hardening not applied: {e}"
-            )
+        else:
+            try:
+                update_job(
+                    kit_name,
+                    job,
+                    "Running",
+                    "Disable IPv6",
+                    11,
+                    total,
+                    "[RUNNING] Attempting to disable IPv6 where supported"
+                )
+                ipv6_result = client.disable_ipv6_best_effort()
+                update_job(
+                    kit_name,
+                    job,
+                    "Running",
+                    "Disable IPv6",
+                    11,
+                    total,
+                    f"[OK] IPv6 hardening via {ipv6_result.get('method')} at {ipv6_result.get('path')}"
+                )
+            except Exception as e:
+                update_job(
+                    kit_name,
+                    job,
+                    "Running",
+                    "Disable IPv6",
+                    11,
+                    total,
+                    f"[SKIP/INFO] IPv6 hardening not applied: {e}"
+                )
 
-        try:
-            config_changes_attempted = True
+        if reconnect_failed:
+            job["snmp_apply_status"] = "Skipped"
+            save_job(kit_name, job)
             update_job(
                 kit_name,
                 job,
@@ -5347,78 +5467,101 @@ def run_ilo_real(cfg: dict):
                 "Harden SNMP",
                 12,
                 total,
-                (
-                    "[RUNNING] SNMP apply attempt | "
-                    f"target={host} | username={snmp_cfg.get('v3_username', '') or '(none)'} | "
-                    f"auth={desired_auth_protocol} | priv={desired_priv_protocol} | "
-                    f"auth_secret={'Yes' if snmp_cfg.get('v3_auth_password') else 'No'} | "
-                    f"privacy_secret={'Yes' if snmp_cfg.get('v3_priv_password') else 'No'}"
-                )
+                f"[SKIP] SNMP was not applied because iLO did not come back on the new IP {active_ip}.",
             )
-            snmp_result = client.harden_snmp_best_effort(
-                v3_username=snmp_cfg.get("v3_username", ""),
-                v3_auth_protocol=snmp_cfg.get("v3_auth_protocol", "SHA"),
-                v3_auth_password=snmp_cfg.get("v3_auth_password", ""),
-                v3_priv_protocol=snmp_cfg.get("v3_priv_protocol", "AES"),
-                v3_priv_password=snmp_cfg.get("v3_priv_password", ""),
-            )
-            job["snmp_apply_status"] = str(snmp_result.get("status") or "Mismatch")
-            job["snmp_applied_keys"] = list(snmp_result.get("applied_keys") or [])
-            job["snmp_verified_checks"] = list(snmp_result.get("verification", {}).get("checks") or [])
-            job["snmp_mismatches"] = list(snmp_result.get("mismatches") or [])
-            job["snmp_reset_recommended"] = bool(snmp_result.get("reset_recommended"))
-            save_job(kit_name, job)
-            snmp_matched = bool(snmp_result.get("matched")) if "matched" in snmp_result else bool(snmp_result.get("verified"))
-            if not snmp_matched:
-                config_changes_succeeded = False
-            update_job(
-                kit_name,
+        else:
+            try:
+                config_changes_attempted = True
+                update_job(
+                    kit_name,
                     job,
                     "Running",
                     "Harden SNMP",
                     12,
                     total,
                     (
-                        (
-                            "[OK] SNMP verified after apply"
-                            if snmp_matched
-                            else "[WARN] SNMP settings partially matched after apply"
-                        )
-                        + " | "
-                        + f"path={snmp_result.get('path', '(unknown)')} | "
-                        + f"username={snmp_cfg.get('v3_username', '') or '(none)'} | "
-                        + f"auth={desired_auth_protocol} | priv={desired_priv_protocol} | "
-                        + f"auth_secret={'Yes' if snmp_cfg.get('v3_auth_password') else 'No'} | "
-                        + f"privacy_secret={'Yes' if snmp_cfg.get('v3_priv_password') else 'No'} | "
-                        + f"checks={snmp_result.get('verification', {}).get('checks', [])} | "
-                        + f"mismatches={snmp_result.get('mismatches', []) or '(none)'} | "
-                        + f"reset_recommended={snmp_result.get('reset_recommended')} | "
-                        + f"notes={snmp_result.get('notes', [])}"
+                        "[RUNNING] SNMP apply attempt | "
+                        f"target={active_ip} | username={snmp_cfg.get('v3_username', '') or '(none)'} | "
+                        f"auth={desired_auth_protocol} | priv={desired_priv_protocol} | "
+                        f"auth_secret={'Yes' if snmp_cfg.get('v3_auth_password') else 'No'} | "
+                        f"privacy_secret={'Yes' if snmp_cfg.get('v3_priv_password') else 'No'}"
                     )
                 )
-        except Exception as e:
-            config_changes_succeeded = False
-            job["snmp_apply_status"] = "Failed"
-            save_job(kit_name, job)
+                snmp_result = client.harden_snmp_best_effort(
+                    v3_username=snmp_cfg.get("v3_username", ""),
+                    v3_auth_protocol=snmp_cfg.get("v3_auth_protocol", "SHA"),
+                    v3_auth_password=snmp_cfg.get("v3_auth_password", ""),
+                    v3_priv_protocol=snmp_cfg.get("v3_priv_protocol", "AES"),
+                    v3_priv_password=snmp_cfg.get("v3_priv_password", ""),
+                )
+                job["snmp_apply_status"] = str(snmp_result.get("status") or "Mismatch")
+                job["snmp_applied_keys"] = list(snmp_result.get("applied_keys") or [])
+                job["snmp_verified_checks"] = list(snmp_result.get("verification", {}).get("checks") or [])
+                job["snmp_mismatches"] = list(snmp_result.get("mismatches") or [])
+                job["snmp_reset_recommended"] = bool(snmp_result.get("reset_recommended"))
+                save_job(kit_name, job)
+                snmp_matched = bool(snmp_result.get("matched")) if "matched" in snmp_result else bool(snmp_result.get("verified"))
+                if not snmp_matched:
+                    config_changes_succeeded = False
+                update_job(
+                    kit_name,
+                        job,
+                        "Running",
+                        "Harden SNMP",
+                        12,
+                        total,
+                        (
+                            (
+                                "[OK] SNMP verified after apply"
+                                if snmp_matched
+                                else "[WARN] SNMP settings partially matched after apply"
+                            )
+                            + " | "
+                            + f"path={snmp_result.get('path', '(unknown)')} | "
+                            + f"username={snmp_cfg.get('v3_username', '') or '(none)'} | "
+                            + f"active_ip={active_ip} | "
+                            + f"auth={desired_auth_protocol} | priv={desired_priv_protocol} | "
+                            + f"auth_secret={'Yes' if snmp_cfg.get('v3_auth_password') else 'No'} | "
+                            + f"privacy_secret={'Yes' if snmp_cfg.get('v3_priv_password') else 'No'} | "
+                            + f"checks={snmp_result.get('verification', {}).get('checks', [])} | "
+                            + f"mismatches={snmp_result.get('mismatches', []) or '(none)'} | "
+                            + f"reset_recommended={snmp_result.get('reset_recommended')} | "
+                            + f"notes={snmp_result.get('notes', [])}"
+                        )
+                    )
+            except Exception as e:
+                config_changes_succeeded = False
+                job["snmp_apply_status"] = "Failed"
+                save_job(kit_name, job)
+                update_job(
+                    kit_name,
+                    job,
+                    "Running",
+                    "Harden SNMP",
+                    12,
+                    total,
+                        (
+                            "[FAILED] SNMP settings could not be verified after apply | "
+                            f"target={active_ip} | username={snmp_cfg.get('v3_username', '') or '(none)'} | "
+                            f"auth={desired_auth_protocol} | priv={desired_priv_protocol} | "
+                            f"auth_secret={'Yes' if snmp_cfg.get('v3_auth_password') else 'No'} | "
+                            f"privacy_secret={'Yes' if snmp_cfg.get('v3_priv_password') else 'No'} | "
+                        f"error={e}"
+                    )
+                )
+
+        storage_result = None
+        if reconnect_failed and storage_execution.get("included"):
             update_job(
                 kit_name,
                 job,
                 "Running",
-                "Harden SNMP",
-                12,
+                "Skip storage stage",
+                13,
                 total,
-                    (
-                        "[FAILED] SNMP settings could not be verified after apply | "
-                        f"target={host} | username={snmp_cfg.get('v3_username', '') or '(none)'} | "
-                        f"auth={desired_auth_protocol} | priv={desired_priv_protocol} | "
-                        f"auth_secret={'Yes' if snmp_cfg.get('v3_auth_password') else 'No'} | "
-                    f"privacy_secret={'Yes' if snmp_cfg.get('v3_priv_password') else 'No'} | "
-                    f"error={e}"
-                )
+                f"[SKIP] Storage stage was not started because iLO did not come back on the new IP {active_ip}.",
             )
-
-        storage_result = None
-        if storage_execution.get("included"):
+        elif storage_execution.get("included"):
             update_job(
                 kit_name,
                 job,
@@ -5431,7 +5574,8 @@ def run_ilo_real(cfg: dict):
             storage_result = run_storage_as_part_of_real_run(
                 cfg,
                 client,
-                host,
+                login_ip,
+                active_ip,
                 storage_execution,
                 kit_name,
                 job,
