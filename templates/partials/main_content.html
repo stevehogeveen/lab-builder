@@ -42,7 +42,6 @@
         {% endif %}
     </section>
     {% endif %}
-    {% if ks_content %}<div class="codeblock">{{ ks_content }}</div>{% endif %}
     {% if config_view_title and config_view_content %}
     <details class="card" open>
         <summary class="summary-row">
@@ -53,67 +52,27 @@
     </details>
     {% endif %}
 
-    {% if active_page not in ["dashboard", "history", "kits"] and page_runbook %}
-    <details class="card">
-        <summary class="summary-row">
-            <span class="text-lg font-semibold">{{ page_runbook.title }}</span>
-            <span class="status progress">Guide</span>
-        </summary>
-        <div class="grid grid-cols-1 xl:grid-cols-3 gap-4 mt-4">
-            <div class="xl:col-span-2 grid grid-cols-1 md:grid-cols-2 gap-3 text-sm">
-                <div class="result" style="margin-top: 0;">
-                    <div class="font-semibold mb-1">What this page controls</div>
-                    <div>{{ page_runbook.what }}</div>
-                </div>
-                <div class="result" style="margin-top: 0;">
-                    <div class="font-semibold mb-1">What to do first</div>
-                    <div>{{ page_runbook.before }}</div>
-                </div>
-                <div class="result" style="margin-top: 0;">
-                    <div class="font-semibold mb-1">What happens when you run it</div>
-                    <div>{{ page_runbook.when_run }}</div>
-                </div>
-                <div class="result" style="margin-top: 0;">
-                    <div class="font-semibold mb-1">Restart and reports</div>
-                    <div>{{ page_runbook.restart }}</div>
-                    <div class="mt-1 text-slate-400">{{ page_runbook.reports }}</div>
-                </div>
-            </div>
-            {% set source_rows = settings_sources.get(active_page, settings_sources.get('global_settings', [])) %}
-            {% if source_rows %}
+    {% if page_briefing and active_page not in ["configs", "history", "kits"] %}
+    <section class="panel">
+        <div class="grid grid-cols-1 lg:grid-cols-[minmax(0,1.25fr)_minmax(0,1fr)_auto] gap-4 items-start">
             <div class="card">
-                <div class="text-lg font-semibold mb-3">Defaults and overrides</div>
-                <div class="space-y-2 text-sm">
-                    {% for row in source_rows %}
-                    <div>
-                        <div class="font-semibold">{{ row.label }}</div>
-                        <div>{{ row.value }}</div>
-                        <div class="text-slate-400">{{ row.source }}</div>
-                    </div>
-                    {% endfor %}
-                </div>
+                <div class="text-xs font-bold uppercase text-slate-400 mb-1">What this page is for</div>
+                <div class="text-base font-semibold">{{ page_briefing.title }}</div>
+                <div class="text-sm text-slate-400 mt-2">{{ page_briefing.purpose }}</div>
             </div>
-            {% endif %}
-        </div>
-    </details>
-    {% endif %}
-
-    {% if page_comparisons.get(active_page) %}
-    <section class="card">
-        <div class="flex items-center justify-between gap-3 mb-3">
-            <div>
-                <div class="text-lg font-semibold">Current, planned, approved, result</div>
-                <div class="text-sm text-slate-400">A quick comparison first. Technical detail stays in the page details and reports.</div>
-            </div>
-            <span class="status progress">Review</span>
-        </div>
-        <div class="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-3">
-            {% for item in page_comparisons.get(active_page, []) %}
             <div class="card">
-                <div class="text-xs font-bold uppercase text-slate-400 mb-1">{{ item.label }}</div>
-                <div class="text-sm">{{ item.value }}</div>
+                <div class="text-xs font-bold uppercase text-slate-400 mb-1">What to do next</div>
+                <div class="text-sm">{{ page_briefing.next }}</div>
             </div>
-            {% endfor %}
+            <div class="card">
+                <div class="text-xs font-bold uppercase text-slate-400 mb-1">What happened last</div>
+                <div class="text-sm">{{ page_briefing.last }}</div>
+                {% if page_briefing.next_href and page_briefing.next_label %}
+                <div class="actions mt-4">
+                    <a class="btn btn-primary action-button" href="{{ page_briefing.next_href }}">{{ page_briefing.next_label }}</a>
+                </div>
+                {% endif %}
+            </div>
         </div>
     </section>
     {% endif %}
@@ -125,26 +84,6 @@
     {% elif active_page == "ilo" %}
         {% include "partials/pages/ilo.html" %}
     {% elif active_page == "execution" %}
-        <section class="card">
-            <div class="flex flex-wrap items-center justify-between gap-3 mb-2">
-                <div>
-                    <div class="text-lg font-semibold">Storage in the upcoming iLO run</div>
-                    <div class="text-sm text-slate-400">Quick answer first, then use the stage cards below for the full review.</div>
-                </div>
-                <span class="status {{ storage_execution_status.tone or 'warning' }}">{{ storage_execution_status.badge or 'Storage not approved' }}</span>
-            </div>
-            <div class="text-sm mb-2">{{ storage_execution_status.summary }}</div>
-            {% if not storage_review.approved %}
-            <div class="error mt-3">Storage and RAID will not be configured during the iLO run until they are reviewed and approved on the Storage / RAID page.</div>
-            {% else %}
-            <div class="result mt-3">The approved storage plan is available for inclusion in the iLO run.</div>
-            {% endif %}
-            <div class="actions mt-4">
-                <a class="btn btn-primary action-button {% if storage_review.approved %}btn-danger{% endif %}" href="/storage#{% if storage_review.approved %}storage-approval-actions{% else %}storage-review-start{% endif %}">
-                    {% if storage_review.approved %}Review approved storage{% else %}Open Storage / RAID{% endif %}
-                </a>
-            </div>
-        </section>
         {% include "partials/pages/execution.html" %}
     {% elif active_page == "esxi" %}
         {% include "partials/pages/esxi.html" %}

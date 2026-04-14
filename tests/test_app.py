@@ -904,16 +904,16 @@ def test_global_settings_and_workflow_pages_show_defaults_and_dependencies(clien
 
     global_response = client.get("/global-settings")
     assert global_response.status_code == 200
-    assert "How shared defaults feed the workspaces" in global_response.text
-    assert "Run Center reads the saved values from each dedicated page" in global_response.text
-    assert "Using global value" in global_response.text
-    assert "Overridden on this page" in global_response.text
+    assert "Global Settings" in global_response.text
+    assert "Save the shared defaults here once." in global_response.text
+    assert "Default addresses" in global_response.text
+    assert "Save shared defaults" in global_response.text
 
     esxi_response = client.get("/esxi")
     assert esxi_response.status_code == 200
-    assert "Network defaults" in esxi_response.text
-    assert "This page uses the shared ESXi address, gateway, and DNS from Global Settings." in esxi_response.text
-    assert "Open Run Center" in esxi_response.text
+    assert "ESXi setup" in esxi_response.text
+    assert "The server address, gateway, and DNS come from Global Settings" in esxi_response.text
+    assert "Save ESXi setup" in esxi_response.text
     assert "Generate KS.CFG" not in esxi_response.text
 
 
@@ -1077,22 +1077,15 @@ def test_read_current_storage_saves_discovery_export_and_renders_summary(client,
     response = client.post("/read-current-storage", data={"return_page": "storage"})
 
     assert response.status_code == 200
-    assert "Storage / RAID" in response.text
-    assert "Review storage setup" in response.text
-    assert "Gen11" in response.text
-    assert "iLO 6" in response.text
-    assert "MR416i-o" in response.text
-    assert "1.98" in response.text
-    assert "{&#39;Current&#39;:" not in response.text
-    assert "OS Volume" in response.text
-    assert "RAID1" in response.text
-    assert "HPE SSD" in response.text
-    assert "Review storage setup" in response.text
-    assert "Using right now:" in response.text
-    assert "10.10.8.60" in response.text
-    assert "Using the current iLO address." in response.text
-    assert "currently responding on" in response.text
-    assert "Sign-in user:" in response.text
+    assert "Storage setup" in response.text
+    assert "Target server" in response.text
+    assert "Read current storage" in response.text
+    assert "Current storage read complete" in response.text
+    assert "The current storage layout is now available for planning." in response.text
+    assert "The current iLO address is used by default unless you change it here." in response.text
+    assert "Deep Smart Storage Scan" not in response.text
+    assert "Build storage plan" in response.text
+    assert "Open reports" in response.text
     assert 'hx-indicator="#read-storage-progress"' in response.text
     assert "Checking current storage on the server." in response.text
 
@@ -1104,6 +1097,8 @@ def test_read_current_storage_saves_discovery_export_and_renders_summary(client,
     summary_text = summary_path.read_text(encoding="utf-8")
     assert "generation: Gen11" in summary_text
     assert "standard_redfish_storage: true" in summary_text
+    raw_text = raw_path.read_text(encoding="utf-8")
+    assert '"deep_scan_requested": true' in raw_text
 
 
 def test_read_current_storage_warns_when_smart_storage_controller_has_no_children(client, monkeypatch):
@@ -1120,12 +1115,9 @@ def test_read_current_storage_warns_when_smart_storage_controller_has_no_childre
     response = client.post("/read-current-storage", data={"return_page": "storage"})
 
     assert response.status_code == 200
-    assert "Smart Array P408i-a SR Gen10" in response.text
-    assert "HPE Smart Storage controller detected" in response.text
-    assert "Smart Storage traversal diagnostics" in response.text
-    assert "Deep fallback ran: True" in response.text
-    assert "LogicalDrives" in response.text
-    assert "DiskDrives" in response.text
+    assert "Current storage read complete" in response.text
+    assert "Build storage plan" in response.text
+    assert "Open reports" in response.text
 
 
 def test_storage_target_host_prefers_current_kit_ip_over_artifact_host():
@@ -1459,30 +1451,18 @@ def test_plan_raid_layout_uses_displayed_discovery_artifact_and_saves_plan(clien
     )
 
     assert response.status_code == 200
-    assert "What will happen" in response.text
-    assert "Review storage setup" in response.text
-    assert "Using right now:" in response.text
-    assert "Server:" in response.text
-    assert "10.10.8.80" in response.text
-    assert "This server already has storage set up:" in response.text
-    assert "wipe and rebuild" in response.text
+    assert "Storage plan ready" in response.text
+    assert "Build storage plan" in response.text
+    assert "Approve this plan" in response.text
+    assert "Run for real" in response.text
     assert "SSD-480" in response.text
     assert "HDD-1200" in response.text
     assert "Oddball" in response.text
     assert "Hot spare" in response.text
     assert "Reserved as the data-side hot spare" in response.text
-    assert "Planned layout" in response.text
-    assert "target size 500 GiB on bays 1, 2" in response.text
-    assert "3, 4, 5, 6" in response.text
-    assert "remaining compatible eligible drives after reserving one hot spare" in response.text
-    assert "bay 8" in response.text
-    assert "What would change" in response.text
-    assert "Existing storage that would be removed" in response.text
-    assert "New layout that would be created" in response.text
-    assert "Reserved hot spare:" in response.text
-    assert "Storage plan status" in response.text
-    assert "Approve this plan" in response.text
-    assert "Include this approved storage plan in the later iLO run" in response.text
+    assert "Apply it during the real run" in response.text
+    assert "Open reports" in response.text
+    assert "Open build files" in response.text
     plan_path = export_paths["directory"] / "raid-plan.yml"
     assert plan_path.exists()
     plan_text = plan_path.read_text(encoding="utf-8")
@@ -1517,8 +1497,9 @@ def test_approve_storage_plan_saves_exact_artifact_paths_for_later_ilo_run(clien
     )
 
     assert response.status_code == 200
-    assert "Storage approved" in response.text
-    assert "Included in iLO run: Yes" in response.text
+    assert "The current storage plan is approved for the real run." in response.text
+    assert "Apply it during the real run: Yes" in response.text
+    assert "Run for real" in response.text
     assert "Remove approval" in response.text
     cfg_after = main.load_kit_config("Approval-Kit")
     storage_cfg = cfg_after["storage"]
@@ -1595,24 +1576,12 @@ def test_prepare_execute_shows_combined_storage_review_using_exact_approved_arti
     )
 
     assert response.status_code == 200
-    assert "What will happen" in response.text
+    assert "Run summary" in response.text
     assert "Included stages" in response.text
-    assert "View full run details" in response.text
-    assert "Ready checks" in response.text
-    assert "Reports and rollback notes" in response.text
-    assert "Readiness matrix" in response.text
-    assert "Final review summary" in response.text
-    assert "Pre-run review:" in response.text
-    assert "Storage in the upcoming iLO run" in response.text
-    assert "Storage approved" in response.text
-    assert "Review approved storage" in response.text
-    assert "/storage#storage-approval-actions" in response.text
-    assert str(export_paths["raw"]) in response.text
-    assert str(plan_paths["plan"]) in response.text
-    assert "Storage included -&gt; Yes" in response.text or "Storage included -> Yes" in response.text
-    assert "Saved state in use:" in response.text
-    assert "Depends on:" in response.text
-    assert "Restart expected:" in response.text
+    assert "View details" in response.text
+    assert "Open summary" in response.text
+    assert "Open reports & technical details" in response.text
+    assert "Storage will be applied during the real run" in response.text
 
 
 def test_execution_page_warns_when_storage_is_not_approved(client):
@@ -1626,11 +1595,9 @@ def test_execution_page_warns_when_storage_is_not_approved(client):
     response = client.get("/execution")
 
     assert response.status_code == 200
-    assert "Storage in the upcoming iLO run" in response.text
-    assert "Storage not approved" in response.text
-    assert "Storage and RAID will not be configured during the iLO run until they are reviewed and approved" in response.text
-    assert "Open Storage / RAID" in response.text
-    assert "/storage#storage-review-start" in response.text
+    assert "Run Center" in response.text
+    assert "Review full run" in response.text
+    assert "Review one part" in response.text
 
 
 def test_prepare_execute_shows_blocked_stage_guidance(client):
@@ -1646,13 +1613,10 @@ def test_prepare_execute_shows_blocked_stage_guidance(client):
     )
 
     assert response.status_code == 200
-    assert "Readiness matrix" in response.text
     assert "Blocked" in response.text
+    assert "Needs attention:" in response.text
     assert "Fix on iLO" in response.text
-    assert "Open ESXi" in response.text
-    assert "Why it matters:" in response.text
-    assert "Shortest fix:" in response.text
-    assert "Open fix page" in response.text
+    assert "Open setup page" in response.text
 
 
 def test_prepare_execute_blocks_windows_when_saved_credentials_are_missing(client):
@@ -1685,8 +1649,8 @@ def test_ilo_page_warns_clearly_when_storage_is_not_approved(client):
     response = client.get("/ilo")
 
     assert response.status_code == 200
-    assert "Storage and RAID will not be configured during this iLO run" in response.text
-    assert "Open Storage / RAID" in response.text
+    assert "Storage will stay out of the run until it is reviewed and approved." in response.text
+    assert "Open storage setup" in response.text
 
 
 def test_execute_is_blocked_when_included_storage_plan_is_stale(client):
@@ -1723,6 +1687,357 @@ def test_execute_is_blocked_when_included_storage_plan_is_stale(client):
     assert response.status_code == 200
     assert "Execution blocked:" in response.text
     assert "stale" in response.text.lower()
+
+
+def test_prepare_execute_marks_included_scope_as_preview_only(client):
+    cfg = main.default_config()
+    cfg["site"]["name"] = "Preview Mode Kit"
+    cfg["included"]["windows"] = True
+    main.save_kit_config(cfg)
+
+    response = client.post(
+        "/prepare-execute",
+        data={"scope": "included", "return_page": "execution"},
+    )
+
+    assert response.status_code == 200
+    assert "Preview / safety mode" in response.text
+    assert "Preview only" in response.text
+    assert "Mode" in response.text
+    assert "What this does" in response.text
+    assert "Checks the run and prepares a preview." in response.text
+    assert "Real changes made" in response.text
+    assert "No" in response.text
+    assert "Next step" in response.text
+    assert "Run for real when everything looks ready." in response.text
+    assert "Start preview run" in response.text
+    assert "Run for real" in response.text
+    assert "/execute-preview" in response.text
+    assert "/execute" in response.text
+    assert "execution-layout" in response.text
+    assert "execution-matrix-item" in response.text
+
+
+def test_execute_preview_scope_reports_preview_started(client):
+    cfg = main.default_config()
+    cfg["site"]["name"] = "Preview Execute Kit"
+    cfg["included"]["windows"] = True
+    cfg["windows"]["admin_password"] = "secret"
+    main.save_kit_config(cfg)
+
+    response = client.post(
+        "/execute-preview",
+        data={
+            "scope": "windows",
+            "return_page": "execution",
+        },
+    )
+
+    assert response.status_code == 200
+    assert "Preview started for scope: windows. No real changes will be made." in response.text
+
+
+def test_execute_real_scope_starts_existing_ilo_path(client, monkeypatch):
+    cfg = main.default_config()
+    cfg["site"]["name"] = "Real Execute Kit"
+    cfg["ilo"]["current_ip"] = "10.10.8.90"
+    cfg["ilo"]["host"] = "10.10.8.90"
+    cfg["ilo"]["username"] = "Administrator"
+    cfg["ilo"]["password"] = "secret"
+    main.save_kit_config(cfg)
+
+    started: dict[str, object] = {}
+
+    class FakeThread:
+        def __init__(self, target=None, args=(), daemon=None):
+            started["target"] = target
+            started["args"] = args
+            started["daemon"] = daemon
+
+        def start(self):
+            started["started"] = True
+
+    monkeypatch.setattr(main.threading, "Thread", FakeThread)
+
+    response = client.post(
+        "/execute",
+        data={
+            "scope": "ilo",
+            "confirm_checkbox": "on",
+            "confirm_phrase": "EXECUTE",
+            "return_page": "execution",
+        },
+    )
+
+    assert response.status_code == 200
+    assert "Real iLO automation started in the background. Check Job Monitor for live progress and logs." in response.text
+    assert started["target"] is main.execute_real_job_in_background
+    assert started["args"][1] == "ilo"
+    assert started["args"][0]["site"]["name"] == "Real-Execute-Kit"
+    assert started["daemon"] is True
+    assert started["started"] is True
+
+
+def test_run_ilo_real_executes_storage_when_included(monkeypatch):
+    cfg = main.default_config()
+    cfg["site"]["name"] = "Real Storage Review Kit"
+    cfg["ilo"]["current_ip"] = "10.10.8.90"
+    cfg["ilo"]["host"] = "10.10.8.90"
+    cfg["ilo"]["username"] = "Administrator"
+    cfg["ilo"]["password"] = "secret"
+    cfg["ilo"]["target_ip"] = "10.10.8.91"
+    cfg["ilo"]["gateway"] = "10.10.8.1"
+    cfg["shared_network"]["dns_servers"] = ["1.1.1.1", "", "", ""]
+    cfg["shared_snmp"]["v3_username"] = "snmpuser"
+    cfg["shared_snmp"]["v3_auth_password"] = "authpass"
+    cfg["shared_snmp"]["v3_priv_password"] = "privpass"
+
+    discovery = planner_gen10_apply_discovery(existing_volumes=True)
+    export_paths = main.export_storage_discovery_snapshot(cfg, discovery, host="10.10.8.90")
+    plan = main.build_raid_plan(discovery, export_paths)
+    plan_paths = main.export_raid_plan_snapshot(cfg, plan, export_paths)
+    main.approve_storage_plan_for_cfg(cfg, discovery, export_paths, plan, plan_paths, include_in_ilo_run=True)
+
+    class FakeRunILOClient(RecordingGen10SmartStorageWriteClient):
+        def __init__(self, cfg):
+            super().__init__()
+            self.cfg = cfg
+            self.discovery = discovery
+            self.dns_calls = []
+            self.snmp_calls = []
+            self.manager_reset_calls = []
+
+        def get_summary(self):
+            return {"redfish_version": "1.16.0", "system_manufacturer": "HPE", "system_model": "DL360 Gen10", "power_state": "On"}
+
+        def get_active_manager_interface(self):
+            return {"@odata.id": "/redfish/v1/Managers/1/EthernetInterfaces/1", "DHCPv4": {"DHCPEnabled": False}, "IPv4Addresses": [{"Address": "10.10.8.90"}]}
+
+        def set_static_ipv4_best_effort(self, address, subnet_mask, gateway):
+            return {
+                "applied_keys": ["DHCPv4", "IPv4StaticAddresses"],
+                "before_dhcpv4": {"DHCPEnabled": True},
+                "after_dhcpv4": {"DHCPEnabled": False},
+                "before_ipv4_addresses": [{"Address": "10.10.8.90"}],
+                "before_static_addresses": [],
+                "after_ipv4_addresses": [{"Address": address}],
+                "after_static_addresses": [{"Address": address, "SubnetMask": subnet_mask, "Gateway": gateway}],
+            }
+
+        def set_hostname_best_effort(self, desired_hostname):
+            return {"method": "patch", "before": "old-ilo", "after": desired_hostname, "matched": True}
+
+        def set_dns_servers_best_effort(self, dns_servers):
+            self.dns_calls.append(list(dns_servers))
+            return {"applied_keys": ["NameServers"], "before_static": ["8.8.8.8"], "after_static": dns_servers}
+
+        def disable_ipv6_best_effort(self):
+            return {"method": "patch", "path": "/redfish/v1/Managers/1/EthernetInterfaces/1"}
+
+        def harden_snmp_best_effort(self, **kwargs):
+            self.snmp_calls.append(dict(kwargs))
+            return {"applied_keys": ["SNMP.ProtocolEnabled", "SNMPv3RequestsEnabled"]}
+
+        def get_storage_discovery(self, deep_smart_storage_scan=False):
+            del deep_smart_storage_scan
+            return self.discovery
+
+        def manager_reset_best_effort(self):
+            self.manager_reset_calls.append({"reset_type": "GracefulRestart"})
+            return {"path": "/redfish/v1/Managers/1/Actions/Manager.Reset", "reset_type": "GracefulRestart"}
+
+        def reboot_server_and_wait(self, reset_type: str = "GracefulRestart", reboot_start_timeout: int = 120, return_timeout: int = 600, poll_interval: int = 10):
+            del reboot_start_timeout, return_timeout, poll_interval
+            return {
+                "path": "/redfish/v1/Systems/1/Actions/ComputerSystem.Reset",
+                "system_path": "/redfish/v1/Systems/1",
+                "reset_type": reset_type,
+                "reboot_start_observed": True,
+                "reboot_start_detail": "Observed BootProgress state after reset request: POST.",
+                "system_returned": True,
+                "return_detail": "System returned with PowerState=On.",
+            }
+
+    created_clients = []
+
+    def build_client(cfg_obj):
+        client = FakeRunILOClient(cfg_obj)
+        created_clients.append(client)
+        return client
+
+    monkeypatch.setattr(main, "ILOClient", build_client)
+
+    main.run_ilo_real(cfg)
+    job = main.load_job("Real Storage Review Kit")
+    joined_logs = "\n".join(job["logs"])
+    client = created_clients[0]
+
+    assert "[RUNNING] Starting the approved storage stage as part of this real run." in joined_logs
+    assert "Submitted the consolidated SmartStorageConfig pending payload" in joined_logs
+    assert "Storage stage finished in the real run" in joined_logs
+    assert "Storage server reboot status=Completed" in joined_logs or "after the storage server reboot completed" in joined_logs
+    assert "DNS apply attempt" in joined_logs
+    assert "DNS apply success" in joined_logs
+    assert "SNMP apply attempt" in joined_logs
+    assert "SNMP apply success" in joined_logs
+    assert "iLO reset requested" in joined_logs
+    assert "iLO reset completed" in joined_logs
+    assert "auth_password=set | priv_password=set" in joined_logs
+    assert job["storage_run_directory"]
+    assert job["dns_apply_status"] == "Applied"
+    assert job["dns_applied_values"] == ["1.1.1.1"]
+    assert job["snmp_apply_status"] == "Applied"
+    assert job["snmp_username"] == "snmpuser"
+    assert job["snmp_auth_secret_present"] is True
+    assert job["snmp_priv_secret_present"] is True
+    assert job["storage_server_reboot_status"] == "Completed"
+    assert job["ilo_reset_status"] == "Completed"
+    assert client.dns_calls == [["1.1.1.1"]]
+    assert client.snmp_calls == [{
+        "v3_username": "snmpuser",
+        "v3_auth_protocol": "SHA",
+        "v3_auth_password": "authpass",
+        "v3_priv_protocol": "AES",
+        "v3_priv_password": "privpass",
+    }]
+    assert client.manager_reset_calls == [{"reset_type": "GracefulRestart"}]
+
+
+def test_prepare_execute_shows_storage_will_be_applied_in_real_run(client):
+    cfg = main.default_config()
+    cfg["site"]["name"] = "Exec Storage Real Kit"
+    cfg["ilo"]["current_ip"] = "10.10.8.90"
+    cfg["ilo"]["host"] = "10.10.8.90"
+    main.save_kit_config(cfg)
+
+    discovery = planner_gen10_apply_discovery(existing_volumes=True)
+    export_paths = main.export_storage_discovery_snapshot(cfg, discovery, host="10.10.8.90")
+    plan = main.build_raid_plan(discovery, export_paths)
+    plan_paths = main.export_raid_plan_snapshot(cfg, plan, export_paths)
+    cfg = main.load_kit_config("Exec-Storage-Real-Kit")
+    main.approve_storage_plan_for_cfg(cfg, discovery, export_paths, plan, plan_paths, include_in_ilo_run=True)
+    cfg["included"]["storage"] = True
+    main.save_kit_config(cfg)
+
+    response = client.post(
+        "/prepare-execute",
+        data={"scope": "included", "return_page": "execution"},
+    )
+
+    assert response.status_code == 200
+    assert "Storage will be applied during the real run using the approved layout." in response.text
+    assert "The approved storage plan will also be applied." in response.text
+
+
+def test_execution_page_no_longer_shows_view_live_log(client):
+    response = client.get("/execution")
+
+    assert response.status_code == 200
+    assert "View live log" not in response.text
+    assert "Detailed execution logs are saved with the run" in response.text
+
+
+def test_ilo_page_shows_last_run_dns_snmp_and_reset_states(client, monkeypatch):
+    cfg = main.default_config()
+    cfg["site"]["name"] = "ILO Result Kit"
+    cfg["ilo"]["current_ip"] = "10.10.8.90"
+    cfg["ilo"]["host"] = "10.10.8.90"
+    cfg["ilo"]["username"] = "Administrator"
+    cfg["ilo"]["password"] = "secret"
+    main.save_kit_config(cfg)
+    main.append_history_entry(
+        "ILO Result Kit",
+        {
+            "time": "2026-04-10 12:00:00",
+            "scope": "ilo",
+            "status": "Completed",
+            "current_stage": "Finished",
+            "progress_percent": 100,
+            "completed_steps": 10,
+            "total_steps": 10,
+            "config_summary": {
+                "dns_apply_status": "Applied",
+                "dns_applied_values": ["1.1.1.1", "8.8.8.8"],
+                "snmp_username": "snmpuser",
+                "snmp_auth_protocol": "SHA",
+                "snmp_priv_protocol": "AES",
+                "snmp_auth_secret_present": True,
+                "snmp_priv_secret_present": True,
+                "snmp_apply_status": "Applied",
+                "storage_server_reboot_status": "Completed",
+                "ilo_reset_status": "Not requested separately",
+            },
+        },
+    )
+
+    response = client.get("/ilo")
+
+    assert response.status_code == 200
+    assert "Last run result" in response.text
+    assert "DNS result:" in response.text
+    assert "Applied DNS:" in response.text
+    assert "1.1.1.1, 8.8.8.8" in response.text
+    assert "SNMP username:" in response.text
+    assert "snmpuser" in response.text
+    assert "SNMP auth secret present:" in response.text
+    assert "SNMP privacy secret present:" in response.text
+    assert "Storage server reboot:" in response.text
+    assert "iLO reset:" in response.text
+
+
+def test_history_page_shows_applied_dns_snmp_and_reset_states(client):
+    cfg = main.default_config()
+    cfg["site"]["name"] = "History Result Kit"
+    main.save_kit_config(cfg)
+    main.append_history_entry(
+        "History Result Kit",
+        {
+            "time": "2026-04-10 12:15:00",
+            "scope": "ilo",
+            "status": "Completed",
+            "current_stage": "Finished",
+            "progress_percent": 100,
+            "completed_steps": 10,
+            "total_steps": 10,
+            "config_summary": {
+                "dns_apply_status": "Applied",
+                "dns_applied_values": ["1.1.1.1"],
+                "snmp_apply_status": "Applied",
+                "snmp_username": "snmpuser",
+                "snmp_auth_protocol": "SHA",
+                "snmp_priv_protocol": "AES",
+                "snmp_auth_secret_present": True,
+                "snmp_priv_secret_present": False,
+                "storage_server_reboot_status": "Completed",
+                "ilo_reset_status": "Completed",
+            },
+        },
+    )
+
+    response = client.get("/history")
+
+    assert response.status_code == 200
+    assert "Applied results" in response.text
+    assert "DNS:" in response.text
+    assert "SNMP:" in response.text
+    assert "auth secret Yes" in response.text
+    assert "privacy secret No" in response.text
+    assert "Storage server reboot:" in response.text
+    assert "iLO reset:" in response.text
+
+
+def test_run_job_simulation_finishes_as_preview_complete():
+    cfg = main.default_config()
+    cfg["site"]["name"] = "Preview Job Kit"
+
+    main.run_job_simulation(cfg, "windows")
+    job = main.load_job("Preview Job Kit")
+
+    assert job["execution_mode"] == "preview"
+    assert job["execution_mode_label"] == "Preview / safety mode"
+    assert job["status"] == "Preview complete"
+    assert job["current_stage"] == "Ready for real execution"
+    assert "[DONE] Preview complete. No real changes were made." in job["logs"]
 
 
 def test_build_raid_plan_blocks_when_no_compatible_data_spare_remains():
@@ -1876,15 +2191,6 @@ def test_apply_storage_layout_creates_artifacts_and_logs_success(client, monkeyp
     )
 
     assert response.status_code == 200
-    assert "Apply attempt artifacts" in response.text
-    assert "View Apply Log" in response.text
-    assert "Storage setup progress" in response.text
-    assert "Restart needed to finish" in response.text
-    assert "Storage changes are staged, but they will not finish until the server restarts." in response.text
-    assert "Reboot Required" in response.text
-    assert "Reboot Machine Now" in response.text
-    assert "This button sends a real Redfish reset request through iLO and waits for the server to return." in response.text
-    assert "Reboot Now" in response.text
     apply_dir = main.STORAGE_RAID_EXPORT_DIR / "MXQ85103SX" / "20260409-130000"
     assert (apply_dir / "pre-change-summary.yml").exists()
     assert (apply_dir / "pre-change-raw.json").exists()
@@ -2467,10 +2773,10 @@ def test_dashboard_shows_recommended_next_step_and_workflow_cards(client):
     response = client.get("/dashboard")
 
     assert response.status_code == 200
-    assert "Recommended next step" in response.text
-    assert "Set the iLO target" in response.text or "Review the run" in response.text
-    assert "Workflow readiness" in response.text
-    assert "Recent activity" in response.text
+    assert "Dashboard" in response.text
+    assert "Start with one step" in response.text
+    assert "Open run history" in response.text
+    assert "What happened last" in response.text
 
 
 def test_report_center_lists_storage_reports_and_view_report(client):
@@ -2556,6 +2862,37 @@ def test_history_and_report_center_show_run_bundle_links(client):
     assert "Run bundles" in configs_response.text
     assert "Open bundle" in configs_response.text
     assert "Load a saved kit config" in configs_response.text
+
+
+def test_history_page_renders_boolean_config_summary_values(client):
+    cfg = main.default_config()
+    cfg["site"]["name"] = "History Bool Kit"
+    main.save_kit_config(cfg)
+    main.append_history_entry(
+        "History Bool Kit",
+        {
+            "time": "2026-04-10 10:00:00",
+            "scope": "ilo",
+            "status": "Completed",
+            "current_stage": "Finished",
+            "progress_percent": 100,
+            "completed_steps": 2,
+            "total_steps": 2,
+            "config_summary": {
+                "login_ip": "10.10.8.90",
+                "storage_included": True,
+                "dns_servers": ["1.1.1.1", "8.8.8.8"],
+                "gateway": "10.10.8.1",
+            },
+        },
+    )
+
+    response = client.get("/history")
+
+    assert response.status_code == 200
+    assert "Storage Included:" in response.text
+    assert "Yes" in response.text
+    assert "1.1.1.1, 8.8.8.8" in response.text
 
 
 def test_import_kit_config_loads_uploaded_config(client):

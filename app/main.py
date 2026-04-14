@@ -7,7 +7,7 @@ import re
 import threading
 import time
 import yaml
-from typing import Any
+from typing import Any, Callable
 
 from fastapi import FastAPI, Request, Form, WebSocket, WebSocketDisconnect, UploadFile, File
 from fastapi.responses import FileResponse, HTMLResponse
@@ -25,7 +25,6 @@ CURRENT_KIT_FILE = CONFIG_DIR / "current_kit.txt"
 ARTIFACTS_DIR = BASE_DIR / "artifacts"
 GENERATED_DIR = ARTIFACTS_DIR / "generated"
 JOBS_DIR = ARTIFACTS_DIR / "jobs"
-KS_OUTPUT_PATH = GENERATED_DIR / "KS.CFG"
 HISTORY_DIR = ARTIFACTS_DIR / "history"
 ILO_CONFIG_EXPORT_DIR = HISTORY_DIR / "ilo-configs"
 CONFIG_EXPORT_DIR = HISTORY_DIR / "configs"
@@ -107,8 +106,8 @@ PAGE_META = {
         "subtitle": "View and export generated configuration snapshots.",
     },
     "storage": {
-        "title": "Storage / RAID",
-        "subtitle": "Read current storage controllers, arrays, volumes, and drives.",
+        "title": "Storage setup",
+        "subtitle": "Read what is on the server, build the new layout, approve it, and send it into the real run.",
     },
     "kits": {
         "title": "Kits",
@@ -246,6 +245,8 @@ def build_history_config_summary(cfg: dict, scope: str) -> dict:
             "snmp_v3_username": (snmp_cfg.get("v3_username") or "").strip(),
             "snmp_v3_auth_protocol": snmp_cfg.get("v3_auth_protocol", "SHA"),
             "snmp_v3_priv_protocol": snmp_cfg.get("v3_priv_protocol", "AES"),
+            "snmp_v3_auth_secret_present": bool(snmp_cfg.get("v3_auth_password")),
+            "snmp_v3_priv_secret_present": bool(snmp_cfg.get("v3_priv_password")),
             "storage_included": bool(storage_review.get("include_in_ilo_run")),
             "storage_plan_path": (storage_review.get("approval", {}) or {}).get("plan_path", ""),
         }
@@ -1468,12 +1469,22 @@ def build_workflow_contexts(cfg: dict[str, Any], job: dict[str, Any], history: l
 def build_page_comparisons(cfg: dict[str, Any], workflow_contexts: dict[str, dict[str, Any]], history: list[dict[str, Any]]) -> dict[str, list[dict[str, str]]]:
     latest_ilo = latest_history_entry_for_scope(history, ["ilo"]) or {}
     latest_storage = latest_history_entry_for_scope(history, ["storage-apply", "storage-reboot"]) or {}
+    latest_ilo_cfg = latest_ilo.get("config_summary", {}) or {}
+    ilo_result_parts = [latest_ilo.get("status") or "No iLO run recorded yet."]
+    if latest_ilo_cfg.get("dns_apply_status"):
+        ilo_result_parts.append(f"DNS {latest_ilo_cfg.get('dns_apply_status')}")
+    if latest_ilo_cfg.get("snmp_apply_status"):
+        ilo_result_parts.append(f"SNMP {latest_ilo_cfg.get('snmp_apply_status')}")
+    if latest_ilo_cfg.get("ilo_reset_status"):
+        ilo_result_parts.append(f"iLO reset {latest_ilo_cfg.get('ilo_reset_status')}")
+    if latest_ilo_cfg.get("storage_server_reboot_status"):
+        ilo_result_parts.append(f"Storage reboot {latest_ilo_cfg.get('storage_server_reboot_status')}")
     return {
         "ilo": [
             {"label": "Current", "value": (cfg.get("ilo", {}).get("current_ip") or cfg.get("ilo", {}).get("host") or "Not set")},
             {"label": "Planned", "value": f"IP {cfg.get('ilo', {}).get('target_ip') or 'Unchanged'} | gateway {cfg.get('ilo', {}).get('gateway') or 'Unchanged'} | hostname {cfg.get('ilo', {}).get('hostname') or 'Unchanged'}"},
             {"label": "Approved", "value": "iLO uses the saved settings on this page directly."},
-            {"label": "Result", "value": latest_ilo.get("status") or "No iLO run recorded yet."},
+            {"label": "Result", "value": " | ".join(ilo_result_parts)},
         ],
         "storage": [
             {"label": "Current", "value": workflow_contexts["storage"]["current_summary"]},
@@ -1512,6 +1523,173 @@ def build_recommended_next_step(cfg: dict[str, Any], workflow_contexts: dict[str
         if cfg.get("included", {}).get(key) and workflow_contexts[key]["state"] in {"not_started", "failed"}:
             return {"title": f"Review {workflow_contexts[key]['name']} setup", "summary": f"Open the {workflow_contexts[key]['name']} page and finish the saved setup values.", "href": workflow_contexts[key]["review_href"]}
     return {"title": "Review the run", "summary": "Open Run Center to review the included stages, checks, and warnings before starting.", "href": "/execution"}
+
+
+def latest_page_history_entry(history: list[dict[str, Any]], *, workflows: list[str] | None = None, scopes: list[str] | None = None) -> dict[str, Any] | None:
+    workflows = workflows or []
+    scopes = scopes or []
+    for item in history:
+        item_scope = str(item.get("scope") or "")
+        item_workflow = str(item.get("workflow") or "")
+        if item_scope in scopes or item_workflow in workflows:
+            return item
+    return None
+
+
+def build_page_briefing(
+    active_page: str,
+    cfg: dict[str, Any],
+    workflow_contexts: dict[str, dict[str, Any]],
+    history: list[dict[str, Any]],
+    execution_review: dict[str, Any] | None = None,
+) -> dict[str, str] | None:
+    if active_page in {"configs", "history", "kits"}:
+        return None
+
+    storage_review = build_storage_review_context(cfg)
+    mapping = {
+        "dashboard": {
+            "title": "Start here",
+            "purpose": "This is the home page. It shows the most important next step for this kit.",
+            "next": build_recommended_next_step(cfg, workflow_contexts)["summary"],
+            "next_label": build_recommended_next_step(cfg, workflow_contexts)["title"],
+            "next_href": build_recommended_next_step(cfg, workflow_contexts)["href"],
+            "last": (history[0].get("summary") if history else "") or "Nothing has happened yet for this kit.",
+        },
+        "global_settings": {
+            "title": "Global settings",
+            "purpose": "Use this page to save the shared defaults that the rest of the app can reuse.",
+            "next": "Fill in the shared defaults, save them, then open the setup page you want to finish next.",
+            "next_label": "Save shared defaults",
+            "next_href": "/global-settings",
+            "last": (
+                (latest_page_history_entry(history, workflows=["global_settings"]) or {}).get("summary")
+                or "Nothing has been saved here recently."
+            ),
+        },
+        "configuration": {
+            "title": "Global settings",
+            "purpose": "Use this page to save the shared defaults that the rest of the app can reuse.",
+            "next": "Fill in the shared defaults, save them, then open the setup page you want to finish next.",
+            "next_label": "Save shared defaults",
+            "next_href": "/global-settings",
+            "last": (
+                (latest_page_history_entry(history, workflows=["global_settings"]) or {}).get("summary")
+                or "Nothing has been saved here recently."
+            ),
+        },
+        "ilo": {
+            "title": "iLO setup",
+            "purpose": "Use this page to tell the app how to reach iLO and what iLO settings you want to use.",
+            "next": (
+                "Save the iLO address and sign-in details first."
+                if not (cfg.get("ilo", {}).get("current_ip") or cfg.get("ilo", {}).get("host"))
+                else "Save the iLO setup, then go to Run Center when you are ready."
+            ),
+            "next_label": (
+                "Save iLO setup"
+                if not (cfg.get("ilo", {}).get("current_ip") or cfg.get("ilo", {}).get("host"))
+                else "Open Run Center"
+            ),
+            "next_href": "/ilo" if not (cfg.get("ilo", {}).get("current_ip") or cfg.get("ilo", {}).get("host")) else "/execution",
+            "last": (
+                (latest_page_history_entry(history, workflows=["ilo"], scopes=["ilo"]) or {}).get("summary")
+                or "No iLO run has finished yet."
+            ),
+        },
+        "storage": {
+            "title": "Storage setup",
+            "purpose": "Use this page to read the disks, build a layout, approve it, and send it into the real run.",
+            "next": (
+                "Read current storage first."
+                if storage_review.get("state") in {"not_started", "idle"} or not storage_review.get("latest")
+                else "Build storage plan next."
+                if storage_review.get("state") == "discovered"
+                else "Approve this plan next."
+                if storage_review.get("state") == "planned" or storage_review.get("stale")
+                else "Open Run Center when you are ready to use the approved plan."
+            ),
+            "next_label": (
+                "Read current storage"
+                if storage_review.get("state") in {"not_started", "idle"} or not storage_review.get("latest")
+                else "Build storage plan"
+                if storage_review.get("state") == "discovered"
+                else "Approve this plan"
+                if storage_review.get("state") == "planned" or storage_review.get("stale")
+                else "Run for real"
+            ),
+            "next_href": (
+                "/storage#read-current-storage"
+                if storage_review.get("state") in {"not_started", "idle"} or not storage_review.get("latest")
+                else "/storage#build-storage-plan"
+                if storage_review.get("state") == "discovered"
+                else "/storage#approve-storage-plan"
+                if storage_review.get("state") == "planned" or storage_review.get("stale")
+                else "/execution"
+            ),
+            "last": (
+                (latest_page_history_entry(history, workflows=["storage"], scopes=["storage-apply", "storage-reboot"]) or {}).get("summary")
+                or storage_review.get("status_reason")
+                or "No storage run has finished yet."
+            ),
+        },
+        "esxi": {
+            "title": "ESXi setup",
+            "purpose": "Use this page to save the ESXi name and password for this kit.",
+            "next": (
+                "Enter the ESXi name and password, then save them."
+                if not (cfg.get("esxi", {}).get("hostname") and cfg.get("esxi", {}).get("root_password"))
+                else "Open Run Center when you are ready."
+            ),
+            "next_label": (
+                "Save ESXi setup"
+                if not (cfg.get("esxi", {}).get("hostname") and cfg.get("esxi", {}).get("root_password"))
+                else "Open Run Center"
+            ),
+            "next_href": "/esxi" if not (cfg.get("esxi", {}).get("hostname") and cfg.get("esxi", {}).get("root_password")) else "/execution",
+            "last": (
+                (latest_page_history_entry(history, workflows=["esxi"], scopes=["esxi"]) or {}).get("summary")
+                or "No ESXi run has finished yet."
+            ),
+        },
+        "windows": {
+            "title": "Windows setup",
+            "purpose": "Use this page to save the Windows details for this kit.",
+            "next": "Fill in the Windows setup, save it, then use Run Center when you are ready.",
+            "next_label": "Save Windows setup",
+            "next_href": "/windows",
+            "last": (
+                (latest_page_history_entry(history, workflows=["windows"], scopes=["windows"]) or {}).get("summary")
+                or "No Windows run has finished yet."
+            ),
+        },
+        "qnap": {
+            "title": "QNAP setup",
+            "purpose": "Use this page to save the QNAP details for this kit.",
+            "next": "Fill in the QNAP setup, save it, then use Run Center when you are ready.",
+            "next_label": "Save QNAP setup",
+            "next_href": "/qnap",
+            "last": (
+                (latest_page_history_entry(history, workflows=["qnap"], scopes=["qnap"]) or {}).get("summary")
+                or "No QNAP run has finished yet."
+            ),
+        },
+        "execution": {
+            "title": "Run Center",
+            "purpose": "Use this page to check the plan one last time before you run anything.",
+            "next": (
+                "Pick Review full run to see the full checklist."
+                if not execution_review
+                else "If the review looks right, choose Preview only or Run for real."
+            ),
+            "next_label": "Review full run" if not execution_review else "Run for real",
+            "next_href": "/execution",
+            "last": (
+                (history[0].get("summary") if history else "") or "No run has finished yet."
+            ),
+        },
+    }
+    return mapping.get(active_page)
 
 
 def mask_secret(value: str) -> str:
@@ -1573,65 +1751,6 @@ def build_settings_sources(cfg: dict[str, Any]) -> dict[str, list[dict[str, str]
             {"label": "Password", "value": mask_secret(cfg.get("qnap", {}).get("password", "")), "source": source_label("local")},
         ],
     }
-
-
-def build_page_dependencies(cfg: dict[str, Any], workflow_contexts: dict[str, dict[str, Any]]) -> dict[str, list[dict[str, str]]]:
-    storage_review = build_storage_review_context(cfg)
-    storage_target = resolve_storage_target_host(cfg)
-    shared_subnet = cfg.get("shared_network", {}).get("subnet", "")
-    deps: dict[str, list[dict[str, str]]] = {
-        "global_settings": [
-            {"title": "Shared defaults feed every workspace", "summary": "Save the shared network, gateway, DNS, and included workflows here before fine-tuning the dedicated pages.", "tone": "progress"},
-        ],
-        "storage": [
-            {
-                "title": "Storage depends on iLO target",
-                "summary": "Storage review uses the current iLO address and credentials. Set or confirm them on the iLO page first." if not storage_target.get("valid") else "Storage is using the current iLO target and can read the server from this page.",
-                "tone": "pending" if not storage_target.get("valid") else "ready",
-            },
-        ],
-        "ilo": [
-            {
-                "title": "Storage approval is optional but visible here",
-                "summary": "This iLO run will skip storage until Storage / RAID is reviewed and approved." if not storage_review.get("approved") else "The approved storage plan can be included when you prepare the iLO run.",
-                "tone": "pending" if not storage_review.get("approved") else "ready",
-            },
-        ],
-        "esxi": [
-            {
-                "title": "ESXi uses shared network defaults",
-                "summary": "The target IP, gateway, and DNS come from Global Settings.",
-                "tone": "ready" if shared_subnet else "pending",
-            },
-            {
-                "title": "ESXi depends on iLO readiness",
-                "summary": "Set the current iLO address first so the hardware workflow is pointed at the right server." if not (cfg.get("ilo", {}).get("current_ip") or cfg.get("ilo", {}).get("host")) else "The iLO target is already saved for this kit.",
-                "tone": "pending" if not (cfg.get("ilo", {}).get("current_ip") or cfg.get("ilo", {}).get("host")) else "ready",
-            },
-        ],
-        "windows": [
-            {
-                "title": "Windows uses shared network defaults",
-                "summary": "The target IP, gateway, and DNS come from Global Settings unless the shared plan changes.",
-                "tone": "ready" if shared_subnet else "pending",
-            },
-        ],
-        "qnap": [
-            {
-                "title": "QNAP uses shared network defaults",
-                "summary": "The target IP and gateway come from Global Settings unless the shared plan changes.",
-                "tone": "ready" if shared_subnet else "pending",
-            },
-        ],
-        "execution": [
-            {
-                "title": "Run Center consumes saved workspace settings",
-                "summary": "This page reviews and runs the settings already saved on the dedicated workflow pages. It does not silently rebuild them here.",
-                "tone": "progress",
-            },
-        ],
-    }
-    return deps
 
 
 def collect_report_entries(cfg: dict[str, Any], query: str = "", report_type: str = "all", limit: int = 120) -> list[dict[str, str]]:
@@ -1782,6 +1901,63 @@ def build_recoverability_notes(cfg: dict[str, Any], scope: str, stages: list[dic
     return notes
 
 
+def execution_mode_for_scope(scope: str) -> dict[str, str]:
+    if scope == "ilo":
+        return {
+            "key": "real",
+            "label": "Real execution",
+            "badge": "Real run",
+            "summary": "This path performs real iLO changes when you start it.",
+            "what_this_does": "Applies the saved iLO setup to the live target.",
+            "real_changes": "Yes",
+            "next_step": "Start the run when the review looks correct.",
+            "run_button": "Start real iLO run",
+            "run_note": "This is the live path. Real changes may be made.",
+            "live_intro": "Live progress below is tracking a real run.",
+        }
+    return {
+        "key": "preview",
+        "label": "Preview / safety mode",
+        "badge": "Preview only",
+        "summary": "This path validates and stages a preview only. No real changes are made.",
+        "what_this_does": "Checks the run and prepares a preview.",
+        "real_changes": "No",
+        "next_step": "Run for real when everything looks ready.",
+        "run_button": "Start preview run",
+        "run_note": "This is a safety-mode preview. No real changes will be made.",
+        "live_intro": "Live progress below is tracking a preview only.",
+    }
+
+
+def build_execution_launch_options(cfg: dict[str, Any], scope: str) -> dict[str, Any]:
+    preview_option = {
+        "scope": scope,
+        "label": "Preview only",
+        "summary": "Checks the run and prepares a preview. No real changes are made.",
+    }
+    storage_review = build_storage_review_context(cfg)
+    storage_real = bool(storage_review.get("include_in_ilo_run") and storage_review.get("approved") and not storage_review.get("stale"))
+    if scope == "ilo":
+        return {
+            "preview": preview_option,
+            "real": {
+                "scope": "ilo",
+                "label": "Run for real",
+                "summary": "Starts the live iLO run and may apply real changes to the server." + (" The approved storage plan will also be applied." if storage_real else ""),
+            },
+        }
+    if scope == "included" and cfg.get("included", {}).get("ilo"):
+        return {
+            "preview": preview_option,
+            "real": {
+                "scope": "ilo",
+                "label": "Run for real",
+                "summary": "Starts the live iLO run for this kit." + (" The approved storage plan will also be applied." if storage_real else ""),
+            },
+        }
+    return {"preview": preview_option, "real": None}
+
+
 def build_run_center_readiness_matrix(cfg: dict[str, Any], scope: str) -> list[dict[str, Any]]:
     included_cfg = cfg.get("included", {}) or {}
     storage_review = build_storage_review_context(cfg)
@@ -1901,6 +2077,7 @@ def build_run_summary(cfg: dict[str, Any], scope: str) -> dict[str, Any]:
         "readiness_matrix": review.get("readiness_matrix", []),
         "final_summary": review.get("final_summary", {}),
         "result": latest.get("status", "No run recorded yet."),
+        "result_details": latest.get("config_summary", {}) or {},
         "restart_occurred": "Yes" if review.get("restart_expected") else "No",
         "detail_text": review.get("detail_text", ""),
         "validation_checks": review.get("validation_checks", []),
@@ -2592,6 +2769,7 @@ def record_storage_apply_step(
     details: str = "",
     error: str = "",
     response: Any = None,
+    progress_percent: int | None = None,
 ) -> None:
     entry = {
         "time": time.strftime("%Y-%m-%d %H:%M:%S"),
@@ -2640,7 +2818,7 @@ def record_storage_apply_step(
         completed,
         total,
         line,
-        progress_percent=storage_workflow_progress_percent(workflow_state, completed, total),
+        progress_percent=progress_percent if progress_percent is not None else storage_workflow_progress_percent(workflow_state, completed, total),
     )
 
 
@@ -2676,6 +2854,15 @@ def build_storage_apply_intent(plan: dict, apply_mode: str) -> dict[str, Any]:
             for volume in plan.get("existing_logical_volumes", [])
         ],
     }
+
+
+def storage_apply_mode_for_plan(plan: dict[str, Any]) -> str:
+    next_action = str((plan.get("apply_readiness", {}) or {}).get("next_action") or "").strip().lower()
+    default_recommendation = str(plan.get("default_recommendation") or "").strip().lower()
+    mode = next_action or default_recommendation
+    if "wipe" in mode or "rebuild" in mode:
+        return "wipe_rebuild"
+    return "create_only"
 
 
 def choose_storage_apply_platform(discovery: dict, plan: dict) -> dict[str, Any]:
@@ -2770,6 +2957,7 @@ def execute_storage_apply_gen10(
     apply_paths: dict[str, Path],
     starting_step: int,
     total_steps: int,
+    progress_resolver: Callable[[int, int], int] | None = None,
 ) -> tuple[int, list[Any]]:
     settings_path = platform.get("settings_path", "")
     if not settings_path:
@@ -2796,6 +2984,7 @@ def execute_storage_apply_gen10(
             "Delete existing logical volumes",
             targets=targets,
             details=f"Preparing {len(existing_volume_paths)} logical-volume delete actions for one consolidated SmartStorageConfig payload.",
+            progress_percent=progress_resolver(current, total_steps) if progress_resolver else None,
         )
         record_storage_apply_step(
             kit_name,
@@ -2809,6 +2998,7 @@ def execute_storage_apply_gen10(
             "Delete existing logical volumes",
             targets=targets,
             details=f"Queued {len(existing_volume_paths)} logical-volume delete actions into the final pending config.",
+            progress_percent=progress_resolver(current, total_steps) if progress_resolver else None,
         )
         current += 1
     else:
@@ -2824,6 +3014,7 @@ def execute_storage_apply_gen10(
             "Delete existing logical volumes",
             targets={"controller": apply_state["controller"].get("name") or apply_state["controller"].get("model") or ""},
             details="Create-only mode selected; no existing logical volumes will be removed.",
+            progress_percent=progress_resolver(current, total_steps) if progress_resolver else None,
         )
         current += 1
 
@@ -2840,6 +3031,7 @@ def execute_storage_apply_gen10(
         "Create OS RAID 1 logical drive",
         targets={"controller": apply_state["controller"].get("name") or apply_state["controller"].get("model") or "", "bays": os_intent.get("bays", [])},
         details=f"Staging OS RAID 1 into one consolidated SmartStorageConfig payload at {settings_path}.",
+        progress_percent=progress_resolver(current, total_steps) if progress_resolver else None,
     )
     record_storage_apply_step(
         kit_name,
@@ -2853,6 +3045,7 @@ def execute_storage_apply_gen10(
         "Create OS RAID 1 logical drive",
         targets={"controller": apply_state["controller"].get("name") or apply_state["controller"].get("model") or "", "bays": os_intent.get("bays", [])},
         details="Queued OS RAID 1 in the final pending config.",
+        progress_percent=progress_resolver(current, total_steps) if progress_resolver else None,
     )
     current += 1
 
@@ -2869,6 +3062,7 @@ def execute_storage_apply_gen10(
         "Create Data RAID 6 logical drive",
         targets={"controller": apply_state["controller"].get("name") or apply_state["controller"].get("model") or "", "bays": data_intent.get("bays", [])},
         details=f"Staging Data RAID 6 into one consolidated SmartStorageConfig payload at {settings_path}.",
+        progress_percent=progress_resolver(current, total_steps) if progress_resolver else None,
     )
     record_storage_apply_step(
         kit_name,
@@ -2882,6 +3076,7 @@ def execute_storage_apply_gen10(
         "Create Data RAID 6 logical drive",
         targets={"controller": apply_state["controller"].get("name") or apply_state["controller"].get("model") or "", "bays": data_intent.get("bays", [])},
         details="Queued Data RAID 6 in the final pending config.",
+        progress_percent=progress_resolver(current, total_steps) if progress_resolver else None,
     )
     current += 1
 
@@ -2898,6 +3093,7 @@ def execute_storage_apply_gen10(
         "Assign hot spare",
         targets={"controller": apply_state["controller"].get("name") or apply_state["controller"].get("model") or "", "bays": [spare_intent.get("bay", "")]},
         details=f"Submitting one consolidated SmartStorageConfig payload with the reserved hot spare at {settings_path}.",
+        progress_percent=progress_resolver(current, total_steps) if progress_resolver else None,
     )
     response = client.apply_gen10_storage_layout(
         settings_path=settings_path,
@@ -2921,6 +3117,7 @@ def execute_storage_apply_gen10(
         targets={"controller": apply_state["controller"].get("name") or apply_state["controller"].get("model") or "", "bays": [spare_intent.get("bay", "")]},
         details="Submitted the consolidated SmartStorageConfig pending payload with OS RAID 1, Data RAID 6, and dedicated hot spare.",
         response=response,
+        progress_percent=progress_resolver(current, total_steps) if progress_resolver else None,
     )
     current += 1
     return current, responses
@@ -3568,6 +3765,383 @@ def start_storage_reboot_background(
     thread.start()
 
 
+def combined_progress_percent(completed: int, total: int) -> int:
+    if total <= 0:
+        return 0
+    completed = max(0, min(completed, total))
+    return int((completed / total) * 100)
+
+
+def run_storage_as_part_of_real_run(
+    cfg: dict[str, Any],
+    client: ILOClient,
+    host: str,
+    storage_execution: dict[str, Any],
+    kit_name: str,
+    job: dict[str, Any],
+    start_step: int,
+    total_steps: int,
+) -> dict[str, Any]:
+    discovery_raw_path = str(storage_execution.get("discovery_raw_path") or "")
+    raid_plan_path = str(storage_execution.get("plan_path") or "")
+    discovery, _discovery_paths, plan, plan_paths = restore_storage_page_state(
+        discovery_raw_path=discovery_raw_path,
+        raid_plan_path=raid_plan_path,
+        expected_host=host,
+    )
+    if not plan_paths:
+        raise ValueError("Approved storage plan artifact is missing for the real run.")
+
+    apply_mode = storage_apply_mode_for_plan(plan)
+    apply_paths = initialize_storage_apply_artifacts(cfg, plan, plan_paths)
+    apply_state = {
+        "started_at": time.strftime("%Y-%m-%d %H:%M:%S"),
+        "finished_at": "",
+        "mode": apply_mode,
+        "status": "Running",
+        "apply_path": "",
+        "controller": plan.get("source_discovery", {}).get("controller", {}) or {},
+        "paths": {key: str(value) for key, value in apply_paths.items()},
+        "steps": [],
+        "responses": [],
+        "errors": [],
+        "reboot_required": False,
+        "workflow_state": "running_apply",
+        "reboot_status": "Not requested",
+        "reboot_requested": False,
+        "post_reboot_validation": "Pending reboot decision",
+    }
+    save_storage_apply_state(apply_state, apply_paths)
+    job["storage_run_directory"] = str(apply_paths["directory"])
+    save_job(kit_name, job)
+
+    current_step = start_step
+
+    record_storage_apply_step(
+        kit_name,
+        job,
+        apply_state,
+        apply_paths,
+        "Validate controller and plan",
+        current_step,
+        total_steps,
+        "running",
+        "Validate controller and plan",
+        targets={"controller": apply_state["controller"].get("name") or apply_state["controller"].get("model") or ""},
+        details=f"Validating approved storage plan for host={host} in {apply_mode.replace('_', ' ')} mode.",
+        progress_percent=combined_progress_percent(current_step, total_steps),
+    )
+    validate_storage_apply_request(plan, apply_mode, storage_apply_confirmation_for_mode(apply_mode), True)
+    current_step += 1
+    record_storage_apply_step(
+        kit_name,
+        job,
+        apply_state,
+        apply_paths,
+        "Validate controller and plan",
+        current_step,
+        total_steps,
+        "ok",
+        "Validate controller and plan",
+        targets={"controller": apply_state["controller"].get("name") or apply_state["controller"].get("model") or ""},
+        details="Approved storage plan, host, controller, and hot spare checks passed for the real run.",
+        progress_percent=combined_progress_percent(current_step, total_steps),
+    )
+
+    current_step += 1
+    record_storage_apply_step(
+        kit_name,
+        job,
+        apply_state,
+        apply_paths,
+        "Export pre-change storage",
+        current_step,
+        total_steps,
+        "running",
+        "Export pre-change storage",
+        targets={"controller": apply_state["controller"].get("name") or apply_state["controller"].get("model") or ""},
+        details=f"Reading current storage state from {host} before the real storage apply.",
+        progress_percent=combined_progress_percent(current_step, total_steps),
+    )
+    pre_change_discovery = client.get_storage_discovery(deep_smart_storage_scan=False)
+    write_storage_discovery_snapshot_files(
+        apply_paths["pre_change_summary"],
+        apply_paths["pre_change_raw"],
+        cfg,
+        pre_change_discovery,
+        host=host,
+    )
+    current_step += 1
+    record_storage_apply_step(
+        kit_name,
+        job,
+        apply_state,
+        apply_paths,
+        "Export pre-change storage",
+        current_step,
+        total_steps,
+        "ok",
+        "Export pre-change storage",
+        targets={"controller": apply_state["controller"].get("name") or apply_state["controller"].get("model") or ""},
+        details=f"Saved {apply_paths['pre_change_summary'].name} and {apply_paths['pre_change_raw'].name}.",
+        progress_percent=combined_progress_percent(current_step, total_steps),
+    )
+
+    platform = choose_storage_apply_platform(pre_change_discovery, plan)
+    apply_state["apply_path"] = platform.get("label", "")
+    current_step += 1
+    record_storage_apply_step(
+        kit_name,
+        job,
+        apply_state,
+        apply_paths,
+        "Choose storage apply path",
+        current_step,
+        total_steps,
+        "ok",
+        "Choose storage apply path",
+        targets={"controller": apply_state["controller"].get("name") or apply_state["controller"].get("model") or "", "path": platform.get("settings_path", "")},
+        details=f"Selected {platform.get('label')} for the real storage stage.",
+        progress_percent=combined_progress_percent(current_step, total_steps),
+    )
+
+    current_step += 1
+    if platform.get("id") == "gen10_hpe_smartstorageconfig":
+        current_step, responses = execute_storage_apply_gen10(
+            client,
+            plan,
+            apply_mode,
+            platform,
+            kit_name,
+            job,
+            apply_state,
+            apply_paths,
+            current_step,
+            total_steps,
+            progress_resolver=combined_progress_percent,
+        )
+        apply_state["responses"].extend({"step": "platform_apply", "response": storage_apply_response_excerpt(item)} for item in responses)
+        combined_response = {"responses": [storage_apply_response_excerpt(item) for item in responses]}
+    else:
+        raise ILOError(f"Storage apply path {platform.get('label')} is not implemented yet.")
+
+    record_storage_apply_step(
+        kit_name,
+        job,
+        apply_state,
+        apply_paths,
+        "Record controller/apply response",
+        current_step,
+        total_steps,
+        "ok",
+        "Record controller/apply response",
+        targets={"controller": apply_state["controller"].get("name") or apply_state["controller"].get("model") or ""},
+        details="Captured the immediate controller/apply response for the real storage stage.",
+        response=combined_response,
+        progress_percent=combined_progress_percent(current_step, total_steps),
+    )
+
+    current_step += 1
+    reboot_required = any(
+        isinstance(item, dict) and item.get("response", {}).get("reboot_required")
+        for item in apply_state.get("responses", [])
+    )
+    apply_state["reboot_required"] = bool(reboot_required)
+    apply_state["workflow_state"] = "staged_reboot_required" if apply_state["reboot_required"] else "apply_complete"
+    apply_state["post_reboot_validation"] = "Pending reboot" if apply_state["reboot_required"] else "Not required"
+    apply_state["status"] = "Staged" if apply_state["reboot_required"] else "Completed"
+    record_storage_apply_step(
+        kit_name,
+        job,
+        apply_state,
+        apply_paths,
+        "Determine whether reboot is required",
+        current_step,
+        total_steps,
+        "ok",
+        "Determine whether reboot is required",
+        targets={"controller": apply_state["controller"].get("name") or apply_state["controller"].get("model") or ""},
+        details=f"reboot_required={apply_state['reboot_required']}",
+        progress_percent=combined_progress_percent(current_step, total_steps),
+    )
+
+    current_step += 1
+    record_storage_apply_step(
+        kit_name,
+        job,
+        apply_state,
+        apply_paths,
+        "Export post-change storage",
+        current_step,
+        total_steps,
+        "running",
+        "Export post-change storage",
+        targets={"controller": apply_state["controller"].get("name") or apply_state["controller"].get("model") or ""},
+        details=f"Reading current storage state after {apply_mode.replace('_', ' ')} apply.",
+        progress_percent=combined_progress_percent(current_step, total_steps),
+    )
+    post_change_discovery = client.get_storage_discovery(deep_smart_storage_scan=False)
+    write_storage_discovery_snapshot_files(
+        apply_paths["post_change_summary"],
+        apply_paths["post_change_raw"],
+        cfg,
+        post_change_discovery,
+        host=host,
+    )
+    current_step += 1
+    record_storage_apply_step(
+        kit_name,
+        job,
+        apply_state,
+        apply_paths,
+        "Export post-change storage",
+        current_step,
+        total_steps,
+        "ok",
+        "Export post-change storage",
+        targets={"controller": apply_state["controller"].get("name") or apply_state["controller"].get("model") or ""},
+        details=f"Saved {apply_paths['post_change_summary'].name} and {apply_paths['post_change_raw'].name}.",
+        progress_percent=combined_progress_percent(current_step, total_steps),
+    )
+
+    if apply_state.get("reboot_required"):
+        apply_state["workflow_state"] = "reboot_requested"
+        apply_state["reboot_status"] = "Requested"
+        apply_state["reboot_requested"] = True
+        apply_state["post_reboot_validation"] = "Pending reboot start"
+        current_step += 1
+        record_storage_apply_step(
+            kit_name,
+            job,
+            apply_state,
+            apply_paths,
+            "Request server reboot",
+            current_step,
+            total_steps,
+            "running",
+            "Request server reboot",
+            targets={"controller": apply_state["controller"].get("name") or apply_state["controller"].get("model") or ""},
+            details="Storage stage requires a reboot, so the real run is requesting it now.",
+            progress_percent=combined_progress_percent(current_step, total_steps),
+        )
+        reboot_result = client.reboot_server_and_wait(reset_type="GracefulRestart")
+        reboot_state = {
+            "started_at": time.strftime("%Y-%m-%d %H:%M:%S"),
+            "finished_at": time.strftime("%Y-%m-%d %H:%M:%S"),
+            "status": "Completed",
+            "requested": True,
+            "steps": [{"step": "Request server reboot", "result": reboot_result}],
+            "errors": [],
+        }
+        save_storage_reboot_state(reboot_state, apply_paths)
+
+        apply_state["workflow_state"] = "waiting_for_server_return"
+        apply_state["reboot_status"] = "Server returned"
+        apply_state["post_reboot_validation"] = "Capturing post-reboot storage discovery"
+        current_step += 1
+        record_storage_apply_step(
+            kit_name,
+            job,
+            apply_state,
+            apply_paths,
+            "Wait for server return",
+            current_step,
+            total_steps,
+            "ok",
+            "Wait for server return",
+            targets={"controller": apply_state["controller"].get("name") or apply_state["controller"].get("model") or ""},
+            details=str(reboot_result.get("return_detail") or reboot_result.get("reboot_start_detail") or "Server returned after reboot."),
+            response=reboot_result,
+            progress_percent=combined_progress_percent(current_step, total_steps),
+        )
+
+        current_step += 1
+        record_storage_apply_step(
+            kit_name,
+            job,
+            apply_state,
+            apply_paths,
+            "Export post-reboot storage",
+            current_step,
+            total_steps,
+            "running",
+            "Export post-reboot storage",
+            targets={"controller": apply_state["controller"].get("name") or apply_state["controller"].get("model") or ""},
+            details="Capturing post-reboot storage state for validation.",
+            progress_percent=combined_progress_percent(current_step, total_steps),
+        )
+        post_reboot_discovery = client.get_storage_discovery(deep_smart_storage_scan=False)
+        write_storage_discovery_snapshot_files(
+            apply_paths["post_reboot_summary"],
+            apply_paths["post_reboot_raw"],
+            cfg,
+            post_reboot_discovery,
+            host=host,
+        )
+        validation = build_storage_reboot_validation(post_reboot_discovery, apply_state)
+        apply_state["status"] = "Completed"
+        apply_state["workflow_state"] = "post_reboot_validation_complete"
+        apply_state["reboot_status"] = "Completed"
+        apply_state["post_reboot_validation"] = "Complete"
+        current_step += 1
+        record_storage_apply_step(
+            kit_name,
+            job,
+            apply_state,
+            apply_paths,
+            "Post-reboot validation",
+            current_step,
+            total_steps,
+            "ok",
+            "Post-reboot validation",
+            targets={"controller": apply_state["controller"].get("name") or apply_state["controller"].get("model") or ""},
+            details=(
+                f"controller_count={validation.get('controller_count')} | "
+                f"logical_volume_count={validation.get('logical_volume_count')} | "
+                f"validation_status={validation.get('validation_status')}"
+            ),
+            response=validation,
+            progress_percent=combined_progress_percent(current_step, total_steps),
+        )
+    else:
+        reboot_state = {
+            "started_at": "",
+            "finished_at": "",
+            "status": "Not required",
+            "requested": False,
+            "steps": [],
+            "errors": [],
+        }
+        save_storage_reboot_state(reboot_state, apply_paths)
+        for step_name in ("Request server reboot", "Wait for server return", "Post-reboot validation"):
+            current_step += 1
+            record_storage_apply_step(
+                kit_name,
+                job,
+                apply_state,
+                apply_paths,
+                step_name,
+                current_step,
+                total_steps,
+                "skip",
+                step_name,
+                targets={"controller": apply_state["controller"].get("name") or apply_state["controller"].get("model") or ""},
+                details="No storage reboot was required for this real run.",
+                progress_percent=combined_progress_percent(current_step, total_steps),
+            )
+
+    apply_state["finished_at"] = time.strftime("%Y-%m-%d %H:%M:%S")
+    save_storage_apply_state(apply_state, apply_paths)
+    return {
+        "apply_paths": apply_paths,
+        "apply_state": apply_state,
+        "plan": plan,
+        "plan_paths": plan_paths,
+        "discovery": discovery,
+        "final_step": current_step,
+    }
+
+
 def render_exports_folder_listing(root: Path) -> str:
     lines = [f"Exports Root: {root}", ""]
     servers = sorted([p for p in root.iterdir() if p.is_dir()], key=lambda p: p.name.lower())
@@ -3896,19 +4470,6 @@ def summarize_section_states(cfg: dict) -> dict:
     }
 
 
-def render_ks_cfg(cfg):
-    template = templates.env.get_template("ks.cfg.j2")
-    esxi = cfg.get("esxi", {})
-    return template.render(
-        hostname=esxi.get("hostname", ""),
-        management_ip=esxi.get("management_ip", ""),
-        subnet_mask=esxi.get("subnet_mask", ""),
-        gateway=esxi.get("gateway", ""),
-        dns_servers=esxi.get("dns_servers", []),
-        root_password=esxi.get("root_password", ""),
-    )
-
-
 def build_cards():
     return [
         {"title": "iLO", "status": "Ready", "desc": "Connect, configure, mount media, power cycle"},
@@ -3942,6 +4503,7 @@ def build_action_feedback(
 
 def build_execution_review(cfg: dict, scope: str):
     lines = [f"Execution scope: {scope}", ""]
+    execution_mode = execution_mode_for_scope(scope)
     storage_review = build_storage_review_context(cfg)
     storage_validation_error = None
     try:
@@ -4083,16 +4645,9 @@ def build_execution_review(cfg: dict, scope: str):
             elif storage_validation_error:
                 summary = f"Storage setup is blocked until it is reviewed again: {storage_validation_error}"
             elif storage_review.get("approved") and not storage_review.get("stale"):
-                plan_summary = storage_review.get("approval", {}).get("plan_summary", {}) or {}
-                mode = str(plan_summary.get("mode") or "").lower()
-                if "wipe" in mode or "rebuild" in mode:
-                    summary = "Storage will be erased and rebuilt using the approved layout."
-                elif plan_summary.get("os_bays") or plan_summary.get("data_bays"):
-                    summary = "Storage will be set up using the approved layout."
-                else:
-                    summary = "Storage will be checked against the approved layout."
+                summary = "Storage will be applied during the real run using the approved layout."
                 if storage_review.get("approval", {}).get("reboot_expected"):
-                    summary += " Restart required."
+                    summary += " Restart expected."
         state_key, status_label, status_tone, blocked_reason = stage_state(key, included)
         checks = stage_checks(key, included)
         blockers = [item for item in checks if not item.get("ok")]
@@ -4188,6 +4743,7 @@ def build_execution_review(cfg: dict, scope: str):
     if storage_validation_error and "Storage / RAID" not in will_not_run and any(stage["key"] == "storage" for stage in included_stages):
         will_not_run.append("Storage / RAID until it is reviewed again")
     summary_items = [
+        {"label": "Execution mode", "value": execution_mode["label"]},
         {"label": "Run type", "value": "Full kit run" if scope == "included" else f"Single stage: {components.get(scope, {'name': scope}).get('name', scope)}"},
         {"label": "Selected kit", "value": cfg.get("site", {}).get("name", "") or "Unknown"},
         {"label": "Storage in run", "value": "Yes" if (scope == "included" and cfg.get("included", {}).get("storage")) or (scope == "ilo" and storage_review.get("include_in_ilo_run")) else "No"},
@@ -4195,10 +4751,12 @@ def build_execution_review(cfg: dict, scope: str):
     ]
     warning_points = [
         "Review the selected targets, sign-in details, and included stages before starting.",
-        "This run can restart equipment and make destructive changes.",
+        execution_mode["summary"] if execution_mode["key"] == "preview" else "This run can restart equipment and make destructive changes.",
     ]
     if storage_validation_error:
         warning_points.append(f"Storage is blocked right now: {storage_validation_error}")
+    elif any(stage["key"] == "storage" and stage["included"] for stage in included_stages):
+        warning_points.append("Approved storage will be applied during the real run using the exact approved artifact.")
     validation_checks = build_execution_validation_overview(cfg, scope, included_stages)
     recoverability = build_recoverability_notes(cfg, scope, included_stages)
     final_summary = {
@@ -4208,13 +4766,22 @@ def build_execution_review(cfg: dict, scope: str):
         "plans_in_use": [stage["state_used"] for stage in included_stages if stage.get("included")],
     }
     summary_artifacts = build_run_summary_artifacts(cfg, {"stages": included_stages}, scope)
+    launch_options = build_execution_launch_options(cfg, scope)
     return {
         "scope": scope,
+        "execution_mode": execution_mode,
+        "execution_mode_rows": [
+            {"label": "Mode", "value": execution_mode["badge"]},
+            {"label": "What this does", "value": execution_mode["what_this_does"]},
+            {"label": "Real changes made", "value": execution_mode["real_changes"]},
+            {"label": "Next step", "value": execution_mode["next_step"]},
+        ],
         "summary_items": summary_items,
         "stages": included_stages,
         "readiness_matrix": readiness_matrix,
         "final_summary": final_summary,
         "summary_artifacts": summary_artifacts,
+        "launch_options": launch_options,
         "warning_title": "Review before you start",
         "warning_points": warning_points,
         "validation_checks": validation_checks,
@@ -4225,66 +4792,73 @@ def build_execution_review(cfg: dict, scope: str):
 
 
 def get_steps_for_scope(cfg: dict, scope: str):
+    if scope == "ilo":
+        return [
+            "Preview iLO target and sign-in",
+            "Preview iLO network changes",
+            "Preview DNS and SNMP changes",
+            "Preview complete - ready for real iLO execution",
+        ]
     if scope == "esxi":
         return [
-            "Validate ESXi config",
-            "Generate KS.CFG",
-            "Prepare ISO patch inputs",
-            "Validate install target settings",
-            "Ready for real ESXi actions",
+            "Preview ESXi configuration",
+            "Preview generated install inputs",
+            "Preview ISO patch inputs",
+            "Preview install target checks",
+            "Preview complete - ready for real ESXi execution",
         ]
     if scope == "windows":
         return [
-            "Validate Windows config",
-            "Validate network plan",
-            "Prepare unattended settings",
-            "Validate VM/build target",
-            "Ready for real Windows actions",
+            "Preview Windows configuration",
+            "Preview network plan",
+            "Preview unattended settings",
+            "Preview VM and build target checks",
+            "Preview complete - ready for real Windows execution",
         ]
     if scope == "qnap":
         return [
-            "Validate QNAP config",
-            "Validate target IP",
-            "Prepare storage settings",
-            "Validate credentials",
-            "Ready for real QNAP actions",
+            "Preview QNAP configuration",
+            "Preview target IP",
+            "Preview storage settings",
+            "Preview credentials",
+            "Preview complete - ready for real QNAP execution",
         ]
     if scope == "iosafe":
         return [
-            "Validate ioSafe config",
-            "Validate target IP",
-            "Prepare storage settings",
-            "Validate credentials",
-            "Ready for real ioSafe actions",
+            "Preview ioSafe configuration",
+            "Preview target IP",
+            "Preview storage settings",
+            "Preview credentials",
+            "Preview complete - ready for real ioSafe execution",
         ]
     if scope == "cisco_switch":
         return [
-            "Validate switch config",
-            "Validate management IP",
-            "Prepare switch template",
-            "Validate credentials",
-            "Ready for real switch actions",
+            "Preview switch configuration",
+            "Preview management IP",
+            "Preview switch template",
+            "Preview credentials",
+            "Preview complete - ready for real switch execution",
         ]
     if scope == "included":
-        steps = ["Validate included kit scope"]
+        steps = ["Preview included kit scope"]
         included = cfg.get("included", {})
         if included.get("storage"):
-            steps.append("Stage approved storage plan")
+            steps.append("Preview approved storage plan")
         if included.get("ilo"):
-            steps.append("Stage iLO actions")
+            steps.append("Preview iLO actions")
         if included.get("esxi"):
-            steps.append("Stage ESXi actions")
+            steps.append("Preview ESXi actions")
         if included.get("windows"):
-            steps.append("Stage Windows actions")
+            steps.append("Preview Windows actions")
         if included.get("qnap"):
-            steps.append("Stage QNAP actions")
+            steps.append("Preview QNAP actions")
         if included.get("iosafe"):
-            steps.append("Stage ioSafe actions")
+            steps.append("Preview ioSafe actions")
         if included.get("cisco_switch"):
-            steps.append("Stage Cisco switch actions")
-        steps.append("Ready for real included-kit execution")
+            steps.append("Preview Cisco switch actions")
+        steps.append("Preview complete - ready for real included-kit execution")
         return steps
-    return ["Unknown scope"]
+    return ["Preview scope is not defined"]
 
 
 def validate_execution_scope(cfg: dict, scope: str) -> None:
@@ -4317,16 +4891,19 @@ def update_job(
 
 
 def initialize_background_job(kit_name: str, scope: str):
+    mode = execution_mode_for_scope(scope)
     save_job(
         kit_name,
         {
-            "status": "Starting",
+            "status": "Real run queued" if mode["key"] == "real" else "Preview queued",
+            "execution_mode": mode["key"],
+            "execution_mode_label": mode["label"],
             "scope": scope,
             "current_stage": "Queued",
             "progress_percent": 0,
             "completed_steps": 0,
             "total_steps": 0,
-            "logs": [f"[QUEUED] Execution requested for scope: {scope}"],
+            "logs": [f"[QUEUED] {mode['label']} requested for scope: {scope}"],
         },
     )
 
@@ -4354,16 +4931,51 @@ def append_job_history_snapshot(cfg: dict, scope: str):
             "total_steps": finished_job.get("total_steps", 0),
             "issues": issue_lines,
             "logs": logs,
-            "config_summary": build_history_config_summary(cfg, scope),
+            "config_summary": {
+                **build_history_config_summary(cfg, scope),
+                **(
+                    {
+                        "storage_run_directory": str(finished_job.get("storage_run_directory") or ""),
+                        "storage_apply_path": str(finished_job.get("apply_path") or ""),
+                        "reboot_required": bool(finished_job.get("reboot_required")),
+                        "storage_server_reboot_required": bool(finished_job.get("storage_server_reboot_required")),
+                        "storage_server_reboot_status": str(finished_job.get("storage_server_reboot_status") or ""),
+                        "ilo_reset_required": bool(finished_job.get("ilo_reset_required")),
+                        "ilo_reset_status": str(finished_job.get("ilo_reset_status") or ""),
+                        "dns_apply_status": str(finished_job.get("dns_apply_status") or ""),
+                        "dns_applied_values": finished_job.get("dns_applied_values") or [],
+                        "dns_applied_keys": finished_job.get("dns_applied_keys") or [],
+                        "snmp_apply_status": str(finished_job.get("snmp_apply_status") or ""),
+                        "snmp_applied_keys": finished_job.get("snmp_applied_keys") or [],
+                        "snmp_username": str(finished_job.get("snmp_username") or ""),
+                        "snmp_auth_protocol": str(finished_job.get("snmp_auth_protocol") or ""),
+                        "snmp_priv_protocol": str(finished_job.get("snmp_priv_protocol") or ""),
+                        "snmp_auth_secret_present": bool(finished_job.get("snmp_auth_secret_present")),
+                        "snmp_priv_secret_present": bool(finished_job.get("snmp_priv_secret_present")),
+                    }
+                    if (
+                        finished_job.get("storage_run_directory")
+                        or finished_job.get("apply_path")
+                        or finished_job.get("dns_apply_status")
+                        or finished_job.get("snmp_apply_status")
+                        or finished_job.get("ilo_reset_status")
+                        or finished_job.get("storage_server_reboot_status")
+                    )
+                    else {}
+                ),
+            },
             "run_summary_path": str(run_summary_path),
         },
     )
 
 
-def execute_job_in_background(cfg: dict, scope: str):
+def execute_real_job_in_background(cfg: dict, scope: str):
     kit_name = cfg["site"]["name"]
     try:
-        run_job_simulation(cfg, scope)
+        if scope == "ilo":
+            run_ilo_real(cfg)
+        else:
+            raise RuntimeError(f"Real execution is not wired for scope: {scope}")
     except Exception as e:
         save_job(
             kit_name,
@@ -4387,16 +4999,34 @@ def run_ilo_real(cfg: dict):
     snmp_cfg = cfg.get("shared_snmp", {})
     shared_dns = [x for x in cfg.get("shared_network", {}).get("dns_servers", []) if x and x.strip()]
     storage_execution = validate_storage_ready_for_ilo_run(cfg)
+    desired_auth_protocol = snmp_cfg.get("v3_auth_protocol", "SHA")
+    desired_priv_protocol = snmp_cfg.get("v3_priv_protocol", "AES")
 
-    total = 14 if storage_execution.get("included") else 13
+    total = 30 if storage_execution.get("included") else 13
     job = {
         "status": "Running",
+        "execution_mode": "real",
+        "execution_mode_label": "Real execution",
         "scope": "ilo",
         "current_stage": "",
         "progress_percent": 0,
         "completed_steps": 0,
         "total_steps": total,
         "logs": [],
+        "dns_apply_status": "Not attempted",
+        "dns_applied_values": [],
+        "dns_applied_keys": [],
+        "snmp_apply_status": "Not attempted",
+        "snmp_applied_keys": [],
+        "snmp_username": snmp_cfg.get("v3_username", "") or "",
+        "snmp_auth_protocol": desired_auth_protocol,
+        "snmp_priv_protocol": desired_priv_protocol,
+        "snmp_auth_secret_present": bool(snmp_cfg.get("v3_auth_password")),
+        "snmp_priv_secret_present": bool(snmp_cfg.get("v3_priv_password")),
+        "storage_server_reboot_required": False,
+        "storage_server_reboot_status": "Not required",
+        "ilo_reset_required": False,
+        "ilo_reset_status": "Not required",
     }
     save_job(kit_name, job)
 
@@ -4407,8 +5037,6 @@ def run_ilo_real(cfg: dict):
     target_ip = (ilo_cfg.get("target_ip") or "").strip()
     desired_gateway = (ilo_cfg.get("gateway") or "").strip()
     desired_subnet_mask = (ilo_cfg.get("subnet_mask") or "").strip()
-    desired_auth_protocol = snmp_cfg.get("v3_auth_protocol", "SHA")
-    desired_priv_protocol = snmp_cfg.get("v3_priv_protocol", "AES")
     config_changes_attempted = False
     config_changes_succeeded = True
 
@@ -4442,53 +5070,23 @@ def run_ilo_real(cfg: dict):
             (
                 f"[CONFIG] shared_dns={', '.join(shared_dns) if shared_dns else '(none)'} | "
                 f"snmp_v3_user={snmp_cfg.get('v3_username', '') or '(none)'} | "
-                f"auth={desired_auth_protocol} | priv={desired_priv_protocol}"
+                f"auth={desired_auth_protocol} | priv={desired_priv_protocol} | "
+                f"auth_password={'set' if snmp_cfg.get('v3_auth_password') else 'missing'} | "
+                f"priv_password={'set' if snmp_cfg.get('v3_priv_password') else 'missing'}"
             ),
         )
-        step_offset = 0
-        if storage_execution.get("included"):
-            plan_summary = storage_execution.get("plan_summary", {}) or {}
-            update_job(
-                kit_name,
-                job,
-                "Running",
-                "Load approved storage plan",
-                1,
-                total,
-                (
-                    f"[RUNNING] Using approved storage discovery artifact {storage_execution.get('discovery_raw_path')} "
-                    f"and approved plan artifact {storage_execution.get('plan_path')}."
-                ),
-            )
-            update_job(
-                kit_name,
-                job,
-                "Running",
-                "Load approved storage plan",
-                1,
-                total,
-                (
-                    f"[OK] Approved storage plan loaded into the iLO run context | "
-                    f"controller={plan_summary.get('controller') or '(unknown)'} | "
-                    f"os_bays={plan_summary.get('os_bays') or '(none)'} | "
-                    f"data_bays={plan_summary.get('data_bays') or '(none)'} | "
-                    f"spare_bay={plan_summary.get('spare_bay') or '(none)'} | "
-                    f"reboot_expected={storage_execution.get('reboot_expected')}"
-                ),
-            )
-            step_offset = 1
         client = ILOClient(ILOConfig(host=host, username=username, password=password, verify_tls=False, timeout=15))
 
-        update_job(kit_name, job, "Running", "Connect to Redfish", 1 + step_offset, total, f"[RUNNING] Connecting to https://{host}/redfish/v1/")
+        update_job(kit_name, job, "Running", "Connect to Redfish", 1, total, f"[RUNNING] Connecting to https://{host}/redfish/v1/")
         summary = client.get_summary()
-        update_job(kit_name, job, "Running", "Read service root", 2 + step_offset, total, f"[OK] Redfish version: {summary.get('redfish_version', '')}")
+        update_job(kit_name, job, "Running", "Read service root", 2, total, f"[OK] Redfish version: {summary.get('redfish_version', '')}")
 
         update_job(
             kit_name,
             job,
             "Running",
             "Read system inventory",
-            3 + step_offset,
+            3,
             total,
             f"[OK] System: {summary.get('system_manufacturer', '')} {summary.get('system_model', '')} | Power: {summary.get('power_state', '')}"
         )
@@ -4500,7 +5098,7 @@ def run_ilo_real(cfg: dict):
                 job,
                 "Running",
                 "Inspect network state",
-                4 + step_offset,
+                4,
                 total,
                 (
                     f"[OK] Active interface {iface.get('@odata.id', '')} | "
@@ -4514,7 +5112,7 @@ def run_ilo_real(cfg: dict):
                 job,
                 "Running",
                 "Inspect network state",
-                4 + step_offset,
+                4,
                 total,
                 f"[SKIP/INFO] Could not read active interface details: {e}"
             )
@@ -4527,7 +5125,7 @@ def run_ilo_real(cfg: dict):
                     job,
                     "Running",
                     "Apply static IPv4",
-                    5 + step_offset,
+                    5,
                     total,
                     f"[RUNNING] Disabling DHCPv4 and setting static IPv4 address={target_ip} subnet_mask={desired_subnet_mask} gateway={desired_gateway}"
                 )
@@ -4541,7 +5139,7 @@ def run_ilo_real(cfg: dict):
                     job,
                     "Running",
                     "Verify static IPv4",
-                    6 + step_offset,
+                    6,
                     total,
                     (
                         f"[OK] Static IPv4 applied via {', '.join(ip_result.get('applied_keys', []))} | "
@@ -4557,7 +5155,7 @@ def run_ilo_real(cfg: dict):
                     job,
                     "Running",
                     "Apply static IPv4",
-                    6 + step_offset,
+                    6,
                     total,
                     f"[FAILED] Static IPv4 update not applied: {e}"
                 )
@@ -4567,7 +5165,7 @@ def run_ilo_real(cfg: dict):
                 job,
                 "Running",
                 "Skip static IPv4",
-                6 + step_offset,
+                6,
                 total,
                 "[SKIP] Missing target IP, subnet mask, or gateway for static IPv4 update."
             )
@@ -4579,7 +5177,7 @@ def run_ilo_real(cfg: dict):
                 job,
                 "Running",
                 "Apply iLO hostname",
-                7 + step_offset,
+                7,
                 total,
                 f"[RUNNING] Attempting to set iLO hostname to: {desired_hostname}"
             )
@@ -4589,7 +5187,7 @@ def run_ilo_real(cfg: dict):
                 job,
                 "Running",
                 "Verify iLO hostname",
-                8 + step_offset,
+                8,
                 total,
                 f"[OK] Hostname write via {result.get('method')} | before='{result.get('before','')}' | after='{result.get('after','')}' | matched={result.get('matched')}"
             )
@@ -4601,7 +5199,7 @@ def run_ilo_real(cfg: dict):
                 job,
                 "Running",
                 "Skip hostname",
-                8 + step_offset,
+                8,
                 total,
                 "[SKIP] No desired iLO hostname configured."
             )
@@ -4614,38 +5212,64 @@ def run_ilo_real(cfg: dict):
                     job,
                     "Running",
                     "Apply DNS",
-                    9 + step_offset,
+                    9,
                     total,
-                    f"[RUNNING] Applying DNS servers to active iLO interface: {', '.join(shared_dns)}"
+                    (
+                        "[RUNNING] DNS apply attempt | "
+                        "source=shared_network.dns_servers | "
+                        f"target={host} | values={', '.join(shared_dns)}"
+                    )
                 )
                 dns_result = client.set_dns_servers_best_effort(shared_dns)
+                job["dns_apply_status"] = "Applied"
+                job["dns_applied_values"] = list(dns_result.get("after_static") or shared_dns)
+                job["dns_applied_keys"] = list(dns_result.get("applied_keys") or [])
+                save_job(kit_name, job)
                 update_job(
                     kit_name,
                     job,
                     "Running",
                     "Verify DNS",
-                    10 + step_offset,
+                    10,
                     total,
-                    f"[OK] DNS applied via {', '.join(dns_result.get('applied_keys', []))} | before={dns_result.get('before_static')} | after={dns_result.get('after_static')}"
+                    (
+                        "[OK] DNS apply success | "
+                        f"path={dns_result.get('path', '(unknown)')} | "
+                        f"keys={', '.join(dns_result.get('applied_keys', [])) or '(none)'} | "
+                        f"before_static={dns_result.get('before_static')} | "
+                        f"before_names={dns_result.get('before_names')} | "
+                        f"after_static={dns_result.get('after_static')} | "
+                        f"after_names={dns_result.get('after_names')}"
+                    )
                 )
             except Exception as e:
                 config_changes_succeeded = False
+                job["dns_apply_status"] = "Failed"
+                job["dns_applied_values"] = list(shared_dns)
+                save_job(kit_name, job)
                 update_job(
                     kit_name,
                     job,
                     "Running",
                     "Apply DNS",
-                    10 + step_offset,
+                    10,
                     total,
-                    f"[SKIP/INFO] DNS write not applied: {e}"
+                    (
+                        "[FAILED] DNS apply failed | "
+                        "source=shared_network.dns_servers | "
+                        f"target={host} | values={', '.join(shared_dns)} | error={e}"
+                    )
                 )
         else:
+            job["dns_apply_status"] = "Skipped"
+            job["dns_applied_values"] = []
+            save_job(kit_name, job)
             update_job(
                 kit_name,
                 job,
                 "Running",
                 "Skip DNS",
-                10 + step_offset,
+                10,
                 total,
                 "[SKIP] No shared DNS servers configured."
             )
@@ -4656,7 +5280,7 @@ def run_ilo_real(cfg: dict):
                 job,
                 "Running",
                 "Disable IPv6",
-                11 + step_offset,
+                11,
                 total,
                 "[RUNNING] Attempting to disable IPv6 where supported"
             )
@@ -4666,7 +5290,7 @@ def run_ilo_real(cfg: dict):
                 job,
                 "Running",
                 "Disable IPv6",
-                11 + step_offset,
+                11,
                 total,
                 f"[OK] IPv6 hardening via {ipv6_result.get('method')} at {ipv6_result.get('path')}"
             )
@@ -4676,7 +5300,7 @@ def run_ilo_real(cfg: dict):
                 job,
                 "Running",
                 "Disable IPv6",
-                11 + step_offset,
+                11,
                 total,
                 f"[SKIP/INFO] IPv6 hardening not applied: {e}"
             )
@@ -4688,9 +5312,15 @@ def run_ilo_real(cfg: dict):
                 job,
                 "Running",
                 "Harden SNMP",
-                12 + step_offset,
+                12,
                 total,
-                "[RUNNING] Enabling SNMP, forcing SNMPv3-only where supported, disabling SNMPv1 where supported"
+                (
+                    "[RUNNING] SNMP apply attempt | "
+                    f"target={host} | username={snmp_cfg.get('v3_username', '') or '(none)'} | "
+                    f"auth={desired_auth_protocol} | priv={desired_priv_protocol} | "
+                    f"auth_secret={'Yes' if snmp_cfg.get('v3_auth_password') else 'No'} | "
+                    f"privacy_secret={'Yes' if snmp_cfg.get('v3_priv_password') else 'No'}"
+                )
             )
             snmp_result = client.harden_snmp_best_effort(
                 v3_username=snmp_cfg.get("v3_username", ""),
@@ -4699,70 +5329,179 @@ def run_ilo_real(cfg: dict):
                 v3_priv_protocol=snmp_cfg.get("v3_priv_protocol", "AES"),
                 v3_priv_password=snmp_cfg.get("v3_priv_password", ""),
             )
+            job["snmp_apply_status"] = "Applied"
+            job["snmp_applied_keys"] = list(snmp_result.get("applied_keys") or [])
+            save_job(kit_name, job)
             update_job(
                 kit_name,
-                job,
-                "Running",
-                "Harden SNMP",
-                12 + step_offset,
-                total,
-                f"[OK] SNMP hardening applied. Keys touched: {', '.join(snmp_result.get('applied_keys', []))}"
-            )
+                    job,
+                    "Running",
+                    "Harden SNMP",
+                    12,
+                    total,
+                    (
+                        "[OK] SNMP apply success | "
+                        f"path={snmp_result.get('path', '(unknown)')} | "
+                        f"keys={', '.join(snmp_result.get('applied_keys', [])) or '(none)'} | "
+                        f"username={snmp_cfg.get('v3_username', '') or '(none)'} | "
+                        f"auth={desired_auth_protocol} | priv={desired_priv_protocol} | "
+                        f"auth_secret={'Yes' if snmp_cfg.get('v3_auth_password') else 'No'} | "
+                        f"privacy_secret={'Yes' if snmp_cfg.get('v3_priv_password') else 'No'}"
+                    )
+                )
         except Exception as e:
             config_changes_succeeded = False
+            job["snmp_apply_status"] = "Failed"
+            save_job(kit_name, job)
             update_job(
                 kit_name,
                 job,
                 "Running",
                 "Harden SNMP",
-                12 + step_offset,
+                12,
                 total,
-                f"[SKIP/INFO] SNMP hardening not fully applied: {e}"
+                (
+                    "[FAILED] SNMP apply failed | "
+                    f"target={host} | username={snmp_cfg.get('v3_username', '') or '(none)'} | "
+                    f"auth={desired_auth_protocol} | priv={desired_priv_protocol} | "
+                    f"auth_secret={'Yes' if snmp_cfg.get('v3_auth_password') else 'No'} | "
+                    f"privacy_secret={'Yes' if snmp_cfg.get('v3_priv_password') else 'No'} | "
+                    f"error={e}"
+                )
+            )
+
+        storage_result = None
+        if storage_execution.get("included"):
+            update_job(
+                kit_name,
+                job,
+                "Running",
+                "Run storage stage",
+                13,
+                total,
+                "[RUNNING] Starting the approved storage stage as part of this real run.",
+            )
+            storage_result = run_storage_as_part_of_real_run(
+                cfg,
+                client,
+                host,
+                storage_execution,
+                kit_name,
+                job,
+                13,
+                total,
+            )
+            job["storage_server_reboot_required"] = bool(storage_result["apply_state"].get("reboot_required"))
+            job["storage_server_reboot_status"] = (
+                "Completed"
+                if storage_result["apply_state"].get("workflow_state") == "post_reboot_validation_complete"
+                else "Required"
+                if storage_result["apply_state"].get("reboot_required")
+                else "Not required"
+            )
+            save_job(kit_name, job)
+            update_job(
+                kit_name,
+                job,
+                "Running",
+                "Finalize combined run",
+                29,
+                total,
+                (
+                    f"[OK] Storage stage finished in the real run | "
+                    f"apply_path={storage_result['apply_state'].get('apply_path')} | "
+                    f"reboot_required={storage_result['apply_state'].get('reboot_required')} | "
+                    f"run_dir={storage_result['apply_paths']['directory']}"
+                ),
             )
 
         if config_changes_attempted and config_changes_succeeded:
+            job["ilo_reset_required"] = True
+            job["ilo_reset_status"] = "Requested"
+            save_job(kit_name, job)
             try:
                 update_job(
                     kit_name,
                     job,
                     "Running",
                     "Reset iLO",
-                    13 + step_offset,
                     total,
-                    "[RUNNING] All requested config changes succeeded. Restarting iLO to apply them cleanly."
+                    total,
+                    (
+                        "[RUNNING] iLO reset requested | "
+                        "reason=management-controller config changes succeeded"
+                        + (
+                            " after the storage server reboot completed"
+                            if storage_result and storage_result["apply_state"].get("reboot_required")
+                            else ""
+                        )
+                    )
                 )
                 reset_result = client.manager_reset_best_effort()
+                job["ilo_reset_status"] = "Completed"
+                save_job(kit_name, job)
                 update_job(
                     kit_name,
                     job,
                     "Completed",
                     "Finished",
-                    13 + step_offset,
                     total,
-                    f"[DONE] Real iLO automation finished. iLO reset requested via {reset_result.get('path')} ({reset_result.get('reset_type')})."
+                    total,
+                    (
+                        "[DONE] Real run finished. "
+                        f"iLO reset completed via {reset_result.get('path')} ({reset_result.get('reset_type')}). "
+                        f"Storage server reboot status={job.get('storage_server_reboot_status')} | "
+                        f"DNS={job.get('dns_apply_status')} | SNMP={job.get('snmp_apply_status')}"
+                    )
                 )
             except Exception as e:
+                job["ilo_reset_status"] = "Failed"
+                save_job(kit_name, job)
                 update_job(
                     kit_name,
                     job,
                     "Failed",
                     "Reset iLO",
-                    13 + step_offset,
                     total,
-                    f"[FAILED] Config changes succeeded but iLO reset could not be requested: {e}"
+                    total,
+                    f"[FAILED] iLO reset failed after successful config changes: {e}"
                 )
         else:
             reason = "No config changes were requested."
             if config_changes_attempted and not config_changes_succeeded:
                 reason = "One or more config changes did not succeed."
+                job["ilo_reset_required"] = False
+                job["ilo_reset_status"] = "Not requested"
+                save_job(kit_name, job)
+                update_job(
+                    kit_name,
+                    job,
+                    "Failed",
+                    "Finished",
+                    total,
+                    total,
+                    (
+                        "[FAILED] Real run finished with iLO config failures. "
+                        f"DNS={job.get('dns_apply_status')} | SNMP={job.get('snmp_apply_status')} | "
+                        f"Storage server reboot status={job.get('storage_server_reboot_status')}. "
+                        "Review the iLO stage logs before retrying."
+                    )
+                )
+                return
+            elif storage_result and storage_result["apply_state"].get("reboot_required"):
+                reason = "Storage reboot and post-validation completed as part of the real run."
+            else:
+                job["ilo_reset_required"] = False
+                job["ilo_reset_status"] = "Not required"
+                save_job(kit_name, job)
             update_job(
                 kit_name,
                 job,
                 "Completed",
                 "Finished",
-                13 + step_offset,
                 total,
-                f"[DONE] Real iLO automation finished without iLO reset. {reason}"
+                total,
+                f"[DONE] Real run finished without a separate iLO reset. {reason}"
             )
     except ILOError as e:
         update_job(kit_name, job, "Failed", "iLO error", job.get("completed_steps", 0), total, f"[FAILED] {e}")
@@ -4770,15 +5509,13 @@ def run_ilo_real(cfg: dict):
         update_job(kit_name, job, "Failed", "Unexpected error", job.get("completed_steps", 0), total, f"[FAILED] Unexpected error: {e}")
 
 def run_job_simulation(cfg: dict, scope: str):
-    if scope == "ilo":
-        run_ilo_real(cfg)
-        return
-
     kit_name = cfg["site"]["name"]
     steps = get_steps_for_scope(cfg, scope)
     total = len(steps)
     job = {
-        "status": "Running",
+        "status": "Preview running",
+        "execution_mode": "preview",
+        "execution_mode_label": "Preview / safety mode",
         "scope": scope,
         "current_stage": "",
         "progress_percent": 0,
@@ -4792,16 +5529,39 @@ def run_job_simulation(cfg: dict, scope: str):
         job["current_stage"] = step
         job["completed_steps"] = idx - 1
         job["progress_percent"] = int(((idx - 1) / total) * 100)
-        job["logs"].append(f"[RUNNING] {step}")
+        job["logs"].append(f"[PREVIEW] {step}")
         save_job(kit_name, job)
         time.sleep(0.2)
 
-    job["status"] = "Completed"
-    job["current_stage"] = "Finished"
+    job["status"] = "Preview complete"
+    job["current_stage"] = "Ready for real execution"
     job["completed_steps"] = total
     job["progress_percent"] = 100
-    job["logs"].append("[DONE] Execution path completed in safety mode.")
+    job["logs"].append("[DONE] Preview complete. No real changes were made.")
     save_job(kit_name, job)
+
+
+def execute_preview_job_in_background(cfg: dict, scope: str):
+    kit_name = cfg["site"]["name"]
+    try:
+        run_job_simulation(cfg, scope)
+    except Exception as e:
+        save_job(
+            kit_name,
+            {
+                "status": "Failed",
+                "scope": scope,
+                "execution_mode": "preview",
+                "execution_mode_label": "Preview / safety mode",
+                "current_stage": "Unexpected error",
+                "progress_percent": 0,
+                "completed_steps": 0,
+                "total_steps": 0,
+                "logs": [f"[FAILED] Unexpected preview error: {e}"],
+            },
+        )
+    finally:
+        append_job_history_snapshot(cfg, scope)
 
 
 def render_page(
@@ -4809,8 +5569,6 @@ def render_page(
     cfg: dict,
     active_page: str = "dashboard",
     message: str | None = None,
-    ks_result: str | None = None,
-    ks_content: str | None = None,
     error_message: str | None = None,
     execution_preview: str | None = None,
     execution_review: dict | None = None,
@@ -4829,6 +5587,7 @@ def render_page(
     page_meta = PAGE_META[active_page]
     job = load_job(cfg["site"]["name"])
     history = load_history(cfg["site"]["name"])
+    latest_ilo_history = latest_history_entry_for_scope(history, ["ilo"]) or {}
     storage_workflow_state = load_storage_workflow_state(storage_apply_paths)
     storage_review = build_storage_review_context(cfg)
     storage_target = resolve_storage_target_host(cfg)
@@ -4859,9 +5618,9 @@ def render_page(
         query=str(request.query_params.get("report_query", "") or ""),
         report_type=str(request.query_params.get("report_type", "all") or "all"),
     )
+    page_briefing = build_page_briefing(active_page, cfg, workflow_contexts, history, execution_review)
     page_runbook = PAGE_RUNBOOKS.get(active_page, {})
     settings_sources = build_settings_sources(cfg)
-    page_dependencies = build_page_dependencies(cfg, workflow_contexts)
     ilo_inclusion = component_inclusion_status(cfg, "ilo")
     esxi_inclusion = component_inclusion_status(cfg, "esxi")
     windows_inclusion = component_inclusion_status(cfg, "windows")
@@ -4873,15 +5632,6 @@ def render_page(
                 error_message,
                 tone="pending",
                 status_label="Warning",
-            )
-        elif ks_result:
-            tone = "ready" if not ks_result.lower().startswith("failed") else "pending"
-            action_feedback = build_action_feedback(
-                "Kickstart result",
-                ks_result,
-                tone=tone,
-                status_label="Ready" if tone == "ready" else "Warning",
-                details=["The full kickstart content is available below."] if ks_content else [],
             )
         elif message:
             action_feedback = build_action_feedback(
@@ -4900,8 +5650,6 @@ def render_page(
         "kits": list_kits(),
         "current_kit": cfg.get("site", {}).get("name", ""),
         "message": message,
-        "ks_result": ks_result,
-        "ks_content": ks_content,
         "error_message": error_message,
         "execution_preview": execution_preview,
         "execution_review": execution_review,
@@ -4925,15 +5673,16 @@ def render_page(
         "recommended_next_step": recommended_next_step,
         "activity_feed": activity_feed,
         "report_center": report_center,
+        "page_briefing": page_briefing,
         "page_runbook": page_runbook,
         "settings_sources": settings_sources,
-        "page_dependencies": page_dependencies,
         "ilo_inclusion": ilo_inclusion,
         "esxi_inclusion": esxi_inclusion,
         "windows_inclusion": windows_inclusion,
         "qnap_inclusion": qnap_inclusion,
         "job": job,
         "history": history,
+        "latest_ilo_history": latest_ilo_history,
         "section_states": summarize_section_states(cfg),
     }
 
@@ -5062,9 +5811,15 @@ async def save_storage_target(
         request,
         cfg,
         active_page=return_page,
-        message=(
-            f"Saved storage target settings. Storage / RAID will use {target.get('resolved') or 'no resolved host'} "
-            f"from {target.get('source') or 'no source'}."
+        action_feedback=build_action_feedback(
+            "Storage target saved",
+            "Saved the server address and sign-in details for storage setup.",
+            tone="ready",
+            outcomes=[
+                f"Server address: {target.get('resolved') or 'Not resolved yet'}",
+                f"Next step: Read current storage",
+            ],
+            links=[{"label": "Read current storage", "href": "/storage"}],
         ),
     )
 
@@ -5565,23 +6320,6 @@ async def autofill_ip_plan(
         return render_page(request, cfg, active_page=return_page, error_message=f"IP plan generation failed: {e}")
 
 
-@app.post("/generate-ks", response_class=HTMLResponse)
-async def generate_ks(request: Request, return_page: str = Form("configuration")):
-    cfg = load_kit_config()
-    try:
-        ks_content = render_ks_cfg(cfg)
-        with open(KS_OUTPUT_PATH, "w", encoding="utf-8") as f:
-            f.write(ks_content)
-        build_copy = current_build_output_dir(cfg) / "KS.CFG"
-        build_copy.write_text(ks_content, encoding="utf-8")
-        result = f"KS.CFG generated successfully at {KS_OUTPUT_PATH}"
-    except Exception as e:
-        ks_content = None
-        result = f"Failed to generate KS.CFG: {e}"
-
-    return render_page(request, cfg, active_page=return_page, ks_result=result, ks_content=ks_content)
-
-
 @app.post("/export-ilo-config", response_class=HTMLResponse)
 async def export_ilo_config(request: Request, return_page: str = Form("configs")):
     cfg = load_kit_config()
@@ -5595,11 +6333,6 @@ async def export_ilo_config(request: Request, return_page: str = Form("configs")
         )
     except Exception as e:
         return render_page(request, cfg, active_page=return_page, error_message=f"iLO config export failed: {e}")
-
-
-@app.post("/fetch-current-ilo-config", response_class=HTMLResponse)
-async def fetch_current_ilo_config(request: Request, return_page: str = Form("configs")):
-    return await export_ilo_inventory(request, return_page)
 
 
 @app.post("/export-ilo-inventory", response_class=HTMLResponse)
@@ -5786,29 +6519,10 @@ async def download_latest_live_raw():
     )
 
 
-@app.post("/open-exports-folder", response_class=HTMLResponse)
-async def open_exports_folder(request: Request, return_page: str = Form("configs")):
-    cfg = load_kit_config()
-    return render_page(
-        request,
-        cfg,
-        active_page=return_page,
-        action_feedback=build_action_feedback(
-            "Exports folder opened",
-            "Showing the current exports folder listing for quick review.",
-            tone="ready",
-            outcomes=[f"Folder: {ILO_LIVE_EXPORT_DIR}"],
-        ),
-        config_view_title="Exports Folder",
-        config_view_content=render_exports_folder_listing(ILO_LIVE_EXPORT_DIR),
-    )
-
-
 @app.post("/read-current-storage", response_class=HTMLResponse)
 async def read_current_storage(
     request: Request,
     return_page: str = Form("storage"),
-    deep_smart_storage_scan: str | None = Form(None),
 ):
     cfg = load_kit_config()
     storage_target = resolve_storage_target_host(cfg)
@@ -5827,7 +6541,7 @@ async def read_current_storage(
 
     try:
         client = ILOClient(ILOConfig(host=host, username=username, password=password, verify_tls=False, timeout=15))
-        discovery = client.get_storage_discovery(deep_smart_storage_scan=deep_smart_storage_scan == "on")
+        discovery = client.get_storage_discovery(deep_smart_storage_scan=True)
         export_paths = export_storage_discovery_snapshot(cfg, discovery, host=host)
         update_storage_latest_state(cfg, discovery=discovery, discovery_paths=export_paths)
         save_kit_config(cfg)
@@ -5846,14 +6560,16 @@ async def read_current_storage(
             active_page=return_page,
             action_feedback=build_action_feedback(
                 "Current storage read complete",
-                "Read the current storage layout and refreshed the latest discovery snapshot.",
+                "Read what is on the server and saved a fresh discovery snapshot.",
                 tone="ready",
                 outcomes=[
-                    f"Target: {host}",
-                    f"Source: {storage_target.get('source')}",
-                    f"Run folder: {export_paths['directory']}",
+                    "The current storage layout is now available for planning.",
+                    "Next step: Build storage plan",
                 ],
-                links=[{"label": "Review storage setup", "href": "/storage#storage-approval-status"}],
+                links=[
+                    {"label": "Build storage plan", "href": "/storage#build-storage-plan"},
+                    {"label": "Open reports", "href": "/configs"},
+                ],
             ),
             storage_discovery=discovery.get("summary", {}),
             storage_export_paths=export_paths,
@@ -5906,13 +6622,16 @@ async def plan_raid_layout(
             active_page=return_page,
             action_feedback=build_action_feedback(
                 "Storage plan ready",
-                "Built a read-only storage plan from the latest discovery snapshot.",
+                "Built the new layout from the latest storage read.",
                 tone="ready",
                 outcomes=[
-                    f"Discovery source: {discovery_paths['raw']}",
-                    f"Plan saved to: {plan_paths['plan']}",
+                    "This is still a preview. No storage changes were made.",
+                    "Next step: Approve this plan",
                 ],
-                links=[{"label": "Review storage setup", "href": "/storage#storage-approval-actions"}],
+                links=[
+                    {"label": "Approve this plan", "href": "/storage#approve-storage-plan"},
+                    {"label": "Open reports", "href": "/configs"},
+                ],
             ),
             storage_discovery=discovery.get("summary", {}),
             storage_export_paths=discovery_paths,
@@ -5983,14 +6702,13 @@ async def approve_storage_plan(
             active_page=return_page,
             action_feedback=build_action_feedback(
                 "Storage approved",
-                "The exact storage plan is now approved for later use in the iLO run.",
+                "The current storage plan is approved for the real run.",
                 tone="ready",
                 outcomes=[
-                    f"Approved plan: {plan_paths['plan']}",
-                    f"Target host: {cfg['storage']['approval'].get('host') or host}",
-                    f"Included in iLO run: {'Yes' if cfg['storage']['include_in_ilo_run'] else 'No'}",
+                    f"Apply it during the real run: {'Yes' if cfg['storage']['include_in_ilo_run'] else 'No'}",
+                    "Next step: Run for real",
                 ],
-                links=[{"label": "Review run center", "href": "/execution"}],
+                links=[{"label": "Run for real", "href": "/execution"}],
             ),
             storage_discovery=discovery.get("summary", {}) if discovery else None,
             storage_export_paths=discovery_paths,
@@ -6045,10 +6763,10 @@ async def clear_storage_approval(
         cfg,
         active_page=return_page,
         action_feedback=build_action_feedback(
-            "Storage marked for review again",
-            "Removed the current storage approval so the plan can be reviewed again before a later run.",
+            "Approval removed",
+            "This storage plan now needs review again before it can be used in a real run.",
             tone="ready",
-            outcomes=["Storage will not be included in the iLO run until it is approved again."],
+            outcomes=["Next step: Review the plan and approve it again if it still looks right."],
         ),
         storage_discovery=discovery.get("summary", {}) if discovery else None,
         storage_export_paths=discovery_paths,
@@ -6493,7 +7211,7 @@ async def execute_scope(
 
     initialize_background_job(cfg["site"]["name"], scope)
     threading.Thread(
-        target=execute_job_in_background,
+        target=execute_real_job_in_background,
         args=(cfg, scope),
         daemon=True,
     ).start()
@@ -6502,6 +7220,55 @@ async def execute_scope(
     if scope == "ilo":
         msg = "Real iLO automation started in the background. Check Job Monitor for live progress and logs."
     else:
-        msg = f"Execution started for scope: {scope}."
+        msg = f"Preview started for scope: {scope}. No real changes will be made."
 
     return render_page(request, cfg, active_page=return_page, message=msg)
+
+
+@app.post("/execute-preview", response_class=HTMLResponse)
+async def execute_preview_scope(
+    request: Request,
+    scope: str = Form(...),
+    return_page: str = Form("execution"),
+):
+    cfg = load_kit_config()
+    try:
+        validate_execution_scope(cfg, scope)
+    except Exception as e:
+        review = build_execution_review(cfg, scope)
+        return render_page(
+            request,
+            cfg,
+            active_page=return_page,
+            error_message=f"Preview blocked: {str(e).splitlines()[0]}",
+            execution_preview=review.get("detail_text"),
+            execution_review=review,
+            confirm_scope=scope,
+        )
+
+    save_job(
+        cfg["site"]["name"],
+        {
+            "status": "Preview queued",
+            "execution_mode": "preview",
+            "execution_mode_label": "Preview / safety mode",
+            "scope": scope,
+            "current_stage": "Queued",
+            "progress_percent": 0,
+            "completed_steps": 0,
+            "total_steps": 0,
+            "logs": [f"[QUEUED] Preview / safety mode requested for scope: {scope}"],
+        },
+    )
+    threading.Thread(
+        target=execute_preview_job_in_background,
+        args=(cfg, scope),
+        daemon=True,
+    ).start()
+
+    return render_page(
+        request,
+        cfg,
+        active_page=return_page,
+        message=f"Preview started for scope: {scope}. No real changes will be made.",
+    )

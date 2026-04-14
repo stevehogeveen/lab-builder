@@ -74,6 +74,12 @@
         if (node) node.style.display = visible ? "" : "none";
     }
 
+    function modeSummary(data) {
+        if (data.execution_mode === "preview") return "Preview only. No real changes are being made.";
+        if (data.execution_mode === "real") return "Real execution is running. Changes may be made.";
+        return "Choose a review above to see whether the next run is preview-only or real.";
+    }
+
     function updateActionStatusCard(payload) {
         const card = document.getElementById("page-action-status");
         if (!card) return;

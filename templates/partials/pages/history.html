@@ -137,10 +137,43 @@
                         <div class="font-semibold mb-2">Config used</div>
                         <div class="space-y-1">
                             {% for key, value in item.get('config_summary', {}).items() %}
-                            {% if value %}
-                            <div><span class="text-slate-400">{{ key.replace('_', ' ').title() }}:</span> {{ value if value is string else value|join(', ') }}</div>
+                            {% if value is sameas false or value %}
+                            <div>
+                                <span class="text-slate-400">{{ key.replace('_', ' ').title() }}:</span>
+                                {% if value is sameas true %}
+                                Yes
+                                {% elif value is sameas false %}
+                                No
+                                {% elif value is string %}
+                                {{ value }}
+                                {% elif value is sequence %}
+                                {{ value|join(', ') }}
+                                {% else %}
+                                {{ value }}
+                                {% endif %}
+                            </div>
                             {% endif %}
                             {% endfor %}
+                        </div>
+                    </div>
+                    {% endif %}
+                    {% set cfgsum = item.get('config_summary', {}) %}
+                    {% if cfgsum.get('dns_apply_status') or cfgsum.get('snmp_apply_status') or cfgsum.get('ilo_reset_status') or cfgsum.get('storage_server_reboot_status') %}
+                    <div class="card">
+                        <div class="font-semibold mb-2">Applied results</div>
+                        <div class="space-y-1">
+                            {% if cfgsum.get('dns_apply_status') %}
+                            <div><span class="text-slate-400">DNS:</span> {{ cfgsum.get('dns_apply_status') }}{% if cfgsum.get('dns_applied_values') %} | {{ cfgsum.get('dns_applied_values')|join(', ') }}{% endif %}</div>
+                            {% endif %}
+                            {% if cfgsum.get('snmp_apply_status') %}
+                            <div><span class="text-slate-400">SNMP:</span> {{ cfgsum.get('snmp_apply_status') }} | {{ cfgsum.get('snmp_username') or cfgsum.get('snmp_v3_username') or 'Not set' }} | {{ cfgsum.get('snmp_auth_protocol') or cfgsum.get('snmp_v3_auth_protocol') or 'Unknown' }}/{{ cfgsum.get('snmp_priv_protocol') or cfgsum.get('snmp_v3_priv_protocol') or 'Unknown' }} | auth secret {{ 'Yes' if (cfgsum.get('snmp_auth_secret_present') or cfgsum.get('snmp_v3_auth_secret_present')) else 'No' }} | privacy secret {{ 'Yes' if (cfgsum.get('snmp_priv_secret_present') or cfgsum.get('snmp_v3_priv_secret_present')) else 'No' }}</div>
+                            {% endif %}
+                            {% if cfgsum.get('storage_server_reboot_status') %}
+                            <div><span class="text-slate-400">Storage server reboot:</span> {{ cfgsum.get('storage_server_reboot_status') }}</div>
+                            {% endif %}
+                            {% if cfgsum.get('ilo_reset_status') %}
+                            <div><span class="text-slate-400">iLO reset:</span> {{ cfgsum.get('ilo_reset_status') }}</div>
+                            {% endif %}
                         </div>
                     </div>
                     {% endif %}

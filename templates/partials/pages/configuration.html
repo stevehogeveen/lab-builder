@@ -1,74 +1,21 @@
-<section class="panel">
-    <div class="flex items-center justify-between mb-4">
-        <div>
-            <h2 class="text-2xl font-bold">Global Settings</h2>
-            <div class="text-sm text-slate-400">Shared defaults that the workflow pages can inherit unless they set their own local values.</div>
-        </div>
-        <a class="btn" href="/dashboard">Back to Dashboard</a>
-    </div>
-
-    <div class="grid grid-cols-1 md:grid-cols-3 gap-3 mb-4">
-        <div class="card">
-            <div class="text-xs font-bold uppercase text-slate-400 mb-1">Kit</div>
-            <div class="text-lg font-semibold">{{ cfg.get('site', {}).get('name', '') or 'Not named yet' }}</div>
-            <div class="text-sm text-slate-400 mt-1">Shared identity for this lab build.</div>
-        </div>
-        <div class="card">
-            <div class="text-xs font-bold uppercase text-slate-400 mb-1">Shared Network</div>
-            <div class="text-lg font-semibold">{{ cfg.get('shared_network', {}).get('subnet', '') or 'Not set' }}</div>
-            <div class="text-sm text-slate-400 mt-1">Used as the base for inherited workflow addresses.</div>
-        </div>
-        <div class="card">
-            <div class="text-xs font-bold uppercase text-slate-400 mb-1">How It Works</div>
-            <div class="text-lg font-semibold">Defaults first</div>
-            <div class="text-sm text-slate-400 mt-1">Save shared values here, then refine each workflow on its own page.</div>
-        </div>
-    </div>
-
-    <div class="grid grid-cols-1 xl:grid-cols-3 gap-4 mb-4">
-        <div class="card xl:col-span-2">
-            <div class="text-lg font-semibold mb-3">How shared defaults feed the workspaces</div>
-            <div class="grid grid-cols-1 md:grid-cols-2 gap-3 text-sm">
-                <div class="result" style="margin-top: 0;">
-                    <div class="font-semibold mb-1">iLO and Storage / RAID</div>
-                    <div>These pages inherit the shared network plan first, then can save page-specific target details when needed.</div>
-                </div>
-                <div class="result" style="margin-top: 0;">
-                    <div class="font-semibold mb-1">ESXi, Windows, and QNAP</div>
-                    <div>These workspaces start with the shared address plan here, then keep hostnames, credentials, and inclusion choices on their own pages.</div>
-                </div>
-                <div class="result" style="margin-top: 0;">
-                    <div class="font-semibold mb-1">Run Center</div>
-                    <div>Run Center reads the saved values from each dedicated page. It reviews what is already approved and saved instead of inventing new settings.</div>
-                </div>
-                <div class="result" style="margin-top: 0;">
-                    <div class="font-semibold mb-1">Plain language for value sources</div>
-                    <div><strong>Using global value</strong> means the page is inheriting this shared default. <strong>Overridden on this page</strong> means that workspace now uses its own saved value instead.</div>
-                </div>
-            </div>
-        </div>
-        <div class="card">
-            <div class="text-lg font-semibold mb-3">What to do here</div>
-            <div class="space-y-3 text-sm">
-                <div class="result" style="margin-top: 0;">Set the shared subnet, gateway, and default addresses once.</div>
-                <div class="result" style="margin-top: 0;">Turn workflows on for this kit before opening their dedicated pages.</div>
-                <div class="result" style="margin-top: 0;">Then open each workspace only if you need local overrides or page-specific credentials.</div>
-            </div>
-        </div>
+<section class="panel space-y-6">
+    <div>
+        <h2 class="text-2xl font-bold">Global Settings</h2>
+        <div class="text-sm text-slate-400">Save the shared defaults here once. The other setup pages can reuse them automatically.</div>
     </div>
 
     <form hx-post="/save-global-settings" hx-target="#main-content" hx-swap="outerHTML" class="space-y-4">
         <input type="hidden" name="return_page" value="global_settings">
 
-        <div class="card">
-            <div class="text-lg font-semibold mb-3">Kit and shared network</div>
+        <section class="card">
+            <div class="text-lg font-semibold mb-3">Shared basics</div>
             <div class="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
                 <div>
                     <label class="block text-sm font-bold text-slate-300 mb-2">Kit name</label>
                     <input type="text" name="site_name" value="{{ cfg.get('site', {}).get('name', '') }}" class="input">
                 </div>
                 <div>
-                    <label class="block text-sm font-bold text-slate-300 mb-2">Shared subnet</label>
+                    <label class="block text-sm font-bold text-slate-300 mb-2">Network range</label>
                     <input type="text" name="shared_subnet" value="{{ cfg.get('shared_network', {}).get('subnet', '') }}" class="input">
                 </div>
                 <div>
@@ -76,108 +23,104 @@
                     <input type="text" name="gateway_ip" value="{{ cfg.get('ip_plan', {}).get('gateway', '') }}" class="input">
                 </div>
             </div>
-        </div>
+        </section>
 
-        <div class="card">
-            <div class="text-lg font-semibold mb-3">Default addresses by workflow</div>
-            <div class="text-sm text-slate-400 mb-3">These values are the shared starting point. Workflow pages inherit them automatically unless that page has its own local override.</div>
+        <section class="card">
+            <div class="text-lg font-semibold mb-3">Default addresses</div>
+            <div class="text-sm text-slate-400 mb-3">The setup pages will use these by default unless you change them on that page.</div>
             <div class="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
                 <div>
-                    <label class="block text-sm font-bold text-slate-300 mb-2">iLO final IP</label>
+                    <label class="block text-sm font-bold text-slate-300 mb-2">iLO address</label>
                     <input type="text" name="ilo_target_ip" value="{{ cfg.get('ip_plan', {}).get('ilo', '') }}" class="input">
                 </div>
                 <div>
-                    <label class="block text-sm font-bold text-slate-300 mb-2">ESXi IP</label>
+                    <label class="block text-sm font-bold text-slate-300 mb-2">ESXi address</label>
                     <input type="text" name="esxi_ip" value="{{ cfg.get('ip_plan', {}).get('esxi', '') }}" class="input">
                 </div>
                 <div>
-                    <label class="block text-sm font-bold text-slate-300 mb-2">Windows IP</label>
+                    <label class="block text-sm font-bold text-slate-300 mb-2">Windows address</label>
                     <input type="text" name="windows_ip" value="{{ cfg.get('ip_plan', {}).get('windows', '') }}" class="input">
                 </div>
                 <div>
-                    <label class="block text-sm font-bold text-slate-300 mb-2">QNAP IP</label>
+                    <label class="block text-sm font-bold text-slate-300 mb-2">QNAP address</label>
                     <input type="text" name="qnap_ip" value="{{ cfg.get('ip_plan', {}).get('qnap', '') }}" class="input">
                 </div>
                 <div>
-                    <label class="block text-sm font-bold text-slate-300 mb-2">ioSafe IP</label>
+                    <label class="block text-sm font-bold text-slate-300 mb-2">ioSafe address</label>
                     <input type="text" name="iosafe_ip" value="{{ cfg.get('ip_plan', {}).get('iosafe', '') }}" class="input">
                 </div>
                 <div>
-                    <label class="block text-sm font-bold text-slate-300 mb-2">Switch IP</label>
+                    <label class="block text-sm font-bold text-slate-300 mb-2">Switch address</label>
                     <input type="text" name="switch_ip" value="{{ cfg.get('ip_plan', {}).get('switch', '') }}" class="input">
                 </div>
             </div>
-        </div>
+        </section>
 
-        <div class="grid grid-cols-1 xl:grid-cols-2 gap-4">
-            <div class="card">
-                <div class="text-lg font-semibold mb-3">Shared DNS and SNMP</div>
-                <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
-                    <div>
-                        <label class="block text-sm font-bold text-slate-300 mb-2">DNS 1</label>
-                        <input type="text" name="dns1" value="{{ cfg.get('shared_network', {}).get('dns_servers', ['', '', '', ''])[0] }}" class="input">
-                    </div>
-                    <div>
-                        <label class="block text-sm font-bold text-slate-300 mb-2">DNS 2</label>
-                        <input type="text" name="dns2" value="{{ cfg.get('shared_network', {}).get('dns_servers', ['', '', '', ''])[1] }}" class="input">
-                    </div>
-                    <div>
-                        <label class="block text-sm font-bold text-slate-300 mb-2">DNS 3</label>
-                        <input type="text" name="dns3" value="{{ cfg.get('shared_network', {}).get('dns_servers', ['', '', '', ''])[2] }}" class="input">
-                    </div>
-                    <div>
-                        <label class="block text-sm font-bold text-slate-300 mb-2">DNS 4</label>
-                        <input type="text" name="dns4" value="{{ cfg.get('shared_network', {}).get('dns_servers', ['', '', '', ''])[3] }}" class="input">
-                    </div>
-                    <div>
-                        <label class="block text-sm font-bold text-slate-300 mb-2">SNMP v3 user</label>
-                        <input type="text" name="snmp_v3_username" value="{{ cfg.get('shared_snmp', {}).get('v3_username', '') }}" class="input">
-                    </div>
-                    <div>
-                        <label class="block text-sm font-bold text-slate-300 mb-2">SNMP auth protocol</label>
-                        <select name="snmp_v3_auth_protocol" class="input">
-                            <option value="SHA" {% if cfg.get('shared_snmp', {}).get('v3_auth_protocol', 'SHA') == 'SHA' %}selected{% endif %}>SHA</option>
-                            <option value="MD5" {% if cfg.get('shared_snmp', {}).get('v3_auth_protocol', 'SHA') == 'MD5' %}selected{% endif %}>MD5</option>
-                        </select>
-                    </div>
-                    <div>
-                        <label class="block text-sm font-bold text-slate-300 mb-2">SNMP auth password</label>
-                        <input type="password" name="snmp_v3_auth_password" value="{{ cfg.get('shared_snmp', {}).get('v3_auth_password', '') }}" class="input">
-                    </div>
-                    <div>
-                        <label class="block text-sm font-bold text-slate-300 mb-2">SNMP privacy protocol</label>
-                        <select name="snmp_v3_priv_protocol" class="input">
-                            <option value="AES" {% if cfg.get('shared_snmp', {}).get('v3_priv_protocol', 'AES') == 'AES' %}selected{% endif %}>AES</option>
-                            <option value="DES" {% if cfg.get('shared_snmp', {}).get('v3_priv_protocol', 'AES') == 'DES' %}selected{% endif %}>DES</option>
-                        </select>
-                    </div>
-                    <div>
-                        <label class="block text-sm font-bold text-slate-300 mb-2">SNMP privacy password</label>
-                        <input type="password" name="snmp_v3_priv_password" value="{{ cfg.get('shared_snmp', {}).get('v3_priv_password', '') }}" class="input">
-                    </div>
+        <section class="card">
+            <div class="text-lg font-semibold mb-3">Shared DNS and alerts</div>
+            <div class="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
+                <div>
+                    <label class="block text-sm font-bold text-slate-300 mb-2">DNS 1</label>
+                    <input type="text" name="dns1" value="{{ cfg.get('shared_network', {}).get('dns_servers', ['', '', '', ''])[0] }}" class="input">
+                </div>
+                <div>
+                    <label class="block text-sm font-bold text-slate-300 mb-2">DNS 2</label>
+                    <input type="text" name="dns2" value="{{ cfg.get('shared_network', {}).get('dns_servers', ['', '', '', ''])[1] }}" class="input">
+                </div>
+                <div>
+                    <label class="block text-sm font-bold text-slate-300 mb-2">DNS 3</label>
+                    <input type="text" name="dns3" value="{{ cfg.get('shared_network', {}).get('dns_servers', ['', '', '', ''])[2] }}" class="input">
+                </div>
+                <div>
+                    <label class="block text-sm font-bold text-slate-300 mb-2">DNS 4</label>
+                    <input type="text" name="dns4" value="{{ cfg.get('shared_network', {}).get('dns_servers', ['', '', '', ''])[3] }}" class="input">
+                </div>
+                <div>
+                    <label class="block text-sm font-bold text-slate-300 mb-2">SNMP user</label>
+                    <input type="text" name="snmp_v3_username" value="{{ cfg.get('shared_snmp', {}).get('v3_username', '') }}" class="input">
+                </div>
+                <div>
+                    <label class="block text-sm font-bold text-slate-300 mb-2">SNMP auth type</label>
+                    <select name="snmp_v3_auth_protocol" class="input">
+                        <option value="SHA" {% if cfg.get('shared_snmp', {}).get('v3_auth_protocol', 'SHA') == 'SHA' %}selected{% endif %}>SHA</option>
+                        <option value="MD5" {% if cfg.get('shared_snmp', {}).get('v3_auth_protocol', 'SHA') == 'MD5' %}selected{% endif %}>MD5</option>
+                    </select>
+                </div>
+                <div>
+                    <label class="block text-sm font-bold text-slate-300 mb-2">SNMP auth password</label>
+                    <input type="password" name="snmp_v3_auth_password" value="{{ cfg.get('shared_snmp', {}).get('v3_auth_password', '') }}" class="input">
+                </div>
+                <div>
+                    <label class="block text-sm font-bold text-slate-300 mb-2">SNMP privacy type</label>
+                    <select name="snmp_v3_priv_protocol" class="input">
+                        <option value="AES" {% if cfg.get('shared_snmp', {}).get('v3_priv_protocol', 'AES') == 'AES' %}selected{% endif %}>AES</option>
+                        <option value="DES" {% if cfg.get('shared_snmp', {}).get('v3_priv_protocol', 'AES') == 'DES' %}selected{% endif %}>DES</option>
+                    </select>
+                </div>
+                <div>
+                    <label class="block text-sm font-bold text-slate-300 mb-2">SNMP privacy password</label>
+                    <input type="password" name="snmp_v3_priv_password" value="{{ cfg.get('shared_snmp', {}).get('v3_priv_password', '') }}" class="input">
                 </div>
             </div>
+        </section>
 
-            <div class="card">
-                <div class="text-lg font-semibold mb-3">Workflows in this kit</div>
-                <div class="checks space-y-2">
-                    <label class="check"><input type="checkbox" name="included_ilo" {% if cfg.get('included', {}).get('ilo') %}checked{% endif %}> iLO</label>
-                    <label class="check"><input type="checkbox" name="included_esxi" {% if cfg.get('included', {}).get('esxi') %}checked{% endif %}> ESXi</label>
-                    <label class="check"><input type="checkbox" name="included_windows" {% if cfg.get('included', {}).get('windows') %}checked{% endif %}> Windows</label>
-                    <label class="check"><input type="checkbox" name="included_qnap" {% if cfg.get('included', {}).get('qnap') %}checked{% endif %}> QNAP</label>
-                    <label class="check"><input type="checkbox" name="included_iosafe" {% if cfg.get('included', {}).get('iosafe') %}checked{% endif %}> ioSafe</label>
-                    <label class="check"><input type="checkbox" name="included_cisco_switch" {% if cfg.get('included', {}).get('cisco_switch') %}checked{% endif %}> Cisco Switch</label>
-                    <label class="check"><input type="checkbox" name="included_storage" {% if cfg.get('included', {}).get('storage') %}checked{% endif %}> Storage setup</label>
-                </div>
-                <div class="text-sm text-slate-400 mt-4">Turn shared workflows on here, then fine-tune them on their dedicated pages.</div>
+        <section class="card">
+            <div class="text-lg font-semibold mb-3">Turn pages on for this kit</div>
+            <div class="checks space-y-2">
+                <label class="check"><input type="checkbox" name="included_ilo" {% if cfg.get('included', {}).get('ilo') %}checked{% endif %}> iLO setup</label>
+                <label class="check"><input type="checkbox" name="included_esxi" {% if cfg.get('included', {}).get('esxi') %}checked{% endif %}> ESXi setup</label>
+                <label class="check"><input type="checkbox" name="included_windows" {% if cfg.get('included', {}).get('windows') %}checked{% endif %}> Windows setup</label>
+                <label class="check"><input type="checkbox" name="included_qnap" {% if cfg.get('included', {}).get('qnap') %}checked{% endif %}> QNAP setup</label>
+                <label class="check"><input type="checkbox" name="included_iosafe" {% if cfg.get('included', {}).get('iosafe') %}checked{% endif %}> ioSafe setup</label>
+                <label class="check"><input type="checkbox" name="included_cisco_switch" {% if cfg.get('included', {}).get('cisco_switch') %}checked{% endif %}> Cisco switch setup</label>
+                <label class="check"><input type="checkbox" name="included_storage" {% if cfg.get('included', {}).get('storage') %}checked{% endif %}> Storage setup</label>
             </div>
-        </div>
+        </section>
 
         <div class="actions">
-            <button class="btn btn-danger" type="submit">Save shared defaults</button>
-            <button class="btn" hx-post="/autofill-ip-plan" hx-vals='{"return_page":"global_settings"}' hx-target="#main-content" hx-swap="outerHTML" type="button">Auto-fill IP plan</button>
-            <a class="btn" href="/ilo">Go to iLO</a>
-            <a class="btn" href="/storage">Go to Storage / RAID</a>
+            <button class="btn btn-primary action-button" type="submit">Save shared defaults</button>
+            <button class="btn" hx-post="/autofill-ip-plan" hx-vals='{"return_page":"global_settings"}' hx-target="#main-content" hx-swap="outerHTML" type="button">Fill in default addresses</button>
+            <a class="btn" href="/configs">Open reports & technical details</a>
         </div>
     </form>
 </section>

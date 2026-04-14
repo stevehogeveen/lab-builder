@@ -302,6 +302,29 @@
             gap: 8px;
         }
 
+        .execution-layout,
+        .execution-layout > *,
+        .execution-summary-card,
+        .execution-section-card,
+        .execution-stage-card,
+        .execution-matrix-item {
+            min-height: 0;
+        }
+
+        .execution-layout {
+            align-items: start;
+        }
+
+        .execution-summary-card,
+        .execution-section-card,
+        .execution-stage-card {
+            height: auto;
+        }
+
+        .execution-matrix-item {
+            padding: 14px 16px;
+        }
+
         .stage-link {
             width: 100%;
             justify-content: center;
@@ -783,6 +806,8 @@
 
         const status = document.getElementById("job-status");
         const scope = document.getElementById("job-scope");
+        const mode = document.getElementById("job-mode");
+        const modeSummary = document.getElementById("job-mode-summary");
         const stage = document.getElementById("job-stage");
         const completed = document.getElementById("job-completed");
         const progressText = document.getElementById("job-progress-text");
@@ -791,6 +816,14 @@
 
         if (status) status.textContent = "Status: " + (data.status || "Idle");
         if (scope) scope.textContent = data.scope || "";
+        if (mode) mode.textContent = data.execution_mode_label || "Not running";
+        if (modeSummary) {
+            modeSummary.textContent = data.execution_mode === "preview"
+                ? "Preview only. No real changes are being made."
+                : data.execution_mode === "real"
+                    ? "Real execution is running. Changes may be made."
+                    : "Choose a review above to see whether the next run is preview-only or real.";
+        }
         if (stage) stage.textContent = data.current_stage || "";
         if (completed) completed.textContent = `${data.completed_steps || 0} / ${data.total_steps || 0}`;
         if (progressText) progressText.textContent = `${data.progress_percent || 0}%`;

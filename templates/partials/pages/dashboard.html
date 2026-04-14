@@ -1,116 +1,46 @@
-<section class="space-y-6">
-    <section class="panel">
-        <div class="flex flex-wrap items-start justify-between gap-4 mb-4">
-            <div>
-                <h2 class="text-2xl font-bold">Dashboard</h2>
-                <div class="text-sm text-slate-400">Your command center for readiness, recent activity, and the best next move.</div>
-            </div>
-            <a class="btn btn-primary" href="{{ recommended_next_step.href }}">{{ recommended_next_step.title }}</a>
+<section class="panel space-y-6">
+    <div class="flex flex-wrap items-start justify-between gap-4">
+        <div>
+            <h2 class="text-2xl font-bold">Dashboard</h2>
+            <div class="text-sm text-slate-400">Use this page to move through the setup one step at a time.</div>
         </div>
+        <a class="btn btn-primary action-button" href="{{ recommended_next_step.href }}">{{ recommended_next_step.title }}</a>
+    </div>
 
-        <div class="grid grid-cols-1 md:grid-cols-3 gap-3">
-            <div class="card">
-                <div class="text-xs font-bold uppercase text-slate-400 mb-1">Active kit</div>
-                <div class="text-lg font-semibold">{{ current_kit }}</div>
-                <div class="text-sm text-slate-400 mt-1">All workflow pages and reports use this kit.</div>
-            </div>
-            <div class="card">
-                <div class="text-xs font-bold uppercase text-slate-400 mb-1">Recommended next step</div>
-                <div class="text-lg font-semibold">{{ recommended_next_step.title }}</div>
-                <div class="text-sm text-slate-400 mt-1">{{ recommended_next_step.summary }}</div>
-            </div>
-            <div class="card">
-                <div class="text-xs font-bold uppercase text-slate-400 mb-1">Live work</div>
-                <div class="text-lg font-semibold">{{ job.get('status', 'Idle') }}</div>
-                <div class="text-sm text-slate-400 mt-1">{% if job.get('scope') %}{{ job.get('scope') }}{% else %}Nothing is running right now.{% endif %}</div>
-            </div>
-        </div>
-    </section>
-
-    <section class="panel">
-        <div class="flex items-center justify-between gap-3 mb-4">
-            <div>
-                <div class="text-lg font-semibold">Workflow readiness</div>
-                <div class="text-sm text-slate-400">Each workflow uses the same state model so it is easier to see what is ready, stale, running, or blocked.</div>
-            </div>
-            <a class="btn btn-primary" href="/execution">Open Run Center</a>
-        </div>
-        <div class="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
-            {% for key in ["ilo", "storage", "esxi", "windows", "qnap"] %}
-            {% set item = workflow_contexts.get(key, {}) %}
-            <a class="card block" href="{{ item.review_href }}">
-                <div class="flex items-center justify-between gap-3 mb-3">
-                    <div class="text-lg font-semibold">{{ item.name }}</div>
-                    <span class="status {{ item.tone }}">{{ item.state_label }}</span>
+    <section class="card">
+        <div class="text-lg font-semibold mb-3">Start with one step</div>
+        <div class="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-3">
+            {% for key in ["global_settings", "ilo", "storage", "esxi", "execution"] %}
+            {% set item = workflow_contexts.get(key.replace('global_settings', 'ilo'), {}) if key == 'global_settings' else workflow_contexts.get(key, {}) %}
+            <a class="card block" href="{% if key == 'global_settings' %}/global-settings{% elif key == 'execution' %}/execution{% else %}{{ item.review_href }}{% endif %}">
+                <div class="font-semibold mb-1">
+                    {% if key == 'global_settings' %}Global settings{% elif key == 'execution' %}Run Center{% else %}{{ item.name }}{% endif %}
                 </div>
-                <div class="space-y-2 text-sm">
-                    <div><strong>Target:</strong> {{ item.target }}</div>
-                    <div><strong>Current:</strong> {{ item.current_summary }}</div>
-                    <div><strong>Planned:</strong> {{ item.planned_summary }}</div>
-                    <div><strong>Result:</strong> {{ item.result_summary }}</div>
+                <div class="text-sm text-slate-400">
+                    {% if key == 'global_settings' %}
+                    Save the shared defaults first.
+                    {% elif key == 'execution' %}
+                    Do the final check and start the run.
+                    {% else %}
+                    {{ item.state_label }}. {{ item.planned_summary }}
+                    {% endif %}
                 </div>
-                {% if item.checks %}
-                <div class="mt-4 space-y-2">
-                    {% for check in item.checks[:2] %}
-                    <div class="result" style="margin-top: 0;">
-                        <div class="font-semibold">{{ check.label }}</div>
-                        <div>{{ check.details }}</div>
-                    </div>
-                    {% endfor %}
-                </div>
-                {% endif %}
             </a>
             {% endfor %}
         </div>
     </section>
 
-    <section class="grid grid-cols-1 xl:grid-cols-2 gap-6">
-        <section class="panel">
-            <div class="flex items-center justify-between gap-3 mb-4">
-                <div>
-                    <div class="text-lg font-semibold">Recent activity</div>
-                    <div class="text-sm text-slate-400">Meaningful events and finished runs, without making you read raw logs first.</div>
-                </div>
-                <a class="btn" href="/history">Open Run History</a>
-            </div>
-            {% if activity_feed %}
-            <div class="space-y-3">
-                {% for item in activity_feed %}
-                <div class="card">
-                    <div class="flex items-center justify-between gap-3">
-                        <div class="font-semibold">{{ item.title }}</div>
-                        <span class="status {{ item.tone }}">{{ item.label }}</span>
-                    </div>
-                    <div class="text-sm mt-2">{{ item.summary }}</div>
-                    <div class="text-xs text-slate-400 mt-2">{{ item.time }}{% if item.target %} | {{ item.target }}{% endif %}</div>
-                </div>
-                {% endfor %}
-            </div>
-            {% else %}
-            <div class="result">No activity yet for this kit.</div>
-            {% endif %}
-        </section>
-
-        <section class="panel">
-            <div class="flex items-center justify-between gap-3 mb-4">
-                <div>
-                    <div class="text-lg font-semibold">Reports and exports</div>
-                    <div class="text-sm text-slate-400">Jump straight to saved discovery snapshots, config exports, and recent run artifacts.</div>
-                </div>
-                <a class="btn" href="/configs">Open Reports</a>
-            </div>
-            <div class="grid grid-cols-1 md:grid-cols-2 gap-3">
-                {% for entry in report_center.entries[:4] %}
-                <div class="card">
-                    <div class="flex items-center justify-between gap-3 mb-2">
-                        <div class="font-semibold">{{ entry.label }}</div>
-                        <span class="status progress">{{ entry.kind }}</span>
-                    </div>
-                    <div class="text-sm">{{ entry.parent }}</div>
-                    <div class="text-xs text-slate-400 mt-2">{{ entry.mtime }}</div>
-                </div>
-                {% endfor %}
-            </div>
-        </section>
+    <section class="card">
+        <div class="text-lg font-semibold mb-2">What happened last</div>
+        {% if activity_feed %}
+        <div class="text-sm">{{ activity_feed[0].summary }}</div>
+        <div class="text-xs text-slate-400 mt-2">{{ activity_feed[0].time }}{% if activity_feed[0].target %} | {{ activity_feed[0].target }}{% endif %}</div>
+        {% else %}
+        <div class="text-sm">Nothing has happened yet for this kit.</div>
+        {% endif %}
+        <div class="actions mt-4">
+            <a class="btn" href="/history">Open run history</a>
+            <a class="btn" href="/configs">Open reports & technical details</a>
+        </div>
     </section>
 </section>
