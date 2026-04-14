@@ -34,6 +34,7 @@ included:
   qnap: false
   iosafe: false
   cisco_switch: false
+  storage: true
 section_completion:
   basics: true
   network: true
@@ -84,3 +85,55 @@ cisco_switch:
   ip: 10.122.141.2
   username: ''
   password: ''
+storage:
+  target_host_override: 10.122.141.11
+  username: esbaccess
+  password: '!ESB43v3r!'
+  include_in_ilo_run: true
+  latest_discovery_raw_path: /home/administrator/lab-builder/artifacts/exports/storage-raid/MXQ85103SX/20260414-113624/raw.json
+  latest_discovery_fingerprint: '{"controllers":[{"firmware_version":"1.98","model":"HPE
+    Smart Array P408i-a SR Gen10","name":"Hpe Smart Storage Array Controller","path":"/redfish/v1/Systems/1/SmartStorage/ArrayControllers/0"},{"firmware_version":"","model":"","name":"","path":"/redfish/v1/systems/1/smartstorageconfig/"},{"firmware_version":"","model":"","name":"","path":"/redfish/v1/systems/1/smartstorageconfig/"},{"firmware_version":"","model":"","name":"","path":"/redfish/v1/systems/1/smartstorageconfig/settings/"}],"drives":[{"bay":"1","model":"EG001200JWJNQ","path":"/redfish/v1/Systems/1/SmartStorage/ArrayControllers/0/DiskDrives/0","serial_number":"WFK1YDG1","size_gib":1117.81,"smart_storage_location":"1I:1:1","status":"OK
+    / Enabled"},{"bay":"2","model":"EG001200JWJNQ","path":"/redfish/v1/Systems/1/SmartStorage/ArrayControllers/0/DiskDrives/1","serial_number":"WFK1SN79","size_gib":1117.81,"smart_storage_location":"1I:1:2","status":"OK
+    / Enabled"},{"bay":"3","model":"EG001200JWJNQ","path":"/redfish/v1/Systems/1/SmartStorage/ArrayControllers/0/DiskDrives/2","serial_number":"WFK1Z5LA","size_gib":1117.81,"smart_storage_location":"1I:1:3","status":"OK
+    / Enabled"},{"bay":"4","model":"EG001200JWJNQ","path":"/redfish/v1/Systems/1/SmartStorage/ArrayControllers/0/DiskDrives/3","serial_number":"WFK1WS4S","size_gib":1117.81,"smart_storage_location":"1I:1:4","status":"OK
+    / Enabled"},{"bay":"5","model":"EG001200JWJNQ","path":"/redfish/v1/Systems/1/SmartStorage/ArrayControllers/0/DiskDrives/4","serial_number":"WFK1YDLH","size_gib":1117.81,"smart_storage_location":"2I:1:5","status":"OK
+    / Enabled"},{"bay":"6","model":"EG001200JWJNQ","path":"/redfish/v1/Systems/1/SmartStorage/ArrayControllers/0/DiskDrives/5","serial_number":"WFK1ZJ1W","size_gib":1117.81,"smart_storage_location":"2I:1:6","status":"OK
+    / Enabled"},{"bay":"7","model":"EG001200JWJNQ","path":"/redfish/v1/Systems/1/SmartStorage/ArrayControllers/0/DiskDrives/6","serial_number":"WFK1SQZB","size_gib":1117.81,"smart_storage_location":"2I:1:7","status":"OK
+    / Enabled"},{"bay":"8","model":"EG001200JWJNQ","path":"/redfish/v1/Systems/1/SmartStorage/ArrayControllers/0/DiskDrives/7","serial_number":"WFK1SQZW","size_gib":1117.81,"smart_storage_location":"2I:1:8","status":"OK
+    / Enabled"}],"server":{"generation":"Gen10","model":"ProLiant DL360 Gen10","serial_number":"MXQ85103SX"},"volumes":[{"capacity_gib":500.0,"name":"HpeSmartStorageLogicalDrive","path":"/redfish/v1/Systems/1/SmartStorage/ArrayControllers/0/LogicalDrives/1","raid_type":"1"},{"capacity_gib":3353.35,"name":"HpeSmartStorageLogicalDrive","path":"/redfish/v1/Systems/1/SmartStorage/ArrayControllers/0/LogicalDrives/2","raid_type":"6"}]}'
+  latest_plan_path: /home/administrator/lab-builder/artifacts/exports/storage-raid/MXQ85103SX/20260414-110028/raid-plan.yml
+  latest_plan_summary:
+    controller: ''
+    os_bays: 1, 2
+    data_bays: 3, 4, 5, 6, 7
+    spare_bay: '8'
+    mode: wipe and rebuild
+  latest_host: 10.122.141.10
+  latest_serial_number: MXQ85103SX
+  state: stale
+  status_reason: Current storage target host (10.122.141.11) differs from the approved
+    storage host (10.122.141.10).
+  approval:
+    state: stale
+    approved_at: '2026-04-09 14:02:33'
+    host: 10.122.141.10
+    serial_number: MXQ85103SX
+    discovery_raw_path: /home/administrator/lab-builder/artifacts/exports/storage-raid/MXQ85103SX/20260409-140201/raw.json
+    plan_path: /home/administrator/lab-builder/artifacts/exports/storage-raid/MXQ85103SX/20260409-140201/raid-plan.yml
+    discovery_fingerprint: '{"controllers":[{"firmware_version":"1.98","model":"HPE
+      Smart Array P408i-a SR Gen10","name":"Hpe Smart Storage Array Controller","path":"/redfish/v1/Systems/1/SmartStorage/ArrayControllers/0"},{"firmware_version":"","model":"","name":"","path":"/redfish/v1/systems/1/smartstorageconfig/"},{"firmware_version":"","model":"","name":"","path":"/redfish/v1/systems/1/smartstorageconfig/"},{"firmware_version":"","model":"","name":"","path":"/redfish/v1/systems/1/smartstorageconfig/settings/"}],"drives":[{"bay":"1","model":"EG001200JWJNQ","path":"/redfish/v1/Systems/1/SmartStorage/ArrayControllers/0/DiskDrives/0","serial_number":"WFK1YDG1","size_gib":1117.81,"smart_storage_location":"1I:1:1","status":"OK
+      / Enabled"},{"bay":"2","model":"EG001200JWJNQ","path":"/redfish/v1/Systems/1/SmartStorage/ArrayControllers/0/DiskDrives/1","serial_number":"WFK1SN79","size_gib":1117.81,"smart_storage_location":"1I:1:2","status":"OK
+      / Enabled"},{"bay":"3","model":"EG001200JWJNQ","path":"/redfish/v1/Systems/1/SmartStorage/ArrayControllers/0/DiskDrives/2","serial_number":"WFK1Z5LA","size_gib":1117.81,"smart_storage_location":"1I:1:3","status":"OK
+      / Enabled"},{"bay":"4","model":"EG001200JWJNQ","path":"/redfish/v1/Systems/1/SmartStorage/ArrayControllers/0/DiskDrives/3","serial_number":"WFK1WS4S","size_gib":1117.81,"smart_storage_location":"1I:1:4","status":"OK
+      / Enabled"},{"bay":"5","model":"EG001200JWJNQ","path":"/redfish/v1/Systems/1/SmartStorage/ArrayControllers/0/DiskDrives/4","serial_number":"WFK1YDLH","size_gib":1117.81,"smart_storage_location":"2I:1:5","status":"OK
+      / Enabled"},{"bay":"6","model":"EG001200JWJNQ","path":"/redfish/v1/Systems/1/SmartStorage/ArrayControllers/0/DiskDrives/5","serial_number":"WFK1ZJ1W","size_gib":1117.81,"smart_storage_location":"2I:1:6","status":"OK
+      / Enabled"},{"bay":"7","model":"EG001200JWJNQ","path":"/redfish/v1/Systems/1/SmartStorage/ArrayControllers/0/DiskDrives/6","serial_number":"WFK1SQZB","size_gib":1117.81,"smart_storage_location":"2I:1:7","status":"OK
+      / Enabled"},{"bay":"8","model":"EG001200JWJNQ","path":"/redfish/v1/Systems/1/SmartStorage/ArrayControllers/0/DiskDrives/7","serial_number":"WFK1SQZW","size_gib":1117.81,"smart_storage_location":"2I:1:8","status":"OK
+      / Enabled"}],"server":{"generation":"Gen10","model":"ProLiant DL360 Gen10","serial_number":"MXQ85103SX"},"volumes":[{"capacity_gib":500.0,"name":"HpeSmartStorageLogicalDrive","path":"/redfish/v1/Systems/1/SmartStorage/ArrayControllers/0/LogicalDrives/1","raid_type":"1"},{"capacity_gib":3353.35,"name":"HpeSmartStorageLogicalDrive","path":"/redfish/v1/Systems/1/SmartStorage/ArrayControllers/0/LogicalDrives/2","raid_type":"6"}]}'
+    plan_summary:
+      controller: ''
+      os_bays: 1, 2
+      data_bays: 3, 4, 5, 6, 7
+      spare_bay: '8'
+      mode: wipe and rebuild
+    reboot_expected: true
