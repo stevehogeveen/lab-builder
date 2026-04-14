@@ -28,6 +28,23 @@ class ILOError(Exception):
 class ILOClient:
     SMART_STORAGE_PROBE_TIMEOUT = 3
 
+    @staticmethod
+    def _normalize_string_list(values: Any) -> list[str]:
+        if not isinstance(values, list):
+            return []
+        return [str(item).strip() for item in values if str(item).strip()]
+
+    @staticmethod
+    def _values_match_exact(actual: list[str], requested: list[str]) -> bool:
+        return list(actual) == list(requested)
+
+    @staticmethod
+    def _first_present(block: dict[str, Any], keys: tuple[str, ...]) -> Any:
+        for key in keys:
+            if key in block:
+                return block.get(key)
+        return None
+
     def _safe_get(self, path: str | None, timeout: int | float | None = None) -> dict[str, Any]:
         if not path:
             return {}
@@ -920,14 +937,36 @@ class ILOClient:
 
         self._patch(iface_path, patch_payload)
         after = self._get(iface_path)
+        before_static_normalized = self._normalize_string_list(before_static)
+        before_names_normalized = self._normalize_string_list(before_names)
+        after_static = self._normalize_string_list(after.get("StaticNameServers", []))
+        after_names = self._normalize_string_list(after.get("NameServers", []))
+
+        verified_field = ""
+        if self._values_match_exact(after_static, dns_servers):
+            verified_field = "StaticNameServers"
+        elif self._values_match_exact(after_names, dns_servers):
+            verified_field = "NameServers"
+
+        verified = bool(verified_field)
 
         return {
+            "action": "apply_dns",
+            "requested": list(dns_servers),
             "path": iface_path,
-            "before_static": before_static,
-            "after_static": after.get("StaticNameServers", []),
-            "before_names": before_names,
-            "after_names": after.get("NameServers", []),
+            "before_static": before_static_normalized,
+            "after_static": after_static,
+            "before_names": before_names_normalized,
+            "after_names": after_names,
             "applied_keys": sorted(list(patch_payload.keys())),
+            "verified": verified,
+            "verified_field": verified_field,
+            "status": "Verified" if verified else "Mismatch",
+            "details": (
+                f"Requested DNS values matched {verified_field} after the write."
+                if verified
+                else "PATCH succeeded but the requested DNS values did not read back exactly."
+            ),
         }
 
     def set_static_ipv4_best_effort(self, address: str, subnet_mask: str, gateway: str) -> dict[str, Any]:
@@ -1680,11 +1719,69 @@ class ILOClient:
         self._patch(np_path, {"SNMP": patch_block})
         after_doc = self._get(np_path)
         after = after_doc.get("SNMP", {})
+        verification_checks: list[dict[str, Any]] = []
+
+        if any(key in patch_block for key in ("UserName", "Username", "SNMPv3UserName", "SNMPv3Username")):
+            after_username = self._first_present(after, ("UserName", "Username", "SNMPv3UserName", "SNMPv3Username"))
+            verification_checks.append({
+                "label": "username",
+                "requested": v3_username,
+                "actual": after_username,
+                "matched": after_username == v3_username,
+            })
+
+        if any(key in patch_block for key in ("AuthProtocol", "SNMPv3AuthProtocol")):
+            after_auth_protocol = self._first_present(after, ("AuthProtocol", "SNMPv3AuthProtocol"))
+            verification_checks.append({
+                "label": "auth_protocol",
+                "requested": v3_auth_protocol,
+                "actual": after_auth_protocol,
+                "matched": after_auth_protocol == v3_auth_protocol,
+            })
+
+        if any(key in patch_block for key in ("PrivacyProtocol", "SNMPv3PrivacyProtocol")):
+            after_priv_protocol = self._first_present(after, ("PrivacyProtocol", "SNMPv3PrivacyProtocol"))
+            verification_checks.append({
+                "label": "privacy_protocol",
+                "requested": v3_priv_protocol,
+                "actual": after_priv_protocol,
+                "matched": after_priv_protocol == v3_priv_protocol,
+            })
+
+        if "ProtocolEnabled" in patch_block:
+            verification_checks.append({
+                "label": "protocol_enabled",
+                "requested": True,
+                "actual": after.get("ProtocolEnabled"),
+                "matched": after.get("ProtocolEnabled") is True,
+            })
+
+        verified = bool(verification_checks) and all(item["matched"] for item in verification_checks)
+        mismatches = [item for item in verification_checks if not item["matched"]]
         return {
+            "action": "apply_snmp",
             "path": np_path,
             "before": before,
             "after": after,
             "applied_keys": sorted(list(patch_block.keys())),
+            "requested": {
+                "username": v3_username,
+                "auth_protocol": v3_auth_protocol,
+                "privacy_protocol": v3_priv_protocol,
+                "auth_secret_present": bool(v3_auth_password),
+                "privacy_secret_present": bool(v3_priv_password),
+            },
+            "verification": {
+                "checks": verification_checks,
+                "mismatches": mismatches,
+            },
+            "verified": verified,
+            "status": "Verified" if verified else "Mismatch",
+            "details": (
+                "Requested SNMP values were verified after the write."
+                if verified
+                else "PATCH succeeded but one or more SNMP values did not read back as requested."
+            ),
         }
 
     def manager_reset_best_effort(self, reset_type: str = "GracefulRestart") -> dict[str, Any]:
@@ -1695,9 +1792,13 @@ class ILOClient:
             raise ILOError("Manager reset action not available on this iLO.")
         self._post(target, {"ResetType": reset_type})
         return {
+            "action": "reset_ilo",
             "path": target,
             "reset_type": reset_type,
         }
+
+    def reset_ilo(self, reset_type: str = "GracefulRestart") -> dict[str, Any]:
+        return self.manager_reset_best_effort(reset_type=reset_type)
 
     def eject_virtual_media(self, vm_path: str) -> None:
         vm = self._get(vm_path)
@@ -1801,6 +1902,7 @@ class ILOClient:
 
         return {
             **reset_result,
+            "action": "reboot_server",
             "reboot_start_observed": reboot_started,
             "reboot_start_detail": reboot_start_detail,
             "system_returned": system_returned,
@@ -1808,3 +1910,17 @@ class ILOClient:
             "service_root": service_root or {},
             "final_system": final_system or {},
         }
+
+    def reboot_server(
+        self,
+        reset_type: str = "GracefulRestart",
+        reboot_start_timeout: int = 120,
+        return_timeout: int = 600,
+        poll_interval: int = 10,
+    ) -> dict[str, Any]:
+        return self.reboot_server_and_wait(
+            reset_type=reset_type,
+            reboot_start_timeout=reboot_start_timeout,
+            return_timeout=return_timeout,
+            poll_interval=poll_interval,
+        )

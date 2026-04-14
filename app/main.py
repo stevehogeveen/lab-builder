@@ -4943,10 +4943,13 @@ def append_job_history_snapshot(cfg: dict, scope: str):
                         "ilo_reset_required": bool(finished_job.get("ilo_reset_required")),
                         "ilo_reset_status": str(finished_job.get("ilo_reset_status") or ""),
                         "dns_apply_status": str(finished_job.get("dns_apply_status") or ""),
+                        "dns_requested_values": finished_job.get("dns_requested_values") or [],
+                        "dns_before_values": finished_job.get("dns_before_values") or [],
                         "dns_applied_values": finished_job.get("dns_applied_values") or [],
                         "dns_applied_keys": finished_job.get("dns_applied_keys") or [],
                         "snmp_apply_status": str(finished_job.get("snmp_apply_status") or ""),
                         "snmp_applied_keys": finished_job.get("snmp_applied_keys") or [],
+                        "snmp_verified_checks": finished_job.get("snmp_verified_checks") or [],
                         "snmp_username": str(finished_job.get("snmp_username") or ""),
                         "snmp_auth_protocol": str(finished_job.get("snmp_auth_protocol") or ""),
                         "snmp_priv_protocol": str(finished_job.get("snmp_priv_protocol") or ""),
@@ -5014,6 +5017,8 @@ def run_ilo_real(cfg: dict):
         "total_steps": total,
         "logs": [],
         "dns_apply_status": "Not attempted",
+        "dns_requested_values": list(shared_dns),
+        "dns_before_values": [],
         "dns_applied_values": [],
         "dns_applied_keys": [],
         "snmp_apply_status": "Not attempted",
@@ -5023,6 +5028,7 @@ def run_ilo_real(cfg: dict):
         "snmp_priv_protocol": desired_priv_protocol,
         "snmp_auth_secret_present": bool(snmp_cfg.get("v3_auth_password")),
         "snmp_priv_secret_present": bool(snmp_cfg.get("v3_priv_password")),
+        "snmp_verified_checks": [],
         "storage_server_reboot_required": False,
         "storage_server_reboot_status": "Not required",
         "ilo_reset_required": False,
@@ -5221,10 +5227,17 @@ def run_ilo_real(cfg: dict):
                     )
                 )
                 dns_result = client.set_dns_servers_best_effort(shared_dns)
-                job["dns_apply_status"] = "Applied"
-                job["dns_applied_values"] = list(dns_result.get("after_static") or shared_dns)
+                job["dns_apply_status"] = str(dns_result.get("status") or "Mismatch")
+                job["dns_before_values"] = list(dns_result.get("before_static") or dns_result.get("before_names") or [])
+                job["dns_applied_values"] = list(
+                    dns_result.get("after_static")
+                    or dns_result.get("after_names")
+                    or []
+                )
                 job["dns_applied_keys"] = list(dns_result.get("applied_keys") or [])
                 save_job(kit_name, job)
+                if not dns_result.get("verified"):
+                    config_changes_succeeded = False
                 update_job(
                     kit_name,
                     job,
@@ -5233,13 +5246,16 @@ def run_ilo_real(cfg: dict):
                     10,
                     total,
                     (
-                        "[OK] DNS apply success | "
+                        f"[{'OK' if dns_result.get('verified') else 'WARN'}] DNS {str(dns_result.get('status') or 'Mismatch').lower()} | "
                         f"path={dns_result.get('path', '(unknown)')} | "
                         f"keys={', '.join(dns_result.get('applied_keys', [])) or '(none)'} | "
+                        f"requested={dns_result.get('requested', [])} | "
                         f"before_static={dns_result.get('before_static')} | "
                         f"before_names={dns_result.get('before_names')} | "
                         f"after_static={dns_result.get('after_static')} | "
-                        f"after_names={dns_result.get('after_names')}"
+                        f"after_names={dns_result.get('after_names')} | "
+                        f"verified_field={dns_result.get('verified_field') or '(none)'} | "
+                        f"details={dns_result.get('details')}"
                     )
                 )
             except Exception as e:
@@ -5329,9 +5345,12 @@ def run_ilo_real(cfg: dict):
                 v3_priv_protocol=snmp_cfg.get("v3_priv_protocol", "AES"),
                 v3_priv_password=snmp_cfg.get("v3_priv_password", ""),
             )
-            job["snmp_apply_status"] = "Applied"
+            job["snmp_apply_status"] = str(snmp_result.get("status") or "Mismatch")
             job["snmp_applied_keys"] = list(snmp_result.get("applied_keys") or [])
+            job["snmp_verified_checks"] = list(snmp_result.get("verification", {}).get("checks") or [])
             save_job(kit_name, job)
+            if not snmp_result.get("verified"):
+                config_changes_succeeded = False
             update_job(
                 kit_name,
                     job,
@@ -5340,13 +5359,15 @@ def run_ilo_real(cfg: dict):
                     12,
                     total,
                     (
-                        "[OK] SNMP apply success | "
+                        f"[{'OK' if snmp_result.get('verified') else 'WARN'}] SNMP {str(snmp_result.get('status') or 'Mismatch').lower()} | "
                         f"path={snmp_result.get('path', '(unknown)')} | "
                         f"keys={', '.join(snmp_result.get('applied_keys', [])) or '(none)'} | "
                         f"username={snmp_cfg.get('v3_username', '') or '(none)'} | "
                         f"auth={desired_auth_protocol} | priv={desired_priv_protocol} | "
                         f"auth_secret={'Yes' if snmp_cfg.get('v3_auth_password') else 'No'} | "
-                        f"privacy_secret={'Yes' if snmp_cfg.get('v3_priv_password') else 'No'}"
+                        f"privacy_secret={'Yes' if snmp_cfg.get('v3_priv_password') else 'No'} | "
+                        f"checks={snmp_result.get('verification', {}).get('checks', [])} | "
+                        f"details={snmp_result.get('details')}"
                     )
                 )
         except Exception as e:
@@ -5437,7 +5458,7 @@ def run_ilo_real(cfg: dict):
                         )
                     )
                 )
-                reset_result = client.manager_reset_best_effort()
+                reset_result = client.reset_ilo()
                 job["ilo_reset_status"] = "Completed"
                 save_job(kit_name, job)
                 update_job(
