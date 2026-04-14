@@ -950,23 +950,52 @@ class ILOClient:
 
         verified = bool(verified_field)
 
+        mismatches = []
+        if not verified:
+            mismatches.append(
+                {
+                    "field": "dns_servers",
+                    "requested": list(dns_servers),
+                    "actual_static": after_static,
+                    "actual_names": after_names,
+                }
+            )
+
+        before = {
+            "StaticNameServers": before_static_normalized,
+            "NameServers": before_names_normalized,
+        }
+        after_result = {
+            "StaticNameServers": after_static,
+            "NameServers": after_names,
+        }
+        notes = [
+            f"Wrote DNS values using {', '.join(sorted(list(patch_payload.keys())))}."
+        ]
+        if verified:
+            notes.append(f"Requested DNS values matched {verified_field} after the write.")
+        else:
+            notes.append("PATCH succeeded but the requested DNS values did not read back exactly.")
+
         return {
             "action": "apply_dns",
             "requested": list(dns_servers),
             "path": iface_path,
+            "before": before,
+            "after": after_result,
             "before_static": before_static_normalized,
             "after_static": after_static,
             "before_names": before_names_normalized,
             "after_names": after_names,
             "applied_keys": sorted(list(patch_payload.keys())),
+            "matched": verified,
+            "mismatches": mismatches,
+            "reset_recommended": bool(patch_payload),
+            "notes": notes,
             "verified": verified,
             "verified_field": verified_field,
             "status": "Verified" if verified else "Mismatch",
-            "details": (
-                f"Requested DNS values matched {verified_field} after the write."
-                if verified
-                else "PATCH succeeded but the requested DNS values did not read back exactly."
-            ),
+            "details": notes[-1],
         }
 
     def set_static_ipv4_best_effort(self, address: str, subnet_mask: str, gateway: str) -> dict[str, Any]:
@@ -1756,8 +1785,15 @@ class ILOClient:
                 "matched": after.get("ProtocolEnabled") is True,
             })
 
-        verified = bool(verification_checks) and all(item["matched"] for item in verification_checks)
+        matched = bool(verification_checks) and all(item["matched"] for item in verification_checks)
         mismatches = [item for item in verification_checks if not item["matched"]]
+        notes = [
+            f"Wrote SNMP values using {', '.join(sorted(list(patch_block.keys())))}."
+        ]
+        if matched:
+            notes.append("Requested SNMP values were verified after the write.")
+        else:
+            notes.append("PATCH succeeded but one or more SNMP values did not read back as requested.")
         return {
             "action": "apply_snmp",
             "path": np_path,
@@ -1775,13 +1811,13 @@ class ILOClient:
                 "checks": verification_checks,
                 "mismatches": mismatches,
             },
-            "verified": verified,
-            "status": "Verified" if verified else "Mismatch",
-            "details": (
-                "Requested SNMP values were verified after the write."
-                if verified
-                else "PATCH succeeded but one or more SNMP values did not read back as requested."
-            ),
+            "matched": matched,
+            "mismatches": mismatches,
+            "reset_recommended": bool(patch_block),
+            "notes": notes,
+            "verified": matched,
+            "status": "Verified" if matched else "Mismatch",
+            "details": notes[-1],
         }
 
     def manager_reset_best_effort(self, reset_type: str = "GracefulRestart") -> dict[str, Any]:
