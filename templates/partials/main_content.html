@@ -43,7 +43,7 @@
     </section>
     {% endif %}
     {% set setup_pages = ["global_settings", "configuration", "ilo", "storage", "esxi", "execution"] %}
-    {% if config_view_title and config_view_content and active_page not in setup_pages %}
+    {% if config_view_title and config_view_content and active_page not in setup_pages and active_page != "configs" %}
     <details class="card" open>
         <summary class="summary-row">
             <span class="text-lg font-semibold">{{ config_view_title }}</span>
@@ -101,7 +101,7 @@
     {% elif active_page == "qnap" %}
         {% include "partials/pages/qnap.html" %}
     {% elif active_page == "configs" %}
-        {% include "partials/pages/configs.html" %}
+        {% include "partials/pages/reports.html" %}
     {% elif active_page == "storage" %}
         {% include "partials/pages/storage.html" %}
     {% elif active_page == "kits" %}

@@ -102,8 +102,8 @@ PAGE_META = {
         "subtitle": "Shared defaults for network, inclusion, and kit-wide behavior.",
     },
     "configs": {
-        "title": "Configs",
-        "subtitle": "View and export generated configuration snapshots.",
+        "title": "Reports & Technical Details",
+        "subtitle": "Open logs, reports, raw output, and saved technical details in one place.",
     },
     "storage": {
         "title": "Storage setup",
