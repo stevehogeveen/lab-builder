@@ -36,29 +36,29 @@
         }
 
         body[data-theme="dark"] {
-            --bg: #0b1420;
-            --bg-soft: #101a27;
-            --panel: rgba(17, 27, 39, 0.96);
-            --panel2: #162334;
-            --panel3: #1c2b3d;
-            --border: #243449;
-            --border-strong: #314760;
+            --bg: #0d1520;
+            --bg-soft: #131d2a;
+            --panel: rgba(19, 29, 42, 0.96);
+            --panel2: #182434;
+            --panel3: #1f2d3f;
+            --border: #26384d;
+            --border-strong: #324964;
             --text: #e7eef8;
-            --muted: #95a6bb;
-            --muted-soft: #a7b6c8;
-            --accent: #4f83f1;
-            --accent-soft: rgba(79, 131, 241, 0.14);
-            --good: #39b37e;
-            --good-soft: rgba(57, 179, 126, 0.12);
-            --warn: #d19835;
-            --warn-soft: rgba(209, 152, 53, 0.12);
-            --bad: #d06c63;
-            --bad-soft: rgba(208, 108, 99, 0.12);
-            --sidebar: #0f1a28;
-            --hero-bg: rgba(17, 27, 39, 0.98);
-            --card-shadow: 0 10px 28px rgba(2, 10, 19, 0.32);
-            --card-shadow-hover: 0 14px 36px rgba(2, 10, 19, 0.38);
-            --panel-glow: rgba(79, 131, 241, 0.08);
+            --muted: #9aa9bc;
+            --muted-soft: #afbccd;
+            --accent: #5a8fff;
+            --accent-soft: rgba(90, 143, 255, 0.14);
+            --good: #4fb98b;
+            --good-soft: rgba(79, 185, 139, 0.11);
+            --warn: #d0a24c;
+            --warn-soft: rgba(208, 162, 76, 0.11);
+            --bad: #d47d75;
+            --bad-soft: rgba(212, 125, 117, 0.11);
+            --sidebar: #111a27;
+            --hero-bg: rgba(19, 29, 42, 0.98);
+            --card-shadow: 0 10px 26px rgba(4, 10, 18, 0.26);
+            --card-shadow-hover: 0 14px 34px rgba(4, 10, 18, 0.3);
+            --panel-glow: rgba(90, 143, 255, 0.08);
         }
 
         * { box-sizing: border-box; }
@@ -82,7 +82,7 @@
         .sidebar {
             background: var(--sidebar);
             border-right: 1px solid var(--border);
-            padding: 26px 18px;
+            padding: 22px 16px;
             position: sticky;
             top: 0;
             height: 100vh;
@@ -92,7 +92,7 @@
         }
 
         .brand-block {
-            margin-bottom: 28px;
+            margin-bottom: 22px;
         }
 
         .eyebrow {
@@ -111,7 +111,7 @@
         }
 
         .nav-group {
-            margin-bottom: 20px;
+            margin-bottom: 16px;
         }
 
         .nav-label {
@@ -126,11 +126,11 @@
             display: block;
             text-decoration: none;
             color: var(--text);
-            background: color-mix(in srgb, white 84%, var(--panel2) 16%);
-            border: 1px solid color-mix(in srgb, var(--border) 82%, white 18%);
-            padding: 11px 13px;
-            border-radius: 14px;
-            margin-bottom: 8px;
+            background: color-mix(in srgb, var(--panel2) 72%, transparent);
+            border: 1px solid color-mix(in srgb, var(--border) 90%, transparent);
+            padding: 10px 12px;
+            border-radius: 12px;
+            margin-bottom: 6px;
             font-weight: 600;
             transition: background 0.18s ease, border-color 0.18s ease, transform 0.18s ease, box-shadow 0.18s ease;
         }
@@ -149,20 +149,20 @@
         }
 
         .main {
-            padding: 34px;
+            padding: 28px;
         }
 
         .hero {
             background: var(--hero-bg);
             border: 1px solid var(--border);
-            border-radius: 24px;
+            border-radius: 20px;
             box-shadow: var(--card-shadow);
-            padding: 30px;
-            margin-bottom: 26px;
+            padding: 20px 24px;
+            margin-bottom: 20px;
             display: flex;
             align-items: flex-end;
             justify-content: space-between;
-            gap: 22px;
+            gap: 18px;
             position: relative;
             overflow: hidden;
         }
@@ -179,12 +179,12 @@
         .panel, .card {
             background: var(--panel);
             border: 1px solid var(--border);
-            border-radius: 20px;
+            border-radius: 18px;
             box-shadow: var(--card-shadow);
         }
 
-        .panel { padding: 24px; }
-        .card { padding: 20px; height: 100%; }
+        .panel { padding: 20px; }
+        .card { padding: 16px; height: 100%; }
         .panel, .card, .main, #main-content { min-width: 0; }
 
         a.card {
@@ -541,6 +541,98 @@
             font-weight: 700;
         }
 
+        body[data-active-page="global_settings"] .hero,
+        body[data-active-page="configuration"] .hero,
+        body[data-active-page="ilo"] .hero,
+        body[data-active-page="storage"] .hero,
+        body[data-active-page="esxi"] .hero,
+        body[data-active-page="execution"] .hero {
+            padding: 16px 20px;
+        }
+
+        body[data-active-page="global_settings"] .hero-meta,
+        body[data-active-page="configuration"] .hero-meta,
+        body[data-active-page="ilo"] .hero-meta,
+        body[data-active-page="storage"] .hero-meta,
+        body[data-active-page="esxi"] .hero-meta,
+        body[data-active-page="execution"] .hero-meta {
+            display: none;
+        }
+
+        body[data-active-page="global_settings"] .hero .muted,
+        body[data-active-page="configuration"] .hero .muted,
+        body[data-active-page="ilo"] .hero .muted,
+        body[data-active-page="storage"] .hero .muted,
+        body[data-active-page="esxi"] .hero .muted,
+        body[data-active-page="execution"] .hero .muted {
+            font-size: 0.95rem;
+            max-width: 56rem;
+        }
+
+        body[data-active-page="global_settings"] #main-content,
+        body[data-active-page="configuration"] #main-content,
+        body[data-active-page="ilo"] #main-content,
+        body[data-active-page="storage"] #main-content,
+        body[data-active-page="esxi"] #main-content,
+        body[data-active-page="execution"] #main-content {
+            max-width: 980px;
+        }
+
+        body[data-active-page="global_settings"] #main-content > .panel:first-of-type,
+        body[data-active-page="configuration"] #main-content > .panel:first-of-type,
+        body[data-active-page="ilo"] #main-content > .panel:first-of-type,
+        body[data-active-page="storage"] #main-content > .panel:first-of-type,
+        body[data-active-page="esxi"] #main-content > .panel:first-of-type,
+        body[data-active-page="execution"] #main-content > .panel:first-of-type {
+            border-color: color-mix(in srgb, var(--accent) 22%, var(--border));
+            background: linear-gradient(180deg, color-mix(in srgb, var(--panel) 92%, var(--panel2) 8%), var(--panel));
+        }
+
+        body[data-active-page="global_settings"] #main-content > .panel:first-of-type .card,
+        body[data-active-page="configuration"] #main-content > .panel:first-of-type .card,
+        body[data-active-page="ilo"] #main-content > .panel:first-of-type .card,
+        body[data-active-page="storage"] #main-content > .panel:first-of-type .card,
+        body[data-active-page="esxi"] #main-content > .panel:first-of-type .card,
+        body[data-active-page="execution"] #main-content > .panel:first-of-type .card {
+            background: color-mix(in srgb, var(--panel2) 72%, transparent);
+        }
+
+        .sidebar .nav-group:last-of-type,
+        .sidebar .nav-link[href="/windows"],
+        .sidebar .nav-link[href="/qnap"],
+        .sidebar .nav-link[href="/kits"],
+        .sidebar .nav-link[href="/history"] {
+            display: none;
+        }
+
+        .sidebar .nav-link[href="/ilo"],
+        .sidebar .nav-link[href="/esxi"],
+        .sidebar .nav-link[href="/configs"] {
+            font-size: 0;
+        }
+
+        .sidebar .nav-link[href="/ilo"]::after,
+        .sidebar .nav-link[href="/esxi"]::after,
+        .sidebar .nav-link[href="/configs"]::after {
+            font-size: 0.95rem;
+        }
+
+        .sidebar .nav-link[href="/ilo"]::after {
+            content: "iLO Setup";
+        }
+
+        .sidebar .nav-link[href="/esxi"]::after {
+            content: "ESXi Setup";
+        }
+
+        .sidebar .nav-link[href="/configs"]::after {
+            content: "Reports & Technical Details";
+        }
+
+        .sidebar .nav-label {
+            margin-bottom: 6px;
+        }
+
         .execution-picker-grid .card,
         .execute-confirm,
         #page-action-status,
@@ -712,7 +804,7 @@
         }
     </style>
 </head>
-<body>
+<body data-active-page="{{ active_page }}">
 <div class="app-shell">
     {% include "partials/sidebar.html" %}
 
@@ -756,7 +848,7 @@
         }
     };
 
-    const savedTheme = localStorage.getItem(themeKey) || "light";
+    const savedTheme = localStorage.getItem(themeKey) || "dark";
     applyTheme(savedTheme);
 
     if (themeToggle) {

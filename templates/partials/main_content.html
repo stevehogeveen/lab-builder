@@ -42,7 +42,8 @@
         {% endif %}
     </section>
     {% endif %}
-    {% if config_view_title and config_view_content %}
+    {% set setup_pages = ["global_settings", "configuration", "ilo", "storage", "esxi", "execution"] %}
+    {% if config_view_title and config_view_content and active_page not in setup_pages %}
     <details class="card" open>
         <summary class="summary-row">
             <span class="text-lg font-semibold">{{ config_view_title }}</span>
@@ -50,6 +51,14 @@
         </summary>
         <div class="codeblock mt-4">{{ config_view_content }}</div>
     </details>
+    {% elif config_view_title and config_view_content and active_page in setup_pages %}
+    <section class="card">
+        <div class="text-lg font-semibold mb-2">Technical details were saved</div>
+        <div class="text-sm text-slate-300">Detailed files and raw output stay on the reports page so this setup page stays easy to read.</div>
+        <div class="actions mt-4">
+            <a class="btn" href="/configs">Open reports & technical details</a>
+        </div>
+    </section>
     {% endif %}
 
     {% if page_briefing and active_page not in ["configs", "history", "kits"] %}
