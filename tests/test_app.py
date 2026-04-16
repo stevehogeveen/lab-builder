@@ -1080,15 +1080,14 @@ def test_read_current_storage_saves_discovery_export_and_renders_summary(client,
     assert response.status_code == 200
     assert "Storage setup" in response.text
     assert "Target server" in response.text
-    assert "Read current storage" in response.text
-    assert "Current storage read complete" in response.text
-    assert "The current storage layout is now available for planning." in response.text
-    assert "The current iLO address is used by default unless you change it here." in response.text
+    assert "Current storage setup" in response.text
+    assert "Current storage setup loaded" in response.text
+    assert "The current storage layout is now ready to review." in response.text
+    assert "Storage setup uses the final iLO address from the iLO page by default." in response.text
     assert "Deep Smart Storage Scan" not in response.text
     assert "Build storage plan" in response.text
     assert "Open reports" in response.text
-    assert 'hx-indicator="#read-storage-progress"' in response.text
-    assert "Checking current storage on the server." in response.text
+    assert "See detailed storage information" in response.text
 
     export_dir = main.STORAGE_RAID_EXPORT_DIR / "ABC123" / "20260407-150000"
     summary_path = export_dir / "summary.yml"
@@ -1116,13 +1115,14 @@ def test_read_current_storage_warns_when_smart_storage_controller_has_no_childre
     response = client.post("/read-current-storage", data={"return_page": "storage"})
 
     assert response.status_code == 200
-    assert "Current storage read complete" in response.text
+    assert "Current storage setup loaded" in response.text
     assert "Build storage plan" in response.text
     assert "Open reports" in response.text
 
 
-def test_storage_target_host_prefers_current_kit_ip_over_artifact_host():
+def test_storage_target_host_prefers_planned_ilo_ip_over_current_and_artifact_host():
     cfg = main.default_config()
+    cfg["ilo"]["target_ip"] = "10.10.8.89"
     cfg["ilo"]["current_ip"] = "10.10.8.90"
     cfg["ilo"]["host"] = "10.10.8.91"
     cfg["storage"]["latest_host"] = "10.10.8.92"
@@ -1130,8 +1130,8 @@ def test_storage_target_host_prefers_current_kit_ip_over_artifact_host():
 
     resolved = main.resolve_storage_target_host(cfg)
 
-    assert resolved["resolved"] == "10.10.8.90"
-    assert resolved["source"] == "current kit iLO IP"
+    assert resolved["resolved"] == "10.10.8.89"
+    assert resolved["source"] == "planned iLO target IP"
     assert resolved["artifact_fallback"] is False
 
 
@@ -1148,6 +1148,10 @@ def test_storage_target_host_can_fallback_to_latest_artifact_when_kit_host_is_mi
 
 def test_storage_target_host_reports_clear_error_when_no_host_is_resolved():
     cfg = main.default_config()
+    cfg["ilo"]["target_ip"] = ""
+    cfg["ip_plan"]["ilo"] = ""
+    cfg["ilo"]["current_ip"] = ""
+    cfg["ilo"]["host"] = ""
     resolved = main.resolve_storage_target_host(cfg)
 
     assert resolved["valid"] is False
@@ -1175,11 +1179,40 @@ def test_save_storage_target_persists_explicit_storage_credentials(client):
     )
 
     assert response.status_code == 200
-    assert "Saved storage target settings." in response.text
+    assert "Storage target updated" in response.text
     saved = main.load_kit_config("Storage-Target-Kit")
     assert saved["storage"]["target_host_override"] == "10.10.8.99"
     assert saved["storage"]["username"] == "StorageAdmin"
     assert saved["storage"]["password"] == "storage-secret"
+
+
+def test_save_storage_target_can_clear_override_and_use_ilo_defaults(client):
+    cfg = main.default_config()
+    cfg["site"]["name"] = "Storage Defaults Kit"
+    cfg["ilo"]["target_ip"] = "10.10.8.61"
+    cfg["ilo"]["current_ip"] = "10.10.8.60"
+    cfg["ilo"]["host"] = "10.10.8.60"
+    cfg["ilo"]["username"] = "Administrator"
+    cfg["ilo"]["password"] = "kit-password"
+    cfg["storage"]["target_host_override"] = "10.10.8.99"
+    cfg["storage"]["username"] = "StorageAdmin"
+    cfg["storage"]["password"] = "storage-secret"
+    main.save_kit_config(cfg)
+
+    response = client.post(
+        "/save-storage-target",
+        data={
+            "return_page": "storage",
+            "storage_target_mode": "defaults",
+        },
+    )
+
+    assert response.status_code == 200
+    assert "Using iLO defaults." in response.text
+    saved = main.load_kit_config("Storage-Defaults-Kit")
+    assert saved["storage"]["target_host_override"] == ""
+    assert saved["storage"]["username"] == ""
+    assert saved["storage"]["password"] == ""
 
 
 def test_gen10_smart_storage_traversal_follows_controller_child_collections():
@@ -1440,6 +1473,8 @@ def test_plan_raid_layout_uses_displayed_discovery_artifact_and_saves_plan(clien
     monkeypatch.setattr(main.time, "strftime", fake_strftime)
     cfg = main.default_config()
     cfg["site"]["name"] = "Plan Kit"
+    cfg["ilo"]["target_ip"] = "10.10.8.80"
+    cfg["ip_plan"]["ilo"] = "10.10.8.80"
     cfg["ilo"]["current_ip"] = "10.10.8.80"
     cfg["ilo"]["host"] = "10.10.8.80"
     main.save_kit_config(cfg)
@@ -1475,9 +1510,51 @@ def test_plan_raid_layout_uses_displayed_discovery_artifact_and_saves_plan(clien
     assert "Not in the selected RAID 6 compatible media/protocol/capacity" in plan_text
 
 
+def test_plan_raid_layout_accepts_custom_drive_selection(client, monkeypatch):
+    def fake_strftime(fmt):
+        if fmt == "%Y%m%d-%H%M%S":
+            return "20260407-170100"
+        if fmt == "%Y-%m-%d %H:%M:%S":
+            return "2026-04-07 17:01:00"
+        raise AssertionError(f"unexpected strftime format: {fmt}")
+
+    monkeypatch.setattr(main.time, "strftime", fake_strftime)
+    cfg = main.default_config()
+    cfg["site"]["name"] = "Custom Plan Kit"
+    cfg["ilo"]["target_ip"] = "10.10.8.80"
+    cfg["ip_plan"]["ilo"] = "10.10.8.80"
+    cfg["ilo"]["current_ip"] = "10.10.8.80"
+    cfg["ilo"]["host"] = "10.10.8.80"
+    main.save_kit_config(cfg)
+    discovery = planner_discovery_with_mixed_drives()
+    export_paths = main.export_storage_discovery_snapshot(cfg, discovery, host="10.10.8.80")
+
+    response = client.post(
+        "/plan-raid-layout",
+        data={
+            "return_page": "storage",
+            "discovery_raw_path": str(export_paths["raw"]),
+            "os_bays": ["1", "2"],
+            "data_bays": ["4", "5", "6", "7"],
+            "hot_spare_bay": "8",
+        },
+    )
+
+    assert response.status_code == 200
+    assert "This plan was customized from the default drive selection." in response.text
+    plan_payload = yaml.safe_load((export_paths["directory"] / "raid-plan.yml").read_text(encoding="utf-8"))
+    plan = plan_payload["plan"]
+    assert plan["customization"]["active"] is True
+    assert plan["planned_layout"]["os_raid1"]["bays"] == "1, 2"
+    assert plan["planned_layout"]["data_raid6"]["bays"] == "4, 5, 6, 7"
+    assert plan["planned_layout"]["hot_spare"]["bay"] == "8"
+
+
 def test_approve_storage_plan_saves_exact_artifact_paths_for_later_ilo_run(client):
     cfg = main.default_config()
     cfg["site"]["name"] = "Approval Kit"
+    cfg["ilo"]["target_ip"] = "10.10.8.90"
+    cfg["ip_plan"]["ilo"] = "10.10.8.90"
     cfg["ilo"]["current_ip"] = "10.10.8.90"
     cfg["ilo"]["host"] = "10.10.8.90"
     main.save_kit_config(cfg)
@@ -2444,11 +2521,15 @@ def test_plan_raid_layout_rejects_discovery_from_different_host(client):
 
 def test_plan_raid_layout_blocks_when_storage_host_is_missing():
     cfg = main.default_config()
+    cfg["ilo"]["target_ip"] = ""
+    cfg["ip_plan"]["ilo"] = ""
+    cfg["ilo"]["current_ip"] = ""
+    cfg["ilo"]["host"] = ""
     resolved = main.resolve_storage_target_host(cfg)
 
     assert resolved["valid"] is False
     assert resolved["source"] == ""
-    assert "current kit iLO IP/host" in resolved["error"]
+    assert "planned iLO IP" in resolved["error"]
 
 
 def test_apply_storage_layout_blocks_create_only_when_not_ready(client, monkeypatch):
@@ -3142,7 +3223,25 @@ def test_dashboard_shows_recommended_next_step_and_workflow_cards(client):
     assert "Dashboard" in response.text
     assert "Start with one step" in response.text
     assert "Open run history" in response.text
-    assert "What happened last" in response.text
+    assert "Kit files" in response.text
+    assert "Open a previous kit config" in response.text
+    assert "Per-kit deployment dashboard for offline builds." in response.text
+    assert "Last update" in response.text
+    assert "What happened last" not in response.text
+
+
+def test_reports_page_hides_live_jobs_and_config_capture_blocks(client):
+    cfg = main.default_config()
+    cfg["site"]["name"] = "Reports Kit"
+    main.save_kit_config(cfg)
+
+    response = client.get("/configs")
+
+    assert response.status_code == 200
+    assert "Reports & technical details" in response.text
+    assert "Live job and logs" not in response.text
+    assert "Capture current iLO" not in response.text
+    assert "Saved intended config" not in response.text
 
 
 def test_report_center_lists_storage_reports_and_view_report(client):
@@ -3158,7 +3257,6 @@ def test_report_center_lists_storage_reports_and_view_report(client):
     response = client.get("/configs?report_type=storage")
 
     assert response.status_code == 200
-    assert "Live job and logs" in response.text
     assert "Recent history" in response.text
     assert "Run bundles" in response.text
     assert "Search reports" in response.text

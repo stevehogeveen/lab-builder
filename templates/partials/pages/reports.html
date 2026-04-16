@@ -10,12 +10,7 @@
             </div>
         </div>
 
-        <div class="grid grid-cols-1 md:grid-cols-3 gap-3">
-            <div class="card">
-                <div class="text-xs font-bold uppercase text-slate-400 mb-1">Live job status</div>
-                <div class="text-lg font-semibold">{{ job.get('status', 'Idle') }}</div>
-                <div class="text-sm text-slate-400 mt-1">{{ job.get('current_stage', 'Nothing is running right now.') }}</div>
-            </div>
+        <div class="grid grid-cols-1 md:grid-cols-2 gap-3">
             <div class="card">
                 <div class="text-xs font-bold uppercase text-slate-400 mb-1">Current kit</div>
                 <div class="text-lg font-semibold">{{ current_kit }}</div>
@@ -29,37 +24,7 @@
         </div>
     </section>
 
-    <section class="grid grid-cols-1 xl:grid-cols-2 gap-6">
-        <section class="panel">
-            <div class="flex items-center justify-between gap-3 mb-4">
-                <div>
-                    <div class="text-lg font-semibold">Live job and logs</div>
-                    <div class="text-sm text-slate-400">Use this when you need the technical detail behind the current or most recent run.</div>
-                </div>
-                <span class="status {{ 'progress' if job.get('status') not in ['Idle', 'Complete', 'Preview complete', 'Completed'] else 'ready' }}">{{ job.get('status', 'Idle') }}</span>
-            </div>
-            <div class="space-y-3 text-sm">
-                <div class="result" style="margin-top: 0;">
-                    <div><strong>Mode:</strong> {{ job.get('execution_mode_label') or job.get('execution_mode') or 'Not recorded' }}</div>
-                    <div><strong>Current step:</strong> {{ job.get('current_stage') or 'Not recorded' }}</div>
-                    <div><strong>Progress:</strong> {{ job.get('progress_percent', 0) }}%</div>
-                    <div><strong>Completed:</strong> {{ job.get('completed_steps', 0) }} / {{ job.get('total_steps', 0) }}</div>
-                </div>
-                <div class="progress-shell">
-                    <div class="progress-bar" style="width: {{ job.get('progress_percent', 0) }}%;"></div>
-                </div>
-            </div>
-            <details class="mt-4">
-                <summary class="summary-row">
-                    <span class="text-sm font-bold text-slate-300">Open live job log</span>
-                    <span class="status progress">log</span>
-                </summary>
-                <div class="codeblock mt-4">{% if job.get('logs') %}{% for line in job.get('logs', []) %}{{ line }}
-{% endfor %}{% else %}No live job log is available right now.{% endif %}</div>
-            </details>
-        </section>
-
-        <section class="panel">
+    <section class="panel">
             <div class="flex items-center justify-between gap-3 mb-4">
                 <div>
                     <div class="text-lg font-semibold">Recent history</div>
@@ -83,7 +48,6 @@
             {% else %}
             <div class="result">No history is available for this kit yet.</div>
             {% endif %}
-        </section>
     </section>
 
     {% if execution_preview or (config_view_title and config_view_content) %}
@@ -226,70 +190,4 @@
         {% endif %}
     </section>
 
-    <section class="grid grid-cols-1 xl:grid-cols-2 gap-6">
-        <div class="panel">
-            <div class="text-lg font-semibold mb-3">Capture current iLO</div>
-            <div class="text-sm text-slate-400 mb-3">Use this when you want a fresh live snapshot before a review or change.</div>
-            <form hx-post="/export-ilo-inventory" hx-target="#main-content" hx-swap="outerHTML" data-live-inventory-action data-live-inventory-start="Connecting to iLO" data-live-inventory-progress="Reading Redfish inventory" data-live-inventory-saving="Saving summary and raw files">
-                <input type="hidden" name="return_page" value="configs">
-                <div class="actions">
-                    <button class="btn btn-primary" type="submit">Capture current iLO</button>
-                </div>
-            </form>
-            <div class="actions mt-3">
-                <form hx-post="/view-latest-live-summary" hx-target="#main-content" hx-swap="outerHTML">
-                    <input type="hidden" name="return_page" value="configs">
-                    <button class="btn" type="submit">View latest summary</button>
-                </form>
-                <form action="/download-latest-live-summary" method="post">
-                    <button class="btn" type="submit">Download latest summary</button>
-                </form>
-                <form action="/download-latest-live-raw" method="post">
-                    <button class="btn" type="submit">Download latest raw JSON</button>
-                </form>
-            </div>
-            <div id="live-inventory-status" class="result mt-4" role="status" aria-live="polite">
-                <div class="font-semibold">{{ live_inventory_status.title if live_inventory_status else "Idle" }}</div>
-                <div class="text-sm mt-2">
-                    {% if live_inventory_status and live_inventory_status.details %}
-                        {% for detail in live_inventory_status.details %}
-                        <div>{{ detail }}</div>
-                        {% endfor %}
-                    {% else %}
-                        <div>No live inventory action is running.</div>
-                    {% endif %}
-                </div>
-            </div>
-        </div>
-
-        <div class="panel">
-            <div class="text-lg font-semibold mb-3">Saved intended config</div>
-            <div class="text-sm text-slate-400 mb-3">Open the current saved kit config, download it for handoff, or load a saved config back into the app.</div>
-            <div class="grid grid-cols-1 md:grid-cols-2 gap-3">
-                <form hx-post="/view-current-kit-config" hx-target="#main-content" hx-swap="outerHTML">
-                    <input type="hidden" name="return_page" value="configs">
-                    <button class="btn w-full" type="submit">View kit config</button>
-                </form>
-                <form action="/download-current-kit-config" method="post">
-                    <button class="btn w-full" type="submit">Download kit config</button>
-                </form>
-                <form hx-post="/view-ilo-config-snapshot" hx-target="#main-content" hx-swap="outerHTML">
-                    <input type="hidden" name="return_page" value="configs">
-                    <button class="btn w-full" type="submit">View iLO snapshot</button>
-                </form>
-                <form action="/download-ilo-config-snapshot" method="post">
-                    <button class="btn w-full" type="submit">Download iLO snapshot</button>
-                </form>
-            </div>
-            <form action="/import-kit-config" method="post" enctype="multipart/form-data" class="mt-4 space-y-3">
-                <input type="hidden" name="return_page" value="configs">
-                <label>
-                    <div class="text-sm text-slate-300 mb-1">Load a saved kit config</div>
-                    <input class="input" type="file" name="import_file" accept=".yml,.yaml,.json" required>
-                </label>
-                <button class="btn btn-primary" type="submit">Import config into app</button>
-            </form>
-            <div class="text-sm text-slate-400 mt-3">Imported configs become the current kit in the app, and a copy is saved into the current build folder for this kit.</div>
-        </div>
-    </section>
 </section>

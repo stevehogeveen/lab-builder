@@ -31,7 +31,7 @@
     </section>
 
     <section class="card">
-        <div class="text-lg font-semibold mb-2">What happened last</div>
+        <div class="text-lg font-semibold mb-2">Last update</div>
         {% if activity_feed %}
         <div class="text-sm">{{ activity_feed[0].summary }}</div>
         <div class="text-xs text-slate-400 mt-2">{{ activity_feed[0].time }}{% if activity_feed[0].target %} | {{ activity_feed[0].target }}{% endif %}</div>
@@ -42,5 +42,27 @@
             <a class="btn" href="/history">Open run history</a>
             <a class="btn" href="/configs">Open reports & technical details</a>
         </div>
+    </section>
+
+    <section class="card">
+        <div class="text-lg font-semibold mb-2">Kit files</div>
+        <div class="text-sm text-slate-400 mb-4">Open the saved kit config, download it, or load a previous one back into the app.</div>
+        <div class="grid grid-cols-1 md:grid-cols-2 gap-3">
+            <form hx-post="/view-current-kit-config" hx-target="#main-content" hx-swap="outerHTML">
+                <input type="hidden" name="return_page" value="dashboard">
+                <button class="btn w-full" type="submit">Open current kit config</button>
+            </form>
+            <form action="/download-current-kit-config" method="post">
+                <button class="btn w-full" type="submit">Download current kit config</button>
+            </form>
+        </div>
+        <form action="/import-kit-config" method="post" enctype="multipart/form-data" class="mt-4 space-y-3">
+            <input type="hidden" name="return_page" value="dashboard">
+            <label>
+                <div class="text-sm text-slate-300 mb-1">Open a previous kit config</div>
+                <input class="input" type="file" name="import_file" accept=".yml,.yaml,.json" required>
+            </label>
+            <button class="btn btn-primary" type="submit">Load kit config into app</button>
+        </form>
     </section>
 </section>

@@ -5,15 +5,16 @@
         {% set storage_review = storage_review or {} %}
         {% set storage_target = storage_target or {} %}
         {% set storage_credentials = storage_credentials or {} %}
+        {% set storage_plan_defaults = storage_plan_defaults or storage_plan or {} %}
         <div class="card" id="storage-review-start">
             <div class="text-lg font-semibold mb-2">Target server</div>
-            <div class="text-sm text-slate-400 mb-3">The current iLO address is used by default unless you change it here.</div>
+            <div class="text-sm text-slate-400 mb-3">Storage setup uses the final iLO address from the iLO page by default. You can temporarily replace it here if needed.</div>
             <form hx-post="/save-storage-target" hx-target="#main-content" hx-swap="outerHTML" data-action-title="Saving storage target" data-action-start="Saving the storage target and sign-in details.">
                 <input type="hidden" name="return_page" value="storage">
                 <div class="grid grid-cols-1 md:grid-cols-3 gap-3">
                     <label>
                         <div class="text-sm text-slate-300 mb-1">Server address</div>
-                        <input class="input" type="text" name="storage_target_host" value="{{ cfg.storage.target_host_override or '' }}" placeholder="{{ cfg.ilo.current_ip or cfg.ilo.host or 'Use current iLO address' }}">
+                        <input class="input" type="text" name="storage_target_host" value="{{ cfg.storage.target_host_override or '' }}" placeholder="{{ cfg.ilo.target_ip or cfg.ip_plan.ilo or cfg.ilo.current_ip or cfg.ilo.host or 'Use planned iLO address' }}">
                     </label>
                     <label>
                         <div class="text-sm text-slate-300 mb-1">Username</div>
@@ -25,15 +26,30 @@
                     </label>
                 </div>
                 <div class="actions mt-3">
-                    <button class="btn btn-primary action-button" type="submit">Save target</button>
+                    <button class="btn btn-primary action-button" type="submit" name="storage_target_mode" value="override">Use entered IP</button>
+                    <button class="btn action-button" type="submit" name="storage_target_mode" value="defaults">Use iLO defaults</button>
                 </div>
             </form>
             {% if not storage_target.valid %}
             <div class="text-sm text-amber-300 mt-3">{{ storage_target.error }}</div>
             {% elif not storage_credentials.valid %}
             <div class="text-sm text-amber-300 mt-3">{{ storage_credentials.error }}</div>
+            {% else %}
+            <div class="text-xs text-slate-400 mt-3">Using {{ storage_target.resolved }} with {{ storage_credentials.username or 'saved iLO sign-in' }}.</div>
             {% endif %}
         </div>
+        {% if storage_target.valid and storage_credentials.valid and not storage_discovery and not storage_export_paths %}
+        <form
+            id="storage-autoload-form"
+            hx-post="/read-current-storage"
+            hx-target="#main-content"
+            hx-swap="outerHTML"
+            hx-trigger="load"
+            style="display: none;"
+        >
+            <input type="hidden" name="return_page" value="storage">
+        </form>
+        {% endif %}
         {% if storage_apply_paths %}
         {% set workflow = storage_workflow_state or {} %}
         {% set apply_state = workflow.get('apply', {}) %}
@@ -103,35 +119,144 @@
         {% endif %}
 
         <div class="card">
-            <div class="text-lg font-semibold mb-3">Read current storage</div>
-            <div class="text-sm text-slate-400 mb-3">Read what is on the server. This only gathers the information needed for the next step.</div>
-
-            <form id="read-current-storage-form" hx-post="/read-current-storage" hx-target="#main-content" hx-swap="outerHTML" hx-indicator="#read-storage-progress" data-action-title="Reading current storage" data-action-start="Connecting to iLO and reading the current storage layout." data-action-complete="Current storage read complete.">
-                <input type="hidden" name="return_page" value="storage">
-                <div class="actions">
-                    <button class="btn btn-primary action-button" type="submit" {% if not storage_target.valid or not storage_credentials.valid %}disabled{% endif %} style="{% if storage_target.valid and storage_credentials.valid %}border-color: color-mix(in srgb, var(--ok) 35%, var(--border));{% else %}opacity: 0.55; cursor: not-allowed;{% endif %}">Read current storage</button>
+            <div class="text-lg font-semibold mb-3">Current storage setup</div>
+            <div class="text-sm text-slate-400 mb-3">This shows the current controller, volumes, and drives that the next plan will use.</div>
+            {% if not storage_target.valid %}
+            <div class="text-sm text-amber-300">Current storage cannot be loaded yet because the target server is not set.</div>
+            {% elif not storage_credentials.valid %}
+            <div class="text-sm text-amber-300">Current storage cannot be loaded yet because the storage sign-in details are incomplete.</div>
+            {% elif not storage_discovery %}
+            <div id="read-storage-progress" class="result" style="margin-top: 0;">
+                Loading the current storage setup from the server.
+                <div class="progress-shell">
+                    <div class="progress-bar" style="width: 100%;"></div>
                 </div>
-                {% if not storage_target.valid %}
-                <div class="text-sm text-amber-300 mt-2">Disabled because the target server is not set yet.</div>
-                {% elif not storage_credentials.valid %}
-                <div class="text-sm text-amber-300 mt-2">Disabled because the storage sign-in details are incomplete.</div>
+            </div>
+            {% endif %}
+            {% if storage_discovery %}
+            {% set hpe = storage_discovery.hpe_smart_storage or {} %}
+            {% set standard = storage_discovery.standard_redfish_storage or {} %}
+            {% set controller = (hpe.controllers or standard.controllers or [])[0] if (hpe.controllers or standard.controllers) else {} %}
+            {% set volumes = (hpe.volumes or []) + (standard.volumes or []) %}
+            {% set drives = storage_planning_drives or [] %}
+            <div class="mt-4 space-y-4">
+                <div class="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-3 text-sm">
+                    <div><span class="text-slate-400">Controller:</span> {{ controller.name or controller.model or "Not found" }}</div>
+                    <div><span class="text-slate-400">Firmware:</span> {{ controller.firmware_version or "Unknown" }}</div>
+                    <div><span class="text-slate-400">Current volumes:</span> {{ volumes|length }}</div>
+                    <div><span class="text-slate-400">Usable drives:</span> {{ drives|selectattr('eligible')|list|length }} / {{ drives|length }}</div>
+                </div>
+                {% if volumes %}
+                <div>
+                    <div class="text-sm font-semibold mb-2">Current volumes</div>
+                    <table class="table">
+                        <thead><tr><th>Name</th><th>RAID</th><th>Capacity GiB</th><th>Status</th></tr></thead>
+                        <tbody>
+                        {% for volume in volumes %}
+                            <tr>
+                                <td>{{ volume.name or volume.id }}</td>
+                                <td>{{ volume.raid_type or "Unknown" }}</td>
+                                <td>{{ volume.capacity_gib or "" }}</td>
+                                <td>{{ volume.status or "" }}</td>
+                            </tr>
+                        {% endfor %}
+                        </tbody>
+                    </table>
+                </div>
                 {% endif %}
-                <div id="read-storage-progress" class="htmx-indicator result mt-3">
-                    Checking current storage on the server. This can take a little while on real hardware.
-                    <div class="progress-shell">
-                        <div class="progress-bar" style="width: 100%;"></div>
-                    </div>
+                {% if drives %}
+                <div>
+                    <div class="text-sm font-semibold mb-2">Drives you can plan with</div>
+                    <table class="table">
+                        <thead><tr><th>Bay</th><th>Model</th><th>Size GiB</th><th>Media</th><th>Status</th></tr></thead>
+                        <tbody>
+                        {% for drive in drives %}
+                            <tr>
+                                <td>{{ drive.bay }}</td>
+                                <td>{{ drive.model or drive.name }}</td>
+                                <td>{{ drive.size_gib|round|int }}</td>
+                                <td>{{ drive.media_type }}</td>
+                                <td>{% if drive.eligible %}Ready{% else %}Skip: {{ drive.status or "Not usable" }}{% endif %}</td>
+                            </tr>
+                        {% endfor %}
+                        </tbody>
+                    </table>
                 </div>
-            </form>
+                {% endif %}
+                <div class="actions">
+                    <button
+                        class="btn"
+                        type="button"
+                        onclick="(function(){ const details = document.getElementById('storage-technical-details'); if (!details) return; details.open = true; details.scrollIntoView({ behavior: 'smooth', block: 'start' }); })();"
+                    >
+                        See detailed storage information
+                    </button>
+                </div>
+            </div>
+            {% endif %}
         </div>
 
         {% if storage_export_paths %}
         <div class="card" id="build-storage-plan">
             <div class="text-lg font-semibold mb-3">Build storage plan</div>
-            <div class="text-sm text-slate-400 mb-3">Build the new layout from the latest storage read. This is still read-only.</div>
+            <div class="text-sm text-slate-400 mb-3">Start with the default layout below, then change the drive choices if you want a different setup. This is still read-only.</div>
             <form hx-post="/plan-raid-layout" hx-target="#main-content" hx-swap="outerHTML" data-action-title="Building storage plan" data-action-start="Reviewing the latest discovery and building a proposed layout." data-action-complete="Storage plan ready for review.">
                 <input type="hidden" name="return_page" value="storage">
                 <input type="hidden" name="discovery_raw_path" value="{{ storage_export_paths.raw }}">
+                {% set planning_drives = storage_planning_drives or [] %}
+                {% set selected_os_bays = storage_plan_defaults.customization.selected_os_bays if storage_plan_defaults and storage_plan_defaults.customization else [] %}
+                {% set selected_data_bays = storage_plan_defaults.customization.selected_data_bays if storage_plan_defaults and storage_plan_defaults.customization else [] %}
+                {% set selected_hot_spare_bay = storage_plan_defaults.customization.selected_hot_spare_bay if storage_plan_defaults and storage_plan_defaults.customization else '' %}
+                {% if not selected_os_bays and storage_plan_defaults %}
+                    {% set selected_os_bays = storage_plan_defaults.os_raid1.drives | map(attribute='bay') | list %}
+                {% endif %}
+                {% if not selected_data_bays and storage_plan_defaults %}
+                    {% set selected_data_bays = storage_plan_defaults.data_raid6.drives | map(attribute='bay') | list %}
+                {% endif %}
+                {% if not selected_hot_spare_bay and storage_plan_defaults and storage_plan_defaults.hot_spare.drive %}
+                    {% set selected_hot_spare_bay = storage_plan_defaults.hot_spare.drive.bay %}
+                {% endif %}
+                {% if planning_drives %}
+                <div class="grid grid-cols-1 xl:grid-cols-3 gap-4 mb-4">
+                    <div class="card">
+                        <div class="text-sm font-semibold mb-2">OS mirror drives</div>
+                        <div class="text-xs text-slate-400 mb-3">Choose exactly two drives for the OS RAID 1 pair.</div>
+                        <div class="space-y-2">
+                            {% for drive in planning_drives if drive.eligible %}
+                            <label class="check">
+                                <input type="checkbox" name="os_bays" value="{{ drive.bay }}" {% if drive.bay in selected_os_bays %}checked{% endif %}>
+                                <span>Bay {{ drive.bay }} | {{ drive.model or drive.name }} | {{ drive.size_gib|round|int }} GiB</span>
+                            </label>
+                            {% endfor %}
+                        </div>
+                    </div>
+                    <div class="card">
+                        <div class="text-sm font-semibold mb-2">Data array drives</div>
+                        <div class="text-xs text-slate-400 mb-3">Choose four or more matching drives for the data array.</div>
+                        <div class="space-y-2">
+                            {% for drive in planning_drives if drive.eligible %}
+                            <label class="check">
+                                <input type="checkbox" name="data_bays" value="{{ drive.bay }}" {% if drive.bay in selected_data_bays %}checked{% endif %}>
+                                <span>Bay {{ drive.bay }} | {{ drive.model or drive.name }} | {{ drive.size_gib|round|int }} GiB</span>
+                            </label>
+                            {% endfor %}
+                        </div>
+                    </div>
+                    <div class="card">
+                        <div class="text-sm font-semibold mb-2">Hot spare</div>
+                        <div class="text-xs text-slate-400 mb-3">Choose one spare drive for the data array.</div>
+                        <label>
+                            <div class="text-sm text-slate-300 mb-1">Spare bay</div>
+                            <select class="input" name="hot_spare_bay">
+                                <option value="">Use the default spare choice</option>
+                                {% for drive in planning_drives if drive.eligible %}
+                                <option value="{{ drive.bay }}" {% if drive.bay == selected_hot_spare_bay %}selected{% endif %}>Bay {{ drive.bay }} | {{ drive.model or drive.name }} | {{ drive.size_gib|round|int }} GiB</option>
+                                {% endfor %}
+                            </select>
+                        </label>
+                    </div>
+                </div>
+                {% endif %}
                 <div class="actions">
                     <button class="btn btn-primary action-button" type="submit" {% if not storage_target.valid %}disabled{% endif %} style="{% if storage_target.valid %}border-color: color-mix(in srgb, var(--ok) 35%, var(--border));{% else %}opacity: 0.55; cursor: not-allowed;{% endif %}">Build storage plan</button>
                 </div>
@@ -220,7 +345,7 @@
             </div>
         </div>
 
-        <details class="card">
+        <details class="card" id="storage-technical-details">
             <summary class="summary-row">
                 <span class="text-lg font-semibold">View details</span>
                 <span class="status progress">details</span>
@@ -568,18 +693,5 @@
 (function () {
     if (!window.bindStorageProgressCard) return;
     window.bindStorageProgressCard({ kitName: {{ current_kit|tojson }} });
-})();
-
-(function () {
-    const form = document.getElementById("read-current-storage-form");
-    const progress = document.getElementById("read-storage-progress");
-    if (!form || !progress || !window.document.body) return;
-
-    document.body.addEventListener("htmx:beforeRequest", function (event) {
-        if (event.target !== form) return;
-        window.setTimeout(function () {
-            progress.scrollIntoView({ behavior: "smooth", block: "center" });
-        }, 40);
-    });
 })();
 </script>
