@@ -1778,6 +1778,172 @@ def test_execute_real_scope_starts_existing_ilo_path(client, monkeypatch):
     assert started["started"] is True
 
 
+def test_execute_real_scope_starts_esxi_path(client, monkeypatch):
+    cfg = main.default_config()
+    cfg["site"]["name"] = "Real ESXi Execute Kit"
+    cfg["ilo"]["current_ip"] = "10.10.8.90"
+    cfg["ilo"]["host"] = "10.10.8.90"
+    cfg["ilo"]["username"] = "Administrator"
+    cfg["ilo"]["password"] = "secret"
+    cfg["esxi"]["hostname"] = "esxi-lab"
+    cfg["esxi"]["root_password"] = "esxisecret"
+    cfg["included"]["esxi"] = True
+    main.save_kit_config(cfg)
+
+    started: dict[str, object] = {}
+
+    class FakeThread:
+        def __init__(self, target=None, args=(), daemon=None):
+            started["target"] = target
+            started["args"] = args
+            started["daemon"] = daemon
+
+        def start(self):
+            started["started"] = True
+
+    monkeypatch.setattr(main.threading, "Thread", FakeThread)
+
+    response = client.post(
+        "/execute",
+        data={
+            "scope": "esxi",
+            "confirm_checkbox": "on",
+            "confirm_phrase": "EXECUTE",
+            "return_page": "execution",
+        },
+    )
+
+    assert response.status_code == 200
+    assert "Real ESXi automation started in the background. Check Job Monitor for live progress and logs." in response.text
+    assert started["target"] is main.execute_real_job_in_background
+    assert started["args"][1] == "esxi"
+    assert started["daemon"] is True
+    assert started["started"] is True
+
+
+def test_run_esxi_real_builds_iso_and_starts_virtual_media_boot(monkeypatch, tmp_path):
+    cfg = main.default_config()
+    cfg["site"]["name"] = "Real ESXi Run Kit"
+    cfg["ilo"]["current_ip"] = "10.10.8.90"
+    cfg["ilo"]["host"] = "10.10.8.90"
+    cfg["ilo"]["username"] = "Administrator"
+    cfg["ilo"]["password"] = "secret"
+    cfg["esxi"]["hostname"] = "esxi-lab"
+    cfg["esxi"]["management_ip"] = "10.10.8.10"
+    cfg["esxi"]["subnet_mask"] = "255.255.255.0"
+    cfg["esxi"]["gateway"] = "10.10.8.1"
+    cfg["esxi"]["dns_servers"] = ["1.1.1.1", ""]
+    cfg["esxi"]["root_password"] = "esxisecret"
+
+    built_iso = tmp_path / "esxi-20260416-120000.iso"
+    built_iso.write_text("iso", encoding="utf-8")
+    built: dict[str, object] = {}
+
+    def fake_build_custom_iso(spec):
+        built["spec"] = spec
+        return built_iso
+
+    class FakeEsxiILOClient:
+        def __init__(self, cfg):
+            self.cfg = cfg
+            self.power_state = "On"
+            self.virtual_media = {
+                "@odata.id": "/redfish/v1/Managers/1/VirtualMedia/2",
+                "Inserted": True,
+                "Image": "http://old.example/old.iso",
+                "MediaTypes": ["CD", "DVD"],
+                "Actions": {
+                    "#VirtualMedia.InsertMedia": {"target": "/redfish/v1/Managers/1/VirtualMedia/2/Actions/VirtualMedia.InsertMedia"},
+                },
+            }
+            self.calls = []
+
+        def get_virtual_media(self):
+            return [dict(self.virtual_media)]
+
+        def eject_virtual_media(self, vm_path):
+            self.calls.append(("eject", vm_path))
+            self.virtual_media["Inserted"] = False
+            self.virtual_media["Image"] = ""
+
+        def get_systems(self):
+            return ["/redfish/v1/Systems/1"]
+
+        def get_system(self, system_path):
+            assert system_path == "/redfish/v1/Systems/1"
+            return {"PowerState": self.power_state}
+
+        def power_reset(self, reset_type="ForceRestart", system_path=None):
+            self.calls.append(("power_reset", reset_type, system_path))
+            if reset_type in {"GracefulShutdown", "ForceOff"}:
+                self.power_state = "Off"
+            elif reset_type == "On":
+                self.power_state = "On"
+            return {"reset_type": reset_type, "system_path": system_path}
+
+        def _post(self, target, payload):
+            self.calls.append(("post", target, payload))
+            if target.endswith("VirtualMedia.InsertMedia"):
+                self.virtual_media["Inserted"] = True
+                self.virtual_media["Image"] = payload["Image"]
+
+        def set_one_time_boot_cd(self, system_path=None):
+            self.calls.append(("set_one_time_boot_cd", system_path))
+
+    created_clients = []
+
+    def build_client(cfg_obj):
+        client = FakeEsxiILOClient(cfg_obj)
+        created_clients.append(client)
+        return client
+
+    monkeypatch.setattr(main, "build_custom_iso", fake_build_custom_iso)
+    monkeypatch.setattr(main, "resolve_esxi_base_iso_path", lambda cfg_obj: main.Path("/tmp/base-esxi.iso"))
+    monkeypatch.setattr(main, "detect_public_base_url", lambda target_host="": "http://lab-builder.local:8000")
+    monkeypatch.setattr(main, "ILOClient", build_client)
+
+    main.run_esxi_real(cfg)
+
+    job = main.load_job("Real ESXi Run Kit")
+    joined_logs = "\n".join(job["logs"])
+    client = created_clients[0]
+    spec = built["spec"]
+
+    assert "[RUNNING] Building custom ESXi ISO" in joined_logs
+    assert f"[OK] Built ESXi ISO: {built_iso}" in joined_logs
+    assert "[RUNNING] Ejecting previous virtual media" in joined_logs
+    assert "[RUNNING] Powering server off before setting one-time boot" in joined_logs
+    assert "[OK] Server is off" in joined_logs
+    assert "[RUNNING] Mounting custom ESXi ISO" in joined_logs
+    assert "[OK] Virtual media mounted" in joined_logs
+    assert "[RUNNING] Setting one-time boot to virtual media" in joined_logs
+    assert "[OK] One-time boot set" in joined_logs
+    assert "[RUNNING] Powering server on" in joined_logs
+    assert "[OK] ESXi boot sequence started" in joined_logs
+    assert job["status"] == "Completed"
+    assert job["esxi_iso_path"] == str(built_iso)
+    assert job["esxi_iso_url"].endswith("/esxi-built-iso/Real-ESXi-Run-Kit/esxi-20260416-120000.iso")
+    assert spec.hostname == "esxi-lab"
+    assert spec.management_ip == "10.10.8.10"
+    assert spec.subnet_mask == "255.255.255.0"
+    assert spec.gateway == "10.10.8.1"
+    assert spec.dns_servers == ["1.1.1.1"]
+    assert spec.root_password == "esxisecret"
+    assert ("eject", "/redfish/v1/Managers/1/VirtualMedia/2") in client.calls
+    assert ("power_reset", "GracefulShutdown", "/redfish/v1/Systems/1") in client.calls
+    assert (
+        "post",
+        "/redfish/v1/Managers/1/VirtualMedia/2/Actions/VirtualMedia.InsertMedia",
+        {
+            "Image": "http://lab-builder.local:8000/esxi-built-iso/Real-ESXi-Run-Kit/esxi-20260416-120000.iso",
+            "Inserted": True,
+            "WriteProtected": True,
+        },
+    ) in client.calls
+    assert ("set_one_time_boot_cd", "/redfish/v1/Systems/1") in client.calls
+    assert ("power_reset", "On", "/redfish/v1/Systems/1") in client.calls
+
+
 def test_run_ilo_real_executes_storage_when_included(monkeypatch):
     cfg = main.default_config()
     cfg["site"]["name"] = "Real Storage Review Kit"
@@ -1829,20 +1995,42 @@ def test_run_ilo_real_executes_storage_when_included(monkeypatch):
 
         def set_dns_servers_best_effort(self, dns_servers):
             self.dns_calls.append(list(dns_servers))
-            return {"applied_keys": ["NameServers"], "before_static": ["8.8.8.8"], "after_static": dns_servers}
+            return {
+                "applied_keys": ["NameServers"],
+                "before_static": ["8.8.8.8"],
+                "before_names": ["8.8.8.8"],
+                "after_static": dns_servers,
+                "after_names": dns_servers,
+                "requested": dns_servers,
+                "verified": True,
+                "verified_field": "StaticNameServers",
+                "status": "Verified",
+                "details": "Requested DNS values matched StaticNameServers after the write.",
+            }
 
         def disable_ipv6_best_effort(self):
             return {"method": "patch", "path": "/redfish/v1/Managers/1/EthernetInterfaces/1"}
 
         def harden_snmp_best_effort(self, **kwargs):
             self.snmp_calls.append(dict(kwargs))
-            return {"applied_keys": ["SNMP.ProtocolEnabled", "SNMPv3RequestsEnabled"]}
+            return {
+                "applied_keys": ["SNMP.ProtocolEnabled", "SNMPv3RequestsEnabled"],
+                "verification": {
+                    "checks": [
+                        {"label": "protocol_enabled", "requested": True, "actual": True, "matched": True},
+                        {"label": "username", "requested": kwargs["v3_username"], "actual": kwargs["v3_username"], "matched": True},
+                    ]
+                },
+                "verified": True,
+                "status": "Verified",
+                "details": "Requested SNMP values were verified after the write.",
+            }
 
         def get_storage_discovery(self, deep_smart_storage_scan=False):
             del deep_smart_storage_scan
             return self.discovery
 
-        def manager_reset_best_effort(self):
+        def reset_ilo(self):
             self.manager_reset_calls.append({"reset_type": "GracefulRestart"})
             return {"path": "/redfish/v1/Managers/1/Actions/Manager.Reset", "reset_type": "GracefulRestart"}
 
@@ -1877,19 +2065,21 @@ def test_run_ilo_real_executes_storage_when_included(monkeypatch):
     assert "Storage stage finished in the real run" in joined_logs
     assert "Storage server reboot status=Completed" in joined_logs or "after the storage server reboot completed" in joined_logs
     assert "DNS apply attempt" in joined_logs
-    assert "DNS apply success" in joined_logs
+    assert "DNS verified" in joined_logs
     assert "SNMP apply attempt" in joined_logs
-    assert "SNMP apply success" in joined_logs
+    assert "SNMP verified" in joined_logs
     assert "iLO reset requested" in joined_logs
     assert "iLO reset completed" in joined_logs
     assert "auth_password=set | priv_password=set" in joined_logs
     assert job["storage_run_directory"]
-    assert job["dns_apply_status"] == "Applied"
+    assert job["dns_apply_status"] == "Verified"
     assert job["dns_applied_values"] == ["1.1.1.1"]
-    assert job["snmp_apply_status"] == "Applied"
+    assert job["dns_before_values"] == ["8.8.8.8"]
+    assert job["snmp_apply_status"] == "Verified"
     assert job["snmp_username"] == "snmpuser"
     assert job["snmp_auth_secret_present"] is True
     assert job["snmp_priv_secret_present"] is True
+    assert job["snmp_verified_checks"]
     assert job["storage_server_reboot_status"] == "Completed"
     assert job["ilo_reset_status"] == "Completed"
     assert client.dns_calls == [["1.1.1.1"]]
@@ -1901,6 +2091,61 @@ def test_run_ilo_real_executes_storage_when_included(monkeypatch):
         "v3_priv_password": "privpass",
     }]
     assert client.manager_reset_calls == [{"reset_type": "GracefulRestart"}]
+
+
+def test_set_dns_servers_best_effort_reports_verified_readback(monkeypatch):
+    client = ILOClient(ILOConfig(host="10.0.0.1", username="Administrator", password="secret"))
+    state = {
+        "@odata.id": "/redfish/v1/Managers/1/EthernetInterfaces/1",
+        "StaticNameServers": ["8.8.8.8"],
+        "NameServers": ["8.8.8.8"],
+    }
+
+    monkeypatch.setattr(client, "get_active_manager_interface", lambda: dict(state))
+    monkeypatch.setattr(client, "_patch", lambda path, payload: state.update(payload))
+    monkeypatch.setattr(client, "_get", lambda path: dict(state))
+
+    result = client.set_dns_servers_best_effort(["1.1.1.1"])
+
+    assert result["status"] == "Verified"
+    assert result["verified"] is True
+    assert result["after_static"] == ["1.1.1.1"]
+
+
+def test_harden_snmp_best_effort_reports_mismatch_when_readback_differs(monkeypatch):
+    client = ILOClient(ILOConfig(host="10.0.0.1", username="Administrator", password="secret"))
+    before = {
+        "SNMP": {
+            "ProtocolEnabled": False,
+            "SNMPv3Username": "olduser",
+            "SNMPv3AuthProtocol": "MD5",
+            "SNMPv3PrivacyProtocol": "DES",
+        }
+    }
+    after = {
+        "SNMP": {
+            "ProtocolEnabled": True,
+            "SNMPv3Username": "olduser",
+            "SNMPv3AuthProtocol": "MD5",
+            "SNMPv3PrivacyProtocol": "DES",
+        }
+    }
+
+    monkeypatch.setattr(client, "get_network_protocol", lambda: ("/redfish/v1/Managers/1/NetworkProtocol", dict(before)))
+    monkeypatch.setattr(client, "_patch", lambda path, payload: None)
+    monkeypatch.setattr(client, "_get", lambda path: dict(after))
+
+    result = client.harden_snmp_best_effort(
+        v3_username="newuser",
+        v3_auth_protocol="SHA",
+        v3_auth_password="authpass",
+        v3_priv_protocol="AES",
+        v3_priv_password="privpass",
+    )
+
+    assert result["status"] == "Mismatch"
+    assert result["verified"] is False
+    assert result["verification"]["mismatches"]
 
 
 def test_prepare_execute_shows_storage_will_be_applied_in_real_run(client):
@@ -1963,7 +2208,7 @@ def test_ilo_page_shows_last_run_dns_snmp_and_reset_states(client, monkeypatch):
                 "snmp_priv_protocol": "AES",
                 "snmp_auth_secret_present": True,
                 "snmp_priv_secret_present": True,
-                "snmp_apply_status": "Applied",
+                "snmp_apply_status": "Verified",
                 "storage_server_reboot_status": "Completed",
                 "ilo_reset_status": "Not requested separately",
             },
@@ -1973,16 +2218,8 @@ def test_ilo_page_shows_last_run_dns_snmp_and_reset_states(client, monkeypatch):
     response = client.get("/ilo")
 
     assert response.status_code == 200
-    assert "Last run result" in response.text
-    assert "DNS result:" in response.text
-    assert "Applied DNS:" in response.text
-    assert "1.1.1.1, 8.8.8.8" in response.text
-    assert "SNMP username:" in response.text
-    assert "snmpuser" in response.text
-    assert "SNMP auth secret present:" in response.text
-    assert "SNMP privacy secret present:" in response.text
-    assert "Storage server reboot:" in response.text
-    assert "iLO reset:" in response.text
+    assert "iLO setup" in response.text
+    assert "Open Run Center" in response.text
 
 
 def test_history_page_shows_applied_dns_snmp_and_reset_states(client):
@@ -2000,9 +2237,9 @@ def test_history_page_shows_applied_dns_snmp_and_reset_states(client):
             "completed_steps": 10,
             "total_steps": 10,
             "config_summary": {
-                "dns_apply_status": "Applied",
+                "dns_apply_status": "Verified",
                 "dns_applied_values": ["1.1.1.1"],
-                "snmp_apply_status": "Applied",
+                "snmp_apply_status": "Verified",
                 "snmp_username": "snmpuser",
                 "snmp_auth_protocol": "SHA",
                 "snmp_priv_protocol": "AES",
@@ -2792,6 +3029,8 @@ def test_report_center_lists_storage_reports_and_view_report(client):
     response = client.get("/configs?report_type=storage")
 
     assert response.status_code == 200
+    assert "Live job and logs" in response.text
+    assert "Recent history" in response.text
     assert "Run bundles" in response.text
     assert "Search reports" in response.text
     assert "Report browser" in response.text
@@ -2859,6 +3098,8 @@ def test_history_and_report_center_show_run_bundle_links(client):
 
     configs_response = client.get("/configs")
     assert configs_response.status_code == 200
+    assert "Live job and logs" in configs_response.text
+    assert "Recent history" in configs_response.text
     assert "Run bundles" in configs_response.text
     assert "Open bundle" in configs_response.text
     assert "Load a saved kit config" in configs_response.text

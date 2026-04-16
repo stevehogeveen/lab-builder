@@ -3,11 +3,14 @@ import asyncio
 from datetime import datetime
 import ipaddress
 import json
+import os
 import re
+import socket
 import threading
 import time
 import yaml
 from typing import Any, Callable
+from urllib.parse import quote
 
 from fastapi import FastAPI, Request, Form, WebSocket, WebSocketDisconnect, UploadFile, File
 from fastapi.responses import FileResponse, HTMLResponse
@@ -15,6 +18,8 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
 from app.ilo import ILOClient, ILOConfig, ILOError
+from app.esxi.builder import build_custom_iso
+from app.esxi.models import EsxiBuildSpec
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 TEMPLATES_DIR = BASE_DIR / "templates"
@@ -4982,6 +4987,8 @@ def execute_real_job_in_background(cfg: dict, scope: str):
     try:
         if scope == "ilo":
             run_ilo_real(cfg)
+        elif scope == "esxi":
+            run_esxi_real(cfg)
         else:
             raise RuntimeError(f"Real execution is not wired for scope: {scope}")
     except Exception as e:
@@ -4999,6 +5006,198 @@ def execute_real_job_in_background(cfg: dict, scope: str):
         )
     finally:
         append_job_history_snapshot(cfg, scope)
+
+
+def resolve_esxi_base_iso_path(cfg: dict) -> Path:
+    configured = str((cfg.get("esxi", {}) or {}).get("base_iso_path") or "").strip()
+    if configured:
+        path = Path(configured)
+        if path.exists():
+            return path
+        raise FileNotFoundError(f"Configured ESXi base ISO was not found: {path}")
+
+    base_dir = BASE_DIR / "media" / "esxi" / "base"
+    candidates = sorted(list(base_dir.glob("*.iso")) + list(base_dir.glob("*.ISO")))
+    if not candidates:
+        raise FileNotFoundError(f"No ESXi base ISO was found under {base_dir}")
+    return candidates[0]
+
+
+def detect_public_base_url(target_host: str = "") -> str:
+    configured = os.getenv("LAB_BUILDER_PUBLIC_BASE_URL", "").strip().rstrip("/")
+    if configured:
+        return configured
+
+    host = "127.0.0.1"
+    probe_target = (target_host or "8.8.8.8").strip()
+    try:
+        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sock:
+            sock.connect((probe_target, 443))
+            host = sock.getsockname()[0] or host
+    except Exception:
+        pass
+
+    port = os.getenv("LAB_BUILDER_PORT", "").strip() or os.getenv("PORT", "").strip() or "8000"
+    return f"http://{host}:{port}"
+
+
+def build_esxi_iso_url(cfg: dict, output_iso: Path, target_host: str = "") -> str:
+    public_base_url = detect_public_base_url(target_host)
+    kit_name = sanitize_kit_name(cfg.get("site", {}).get("name", "Kit-01"))
+    output_name = sanitize_kit_name(output_iso.stem)
+    return f"{public_base_url}/esxi-built-iso/{quote(kit_name)}/{quote(output_name)}.iso"
+
+
+def choose_virtual_media_device(client: ILOClient) -> dict[str, Any]:
+    devices = client.get_virtual_media()
+    for item in devices:
+        media_types = [str(mt).lower() for mt in item.get("MediaTypes", [])]
+        has_insert = bool(((item.get("Actions") or {}).get("#VirtualMedia.InsertMedia") or {}).get("target"))
+        if has_insert and any(mt in {"cd", "dvd"} for mt in media_types):
+            return item
+    for item in devices:
+        if ((item.get("Actions") or {}).get("#VirtualMedia.InsertMedia") or {}).get("target"):
+            return item
+    raise ILOError("No writable virtual media device with an InsertMedia action was found.")
+
+
+def wait_for_power_state(
+    client: ILOClient,
+    expected_state: str,
+    *,
+    timeout_seconds: int = 180,
+    poll_interval: int = 5,
+) -> dict[str, Any]:
+    system_path = client.get_systems()[0]
+    deadline = time.time() + max(timeout_seconds, 1)
+    last_seen = ""
+    while time.time() < deadline:
+        current = client.get_system(system_path)
+        last_seen = str(current.get("PowerState") or "")
+        if last_seen.lower() == expected_state.lower():
+            return current
+        time.sleep(max(poll_interval, 1))
+    raise ILOError(f"Timed out waiting for server power state {expected_state}. Last observed state: {last_seen or 'unknown'}.")
+
+
+def run_esxi_real(cfg: dict):
+    kit_name = cfg["site"]["name"]
+    ilo_cfg = cfg.get("ilo", {}) or {}
+    esxi_cfg = cfg.get("esxi", {}) or {}
+    login_ip = str(ilo_cfg.get("current_ip") or ilo_cfg.get("host") or "").strip()
+    username = str(ilo_cfg.get("username") or "").strip()
+    password = ilo_cfg.get("password", "")
+    total = 10
+    job = {
+        "status": "Running",
+        "execution_mode": "real",
+        "execution_mode_label": "Real execution",
+        "scope": "esxi",
+        "current_stage": "",
+        "progress_percent": 0,
+        "completed_steps": 0,
+        "total_steps": total,
+        "logs": [],
+        "esxi_iso_path": "",
+        "esxi_iso_url": "",
+    }
+    save_job(kit_name, job)
+
+    if not login_ip or not username or not password:
+        update_job(kit_name, job, "Failed", "Validation failed", 0, total, "[FAILED] Missing iLO host, username, or password.")
+        return
+
+    management_ip = str(esxi_cfg.get("management_ip") or cfg.get("ip_plan", {}).get("esxi") or "").strip()
+    subnet_mask = str(esxi_cfg.get("subnet_mask") or "").strip()
+    gateway = str(esxi_cfg.get("gateway") or cfg.get("ip_plan", {}).get("gateway") or "").strip()
+    dns_servers = [x.strip() for x in (esxi_cfg.get("dns_servers") or cfg.get("shared_network", {}).get("dns_servers") or []) if x and str(x).strip()]
+    hostname = str(esxi_cfg.get("hostname") or "").strip()
+    root_password = str(esxi_cfg.get("root_password") or "")
+
+    if not management_ip or not subnet_mask or not gateway or not hostname or not root_password:
+        update_job(
+            kit_name,
+            job,
+            "Failed",
+            "Validation failed",
+            0,
+            total,
+            "[FAILED] Missing ESXi hostname, management IP, subnet mask, gateway, or root password.",
+        )
+        return
+
+    try:
+        base_iso_path = resolve_esxi_base_iso_path(cfg)
+        stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+        spec = EsxiBuildSpec(
+            kit_name=sanitize_kit_name(kit_name),
+            base_iso_path=base_iso_path,
+            output_name=f"esxi-{stamp}",
+            hostname=hostname,
+            management_ip=management_ip,
+            subnet_mask=subnet_mask,
+            gateway=gateway,
+            dns_servers=dns_servers,
+            root_password=root_password,
+            vlan_id=str(esxi_cfg.get("vlan_id") or ""),
+            ntp_server=str(esxi_cfg.get("ntp_server") or ""),
+            enable_ssh=bool(esxi_cfg.get("enable_ssh", True)),
+            disable_ipv6=bool(esxi_cfg.get("disable_ipv6", True)),
+        )
+
+        client = ILOClient(ILOConfig(host=login_ip, username=username, password=password, verify_tls=False, timeout=15))
+
+        update_job(kit_name, job, "Running", "Building custom ESXi ISO", 1, total, "[RUNNING] Building custom ESXi ISO")
+        output_iso = build_custom_iso(spec)
+        iso_url = build_esxi_iso_url(cfg, output_iso, login_ip)
+        job["esxi_iso_path"] = str(output_iso)
+        job["esxi_iso_url"] = iso_url
+        save_job(kit_name, job)
+        update_job(kit_name, job, "Running", "Build complete", 2, total, f"[OK] Built ESXi ISO: {output_iso}")
+        update_job(kit_name, job, "Running", "Build complete", 2, total, f"[OK] ESXi ISO will be served from: {iso_url}")
+
+        update_job(kit_name, job, "Running", "Eject media", 3, total, "[RUNNING] Ejecting previous virtual media")
+        for vm in client.get_virtual_media():
+            if vm.get("Inserted") and vm.get("@odata.id"):
+                client.eject_virtual_media(vm["@odata.id"])
+
+        system_path = client.get_systems()[0]
+        current_system = client.get_system(system_path)
+        current_power = str(current_system.get("PowerState") or "")
+        if current_power.lower() != "off":
+            update_job(kit_name, job, "Running", "Power off", 4, total, "[RUNNING] Powering server off before setting one-time boot")
+            try:
+                client.power_reset(reset_type="GracefulShutdown", system_path=system_path)
+            except Exception:
+                client.power_reset(reset_type="ForceOff", system_path=system_path)
+            wait_for_power_state(client, "Off", timeout_seconds=180, poll_interval=5)
+        update_job(kit_name, job, "Running", "Power off", 5, total, "[OK] Server is off")
+
+        vm = choose_virtual_media_device(client)
+        insert_target = ((vm.get("Actions") or {}).get("#VirtualMedia.InsertMedia") or {}).get("target")
+        if not insert_target:
+            raise ILOError("No InsertMedia action was found on the selected virtual media device.")
+        update_job(kit_name, job, "Running", "Mount ISO", 6, total, "[RUNNING] Mounting custom ESXi ISO")
+        client._post(insert_target, {"Image": iso_url, "Inserted": True, "WriteProtected": True})
+        update_job(kit_name, job, "Running", "Mount ISO", 7, total, "[OK] Virtual media mounted")
+
+        update_job(kit_name, job, "Running", "Set boot override", 8, total, "[RUNNING] Setting one-time boot to virtual media")
+        client.set_one_time_boot_cd(system_path=system_path)
+        update_job(kit_name, job, "Running", "Set boot override", 8, total, "[OK] One-time boot set")
+
+        update_job(kit_name, job, "Running", "Power on", 9, total, "[RUNNING] Powering server on")
+        client.power_reset(reset_type="On", system_path=system_path)
+        update_job(kit_name, job, "Completed", "Finished", total, total, "[OK] ESXi boot sequence started")
+        append_activity_event(
+            kit_name,
+            "esxi_real_run_started",
+            workflow="esxi",
+            summary="Built the custom ESXi installer ISO and started the ESXi boot sequence.",
+            target=management_ip,
+            details=[f"ISO: {output_iso}", f"Base ISO: {base_iso_path}"],
+        )
+    except Exception as e:
+        update_job(kit_name, job, "Failed", job.get("current_stage") or "ESXi real run failed", job.get("completed_steps", 0), total, f"[FAILED] {str(e).splitlines()[0]}")
 
 
 def run_ilo_real(cfg: dict):
@@ -7353,6 +7552,16 @@ async def download_run_summary(scope: str = Form(...)):
     return FileResponse(path=path, filename=path.name, media_type="application/x-yaml")
 
 
+@app.get("/esxi-built-iso/{kit_name}/{output_name}.iso")
+async def download_built_esxi_iso(kit_name: str, output_name: str):
+    safe_kit_name = sanitize_kit_name(kit_name)
+    safe_output_name = sanitize_kit_name(output_name)
+    path = EXPORTS_DIR / "esxi-isos" / safe_kit_name / f"{safe_output_name}.iso"
+    if not path.exists():
+        return HTMLResponse(f"Built ESXi ISO not found: {path}", status_code=404)
+    return FileResponse(path=path, filename=path.name, media_type="application/octet-stream")
+
+
 @app.post("/prepare-execute", response_class=HTMLResponse)
 async def prepare_execute(request: Request, scope: str = Form(...), return_page: str = Form("execution")):
     cfg = load_kit_config()
@@ -7427,6 +7636,8 @@ async def execute_scope(
     msg = "Execution started."
     if scope == "ilo":
         msg = "Real iLO automation started in the background. Check Job Monitor for live progress and logs."
+    elif scope == "esxi":
+        msg = "Real ESXi automation started in the background. Check Job Monitor for live progress and logs."
     else:
         msg = f"Preview started for scope: {scope}. No real changes will be made."
 
