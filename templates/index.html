@@ -325,6 +325,25 @@
             padding: 14px 16px;
         }
 
+        .execution-live-card {
+            padding: 22px;
+            border-color: color-mix(in srgb, var(--accent) 24%, var(--border));
+            box-shadow: 0 18px 36px rgba(4, 10, 18, 0.24);
+        }
+
+        .execution-live-summary {
+            background: color-mix(in srgb, var(--panel2) 86%, transparent);
+            border-color: color-mix(in srgb, var(--border-strong) 82%, transparent);
+        }
+
+        .execution-live-log .codeblock {
+            min-height: 220px;
+        }
+
+        .execution-controls-card {
+            background: color-mix(in srgb, var(--panel) 94%, transparent);
+        }
+
         .stage-link {
             width: 100%;
             justify-content: center;
@@ -800,6 +819,10 @@
 
             .hero {
                 border-radius: 20px;
+            }
+
+            .execution-live-card {
+                padding: 18px;
             }
         }
     </style>
