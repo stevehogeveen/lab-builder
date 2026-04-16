@@ -1960,6 +1960,15 @@ def build_execution_launch_options(cfg: dict[str, Any], scope: str) -> dict[str,
                 "summary": "Starts the live iLO run for this kit." + (" The approved storage plan will also be applied." if storage_real else ""),
             },
         }
+    if scope == "esxi":
+        return {
+            "preview": preview_option,
+            "real": {
+                "scope": "esxi",
+                "label": "Run for real",
+                "summary": "Builds the custom ESXi installer ISO, mounts it through virtual media, sets one-time boot, and starts the real ESXi boot sequence.",
+            },
+        }
     return {"preview": preview_option, "real": None}
 
 
@@ -1992,16 +2001,6 @@ def build_run_center_readiness_matrix(cfg: dict[str, Any], scope: str) -> list[d
     for key, name in [("ilo", "iLO"), ("storage", "Storage"), ("esxi", "ESXi"), ("windows", "Windows"), ("qnap", "QNAP")]:
         included = stage_in_scope(key)
         if not included:
-            matrix.append(
-                {
-                    "name": name,
-                    "label": "Not included",
-                    "tone": "progress",
-                    "summary": "This stage is not part of the selected run.",
-                    "action": "Turn it on in its workspace if needed.",
-                    "href": "/storage" if key == "storage" else f"/{key}",
-                }
-            )
             continue
 
         if key == "storage":
@@ -4607,6 +4606,65 @@ def build_execution_review(cfg: dict, scope: str):
             return f"{mode} from {approval.get('plan_path') or '(missing approved plan path)'}"
         return "Saved workspace settings"
 
+    def stage_settings(key: str) -> list[str]:
+        if key == "ilo":
+            return [
+                f"Current iLO IP: {cfg['ilo'].get('current_ip') or cfg['ilo'].get('host') or 'Not set'}",
+                f"Planned iLO IP: {cfg['ilo'].get('target_ip') or 'Unchanged'}",
+                f"Gateway: {cfg['ilo'].get('gateway') or cfg.get('ip_plan', {}).get('gateway') or 'Not set'}",
+                f"Hostname: {cfg['ilo'].get('hostname') or 'Unchanged'}",
+                f"DNS servers: {', '.join([x for x in cfg.get('shared_network', {}).get('dns_servers', []) if x and str(x).strip()]) or 'Not set'}",
+                f"SNMP user: {cfg.get('shared_snmp', {}).get('v3_username') or 'Not set'}",
+                f"SNMP auth: {cfg.get('shared_snmp', {}).get('v3_auth_protocol', 'SHA')}",
+                f"SNMP privacy: {cfg.get('shared_snmp', {}).get('v3_priv_protocol', 'AES')}",
+            ]
+        if key == "esxi":
+            esxi_cfg = cfg.get("esxi", {}) or {}
+            dns_values = [x for x in (esxi_cfg.get("dns_servers") or cfg.get("shared_network", {}).get("dns_servers", [])) if x and str(x).strip()]
+            values = [
+                f"Management IP: {esxi_cfg.get('management_ip') or cfg.get('ip_plan', {}).get('esxi') or 'Not set'}",
+                f"Subnet mask: {esxi_cfg.get('subnet_mask') or 'Not set'}",
+                f"Gateway: {esxi_cfg.get('gateway') or cfg.get('ip_plan', {}).get('gateway') or 'Not set'}",
+                f"Hostname: {esxi_cfg.get('hostname') or 'Not set'}",
+                f"DNS servers: {', '.join(dns_values) or 'Not set'}",
+                f"Root password: {'Saved' if esxi_cfg.get('root_password') else 'Missing'}",
+            ]
+            if esxi_cfg.get("vlan_id"):
+                values.append(f"VLAN ID: {esxi_cfg.get('vlan_id')}")
+            if esxi_cfg.get("ntp_server"):
+                values.append(f"NTP server: {esxi_cfg.get('ntp_server')}")
+            return values
+        if key == "windows":
+            windows_cfg = cfg.get("windows", {}) or {}
+            dns_values = [x for x in (windows_cfg.get("dns_servers") or cfg.get("shared_network", {}).get("dns_servers", [])) if x and str(x).strip()]
+            return [
+                f"Target IP: {windows_cfg.get('ip_address') or cfg.get('ip_plan', {}).get('windows') or 'Not set'}",
+                f"Subnet mask: {windows_cfg.get('subnet_mask') or 'Not set'}",
+                f"Gateway: {windows_cfg.get('gateway') or cfg.get('ip_plan', {}).get('gateway') or 'Not set'}",
+                f"VM name: {windows_cfg.get('vm_name') or 'Not set'}",
+                f"DNS servers: {', '.join(dns_values) or 'Not set'}",
+                f"Admin password: {'Saved' if windows_cfg.get('admin_password') else 'Missing'}",
+            ]
+        if key == "qnap":
+            qnap_cfg = cfg.get("qnap", {}) or {}
+            return [
+                f"Target IP: {qnap_cfg.get('ip') or cfg.get('ip_plan', {}).get('qnap') or 'Not set'}",
+                f"Hostname: {qnap_cfg.get('hostname') or 'Not set'}",
+                f"Username: {qnap_cfg.get('username') or 'Not set'}",
+                f"Password: {'Saved' if qnap_cfg.get('password') else 'Missing'}",
+            ]
+        if key == "storage":
+            approval = storage_review.get("approval", {}) or {}
+            plan_summary = approval.get("plan_summary", {}) or {}
+            return [
+                f"Controller: {plan_summary.get('controller') or 'Not set'}",
+                f"OS RAID 1 bays: {plan_summary.get('os_bays') or 'Not selected'}",
+                f"Data RAID bays: {plan_summary.get('data_bays') or 'Not selected'}",
+                f"Hot spare bay: {plan_summary.get('spare_bay') or 'Not reserved'}",
+                f"Approved host: {approval.get('host') or 'Not set'}",
+            ]
+        return []
+
     def stage_dependencies(key: str) -> list[str]:
         if key == "ilo":
             return ["Global Settings", "Saved iLO target and credentials"]
@@ -4691,6 +4749,7 @@ def build_execution_review(cfg: dict, scope: str):
             "preflight_checks": checks,
             "preflight_ready": [item.get("label") for item in ready_items],
             "preflight_blockers": blockers,
+            "settings": stage_settings(key),
         }
 
     included_stages = []
@@ -4700,17 +4759,18 @@ def build_execution_review(cfg: dict, scope: str):
         for key in ["ilo", "esxi", "windows", "qnap", "iosafe", "cisco_switch"]:
             if included.get(key):
                 lines.append(f"- {components[key]['name']} -> {components[key]['target']}")
-            included_stages.append(stage_entry(key, bool(included.get(key))))
+                included_stages.append(stage_entry(key, True))
         storage_included = bool(included.get("storage"))
         if storage_included:
             lines.append(f"- Storage plan -> {'approved exact artifact' if storage_execution.get('included') else 'not ready'}")
-        included_stages.append(stage_entry("storage", storage_included))
+            included_stages.append(stage_entry("storage", True))
     else:
         lines.append(f"Will act only on stage: {scope}")
         if scope == "ilo":
             lines.append(f"- Storage included in iLO run: {'Yes' if storage_review.get('include_in_ilo_run') else 'No'}")
             included_stages.append(stage_entry("ilo", True))
-            included_stages.append(stage_entry("storage", bool(storage_review.get("include_in_ilo_run"))))
+            if storage_review.get("include_in_ilo_run"):
+                included_stages.append(stage_entry("storage", True))
         else:
             included_stages.append(stage_entry(scope, True))
     lines.append("")
@@ -4745,7 +4805,16 @@ def build_execution_review(cfg: dict, scope: str):
     lines.append("WARNING: This may reboot, reconfigure, overwrite, or otherwise make destructive changes.")
     readiness_matrix = build_run_center_readiness_matrix(cfg, scope)
     will_run = [stage["name"] for stage in included_stages if stage["included"]]
-    will_not_run = [stage["name"] for stage in included_stages if not stage["included"]]
+    will_not_run: list[str] = []
+    if scope == "included":
+        included_cfg = cfg.get("included", {})
+        for key in ["ilo", "esxi", "windows", "qnap", "iosafe", "cisco_switch"]:
+            if not included_cfg.get(key):
+                will_not_run.append(components[key]["name"])
+        if not included_cfg.get("storage"):
+            will_not_run.append("Storage / RAID")
+    elif scope == "ilo" and not storage_review.get("include_in_ilo_run"):
+        will_not_run.append("Storage / RAID")
     if storage_validation_error and "Storage / RAID" not in will_not_run and any(stage["key"] == "storage" for stage in included_stages):
         will_not_run.append("Storage / RAID until it is reviewed again")
     summary_items = [
@@ -5080,6 +5149,30 @@ def wait_for_power_state(
     raise ILOError(f"Timed out waiting for server power state {expected_state}. Last observed state: {last_seen or 'unknown'}.")
 
 
+def wait_for_esxi_management_ready(
+    host: str,
+    *,
+    timeout_seconds: int = 2400,
+    poll_interval: int = 15,
+    port: int = 443,
+) -> dict[str, Any]:
+    deadline = time.time() + max(timeout_seconds, 1)
+    attempts = 0
+    last_error = "No connection attempt was made."
+    while time.time() < deadline:
+        attempts += 1
+        try:
+            with socket.create_connection((host, port), timeout=5):
+                return {"host": host, "port": port, "attempts": attempts}
+        except Exception as e:
+            last_error = str(e).splitlines()[0]
+        time.sleep(max(poll_interval, 1))
+    raise ILOError(
+        f"ESXi did not answer on configured IP {host}:{port} before timeout. "
+        f"Last error: {last_error}"
+    )
+
+
 def run_esxi_real(cfg: dict):
     kit_name = cfg["site"]["name"]
     ilo_cfg = cfg.get("ilo", {}) or {}
@@ -5087,7 +5180,7 @@ def run_esxi_real(cfg: dict):
     login_ip = str(ilo_cfg.get("current_ip") or ilo_cfg.get("host") or "").strip()
     username = str(ilo_cfg.get("username") or "").strip()
     password = ilo_cfg.get("password", "")
-    total = 10
+    total = 13
     job = {
         "status": "Running",
         "execution_mode": "real",
@@ -5125,6 +5218,8 @@ def run_esxi_real(cfg: dict):
             "[FAILED] Missing ESXi hostname, management IP, subnet mask, gateway, or root password.",
         )
         return
+    job["esxi_expected_ip"] = management_ip
+    save_job(kit_name, job)
 
     try:
         base_iso_path = resolve_esxi_base_iso_path(cfg)
@@ -5187,17 +5282,45 @@ def run_esxi_real(cfg: dict):
 
         update_job(kit_name, job, "Running", "Power on", 9, total, "[RUNNING] Powering server on")
         client.power_reset(reset_type="On", system_path=system_path)
-        update_job(kit_name, job, "Completed", "Finished", total, total, "[OK] ESXi boot sequence started")
+        update_job(kit_name, job, "Running", "Wait for server power", 10, total, "[RUNNING] Waiting for the server to power back on")
+        wait_for_power_state(client, "On", timeout_seconds=300, poll_interval=5)
+        update_job(kit_name, job, "Running", "Wait for server power", 11, total, "[OK] Server powered back on")
+
+        update_job(
+            kit_name,
+            job,
+            "Running",
+            "Wait for ESXi network",
+            12,
+            total,
+            f"[RUNNING] Waiting for ESXi management network on {management_ip}",
+        )
+        ready_result = wait_for_esxi_management_ready(management_ip)
+        update_job(
+            kit_name,
+            job,
+            "Completed",
+            "Finished",
+            total,
+            total,
+            (
+                f"[OK] ESXi responded on configured IP {ready_result.get('host')}:{ready_result.get('port')} "
+                f"after {ready_result.get('attempts')} checks. ESXi boot sequence started."
+            ),
+        )
         append_activity_event(
             kit_name,
             "esxi_real_run_started",
             workflow="esxi",
-            summary="Built the custom ESXi installer ISO and started the ESXi boot sequence.",
+            summary="Built the custom ESXi installer ISO, booted the server from it, and confirmed ESXi answered on the configured management IP.",
             target=management_ip,
             details=[f"ISO: {output_iso}", f"Base ISO: {base_iso_path}"],
         )
     except Exception as e:
-        update_job(kit_name, job, "Failed", job.get("current_stage") or "ESXi real run failed", job.get("completed_steps", 0), total, f"[FAILED] {str(e).splitlines()[0]}")
+        detail = str(e).splitlines()[0]
+        if "configured IP" in detail and "ESXi did not answer" in detail:
+            detail += " This usually means the kickstart network settings did not apply or the installer did not finish."
+        update_job(kit_name, job, "Failed", job.get("current_stage") or "ESXi real run failed", job.get("completed_steps", 0), total, f"[FAILED] {detail}")
 
 
 def run_ilo_real(cfg: dict):

@@ -4,6 +4,7 @@ from typing import Any
 from fastapi.testclient import TestClient
 
 from app.ilo import ILOClient, ILOConfig, ILOError
+from app.esxi.kickstart import build_kickstart
 import app.main as main
 
 
@@ -1577,7 +1578,7 @@ def test_prepare_execute_shows_combined_storage_review_using_exact_approved_arti
 
     assert response.status_code == 200
     assert "Run summary" in response.text
-    assert "Included stages" in response.text
+    assert "Stages that will run" in response.text
     assert "View details" in response.text
     assert "Open summary" in response.text
     assert "Open reports & technical details" in response.text
@@ -1596,8 +1597,8 @@ def test_execution_page_warns_when_storage_is_not_approved(client):
 
     assert response.status_code == 200
     assert "Run Center" in response.text
-    assert "Review full run" in response.text
-    assert "Review one part" in response.text
+    assert "Review run before execution" in response.text
+    assert "Review one part" not in response.text
 
 
 def test_prepare_execute_shows_blocked_stage_guidance(client):
@@ -1821,6 +1822,37 @@ def test_execute_real_scope_starts_esxi_path(client, monkeypatch):
     assert started["started"] is True
 
 
+def test_prepare_execute_enables_real_launch_for_esxi_scope(client):
+    cfg = main.default_config()
+    cfg["site"]["name"] = "ESXi Launch Review Kit"
+    cfg["ilo"]["current_ip"] = "10.10.8.90"
+    cfg["ilo"]["host"] = "10.10.8.90"
+    cfg["ilo"]["username"] = "Administrator"
+    cfg["ilo"]["password"] = "secret"
+    cfg["esxi"]["hostname"] = "esxi-lab"
+    cfg["esxi"]["root_password"] = "esxisecret"
+    cfg["included"]["esxi"] = True
+    main.save_kit_config(cfg)
+
+    response = client.post(
+        "/prepare-execute",
+        data={"scope": "esxi", "return_page": "execution"},
+    )
+
+    assert response.status_code == 200
+    assert "Builds the custom ESXi installer ISO, mounts it through virtual media, sets one-time boot, and starts the real ESXi boot sequence." in response.text
+    assert 'name="confirm_checkbox"' in response.text
+    assert 'name="confirm_checkbox" disabled' not in response.text
+    assert 'name="confirm_phrase"' in response.text
+    assert 'name="confirm_phrase" placeholder="EXECUTE" class="input" disabled' not in response.text
+    assert "Review one part" not in response.text
+    assert "Review run before execution" in response.text
+    assert "Management IP: 10.10.8.10" in response.text
+    assert "Root password: Saved" in response.text
+    stage_section = response.text.split("Stages that will run", 1)[1].split("Review before you start", 1)[0]
+    assert "iLO" not in stage_section
+
+
 def test_run_esxi_real_builds_iso_and_starts_virtual_media_boot(monkeypatch, tmp_path):
     cfg = main.default_config()
     cfg["site"]["name"] = "Real ESXi Run Kit"
@@ -1900,6 +1932,7 @@ def test_run_esxi_real_builds_iso_and_starts_virtual_media_boot(monkeypatch, tmp
     monkeypatch.setattr(main, "build_custom_iso", fake_build_custom_iso)
     monkeypatch.setattr(main, "resolve_esxi_base_iso_path", lambda cfg_obj: main.Path("/tmp/base-esxi.iso"))
     monkeypatch.setattr(main, "detect_public_base_url", lambda target_host="": "http://lab-builder.local:8000")
+    monkeypatch.setattr(main, "wait_for_esxi_management_ready", lambda host, **kwargs: {"host": host, "port": 443, "attempts": 2})
     monkeypatch.setattr(main, "ILOClient", build_client)
 
     main.run_esxi_real(cfg)
@@ -1919,10 +1952,12 @@ def test_run_esxi_real_builds_iso_and_starts_virtual_media_boot(monkeypatch, tmp
     assert "[RUNNING] Setting one-time boot to virtual media" in joined_logs
     assert "[OK] One-time boot set" in joined_logs
     assert "[RUNNING] Powering server on" in joined_logs
-    assert "[OK] ESXi boot sequence started" in joined_logs
+    assert "[RUNNING] Waiting for ESXi management network on 10.10.8.10" in joined_logs
+    assert "[OK] ESXi responded on configured IP 10.10.8.10:443 after 2 checks. ESXi boot sequence started." in joined_logs
     assert job["status"] == "Completed"
     assert job["esxi_iso_path"] == str(built_iso)
     assert job["esxi_iso_url"].endswith("/esxi-built-iso/Real-ESXi-Run-Kit/esxi-20260416-120000.iso")
+    assert job["esxi_expected_ip"] == "10.10.8.10"
     assert spec.hostname == "esxi-lab"
     assert spec.management_ip == "10.10.8.10"
     assert spec.subnet_mask == "255.255.255.0"
@@ -1942,6 +1977,100 @@ def test_run_esxi_real_builds_iso_and_starts_virtual_media_boot(monkeypatch, tmp
     ) in client.calls
     assert ("set_one_time_boot_cd", "/redfish/v1/Systems/1") in client.calls
     assert ("power_reset", "On", "/redfish/v1/Systems/1") in client.calls
+
+
+def test_run_esxi_real_fails_when_expected_management_ip_never_comes_up(monkeypatch, tmp_path):
+    cfg = main.default_config()
+    cfg["site"]["name"] = "Real ESXi Failure Kit"
+    cfg["ilo"]["current_ip"] = "10.10.8.90"
+    cfg["ilo"]["host"] = "10.10.8.90"
+    cfg["ilo"]["username"] = "Administrator"
+    cfg["ilo"]["password"] = "secret"
+    cfg["esxi"]["hostname"] = "esxi-lab"
+    cfg["esxi"]["management_ip"] = "10.10.8.10"
+    cfg["esxi"]["subnet_mask"] = "255.255.255.0"
+    cfg["esxi"]["gateway"] = "10.10.8.1"
+    cfg["esxi"]["root_password"] = "esxisecret"
+
+    built_iso = tmp_path / "esxi-failure.iso"
+    built_iso.write_text("iso", encoding="utf-8")
+
+    class FakeEsxiILOClient:
+        def __init__(self, cfg):
+            self.cfg = cfg
+            self.power_state = "On"
+
+        def get_virtual_media(self):
+            return [{
+                "@odata.id": "/redfish/v1/Managers/1/VirtualMedia/2",
+                "Inserted": False,
+                "MediaTypes": ["CD", "DVD"],
+                "Actions": {
+                    "#VirtualMedia.InsertMedia": {"target": "/redfish/v1/Managers/1/VirtualMedia/2/Actions/VirtualMedia.InsertMedia"},
+                },
+            }]
+
+        def eject_virtual_media(self, vm_path):
+            return None
+
+        def get_systems(self):
+            return ["/redfish/v1/Systems/1"]
+
+        def get_system(self, system_path):
+            return {"PowerState": self.power_state}
+
+        def power_reset(self, reset_type="ForceRestart", system_path=None):
+            if reset_type in {"GracefulShutdown", "ForceOff"}:
+                self.power_state = "Off"
+            elif reset_type == "On":
+                self.power_state = "On"
+            return {"reset_type": reset_type, "system_path": system_path}
+
+        def _post(self, target, payload):
+            return None
+
+        def set_one_time_boot_cd(self, system_path=None):
+            return None
+
+    monkeypatch.setattr(main, "build_custom_iso", lambda spec: built_iso)
+    monkeypatch.setattr(main, "resolve_esxi_base_iso_path", lambda cfg_obj: main.Path("/tmp/base-esxi.iso"))
+    monkeypatch.setattr(main, "detect_public_base_url", lambda target_host="": "http://lab-builder.local:8000")
+    monkeypatch.setattr(main, "wait_for_esxi_management_ready", lambda host, **kwargs: (_ for _ in ()).throw(main.ILOError(f"ESXi did not answer on configured IP {host}:443 before timeout. Last error: timed out")))
+    monkeypatch.setattr(main, "ILOClient", lambda cfg_obj: FakeEsxiILOClient(cfg_obj))
+
+    main.run_esxi_real(cfg)
+    job = main.load_job("Real ESXi Failure Kit")
+    joined_logs = "\n".join(job["logs"])
+
+    assert job["status"] == "Failed"
+    assert "ESXi did not answer on configured IP 10.10.8.10:443 before timeout." in joined_logs
+    assert "This usually means the kickstart network settings did not apply or the installer did not finish." in joined_logs
+
+
+def test_build_kickstart_uses_explicit_management_network_fields():
+    spec = main.EsxiBuildSpec(
+        kit_name="Test-Kit",
+        base_iso_path=main.Path("/tmp/base.iso"),
+        output_name="esxi-test",
+        hostname="esxi-lab",
+        management_ip="10.10.8.10",
+        subnet_mask="255.255.255.0",
+        gateway="10.10.8.1",
+        dns_servers=["1.1.1.1", "8.8.8.8"],
+        root_password="esxisecret",
+        vlan_id="123",
+    )
+
+    kickstart = build_kickstart(spec)
+
+    assert "--device=vmnic0" in kickstart
+    assert "--ip=10.10.8.10" in kickstart
+    assert "--netmask=255.255.255.0" in kickstart
+    assert "--gateway=10.10.8.1" in kickstart
+    assert "--nameserver=1.1.1.1,8.8.8.8" in kickstart
+    assert "--hostname=esxi-lab" in kickstart
+    assert "--addvmportgroup=0" in kickstart
+    assert "--vlanid=123" in kickstart
 
 
 def test_run_ilo_real_executes_storage_when_included(monkeypatch):
