@@ -308,6 +308,22 @@ def write_run_bundle_files(kit_name: str, job: dict[str, Any]) -> None:
             "storage_run_directory": str(job.get("storage_run_directory") or ""),
         },
     }
+    if job.get("ilo_change_summary"):
+        summary_payload["ilo_change_summary"] = dict(job.get("ilo_change_summary") or {})
+    if "ilo_reset_required" in job or job.get("ilo_reset_reason"):
+        summary_payload["ilo_reset_decision"] = {
+            "required": bool(job.get("ilo_reset_required")),
+            "status": str(job.get("ilo_reset_status") or ""),
+            "reason": str(job.get("ilo_reset_reason") or ""),
+        }
+    if "ilo_stage_finished" in job or "ilo_final_ip_verified" in job:
+        summary_payload["ilo_final_state"] = {
+            "stage_finished": bool(job.get("ilo_stage_finished")),
+            "final_ip_verified": bool(job.get("ilo_final_ip_verified")),
+            "dns_apply_status": str(job.get("dns_apply_status") or ""),
+            "snmp_apply_status": str(job.get("snmp_apply_status") or ""),
+            "local_account_status": str(job.get("local_account_status") or ""),
+        }
     summary_path.write_text(yaml.safe_dump(summary_payload, sort_keys=False), encoding="utf-8")
 
 
@@ -6201,6 +6217,120 @@ def run_ilo_real(cfg: dict):
             )
             return {"matched": False, "active_ips": []}
 
+    def normalize_dns_values(values):
+        return [
+            str(item).strip()
+            for item in (values or [])
+            if str(item or "").strip() and str(item).strip() not in {"0.0.0.0", "::"}
+        ]
+
+    def active_interface_ipv4_matches(iface_doc: dict[str, Any], address: str, subnet_mask: str, gateway: str) -> bool:
+        if not address or not subnet_mask or not gateway:
+            return False
+        for item in list(iface_doc.get("IPv4Addresses", []) or []) + list(iface_doc.get("IPv4StaticAddresses", []) or []):
+            if not isinstance(item, dict):
+                continue
+            if (
+                str(item.get("Address") or "").strip() == address
+                and str(item.get("SubnetMask") or "").strip() == subnet_mask
+                and str(item.get("Gateway") or "").strip() == gateway
+            ):
+                return True
+        return False
+
+    def current_hostname_value(network_protocol_doc: dict[str, Any], iface_doc: dict[str, Any]) -> str:
+        return str(
+            network_protocol_doc.get("HostName")
+            or iface_doc.get("HostName")
+            or ""
+        ).strip()
+
+    def build_snmp_readback_checks(network_protocol_doc: dict[str, Any]) -> list[dict[str, Any]]:
+        snmp_block = network_protocol_doc.get("SNMP") or {}
+        checks: list[dict[str, Any]] = []
+        requested_username = str(active_snmp_user.get("username") or "").strip()
+        if "ProtocolEnabled" in snmp_block:
+            checks.append({
+                "label": "protocol_enabled",
+                "requested": True,
+                "actual": snmp_block.get("ProtocolEnabled"),
+                "matched": snmp_block.get("ProtocolEnabled") is True,
+            })
+        username_key = next(
+            (
+                key
+                for key in ("UserName", "Username", "SNMPv3UserName", "SNMPv3Username")
+                if key in snmp_block
+            ),
+            "",
+        )
+        if username_key and requested_username:
+            checks.append({
+                "label": "username",
+                "requested": requested_username,
+                "actual": str(snmp_block.get(username_key) or "").strip(),
+                "matched": str(snmp_block.get(username_key) or "").strip() == requested_username,
+            })
+        auth_key = next(
+            (key for key in ("AuthProtocol", "SNMPv3AuthProtocol") if key in snmp_block),
+            "",
+        )
+        if auth_key and desired_auth_protocol:
+            checks.append({
+                "label": "auth_protocol",
+                "requested": desired_auth_protocol,
+                "actual": str(snmp_block.get(auth_key) or "").strip(),
+                "matched": str(snmp_block.get(auth_key) or "").strip() == desired_auth_protocol,
+            })
+        priv_key = next(
+            (key for key in ("PrivacyProtocol", "SNMPv3PrivacyProtocol") if key in snmp_block),
+            "",
+        )
+        if priv_key and desired_priv_protocol:
+            checks.append({
+                "label": "privacy_protocol",
+                "requested": desired_priv_protocol,
+                "actual": str(snmp_block.get(priv_key) or "").strip(),
+                "matched": str(snmp_block.get(priv_key) or "").strip() == desired_priv_protocol,
+            })
+        for legacy_key in (
+            "SNMPv1Enabled",
+            "EnableSNMPv1",
+            "SNMPv1RequestsEnabled",
+            "SNMPv1TrapEnabled",
+            "SNMPv1GetEnabled",
+            "SNMPv1SetEnabled",
+            "SNMPv2Enabled",
+            "EnableSNMPv2",
+            "SNMPv2RequestsEnabled",
+            "SNMPv2TrapEnabled",
+            "SNMPv2cEnabled",
+            "EnableSNMPv2c",
+            "SNMPv2cRequestsEnabled",
+            "SNMPv2cTrapEnabled",
+            "CommunityAccessEnabled",
+        ):
+            if legacy_key in snmp_block:
+                checks.append({
+                    "label": legacy_key,
+                    "requested": False,
+                    "actual": snmp_block.get(legacy_key),
+                    "matched": snmp_block.get(legacy_key) is False,
+                })
+        for v3_key in ("SNMPv3RequestsEnabled", "SNMPv3Enabled", "SNMPv3TrapEnabled"):
+            if v3_key in snmp_block:
+                checks.append({
+                    "label": v3_key,
+                    "requested": True,
+                    "actual": snmp_block.get(v3_key),
+                    "matched": snmp_block.get(v3_key) is True,
+                })
+        return checks
+
+    def current_snmp_matches(network_protocol_doc: dict[str, Any]) -> bool:
+        snmp_checks = build_snmp_readback_checks(network_protocol_doc)
+        return bool(snmp_checks) and all(item.get("matched") for item in snmp_checks)
+
     def verify_final_ilo_configuration(*, stage_name: str, step_index: int) -> dict[str, Any]:
         update_job(
             kit_name,
@@ -6282,32 +6412,9 @@ def run_ilo_real(cfg: dict):
             )
 
         snmp_block = network_protocol.get("SNMP") or {}
-        requested_username = str(active_snmp_user.get("username") or "").strip()
-        actual_username = str(
-            snmp_block.get("UserName")
-            or snmp_block.get("Username")
-            or snmp_block.get("SNMPv3UserName")
-            or snmp_block.get("SNMPv3Username")
-            or ""
-        ).strip()
-        actual_auth = str(
-            snmp_block.get("AuthProtocol")
-            or snmp_block.get("SNMPv3AuthProtocol")
-            or ""
-        ).strip()
-        actual_priv = str(
-            snmp_block.get("PrivacyProtocol")
-            or snmp_block.get("SNMPv3PrivacyProtocol")
-            or ""
-        ).strip()
-        actual_protocol_enabled = snmp_block.get("ProtocolEnabled")
-        if requested_username:
-            result["snmp_matched"] = (
-                actual_protocol_enabled is True
-                and actual_username == requested_username
-                and (not desired_auth_protocol or actual_auth == desired_auth_protocol)
-                and (not desired_priv_protocol or actual_priv == desired_priv_protocol)
-            )
+        snmp_checks = build_snmp_readback_checks(network_protocol)
+        if active_snmp_user.get("username"):
+            result["snmp_matched"] = bool(snmp_checks) and all(item.get("matched") for item in snmp_checks)
             update_job(
                 kit_name,
                 job,
@@ -6320,12 +6427,7 @@ def run_ilo_real(cfg: dict):
                     if result["snmp_matched"]
                     else "[FAILED] Final SNMP did not match: "
                 )
-                + (
-                    f"user={actual_username or '(empty)'} "
-                    f"auth={actual_auth or '(empty)'} "
-                    f"priv={actual_priv or '(empty)'} "
-                    f"protocol_enabled={actual_protocol_enabled}"
-                ),
+                + f"checks={snmp_checks or '(no readable SNMP fields found)'} | raw={snmp_block}",
             )
 
         all_matched = result["hostname_matched"] and result["dns_matched"] and result["snmp_matched"] and not result["errors"]
@@ -6448,6 +6550,13 @@ def run_ilo_real(cfg: dict):
                 "[INFO] Multiple SNMPv3 profiles are saved, but the current iLO Redfish path applies only the first profile.",
             )
         client = build_ilo_client(active_ip)
+        current_network_protocol = {}
+        current_active_interface = {}
+        ip_change_applied = False
+        hostname_change_applied = False
+        dns_change_applied = False
+        snmp_change_applied = False
+        local_users_change_applied = False
 
         update_job(kit_name, job, "Running", "Connect to Redfish", 1, total, f"[RUNNING] Connecting to https://{active_ip}/redfish/v1/")
         summary = client.get_summary()
@@ -6465,6 +6574,7 @@ def run_ilo_real(cfg: dict):
 
         try:
             iface = client.get_active_manager_interface()
+            current_active_interface = iface
             update_job(
                 kit_name,
                 job,
@@ -6489,19 +6599,13 @@ def run_ilo_real(cfg: dict):
                 f"[SKIP/INFO] Could not read active interface details: {e}"
             )
 
+        try:
+            _, current_network_protocol = client.get_network_protocol()
+        except Exception:
+            current_network_protocol = {}
+
         if target_ip and desired_subnet_mask and desired_gateway:
-            config_changes_attempted = True
-            try:
-                if target_ip != active_ip:
-                    update_job(
-                        kit_name,
-                        job,
-                        "Running",
-                        "Apply static IPv4",
-                        5,
-                        total,
-                        f"[RUNNING] Applying iLO IP change from {active_ip} to {target_ip}",
-                    )
+            if active_interface_ipv4_matches(current_active_interface, target_ip, desired_subnet_mask, desired_gateway):
                 update_job(
                     kit_name,
                     job,
@@ -6509,72 +6613,71 @@ def run_ilo_real(cfg: dict):
                     "Apply static IPv4",
                     5,
                     total,
-                    f"[RUNNING] Disabling DHCPv4 and setting static IPv4 address={target_ip} subnet_mask={desired_subnet_mask} gateway={desired_gateway}"
+                    f"[OK] iLO IPv4 already correct; no change needed for {target_ip}.",
                 )
-                ip_result = client.set_static_ipv4_best_effort(
-                    address=target_ip,
-                    subnet_mask=desired_subnet_mask,
-                    gateway=desired_gateway,
-                )
-                update_job(
-                    kit_name,
-                    job,
-                    "Running",
-                    "Verify static IPv4",
-                    6,
-                    total,
-                    (
-                        f"[OK] Static IPv4 applied via {', '.join(ip_result.get('applied_keys', []))} | "
-                        f"before_dhcpv4={ip_result.get('before_dhcpv4')} | after_dhcpv4={ip_result.get('after_dhcpv4')} | "
-                        f"before_ipv4={ip_result.get('before_ipv4_addresses') or ip_result.get('before_static_addresses')} | "
-                        f"after_ipv4={ip_result.get('after_ipv4_addresses') or ip_result.get('after_static_addresses')}"
-                    ),
-                )
-                if target_ip and target_ip != active_ip:
-                    before_ips = [
-                        str(item.get("Address") or "").strip()
-                        for item in (ip_result.get("before_ipv4_addresses") or ip_result.get("before_static_addresses") or [])
-                        if isinstance(item, dict)
-                    ]
-                    after_ips = [
-                        str(item.get("Address") or "").strip()
-                        for item in (ip_result.get("after_ipv4_addresses") or ip_result.get("after_static_addresses") or [])
-                        if isinstance(item, dict)
-                    ]
-                    target_seen_in_readback = target_ip in before_ips or target_ip in after_ips
-                    if target_seen_in_readback:
-                        endpoint_transition_pending = True
-                        job["expected_final_ip"] = expected_final_ip
-                        job["active_ip"] = active_ip
-                        save_job(kit_name, job)
+            else:
+                config_changes_attempted = True
+                try:
+                    if target_ip != active_ip:
                         update_job(
                             kit_name,
                             job,
                             "Running",
-                            "Reconnect to iLO",
-                            6,
+                            "Apply static IPv4",
+                            5,
                             total,
-                            (
-                                "[INFO] Target iLO IP already appeared in interface readback. "
-                                f"Keeping the current session on {active_ip} and deferring final target verification for {target_ip}."
-                            ),
+                            f"[RUNNING] Applying iLO IP change from {active_ip} to {target_ip}",
                         )
-                    else:
-                        reconnect_result = reconnect_to_active_ip(
-                            target_ip,
-                            stage_name="Reconnect to iLO",
-                            step_index=6,
-                        )
-                        if reconnect_result.get("connected"):
-                            job["active_ip"] = active_ip
-                            job["expected_final_ip"] = expected_final_ip
-                            save_job(kit_name, job)
-                        else:
+                    update_job(
+                        kit_name,
+                        job,
+                        "Running",
+                        "Apply static IPv4",
+                        5,
+                        total,
+                        f"[RUNNING] Disabling DHCPv4 and setting static IPv4 address={target_ip} subnet_mask={desired_subnet_mask} gateway={desired_gateway}"
+                    )
+                    ip_result = client.set_static_ipv4_best_effort(
+                        address=target_ip,
+                        subnet_mask=desired_subnet_mask,
+                        gateway=desired_gateway,
+                    )
+                    ip_change_applied = True
+                    current_active_interface = {
+                        **current_active_interface,
+                        "IPv4Addresses": ip_result.get("after_ipv4_addresses") or current_active_interface.get("IPv4Addresses", []),
+                        "IPv4StaticAddresses": ip_result.get("after_static_addresses") or current_active_interface.get("IPv4StaticAddresses", []),
+                    }
+                    update_job(
+                        kit_name,
+                        job,
+                        "Running",
+                        "Verify static IPv4",
+                        6,
+                        total,
+                        (
+                            f"[OK] Static IPv4 applied via {', '.join(ip_result.get('applied_keys', []))} | "
+                            f"before_dhcpv4={ip_result.get('before_dhcpv4')} | after_dhcpv4={ip_result.get('after_dhcpv4')} | "
+                            f"before_ipv4={ip_result.get('before_ipv4_addresses') or ip_result.get('before_static_addresses')} | "
+                            f"after_ipv4={ip_result.get('after_ipv4_addresses') or ip_result.get('after_static_addresses')}"
+                        ),
+                    )
+                    if target_ip and target_ip != active_ip:
+                        before_ips = [
+                            str(item.get("Address") or "").strip()
+                            for item in (ip_result.get("before_ipv4_addresses") or ip_result.get("before_static_addresses") or [])
+                            if isinstance(item, dict)
+                        ]
+                        after_ips = [
+                            str(item.get("Address") or "").strip()
+                            for item in (ip_result.get("after_ipv4_addresses") or ip_result.get("after_static_addresses") or [])
+                            if isinstance(item, dict)
+                        ]
+                        target_seen_in_readback = target_ip in before_ips or target_ip in after_ips
+                        if target_seen_in_readback:
                             endpoint_transition_pending = True
-                            job["active_ip"] = active_ip
                             job["expected_final_ip"] = expected_final_ip
-                            job["ip_reconnect_failed"] = True
-                            job["ip_reconnect_notes"] = reconnect_result.get("notes", [])
+                            job["active_ip"] = active_ip
                             save_job(kit_name, job)
                             update_job(
                                 kit_name,
@@ -6584,21 +6687,50 @@ def run_ilo_real(cfg: dict):
                                 6,
                                 total,
                                 (
-                                    "[WARN] Target iLO IP did not come up yet, but the current iLO session is still active. "
-                                    f"Continuing on {active_ip} and deferring final verification for {target_ip}."
+                                    "[INFO] Target iLO IP already appeared in interface readback. "
+                                    f"Keeping the current session on {active_ip} and deferring final target verification for {target_ip}."
                                 ),
                             )
-            except Exception as e:
-                config_changes_succeeded = False
-                update_job(
-                    kit_name,
-                    job,
-                    "Running",
-                    "Apply static IPv4",
-                    6,
-                    total,
-                    f"[FAILED] Static IPv4 update not applied: {e}"
-                )
+                        else:
+                            reconnect_result = reconnect_to_active_ip(
+                                target_ip,
+                                stage_name="Reconnect to iLO",
+                                step_index=6,
+                            )
+                            if reconnect_result.get("connected"):
+                                job["active_ip"] = active_ip
+                                job["expected_final_ip"] = expected_final_ip
+                                save_job(kit_name, job)
+                            else:
+                                endpoint_transition_pending = True
+                                job["active_ip"] = active_ip
+                                job["expected_final_ip"] = expected_final_ip
+                                job["ip_reconnect_failed"] = True
+                                job["ip_reconnect_notes"] = reconnect_result.get("notes", [])
+                                save_job(kit_name, job)
+                                update_job(
+                                    kit_name,
+                                    job,
+                                    "Running",
+                                    "Reconnect to iLO",
+                                    6,
+                                    total,
+                                    (
+                                        "[WARN] Target iLO IP did not come up yet, but the current iLO session is still active. "
+                                        f"Continuing on {active_ip} and deferring final verification for {target_ip}."
+                                    ),
+                                )
+                except Exception as e:
+                    config_changes_succeeded = False
+                    update_job(
+                        kit_name,
+                        job,
+                        "Running",
+                        "Apply static IPv4",
+                        6,
+                        total,
+                        f"[FAILED] Static IPv4 update not applied: {e}"
+                    )
         else:
             update_job(
                 kit_name,
@@ -6611,28 +6743,43 @@ def run_ilo_real(cfg: dict):
             )
 
         if desired_hostname:
-            config_changes_attempted = True
-            update_job(
-                kit_name,
-                job,
-                "Running",
-                "Apply iLO hostname",
-                7,
-                total,
-                f"[RUNNING] Attempting to set iLO hostname to: {desired_hostname}"
-            )
-            result = client.set_hostname_best_effort(desired_hostname)
-            update_job(
-                kit_name,
-                job,
-                "Running",
-                "Verify iLO hostname",
-                8,
-                total,
-                f"[OK] Hostname write via {result.get('method')} | before='{result.get('before','')}' | after='{result.get('after','')}' | matched={result.get('matched')}"
-            )
-            if not result.get("matched"):
-                config_changes_succeeded = False
+            current_hostname = current_hostname_value(current_network_protocol, current_active_interface)
+            if current_hostname == desired_hostname:
+                update_job(
+                    kit_name,
+                    job,
+                    "Running",
+                    "Apply iLO hostname",
+                    7,
+                    total,
+                    f"[OK] Hostname already correct; no change needed for {desired_hostname}.",
+                )
+            else:
+                config_changes_attempted = True
+                update_job(
+                    kit_name,
+                    job,
+                    "Running",
+                    "Apply iLO hostname",
+                    7,
+                    total,
+                    f"[RUNNING] Attempting to set iLO hostname to: {desired_hostname}"
+                )
+                result = client.set_hostname_best_effort(desired_hostname)
+                hostname_change_applied = bool(result.get("changed"))
+                current_network_protocol["HostName"] = result.get("after", current_network_protocol.get("HostName"))
+                current_active_interface["HostName"] = result.get("after", current_active_interface.get("HostName"))
+                update_job(
+                    kit_name,
+                    job,
+                    "Running",
+                    "Verify iLO hostname",
+                    8,
+                    total,
+                    f"[OK] Hostname write via {result.get('method')} | before='{result.get('before','')}' | after='{result.get('after','')}' | matched={result.get('matched')}"
+                )
+                if not result.get("matched"):
+                    config_changes_succeeded = False
         else:
             update_job(
                 kit_name,
@@ -6645,8 +6792,17 @@ def run_ilo_real(cfg: dict):
             )
 
         if shared_dns:
-            config_changes_attempted = True
-            try:
+            current_dns = normalize_dns_values(
+                current_active_interface.get("StaticNameServers")
+                or current_active_interface.get("NameServers")
+                or []
+            )
+            requested_dns = normalize_dns_values(shared_dns)
+            if current_dns[: len(requested_dns)] == requested_dns:
+                job["dns_apply_status"] = "Already correct"
+                job["dns_before_values"] = list(current_dns)
+                job["dns_applied_values"] = list(current_dns)
+                save_job(kit_name, job)
                 update_job(
                     kit_name,
                     job,
@@ -6654,71 +6810,86 @@ def run_ilo_real(cfg: dict):
                     "Apply DNS",
                     9,
                     total,
-                    (
-                        "[RUNNING] DNS apply attempt | "
-                        "source=shared_network.dns_servers | "
-                        f"target={active_ip} | values={', '.join(shared_dns)}"
-                    )
+                    f"[OK] DNS already correct; no change needed for {', '.join(requested_dns)}.",
                 )
-                dns_result = client.set_dns_servers_best_effort(shared_dns)
-                dns_matched = bool(dns_result.get("matched")) if "matched" in dns_result else bool(dns_result.get("verified"))
-                job["dns_apply_status"] = str(dns_result.get("status") or "Mismatch")
-                dns_before = dns_result.get("before") or {}
-                dns_after = dns_result.get("after") or {}
-                job["dns_before_values"] = list(dns_before.get("StaticNameServers") or dns_before.get("NameServers") or dns_result.get("before_static") or dns_result.get("before_names") or [])
-                job["dns_applied_values"] = list(
-                    dns_after.get("StaticNameServers")
-                    or dns_after.get("NameServers")
-                    or dns_result.get("after_static")
-                    or dns_result.get("after_names")
-                    or []
-                )
-                job["dns_applied_keys"] = list(dns_result.get("applied_keys") or [])
-                job["dns_mismatches"] = list(dns_result.get("mismatches") or [])
-                job["dns_reset_recommended"] = bool(dns_result.get("reset_recommended"))
-                save_job(kit_name, job)
-                if not dns_matched:
-                    config_changes_succeeded = False
-                update_job(
-                    kit_name,
-                    job,
-                    "Running",
-                    "Verify DNS",
-                    10,
-                    total,
-                    (
+            else:
+                config_changes_attempted = True
+                try:
+                    update_job(
+                        kit_name,
+                        job,
+                        "Running",
+                        "Apply DNS",
+                        9,
+                        total,
                         (
-                            "[OK] DNS verified and saved on active iLO interface"
-                            if dns_matched
-                            else "[WARN] DNS write accepted but readback did not match requested values"
+                            "[RUNNING] DNS apply attempt | "
+                            "source=shared_network.dns_servers | "
+                            f"target={active_ip} | values={', '.join(shared_dns)}"
                         )
-                        + " | "
-                        + f"path={dns_result.get('path', '(unknown)')} | "
-                        + f"requested={dns_result.get('requested', [])} | "
-                        + f"after={dns_result.get('after', {})} | "
-                        + f"mismatches={dns_result.get('mismatches', []) or '(none)'} | "
-                        + f"reset_recommended={dns_result.get('reset_recommended')} | "
-                        + f"notes={dns_result.get('notes', [])}"
                     )
-                )
-            except Exception as e:
-                config_changes_succeeded = False
-                job["dns_apply_status"] = "Failed"
-                job["dns_applied_values"] = list(shared_dns)
-                save_job(kit_name, job)
-                update_job(
-                    kit_name,
-                    job,
-                    "Running",
-                    "Apply DNS",
-                    10,
-                    total,
-                    (
-                        "[FAILED] DNS apply failed | "
-                        "source=shared_network.dns_servers | "
-                        f"target={active_ip} | values={', '.join(shared_dns)} | error={e}"
+                    dns_result = client.set_dns_servers_best_effort(shared_dns)
+                    dns_change_applied = bool(dns_result.get("changed"))
+                    dns_matched = bool(dns_result.get("matched")) if "matched" in dns_result else bool(dns_result.get("verified"))
+                    job["dns_apply_status"] = str(dns_result.get("status") or "Mismatch")
+                    dns_before = dns_result.get("before") or {}
+                    dns_after = dns_result.get("after") or {}
+                    job["dns_before_values"] = list(dns_before.get("StaticNameServers") or dns_before.get("NameServers") or dns_result.get("before_static") or dns_result.get("before_names") or [])
+                    job["dns_applied_values"] = list(
+                        dns_after.get("StaticNameServers")
+                        or dns_after.get("NameServers")
+                        or dns_result.get("after_static")
+                        or dns_result.get("after_names")
+                        or []
                     )
-                )
+                    current_active_interface["StaticNameServers"] = list(dns_after.get("StaticNameServers") or [])
+                    current_active_interface["NameServers"] = list(dns_after.get("NameServers") or [])
+                    job["dns_applied_keys"] = list(dns_result.get("applied_keys") or [])
+                    job["dns_mismatches"] = list(dns_result.get("mismatches") or [])
+                    job["dns_reset_recommended"] = bool(dns_result.get("reset_recommended"))
+                    save_job(kit_name, job)
+                    if not dns_matched:
+                        config_changes_succeeded = False
+                    update_job(
+                        kit_name,
+                        job,
+                        "Running",
+                        "Verify DNS",
+                        10,
+                        total,
+                        (
+                            (
+                                "[OK] DNS verified and saved on active iLO interface"
+                                if dns_matched
+                                else "[WARN] DNS write accepted but readback did not match requested values"
+                            )
+                            + " | "
+                            + f"path={dns_result.get('path', '(unknown)')} | "
+                            + f"requested={dns_result.get('requested', [])} | "
+                            + f"after={dns_result.get('after', {})} | "
+                            + f"mismatches={dns_result.get('mismatches', []) or '(none)'} | "
+                            + f"reset_recommended={dns_result.get('reset_recommended')} | "
+                            + f"notes={dns_result.get('notes', [])}"
+                        )
+                    )
+                except Exception as e:
+                    config_changes_succeeded = False
+                    job["dns_apply_status"] = "Failed"
+                    job["dns_applied_values"] = list(shared_dns)
+                    save_job(kit_name, job)
+                    update_job(
+                        kit_name,
+                        job,
+                        "Running",
+                        "Apply DNS",
+                        10,
+                        total,
+                        (
+                            "[FAILED] DNS apply failed | "
+                            "source=shared_network.dns_servers | "
+                            f"target={active_ip} | values={', '.join(shared_dns)} | error={e}"
+                        )
+                    )
         else:
             job["dns_apply_status"] = "Skipped"
             job["dns_applied_values"] = []
@@ -6765,64 +6936,79 @@ def run_ilo_real(cfg: dict):
             )
 
         try:
-            config_changes_attempted = True
-            update_job(
-                kit_name,
-                job,
-                "Running",
-                "Harden SNMP",
-                12,
-                total,
-                (
-                    "[RUNNING] SNMP apply attempt | "
-                    f"target={active_ip} | username={active_snmp_user.get('username', '') or '(none)'} | "
-                    f"auth={desired_auth_protocol} | priv={desired_priv_protocol} | "
-                    f"auth_secret={'Yes' if active_snmp_user.get('auth_password') else 'No'} | "
-                    f"privacy_secret={'Yes' if active_snmp_user.get('priv_password') else 'No'}"
+            if current_snmp_matches(current_network_protocol):
+                job["snmp_apply_status"] = "Already correct"
+                save_job(kit_name, job)
+                update_job(
+                    kit_name,
+                    job,
+                    "Running",
+                    "Harden SNMP",
+                    12,
+                    total,
+                    "[OK] SNMP already correct; no change needed.",
                 )
-            )
-            snmp_result = client.harden_snmp_best_effort(
-                v3_username=active_snmp_user.get("username", ""),
-                v3_auth_protocol=active_snmp_user.get("auth_protocol", "SHA"),
-                v3_auth_password=active_snmp_user.get("auth_password", ""),
-                v3_priv_protocol=active_snmp_user.get("priv_protocol", "AES"),
-                v3_priv_password=active_snmp_user.get("priv_password", ""),
-            )
-            job["snmp_apply_status"] = str(snmp_result.get("status") or "Mismatch")
-            job["snmp_applied_keys"] = list(snmp_result.get("applied_keys") or [])
-            job["snmp_verified_checks"] = list(snmp_result.get("verification", {}).get("checks") or [])
-            job["snmp_mismatches"] = list(snmp_result.get("mismatches") or [])
-            job["snmp_reset_recommended"] = bool(snmp_result.get("reset_recommended"))
-            save_job(kit_name, job)
-            snmp_matched = bool(snmp_result.get("matched")) if "matched" in snmp_result else bool(snmp_result.get("verified"))
-            if not snmp_matched:
-                config_changes_succeeded = False
-            update_job(
-                kit_name,
-                job,
-                "Running",
-                "Harden SNMP",
-                12,
-                total,
-                (
+            else:
+                config_changes_attempted = True
+                update_job(
+                    kit_name,
+                    job,
+                    "Running",
+                    "Harden SNMP",
+                    12,
+                    total,
                     (
-                        "[OK] SNMP verified after apply"
-                        if snmp_matched
-                        else "[WARN] SNMP settings partially matched after apply"
+                        "[RUNNING] SNMP apply attempt | "
+                        f"target={active_ip} | username={active_snmp_user.get('username', '') or '(none)'} | "
+                        f"auth={desired_auth_protocol} | priv={desired_priv_protocol} | "
+                        f"auth_secret={'Yes' if active_snmp_user.get('auth_password') else 'No'} | "
+                        f"privacy_secret={'Yes' if active_snmp_user.get('priv_password') else 'No'}"
                     )
-                    + " | "
-                    + f"path={snmp_result.get('path', '(unknown)')} | "
-                    + f"username={active_snmp_user.get('username', '') or '(none)'} | "
-                    + f"active_ip={active_ip} | "
-                    + f"auth={desired_auth_protocol} | priv={desired_priv_protocol} | "
-                    + f"auth_secret={'Yes' if active_snmp_user.get('auth_password') else 'No'} | "
-                    + f"privacy_secret={'Yes' if active_snmp_user.get('priv_password') else 'No'} | "
-                    + f"checks={snmp_result.get('verification', {}).get('checks', [])} | "
-                    + f"mismatches={snmp_result.get('mismatches', []) or '(none)'} | "
-                    + f"reset_recommended={snmp_result.get('reset_recommended')} | "
-                    + f"notes={snmp_result.get('notes', [])}"
                 )
-            )
+                snmp_result = client.harden_snmp_best_effort(
+                    v3_username=active_snmp_user.get("username", ""),
+                    v3_auth_protocol=active_snmp_user.get("auth_protocol", "SHA"),
+                    v3_auth_password=active_snmp_user.get("auth_password", ""),
+                    v3_priv_protocol=active_snmp_user.get("priv_protocol", "AES"),
+                    v3_priv_password=active_snmp_user.get("priv_password", ""),
+                )
+                snmp_change_applied = bool(snmp_result.get("changed"))
+                current_network_protocol["SNMP"] = dict(snmp_result.get("after") or current_network_protocol.get("SNMP") or {})
+                job["snmp_apply_status"] = str(snmp_result.get("status") or "Mismatch")
+                job["snmp_applied_keys"] = list(snmp_result.get("applied_keys") or [])
+                job["snmp_verified_checks"] = list(snmp_result.get("verification", {}).get("checks") or [])
+                job["snmp_mismatches"] = list(snmp_result.get("mismatches") or [])
+                job["snmp_reset_recommended"] = bool(snmp_result.get("reset_recommended"))
+                save_job(kit_name, job)
+                snmp_matched = bool(snmp_result.get("matched")) if "matched" in snmp_result else bool(snmp_result.get("verified"))
+                if not snmp_matched:
+                    config_changes_succeeded = False
+                update_job(
+                    kit_name,
+                    job,
+                    "Running",
+                    "Harden SNMP",
+                    12,
+                    total,
+                    (
+                        (
+                            "[OK] SNMP verified after apply"
+                            if snmp_matched
+                            else "[WARN] SNMP settings partially matched after apply"
+                        )
+                        + " | "
+                        + f"path={snmp_result.get('path', '(unknown)')} | "
+                        + f"username={active_snmp_user.get('username', '') or '(none)'} | "
+                        + f"active_ip={active_ip} | "
+                        + f"auth={desired_auth_protocol} | priv={desired_priv_protocol} | "
+                        + f"auth_secret={'Yes' if active_snmp_user.get('auth_password') else 'No'} | "
+                        + f"privacy_secret={'Yes' if active_snmp_user.get('priv_password') else 'No'} | "
+                        + f"checks={snmp_result.get('verification', {}).get('checks', [])} | "
+                        + f"mismatches={snmp_result.get('mismatches', []) or '(none)'} | "
+                        + f"reset_recommended={snmp_result.get('reset_recommended')} | "
+                        + f"notes={snmp_result.get('notes', [])}"
+                    )
+                )
         except Exception as e:
             config_changes_succeeded = False
             job["snmp_apply_status"] = "Failed"
@@ -6857,6 +7043,7 @@ def run_ilo_real(cfg: dict):
                     f"[RUNNING] Ensuring additional local iLO users: {', '.join([item.get('username', '') for item in additional_ilo_users])}",
                 )
                 accounts_result = client.ensure_local_accounts_best_effort(additional_ilo_users)
+                local_users_change_applied = any(item.get("changed") for item in accounts_result.get("results") or [])
                 job["local_account_status"] = str(accounts_result.get("status") or "Mismatch")
                 job["local_account_results"] = list(accounts_result.get("results") or [])
                 save_job(kit_name, job)
@@ -6912,11 +7099,45 @@ def run_ilo_real(cfg: dict):
                 14,
                 total,
                 (
-                    "[INFO] Final iLO target verification is still pending. "
-                    f"Current control session={active_ip} | expected_final_ip={expected_final_ip}"
-                ),
-            )
-        reset_recommended = bool(desired_hostname) or job.get("dns_reset_recommended") or job.get("snmp_reset_recommended") or job.get("local_account_status") == "Verified"
+                "[INFO] Final iLO target verification is still pending. "
+                f"Current control session={active_ip} | expected_final_ip={expected_final_ip}"
+            ),
+        )
+        change_summary = {
+            "ipv4": "changed" if ip_change_applied else ("already-correct" if target_ip and desired_subnet_mask and desired_gateway else "not-requested"),
+            "hostname": "changed" if hostname_change_applied else ("already-correct" if desired_hostname else "not-requested"),
+            "dns": "changed" if dns_change_applied else ("already-correct" if shared_dns else "not-requested"),
+            "snmp": "changed" if snmp_change_applied else ("already-correct" if active_snmp_user.get("username") else "not-requested"),
+            "local_users": "changed" if local_users_change_applied else ("already-correct" if additional_ilo_users else "not-requested"),
+        }
+        job["ilo_change_summary"] = dict(change_summary)
+        update_job(
+            kit_name,
+            job,
+            "Running",
+            "Finish iLO stage",
+            14,
+            total,
+            (
+                "[INFO] Change summary | "
+                f"IPv4={change_summary['ipv4']} | "
+                f"Hostname={change_summary['hostname']} | "
+                f"DNS={change_summary['dns']} | "
+                f"SNMP={change_summary['snmp']} | "
+                f"Local users={change_summary['local_users']}"
+            ),
+        )
+        reset_recommended = ip_change_applied
+        job["ilo_reset_reason"] = "iLO IP changed" if reset_recommended else "no reset-worthy iLO change was applied"
+        update_job(
+            kit_name,
+            job,
+            "Running",
+            "Finish iLO stage",
+            14,
+            total,
+            f"[INFO] Reset decision | required={'yes' if reset_recommended else 'no'} | reason={job['ilo_reset_reason']}",
+        )
 
         if config_changes_attempted and not config_changes_succeeded:
             job["ilo_reset_required"] = False
