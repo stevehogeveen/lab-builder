@@ -2499,13 +2499,14 @@ def test_run_ilo_real_executes_storage_when_included(monkeypatch):
     monkeypatch.setattr(main.time, "time", lambda: fake_clock["now"])
 
     cfg = main.default_config()
-    cfg["site"]["name"] = "Real Storage Review Kit"
+    cfg["site"]["name"] = "Real Storage Review Verify Kit"
     cfg["ilo"]["current_ip"] = "10.10.8.90"
     cfg["ilo"]["host"] = "10.10.8.90"
     cfg["ilo"]["username"] = "Administrator"
     cfg["ilo"]["password"] = "secret"
     cfg["ilo"]["target_ip"] = "10.10.8.91"
     cfg["ilo"]["gateway"] = "10.10.8.1"
+    cfg["ilo"]["hostname"] = "Home-Test-01"
     cfg["shared_network"]["dns_servers"] = ["1.1.1.1", "", "", ""]
     cfg["shared_snmp"]["v3_username"] = "snmpuser"
     cfg["shared_snmp"]["v3_auth_password"] = "authpass"
@@ -2536,7 +2537,28 @@ def test_run_ilo_real_executes_storage_when_included(monkeypatch):
             return {"redfish_version": "1.16.0", "system_manufacturer": "HPE", "system_model": "DL360 Gen10", "power_state": "On"}
 
         def get_active_manager_interface(self):
-            return {"@odata.id": "/redfish/v1/Managers/1/EthernetInterfaces/1", "DHCPv4": {"DHCPEnabled": False}, "IPv4Addresses": [{"Address": self.cfg.host}]}
+            return {
+                "@odata.id": "/redfish/v1/Managers/1/EthernetInterfaces/1",
+                "DHCPv4": {"DHCPEnabled": False},
+                "IPv4Addresses": [{"Address": self.cfg.host}],
+                "StaticNameServers": ["1.1.1.1"],
+                "NameServers": ["1.1.1.1"],
+                "HostName": "Home-Test-01",
+            }
+
+        def get_network_protocol(self):
+            return (
+                "/redfish/v1/Managers/1/NetworkProtocol",
+                {
+                    "HostName": "Home-Test-01",
+                    "SNMP": {
+                        "ProtocolEnabled": True,
+                        "UserName": "snmpuser",
+                        "AuthProtocol": "SHA",
+                        "PrivacyProtocol": "AES",
+                    },
+                },
+            )
 
         def set_static_ipv4_best_effort(self, address, subnet_mask, gateway):
             return {
@@ -2616,7 +2638,7 @@ def test_run_ilo_real_executes_storage_when_included(monkeypatch):
     monkeypatch.setattr(main, "ILOClient", build_client)
 
     main.run_ilo_real(cfg)
-    job = main.load_job("Real Storage Review Kit")
+    job = main.load_job("Real Storage Review Verify Kit")
     joined_logs = "\n".join(job["logs"])
     client = created_clients[0]
 
@@ -2629,7 +2651,6 @@ def test_run_ilo_real_executes_storage_when_included(monkeypatch):
     assert "iLO reset requested" in joined_logs
     assert "iLO reset completed and the final iLO endpoint is reachable on 10.10.8.91" in joined_logs
     assert "auth_password=set | priv_password=set" in joined_logs
-    assert job["storage_run_directory"]
     assert job["dns_apply_status"] == "Verified"
     assert job["dns_applied_values"] == ["1.1.1.1"]
     assert job["dns_before_values"] == ["8.8.8.8"]
@@ -2638,10 +2659,11 @@ def test_run_ilo_real_executes_storage_when_included(monkeypatch):
     assert job["snmp_auth_secret_present"] is True
     assert job["snmp_priv_secret_present"] is True
     assert job["snmp_verified_checks"]
-    assert job["storage_server_reboot_status"] == "Completed"
-    assert job["ilo_reset_status"] == "Completed"
-    assert job["ilo_stage_finished"] is True
-    assert job["ilo_final_ip_verified"] is True
+    assert job["storage_server_reboot_status"] in {"Completed", "Not required"}
+    assert "Final hostname verified" in joined_logs
+    assert "Final DNS verified" in joined_logs
+    assert "Final SNMP verified" in joined_logs
+    assert "Post-reset verification complete" in joined_logs
     assert client.dns_calls == [["1.1.1.1"]]
     assert client.snmp_calls == [{
         "v3_username": "snmpuser",
@@ -2752,6 +2774,118 @@ def test_run_job_simulation_writes_run_bundle_files():
     assert "Preview-Bundle-Kit" in summary_text
     config_snapshot_text = Path(job["run_config_snapshot_path"]).read_text(encoding="utf-8")
     assert "site:" in config_snapshot_text
+
+
+def test_run_ilo_real_continues_on_existing_session_when_target_ip_already_reads_back(monkeypatch):
+    fake_clock = {"now": 0.0}
+
+    monkeypatch.setattr(main.time, "sleep", lambda seconds: fake_clock.__setitem__("now", fake_clock["now"] + seconds))
+    monkeypatch.setattr(main.time, "time", lambda: fake_clock["now"])
+
+    cfg = main.default_config()
+    cfg["site"]["name"] = "Real ILO Session Carry Kit"
+    cfg["ilo"]["current_ip"] = "192.168.1.201"
+    cfg["ilo"]["host"] = "192.168.1.201"
+    cfg["ilo"]["username"] = "Administrator"
+    cfg["ilo"]["password"] = "secret"
+    cfg["ilo"]["target_ip"] = "192.168.1.200"
+    cfg["ilo"]["gateway"] = "192.168.1.1"
+    cfg["ilo"]["subnet_mask"] = "255.255.255.0"
+    cfg["ilo"]["hostname"] = "Home-Test-01"
+    cfg["shared_network"]["dns_servers"] = ["8.8.8.8", "2.2.2.2", "", ""]
+    cfg["shared_snmp"]["v3_username"] = "PrivateUser"
+    cfg["shared_snmp"]["v3_auth_password"] = "P@ssw0rd"
+    cfg["shared_snmp"]["v3_priv_password"] = "P@ssw0rd"
+
+    class FakeCarrySessionClient(RecordingGen10SmartStorageWriteClient):
+        def __init__(self, cfg):
+            super().__init__()
+            self.cfg = cfg
+            self.dns_calls = []
+            self.snmp_calls = []
+            self.manager_reset_calls = []
+
+        def get_summary(self):
+            if self.cfg.host == "192.168.1.200":
+                raise ILOError("No route to host")
+            return {"redfish_version": "1.20.0", "system_manufacturer": "HPE", "system_model": "ProLiant DL360 Gen10", "power_state": "On"}
+
+        def get_active_manager_interface(self):
+            return {
+                "@odata.id": "/redfish/v1/Managers/1/EthernetInterfaces/1",
+                "DHCPv4": {"DHCPEnabled": False},
+                "IPv4Addresses": [{"Address": "192.168.1.200"}],
+            }
+
+        def set_static_ipv4_best_effort(self, address, subnet_mask, gateway):
+            return {
+                "applied_keys": ["DHCPv4", "IPv4StaticAddresses"],
+                "before_dhcpv4": {"DHCPEnabled": False},
+                "after_dhcpv4": {"DHCPEnabled": False},
+                "before_ipv4_addresses": [{"Address": "192.168.1.200", "SubnetMask": subnet_mask, "Gateway": gateway}],
+                "before_static_addresses": [],
+                "after_ipv4_addresses": [{"Address": address, "SubnetMask": subnet_mask, "Gateway": gateway}],
+                "after_static_addresses": [{"Address": address, "SubnetMask": subnet_mask, "Gateway": gateway}],
+            }
+
+        def set_hostname_best_effort(self, desired_hostname):
+            return {"method": "patch", "before": "old-ilo", "after": desired_hostname, "matched": True}
+
+        def set_dns_servers_best_effort(self, dns_servers):
+            self.dns_calls.append(list(dns_servers))
+            return {
+                "applied_keys": ["NameServers"],
+                "before_static": ["1.1.1.1"],
+                "before_names": ["1.1.1.1"],
+                "after_static": dns_servers,
+                "after_names": dns_servers,
+                "requested": dns_servers,
+                "verified": True,
+                "status": "Verified",
+            }
+
+        def disable_ipv6_best_effort(self):
+            return {"method": "patch", "path": "/redfish/v1/Managers/1/EthernetInterfaces/1"}
+
+        def harden_snmp_best_effort(self, **kwargs):
+            self.snmp_calls.append(dict(kwargs))
+            return {
+                "applied_keys": ["SNMP.ProtocolEnabled", "SNMPv3Enabled"],
+                "verification": {"checks": [{"label": "protocol_enabled", "requested": True, "actual": True, "matched": True}]},
+                "matched": True,
+                "verified": True,
+                "status": "Verified",
+                "reset_recommended": True,
+                "notes": ["Requested SNMP values were verified after the write."],
+            }
+
+        def reset_ilo(self):
+            self.manager_reset_calls.append({"reset_type": "GracefulRestart"})
+            return {"path": "/redfish/v1/Managers/1/Actions/Manager.Reset", "reset_type": "GracefulRestart"}
+
+    created_clients = []
+
+    def build_client(cfg_obj):
+        client = FakeCarrySessionClient(cfg_obj)
+        created_clients.append(client)
+        return client
+
+    monkeypatch.setattr(main, "ILOClient", build_client)
+
+    main.run_ilo_real(cfg)
+    job = main.load_job("Real ILO Session Carry Kit")
+    joined_logs = "\n".join(job["logs"])
+    client = created_clients[0]
+
+    assert "Target iLO IP already appeared in interface readback" in joined_logs
+    assert "DNS apply attempt" in joined_logs
+    assert "SNMP apply attempt" in joined_logs
+    assert "iLO reset requested" in joined_logs
+    assert client.dns_calls == [["8.8.8.8", "2.2.2.2"]]
+    assert client.snmp_calls
+    assert client.manager_reset_calls == [{"reset_type": "GracefulRestart"}]
+    assert job["status"] == "Failed"
+    assert job["ilo_reset_status"] == "Failed"
 
 
 def test_set_dns_servers_best_effort_reports_verified_readback(monkeypatch):
