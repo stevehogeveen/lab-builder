@@ -860,20 +860,36 @@ def test_save_ilo_settings_updates_only_ilo_page_fields(client):
             "return_page": "ilo",
             "ilo_current_ip": "10.10.8.50",
             "ilo_target_ip": "10.10.8.11",
-            "ilo_gateway": "10.10.8.254",
+            "ilo_gateway": "",
             "ilo_hostname": "ilo-focused",
             "ilo_username": "Administrator",
             "ilo_password": "secret",
-            "included_ilo": "on",
         },
     )
 
     assert response.status_code == 200
     cfg = main.load_kit_config("Ilo-Page-Kit")
     assert cfg["ilo"]["current_ip"] == "10.10.8.50"
-    assert cfg["ilo"]["gateway"] == "10.10.8.254"
+    assert cfg["ilo"]["gateway"] == "10.10.8.1"
     assert cfg["ilo"]["hostname"] == "ilo-focused"
     assert cfg["included"]["ilo"] is True
+
+
+def test_ilo_page_removes_old_controls_and_points_to_storage(client):
+    cfg = main.default_config()
+    cfg["site"]["name"] = "Ilo UI Kit"
+    cfg["ip_plan"]["ilo"] = "10.10.8.11"
+    cfg["ip_plan"]["gateway"] = "10.10.8.1"
+    main.save_kit_config(cfg)
+
+    response = client.get("/ilo")
+
+    assert response.status_code == 200
+    assert "Open global settings" not in response.text
+    assert "Include iLO setup in this kit" not in response.text
+    assert "Open Storage setup" in response.text
+    assert "Read current iLO" in response.text
+    assert "This is filled in from Global Settings unless you replace it here." in response.text
 
 
 def test_save_esxi_windows_and_qnap_page_settings(client):
@@ -1025,10 +1041,9 @@ def test_latest_live_summary_and_raw_downloads_use_new_export_layout(client, mon
 
     response = client.post("/export-ilo-inventory", data={"return_page": "configs"})
     assert response.status_code == 200
-    assert "Live Inventory Status" in response.text
-    assert "Summary file:" in response.text
-    assert "Raw file:" in response.text
-    assert "Host: 10.10.8.50" in response.text
+    assert "Current iLO inventory captured" in response.text
+    assert "Target: 10.10.8.50" in response.text
+    assert "Open artifacts page" in response.text
 
     latest = main.latest_live_inventory_export()
     assert latest is not None
@@ -1038,7 +1053,6 @@ def test_latest_live_summary_and_raw_downloads_use_new_export_layout(client, mon
     view_response = client.post("/view-latest-live-summary", data={"return_page": "configs"})
     assert view_response.status_code == 200
     assert "Latest Live Summary" in view_response.text
-    assert "Live Inventory Status" in view_response.text
     assert "serial_number: ABC123" in view_response.text
 
     summary_download = client.post("/download-latest-live-summary")
@@ -1054,6 +1068,26 @@ def test_latest_live_summary_and_raw_downloads_use_new_export_layout(client, mon
     assert raw_download.headers["content-type"].startswith("application/json")
     assert raw_download.headers["x-live-inventory-summary-path"].endswith("summary.yml")
     assert raw_download.headers["x-live-inventory-raw-path"].endswith("raw.json")
+
+
+def test_export_ilo_inventory_renders_summary_and_download_actions_on_ilo_page(client, monkeypatch):
+    monkeypatch.setattr(main, "ILOClient", FakeILOClient)
+
+    cfg = main.default_config()
+    cfg["site"]["name"] = "Ilo Read Kit"
+    cfg["ilo"]["current_ip"] = "10.10.8.50"
+    cfg["ilo"]["host"] = "10.10.8.50"
+    cfg["ilo"]["username"] = "Administrator"
+    cfg["ilo"]["password"] = "kit-password"
+    main.save_kit_config(cfg)
+
+    response = client.post("/export-ilo-inventory", data={"return_page": "ilo"})
+
+    assert response.status_code == 200
+    assert "Latest Live Summary" in response.text
+    assert "serial_number: ABC123" in response.text
+    assert "Download current iLO summary" in response.text
+    assert "Download raw iLO data" in response.text
 
 
 def test_read_current_storage_saves_discovery_export_and_renders_summary(client, monkeypatch):
