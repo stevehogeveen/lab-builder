@@ -35,32 +35,6 @@
             --panel-glow: rgba(47, 111, 219, 0.05);
         }
 
-        body[data-theme="dark"] {
-            --bg: #0d1520;
-            --bg-soft: #131d2a;
-            --panel: rgba(19, 29, 42, 0.96);
-            --panel2: #182434;
-            --panel3: #1f2d3f;
-            --border: #26384d;
-            --border-strong: #324964;
-            --text: #e7eef8;
-            --muted: #9aa9bc;
-            --muted-soft: #afbccd;
-            --accent: #5a8fff;
-            --accent-soft: rgba(90, 143, 255, 0.14);
-            --good: #4fb98b;
-            --good-soft: rgba(79, 185, 139, 0.11);
-            --warn: #d0a24c;
-            --warn-soft: rgba(208, 162, 76, 0.11);
-            --bad: #d47d75;
-            --bad-soft: rgba(212, 125, 117, 0.11);
-            --sidebar: #111a27;
-            --hero-bg: rgba(19, 29, 42, 0.98);
-            --card-shadow: 0 10px 26px rgba(4, 10, 18, 0.26);
-            --card-shadow-hover: 0 14px 34px rgba(4, 10, 18, 0.3);
-            --panel-glow: rgba(90, 143, 255, 0.08);
-        }
-
         * { box-sizing: border-box; }
 
         body {
@@ -248,10 +222,6 @@
             border-color: var(--accent);
             transform: translateY(-1px);
             box-shadow: 0 10px 20px rgba(42, 103, 209, 0.1);
-        }
-
-        .theme-toggle {
-            min-width: 132px;
         }
 
         .btn-primary,
@@ -838,14 +808,9 @@
                 <div class="muted">{{ page_subtitle }}</div>
             </div>
             <div class="hero-meta">
-                <button id="theme-toggle" class="btn theme-toggle" type="button">Light Mode</button>
                 <div class="hero-stat">
                     <div class="hero-stat-label">Active Kit</div>
                     <div class="hero-stat-value">{{ current_kit }}</div>
-                </div>
-                <div class="hero-stat">
-                    <div class="hero-stat-label">Job Status</div>
-                    <div class="hero-stat-value">{{ job.get('status', 'Idle') }}</div>
                 </div>
             </div>
         </section>
@@ -862,26 +827,6 @@
 
 <script>
 (function () {
-    const themeKey = "lab-builder-theme";
-    const themeToggle = document.getElementById("theme-toggle");
-    const applyTheme = function (theme) {
-        document.body.setAttribute("data-theme", theme);
-        if (themeToggle) {
-            themeToggle.textContent = theme === "light" ? "Dark Mode" : "Light Mode";
-        }
-    };
-
-    const savedTheme = localStorage.getItem(themeKey) || "dark";
-    applyTheme(savedTheme);
-
-    if (themeToggle) {
-        themeToggle.addEventListener("click", function () {
-            const nextTheme = document.body.getAttribute("data-theme") === "light" ? "dark" : "light";
-            localStorage.setItem(themeKey, nextTheme);
-            applyTheme(nextTheme);
-        });
-    }
-
     const kitName = {{ current_kit|tojson }};
     const proto = window.location.protocol === "https:" ? "wss" : "ws";
     const wsUrl = `${proto}://${window.location.host}/ws/job/${encodeURIComponent(kitName)}`;

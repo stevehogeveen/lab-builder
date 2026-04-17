@@ -1899,7 +1899,7 @@ def test_execute_real_scope_starts_esxi_path(client, monkeypatch):
     assert started["started"] is True
 
 
-def test_prepare_execute_enables_real_launch_for_esxi_scope(client):
+def test_prepare_execute_enables_real_launch_for_esxi_scope(client, monkeypatch):
     cfg = main.default_config()
     cfg["site"]["name"] = "ESXi Launch Review Kit"
     cfg["ilo"]["current_ip"] = "10.10.8.90"
@@ -1910,6 +1910,25 @@ def test_prepare_execute_enables_real_launch_for_esxi_scope(client):
     cfg["esxi"]["root_password"] = "esxisecret"
     cfg["included"]["esxi"] = True
     main.save_kit_config(cfg)
+
+    class FakeNow:
+        def strftime(self, fmt):
+            assert fmt == "%Y%m%d-%H%M%S"
+            return "20260416-121500"
+
+    class FakeDateTime:
+        @staticmethod
+        def now():
+            return FakeNow()
+
+        @staticmethod
+        def fromtimestamp(ts):
+            from datetime import datetime as real_datetime
+            return real_datetime.fromtimestamp(ts)
+
+    monkeypatch.setattr(main, "datetime", FakeDateTime)
+    monkeypatch.setattr(main, "detect_public_base_url", lambda target_host="": "http://lab-builder.local:8000")
+    monkeypatch.setattr(main, "resolve_esxi_base_iso_path", lambda cfg_obj: main.Path("/tmp/base-esxi.iso"))
 
     response = client.post(
         "/prepare-execute",
@@ -1924,10 +1943,43 @@ def test_prepare_execute_enables_real_launch_for_esxi_scope(client):
     assert 'name="confirm_phrase" placeholder="EXECUTE" class="input" disabled' not in response.text
     assert "Review one part" not in response.text
     assert "Review run before execution" in response.text
+    assert "Saved kit values from the ESXi Setup page and shared defaults" in response.text
     assert "Management IP: 10.10.8.10" in response.text
     assert "Root password: Saved" in response.text
+    assert "Built ISO path:" in response.text
+    assert "esxi-20260416-121500/esxi-20260416-121500.iso" in response.text
+    assert "Virtual media URL:" in response.text
+    assert "http://lab-builder.local:8000/esxi-built-iso/ESXi-Launch-Review-Kit/esxi-20260416-121500.iso" in response.text
+    assert "Manual test defaults: Manual test script defaults are not used by Run Center" in response.text
+    assert 'name="esxi_run_stamp" value="20260416-121500"' in response.text
     stage_section = response.text.split("Stages that will run", 1)[1].split("Review before you start", 1)[0]
     assert "iLO" not in stage_section
+
+
+def test_prepare_execute_accepts_multiple_selected_runs(client):
+    cfg = main.default_config()
+    cfg["site"]["name"] = "Multi Review Kit"
+    cfg["ilo"]["current_ip"] = "10.10.8.90"
+    cfg["ilo"]["host"] = "10.10.8.90"
+    cfg["ilo"]["username"] = "Administrator"
+    cfg["ilo"]["password"] = "secret"
+    cfg["esxi"]["hostname"] = "esxi-lab"
+    cfg["esxi"]["root_password"] = "esxisecret"
+    cfg["windows"]["vm_name"] = "lab-win"
+    cfg["windows"]["admin_password"] = "windowssecret"
+    main.save_kit_config(cfg)
+
+    response = client.post(
+        "/prepare-execute",
+        data={"selected_scopes": ["esxi", "windows"], "return_page": "execution"},
+    )
+
+    assert response.status_code == 200
+    stage_section = response.text.split("Stages that will run", 1)[1].split("Review before you start", 1)[0]
+    assert "ESXi" in stage_section
+    assert "Windows" in stage_section
+    assert "QNAP" not in stage_section
+    assert "A real run is not available for this review yet." in response.text
 
 
 def test_run_esxi_real_builds_iso_and_starts_virtual_media_boot(monkeypatch, tmp_path):
@@ -1950,12 +2002,31 @@ def test_run_esxi_real_builds_iso_and_starts_virtual_media_boot(monkeypatch, tmp
 
     def fake_build_custom_iso(spec):
         built["spec"] = spec
+        (built_iso.parent / "build-summary.yml").write_text(
+            yaml.safe_dump(
+                {
+                    "generation": {
+                        "ks_cfg": {"generated": True},
+                        "boot_cfg": {"patched": True},
+                        "efi_boot_cfg": {"present": True, "patched": True},
+                    }
+                },
+                sort_keys=False,
+            ),
+            encoding="utf-8",
+        )
         return built_iso
 
     class FakeEsxiILOClient:
         def __init__(self, cfg):
             self.cfg = cfg
             self.power_state = "On"
+            self.boot_state = {
+                "Boot": {
+                    "BootSourceOverrideEnabled": "Disabled",
+                    "BootSourceOverrideTarget": "None",
+                }
+            }
             self.virtual_media = {
                 "@odata.id": "/redfish/v1/Managers/1/VirtualMedia/2",
                 "Inserted": True,
@@ -1980,7 +2051,7 @@ def test_run_esxi_real_builds_iso_and_starts_virtual_media_boot(monkeypatch, tmp
 
         def get_system(self, system_path):
             assert system_path == "/redfish/v1/Systems/1"
-            return {"PowerState": self.power_state}
+            return {"PowerState": self.power_state, **self.boot_state}
 
         def power_reset(self, reset_type="ForceRestart", system_path=None):
             self.calls.append(("power_reset", reset_type, system_path))
@@ -1998,6 +2069,24 @@ def test_run_esxi_real_builds_iso_and_starts_virtual_media_boot(monkeypatch, tmp
 
         def set_one_time_boot_cd(self, system_path=None):
             self.calls.append(("set_one_time_boot_cd", system_path))
+            before = {
+                "BootSourceOverrideEnabled": self.boot_state["Boot"]["BootSourceOverrideEnabled"],
+                "BootSourceOverrideTarget": self.boot_state["Boot"]["BootSourceOverrideTarget"],
+            }
+            self.boot_state["Boot"] = {
+                "BootSourceOverrideEnabled": "Once",
+                "BootSourceOverrideTarget": "Cd",
+            }
+            after = dict(self.boot_state["Boot"])
+            return {
+                "system_path": system_path or "/redfish/v1/Systems/1",
+                "before_enabled": before["BootSourceOverrideEnabled"],
+                "before_target": before["BootSourceOverrideTarget"],
+                "after_enabled": after["BootSourceOverrideEnabled"],
+                "after_target": after["BootSourceOverrideTarget"],
+                "matched": True,
+                "notes": ["Verified one-time boot override."],
+            }
 
     created_clients = []
 
@@ -2012,7 +2101,7 @@ def test_run_esxi_real_builds_iso_and_starts_virtual_media_boot(monkeypatch, tmp
     monkeypatch.setattr(main, "wait_for_esxi_management_ready", lambda host, **kwargs: {"host": host, "port": 443, "attempts": 2})
     monkeypatch.setattr(main, "ILOClient", build_client)
 
-    main.run_esxi_real(cfg)
+    main.run_esxi_real(cfg, run_stamp="20260416-120000")
 
     job = main.load_job("Real ESXi Run Kit")
     joined_logs = "\n".join(job["logs"])
@@ -2020,27 +2109,51 @@ def test_run_esxi_real_builds_iso_and_starts_virtual_media_boot(monkeypatch, tmp
     spec = built["spec"]
 
     assert "[RUNNING] Building custom ESXi ISO" in joined_logs
+    assert "[RUNNING] Generating KS.CFG" in joined_logs
+    assert "[OK] KS.CFG generated" in joined_logs
+    assert "[INFO] ESXi install values: hostname=esxi-lab, management_ip=10.10.8.10, subnet_mask=255.255.255.0, gateway=10.10.8.1, dns=1.1.1.1" in joined_logs
+    assert "[INFO] root_password=SET (policy-valid=no)" in joined_logs
+    assert "[INFO] Optional settings: vlan=(none), ntp=(none), ssh=yes, disable_ipv6=yes" in joined_logs
+    assert "[INFO] Base ISO: /tmp/base-esxi.iso" in joined_logs
+    assert "[OK] BOOT.CFG patched" in joined_logs
+    assert "[OK] EFI/BOOT/BOOT.CFG patched" in joined_logs
     assert f"[OK] Built ESXi ISO: {built_iso}" in joined_logs
+    assert "[INFO] Virtual media URL: http://lab-builder.local:8000/esxi-built-iso/Real-ESXi-Run-Kit/esxi-20260416-120000.iso" in joined_logs
     assert "[RUNNING] Ejecting previous virtual media" in joined_logs
     assert "[RUNNING] Powering server off before setting one-time boot" in joined_logs
     assert "[OK] Server is off" in joined_logs
     assert "[RUNNING] Mounting custom ESXi ISO" in joined_logs
     assert "[OK] Virtual media mounted" in joined_logs
-    assert "[RUNNING] Setting one-time boot to virtual media" in joined_logs
-    assert "[OK] One-time boot set" in joined_logs
+    assert "[RUNNING] Setting one-time boot to CD/DVD" in joined_logs
+    assert "[INFO] Boot override before: enabled=Disabled target=None" in joined_logs
+    assert "[OK] One-time boot set to CD/DVD" in joined_logs
+    assert "[INFO] Boot override after: enabled=Once target=Cd" in joined_logs
     assert "[RUNNING] Powering server on" in joined_logs
     assert "[RUNNING] Waiting for ESXi management network on 10.10.8.10" in joined_logs
     assert "[OK] ESXi responded on configured IP 10.10.8.10:443 after 2 checks. ESXi boot sequence started." in joined_logs
+    assert "esxisecret" not in joined_logs
     assert job["status"] == "Completed"
     assert job["esxi_iso_path"] == str(built_iso)
     assert job["esxi_iso_url"].endswith("/esxi-built-iso/Real-ESXi-Run-Kit/esxi-20260416-120000.iso")
     assert job["esxi_expected_ip"] == "10.10.8.10"
+    assert job["esxi_trace_path"].endswith("/esxi-run-trace.yml")
     assert spec.hostname == "esxi-lab"
     assert spec.management_ip == "10.10.8.10"
     assert spec.subnet_mask == "255.255.255.0"
     assert spec.gateway == "10.10.8.1"
     assert spec.dns_servers == ["1.1.1.1"]
     assert spec.root_password == "esxisecret"
+    assert spec.output_name == "esxi-20260416-120000"
+    trace_path = main.Path(job["esxi_trace_path"])
+    assert trace_path.exists()
+    trace = yaml.safe_load(trace_path.read_text(encoding="utf-8"))
+    assert trace["install_values"]["hostname"] == "esxi-lab"
+    assert trace["install_values"]["root_password_saved"] is True
+    assert trace["install_values"]["root_password_policy_valid"] is False
+    assert trace["artifacts"]["base_iso_path"] == "/tmp/base-esxi.iso"
+    assert trace["artifacts"]["output_iso_path"] == str(built_iso)
+    assert trace["artifacts"]["virtual_media_url"].endswith("/esxi-built-iso/Real-ESXi-Run-Kit/esxi-20260416-120000.iso")
+    assert trace["builder_summary"]["generation"]["boot_cfg"]["patched"] is True
     assert ("eject", "/redfish/v1/Managers/1/VirtualMedia/2") in client.calls
     assert ("power_reset", "GracefulShutdown", "/redfish/v1/Systems/1") in client.calls
     assert (
@@ -2054,6 +2167,101 @@ def test_run_esxi_real_builds_iso_and_starts_virtual_media_boot(monkeypatch, tmp
     ) in client.calls
     assert ("set_one_time_boot_cd", "/redfish/v1/Systems/1") in client.calls
     assert ("power_reset", "On", "/redfish/v1/Systems/1") in client.calls
+
+
+def test_run_esxi_real_blocks_power_on_when_boot_override_does_not_stick(monkeypatch, tmp_path):
+    cfg = main.default_config()
+    cfg["site"]["name"] = "Real ESXi Boot Failure Kit"
+    cfg["ilo"]["current_ip"] = "10.10.8.90"
+    cfg["ilo"]["host"] = "10.10.8.90"
+    cfg["ilo"]["username"] = "Administrator"
+    cfg["ilo"]["password"] = "secret"
+    cfg["esxi"]["hostname"] = "esxi-lab"
+    cfg["esxi"]["management_ip"] = "10.10.8.10"
+    cfg["esxi"]["subnet_mask"] = "255.255.255.0"
+    cfg["esxi"]["gateway"] = "10.10.8.1"
+    cfg["esxi"]["root_password"] = "esxisecret"
+
+    built_iso = tmp_path / "esxi-20260416-120000.iso"
+    built_iso.write_text("iso", encoding="utf-8")
+
+    class FakeEsxiILOClient:
+        def __init__(self, cfg):
+            self.cfg = cfg
+            self.power_state = "Off"
+            self.boot_state = {
+                "Boot": {
+                    "BootSourceOverrideEnabled": "Disabled",
+                    "BootSourceOverrideTarget": "None",
+                }
+            }
+            self.calls = []
+
+        def get_virtual_media(self):
+            return [{
+                "@odata.id": "/redfish/v1/Managers/1/VirtualMedia/2",
+                "Inserted": False,
+                "MediaTypes": ["CD", "DVD"],
+                "Actions": {
+                    "#VirtualMedia.InsertMedia": {"target": "/redfish/v1/Managers/1/VirtualMedia/2/Actions/VirtualMedia.InsertMedia"},
+                },
+            }]
+            self.calls = []
+
+        def eject_virtual_media(self, vm_path):
+            self.calls.append(("eject", vm_path))
+
+        def get_systems(self):
+            return ["/redfish/v1/Systems/1"]
+
+        def get_system(self, system_path):
+            return {"PowerState": self.power_state, **self.boot_state}
+
+        def power_reset(self, reset_type="ForceRestart", system_path=None):
+            self.calls.append(("power_reset", reset_type, system_path))
+            if reset_type == "On":
+                self.power_state = "On"
+            return {"reset_type": reset_type, "system_path": system_path}
+
+        def _post(self, target, payload):
+            self.calls.append(("post", target, payload))
+
+        def set_one_time_boot_cd(self, system_path=None):
+            self.calls.append(("set_one_time_boot_cd", system_path))
+            return {
+                "system_path": system_path or "/redfish/v1/Systems/1",
+                "before_enabled": "Disabled",
+                "before_target": "None",
+                "after_enabled": "Once",
+                "after_target": "Hdd",
+                "matched": False,
+                "notes": ["Boot override did not read back as CD/DVD."],
+            }
+
+    monkeypatch.setattr(main, "build_custom_iso", lambda spec: built_iso)
+    monkeypatch.setattr(main, "resolve_esxi_base_iso_path", lambda cfg_obj: main.Path("/tmp/base-esxi.iso"))
+    monkeypatch.setattr(main, "detect_public_base_url", lambda target_host="": "http://lab-builder.local:8000")
+    monkeypatch.setattr(main, "wait_for_esxi_management_ready", lambda host, **kwargs: {"host": host, "port": 443, "attempts": 2})
+    created_clients = []
+
+    def build_client(cfg_obj):
+        client = FakeEsxiILOClient(cfg_obj)
+        created_clients.append(client)
+        return client
+
+    monkeypatch.setattr(main, "ILOClient", build_client)
+
+    main.run_esxi_real(cfg, run_stamp="20260416-120000")
+    job = main.load_job("Real ESXi Boot Failure Kit")
+    joined_logs = "\n".join(job["logs"])
+    client = created_clients[0]
+
+    assert job["status"] == "Failed"
+    assert "[RUNNING] Setting one-time boot to CD/DVD" in joined_logs
+    assert "[INFO] Boot override before: enabled=Disabled target=None" in joined_logs
+    assert "[FAILED] One-time boot did not stick; expected Once/Cd but got enabled=Once target=Hdd." in joined_logs
+    assert "[SKIP] Server power-on blocked because one-time boot was not verified" in joined_logs
+    assert ("power_reset", "On", "/redfish/v1/Systems/1") not in client.calls
 
 
 def test_run_esxi_real_fails_when_expected_management_ip_never_comes_up(monkeypatch, tmp_path):
@@ -2076,6 +2284,12 @@ def test_run_esxi_real_fails_when_expected_management_ip_never_comes_up(monkeypa
         def __init__(self, cfg):
             self.cfg = cfg
             self.power_state = "On"
+            self.boot_state = {
+                "Boot": {
+                    "BootSourceOverrideEnabled": "Disabled",
+                    "BootSourceOverrideTarget": "None",
+                }
+            }
 
         def get_virtual_media(self):
             return [{
@@ -2094,7 +2308,7 @@ def test_run_esxi_real_fails_when_expected_management_ip_never_comes_up(monkeypa
             return ["/redfish/v1/Systems/1"]
 
         def get_system(self, system_path):
-            return {"PowerState": self.power_state}
+            return {"PowerState": self.power_state, **self.boot_state}
 
         def power_reset(self, reset_type="ForceRestart", system_path=None):
             if reset_type in {"GracefulShutdown", "ForceOff"}:
@@ -2107,7 +2321,19 @@ def test_run_esxi_real_fails_when_expected_management_ip_never_comes_up(monkeypa
             return None
 
         def set_one_time_boot_cd(self, system_path=None):
-            return None
+            self.boot_state["Boot"] = {
+                "BootSourceOverrideEnabled": "Once",
+                "BootSourceOverrideTarget": "Cd",
+            }
+            return {
+                "system_path": system_path or "/redfish/v1/Systems/1",
+                "before_enabled": "Disabled",
+                "before_target": "None",
+                "after_enabled": "Once",
+                "after_target": "Cd",
+                "matched": True,
+                "notes": ["Verified one-time boot override."],
+            }
 
     monkeypatch.setattr(main, "build_custom_iso", lambda spec: built_iso)
     monkeypatch.setattr(main, "resolve_esxi_base_iso_path", lambda cfg_obj: main.Path("/tmp/base-esxi.iso"))
@@ -2316,6 +2542,55 @@ def test_set_dns_servers_best_effort_reports_verified_readback(monkeypatch):
     assert result["status"] == "Verified"
     assert result["verified"] is True
     assert result["after_static"] == ["1.1.1.1"]
+
+
+def test_set_one_time_boot_cd_reports_verified_readback(monkeypatch):
+    client = ILOClient(ILOConfig(host="10.0.0.1", username="Administrator", password="secret"))
+    state = {
+        "Boot": {
+            "BootSourceOverrideEnabled": "Disabled",
+            "BootSourceOverrideTarget": "None",
+        }
+    }
+
+    monkeypatch.setattr(client, "get_system", lambda system_path=None: dict(state))
+
+    def fake_patch(path, payload):
+        state["Boot"].update(payload["Boot"])
+
+    monkeypatch.setattr(client, "_patch", fake_patch)
+
+    result = client.set_one_time_boot_cd("/redfish/v1/Systems/1")
+
+    assert result["before_enabled"] == "Disabled"
+    assert result["before_target"] == "None"
+    assert result["after_enabled"] == "Once"
+    assert result["after_target"] == "Cd"
+    assert result["matched"] is True
+
+
+def test_set_one_time_boot_cd_accepts_equivalent_target(monkeypatch):
+    client = ILOClient(ILOConfig(host="10.0.0.1", username="Administrator", password="secret"))
+    state = {
+        "Boot": {
+            "BootSourceOverrideEnabled": "Disabled",
+            "BootSourceOverrideTarget": "None",
+        }
+    }
+
+    monkeypatch.setattr(client, "get_system", lambda system_path=None: dict(state))
+
+    def fake_patch(path, payload):
+        state["Boot"]["BootSourceOverrideEnabled"] = payload["Boot"]["BootSourceOverrideEnabled"]
+        state["Boot"]["BootSourceOverrideTarget"] = "UefiCd"
+
+    monkeypatch.setattr(client, "_patch", fake_patch)
+
+    result = client.set_one_time_boot_cd("/redfish/v1/Systems/1")
+
+    assert result["after_enabled"] == "Once"
+    assert result["after_target"] == "UefiCd"
+    assert result["matched"] is True
 
 
 def test_harden_snmp_best_effort_reports_mismatch_when_readback_differs(monkeypatch):
@@ -3221,13 +3496,76 @@ def test_dashboard_shows_recommended_next_step_and_workflow_cards(client):
 
     assert response.status_code == 200
     assert "Dashboard" in response.text
+    assert "Active kit" in response.text
+    assert "Choose a kit" in response.text
+    assert "Create a new kit" in response.text
+    assert "Use an existing kit" in response.text
+    assert "Open current config" in response.text
+    assert "Download current config" in response.text
     assert "Start with one step" in response.text
+    assert "Review ESXi setup" not in response.text
     assert "Open run history" in response.text
-    assert "Kit files" in response.text
-    assert "Open a previous kit config" in response.text
+    assert 'name="selected_kit"' in response.text
+    assert 'name="new_kit_name"' in response.text
+    assert 'type="file"' not in response.text
     assert "Per-kit deployment dashboard for offline builds." in response.text
-    assert "Last update" in response.text
+    assert "Job status" in response.text
+    assert "No runs have completed for this kit yet." in response.text
+    assert "Last update" not in response.text
     assert "What happened last" not in response.text
+    assert 'id="theme-toggle"' not in response.text
+    assert "Use this page to move through the setup one step at a time." not in response.text
+
+
+def test_dashboard_load_previous_kit_uses_saved_kit_dropdown(client):
+    cfg = main.default_config()
+    cfg["site"]["name"] = "Primary Dash Kit"
+    main.save_kit_config(cfg)
+    older = main.default_config()
+    older["site"]["name"] = "Older Dash Kit"
+    main.save_kit_config(older)
+    main.set_current_kit_name("Primary-Dash-Kit")
+
+    response = client.get("/dashboard")
+
+    assert response.status_code == 200
+    assert 'name="selected_kit"' in response.text
+    selector_section = response.text.split('name="selected_kit"', 1)[1]
+    assert ">Older-Dash-Kit<" in selector_section
+    assert ">Primary-Dash-Kit<" not in selector_section
+
+
+def test_dashboard_job_status_lists_passed_and_failed_with_dates(client):
+    cfg = main.default_config()
+    cfg["site"]["name"] = "Dash Status Kit"
+    main.save_kit_config(cfg)
+    main.save_history(
+        "Dash-Status-Kit",
+        [
+            {"time": "2026-04-17 10:30:00", "scope": "esxi", "status": "Failed"},
+            {"time": "2026-04-17 09:15:00", "scope": "ilo", "status": "Completed"},
+        ],
+    )
+
+    response = client.get("/dashboard")
+
+    assert response.status_code == 200
+    assert "Job status" in response.text
+    assert "iLO run passed" in response.text
+    assert "2026-04-17 09:15:00" in response.text
+    assert "ESXi run failed" in response.text
+    assert "2026-04-17 10:30:00" in response.text
+
+
+def test_create_new_kit_updates_active_kit_on_dashboard(client):
+    response = client.post(
+        "/new-kit",
+        data={"new_kit_name": "Fresh Kit", "return_page": "dashboard"},
+    )
+
+    assert response.status_code == 200
+    assert "Active kit" in response.text
+    assert "Fresh-Kit" in response.text
 
 
 def test_reports_page_hides_live_jobs_and_config_capture_blocks(client):
