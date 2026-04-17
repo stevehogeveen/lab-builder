@@ -1,5 +1,6 @@
 import pytest
 import yaml
+from pathlib import Path
 from typing import Any
 from fastapi.testclient import TestClient
 
@@ -848,6 +849,57 @@ def test_save_global_settings_updates_shared_defaults(client):
     assert cfg["included"]["storage"] is True
 
 
+def test_save_global_settings_persists_additional_snmp_users(client):
+    response = client.post(
+        "/save-global-settings",
+        data={
+            "return_page": "global_settings",
+            "site_name": "SNMP Kit",
+            "shared_subnet": "10.30.40.0/24",
+            "gateway_ip": "10.30.40.1",
+            "switch_ip": "10.30.40.2",
+            "esxi_ip": "10.30.40.10",
+            "ilo_target_ip": "10.30.40.11",
+            "windows_ip": "10.30.40.20",
+            "qnap_ip": "10.30.40.30",
+            "iosafe_ip": "10.30.40.31",
+            "dns1": "1.1.1.1",
+            "dns2": "",
+            "dns3": "",
+            "dns4": "",
+            "snmp_v3_username": "primary-snmp",
+            "snmp_v3_auth_protocol": "SHA",
+            "snmp_v3_auth_password": "primary-auth",
+            "snmp_v3_priv_protocol": "AES",
+            "snmp_v3_priv_password": "primary-priv",
+            "snmp_extra_username": ["backup-snmp"],
+            "snmp_extra_auth_protocol": ["MD5"],
+            "snmp_extra_auth_password": ["backup-auth"],
+            "snmp_extra_priv_protocol": ["DES"],
+            "snmp_extra_priv_password": ["backup-priv"],
+        },
+    )
+
+    assert response.status_code == 200
+    cfg = main.load_kit_config("SNMP-Kit")
+    assert cfg["shared_snmp"]["users"] == [
+        {
+            "username": "primary-snmp",
+            "auth_protocol": "SHA",
+            "auth_password": "primary-auth",
+            "priv_protocol": "AES",
+            "priv_password": "primary-priv",
+        },
+        {
+            "username": "backup-snmp",
+            "auth_protocol": "MD5",
+            "auth_password": "backup-auth",
+            "priv_protocol": "DES",
+            "priv_password": "backup-priv",
+        },
+    ]
+
+
 def test_save_ilo_settings_updates_only_ilo_page_fields(client):
     cfg = main.default_config()
     cfg["site"]["name"] = "Ilo Page Kit"
@@ -873,6 +925,36 @@ def test_save_ilo_settings_updates_only_ilo_page_fields(client):
     assert cfg["ilo"]["gateway"] == "10.10.8.1"
     assert cfg["ilo"]["hostname"] == "ilo-focused"
     assert cfg["included"]["ilo"] is True
+
+
+def test_save_ilo_settings_persists_additional_users(client):
+    cfg = main.default_config()
+    cfg["site"]["name"] = "Ilo User Kit"
+    cfg["ip_plan"]["gateway"] = "10.10.8.1"
+    main.save_kit_config(cfg)
+
+    response = client.post(
+        "/save-ilo-settings",
+        data={
+            "return_page": "ilo",
+            "ilo_current_ip": "10.10.8.50",
+            "ilo_target_ip": "10.10.8.11",
+            "ilo_gateway": "",
+            "ilo_hostname": "ilo-users",
+            "ilo_username": "Administrator",
+            "ilo_password": "secret",
+            "ilo_extra_username": ["opsadmin", "auditor"],
+            "ilo_extra_password": ["ops-pass", "audit-pass"],
+            "ilo_extra_role": ["Administrator", "ReadOnly"],
+        },
+    )
+
+    assert response.status_code == 200
+    cfg = main.load_kit_config("Ilo-User-Kit")
+    assert cfg["ilo"]["additional_users"] == [
+        {"username": "opsadmin", "password": "ops-pass", "role": "Administrator"},
+        {"username": "auditor", "password": "audit-pass", "role": "ReadOnly"},
+    ]
 
 
 def test_ilo_page_removes_old_controls_and_points_to_storage(client):
@@ -2411,6 +2493,11 @@ def test_build_kickstart_uses_explicit_management_network_fields():
 
 
 def test_run_ilo_real_executes_storage_when_included(monkeypatch):
+    fake_clock = {"now": 0.0}
+
+    monkeypatch.setattr(main.time, "sleep", lambda seconds: fake_clock.__setitem__("now", fake_clock["now"] + seconds))
+    monkeypatch.setattr(main.time, "time", lambda: fake_clock["now"])
+
     cfg = main.default_config()
     cfg["site"]["name"] = "Real Storage Review Kit"
     cfg["ilo"]["current_ip"] = "10.10.8.90"
@@ -2430,6 +2517,8 @@ def test_run_ilo_real_executes_storage_when_included(monkeypatch):
     plan_paths = main.export_raid_plan_snapshot(cfg, plan, export_paths)
     main.approve_storage_plan_for_cfg(cfg, discovery, export_paths, plan, plan_paths, include_in_ilo_run=True)
 
+    reset_state = {"requested": False, "polls_after_reset": 0}
+
     class FakeRunILOClient(RecordingGen10SmartStorageWriteClient):
         def __init__(self, cfg):
             super().__init__()
@@ -2440,10 +2529,14 @@ def test_run_ilo_real_executes_storage_when_included(monkeypatch):
             self.manager_reset_calls = []
 
         def get_summary(self):
+            if self.cfg.host == "10.10.8.91" and reset_state["requested"]:
+                reset_state["polls_after_reset"] += 1
+                if reset_state["polls_after_reset"] == 1:
+                    raise ILOError("iLO reset in progress")
             return {"redfish_version": "1.16.0", "system_manufacturer": "HPE", "system_model": "DL360 Gen10", "power_state": "On"}
 
         def get_active_manager_interface(self):
-            return {"@odata.id": "/redfish/v1/Managers/1/EthernetInterfaces/1", "DHCPv4": {"DHCPEnabled": False}, "IPv4Addresses": [{"Address": "10.10.8.90"}]}
+            return {"@odata.id": "/redfish/v1/Managers/1/EthernetInterfaces/1", "DHCPv4": {"DHCPEnabled": False}, "IPv4Addresses": [{"Address": self.cfg.host}]}
 
         def set_static_ipv4_best_effort(self, address, subnet_mask, gateway):
             return {
@@ -2498,6 +2591,7 @@ def test_run_ilo_real_executes_storage_when_included(monkeypatch):
 
         def reset_ilo(self):
             self.manager_reset_calls.append({"reset_type": "GracefulRestart"})
+            reset_state["requested"] = True
             return {"path": "/redfish/v1/Managers/1/Actions/Manager.Reset", "reset_type": "GracefulRestart"}
 
         def reboot_server_and_wait(self, reset_type: str = "GracefulRestart", reboot_start_timeout: int = 120, return_timeout: int = 600, poll_interval: int = 10):
@@ -2526,16 +2620,14 @@ def test_run_ilo_real_executes_storage_when_included(monkeypatch):
     joined_logs = "\n".join(job["logs"])
     client = created_clients[0]
 
-    assert "[RUNNING] Starting the approved storage stage as part of this real run." in joined_logs
+    assert "[RUNNING] Starting the approved storage stage after the iLO stage finished." in joined_logs
     assert "Submitted the consolidated SmartStorageConfig pending payload" in joined_logs
-    assert "Storage stage finished in the real run" in joined_logs
-    assert "Storage server reboot status=Completed" in joined_logs or "after the storage server reboot completed" in joined_logs
     assert "DNS apply attempt" in joined_logs
     assert "DNS verified" in joined_logs
     assert "SNMP apply attempt" in joined_logs
     assert "SNMP verified" in joined_logs
     assert "iLO reset requested" in joined_logs
-    assert "iLO reset completed" in joined_logs
+    assert "iLO reset completed and the final iLO endpoint is reachable on 10.10.8.91" in joined_logs
     assert "auth_password=set | priv_password=set" in joined_logs
     assert job["storage_run_directory"]
     assert job["dns_apply_status"] == "Verified"
@@ -2548,6 +2640,8 @@ def test_run_ilo_real_executes_storage_when_included(monkeypatch):
     assert job["snmp_verified_checks"]
     assert job["storage_server_reboot_status"] == "Completed"
     assert job["ilo_reset_status"] == "Completed"
+    assert job["ilo_stage_finished"] is True
+    assert job["ilo_final_ip_verified"] is True
     assert client.dns_calls == [["1.1.1.1"]]
     assert client.snmp_calls == [{
         "v3_username": "snmpuser",
@@ -2557,6 +2651,107 @@ def test_run_ilo_real_executes_storage_when_included(monkeypatch):
         "v3_priv_password": "privpass",
     }]
     assert client.manager_reset_calls == [{"reset_type": "GracefulRestart"}]
+    assert joined_logs.index("iLO reset completed and the final iLO endpoint is reachable") < joined_logs.index("Starting the approved storage stage after the iLO stage finished.")
+    assert job["run_bundle_dir"]
+    assert Path(job["run_bundle_dir"]).is_dir()
+    assert Path(job["run_live_log_path"]).is_file()
+    assert Path(job["run_trace_path"]).is_file()
+    assert Path(job["run_config_snapshot_path"]).is_file()
+    assert "iLO reset completed and the final iLO endpoint is reachable" in Path(job["run_live_log_path"]).read_text(encoding="utf-8")
+    trace_text = Path(job["run_trace_path"]).read_text(encoding="utf-8")
+    assert "trace_events:" in trace_text or "events:" in trace_text
+    assert str(Path(job["run_bundle_dir"])) in trace_text
+
+
+def test_run_ilo_real_fails_when_ilo_reset_cannot_be_verified(monkeypatch):
+    fake_clock = {"now": 0.0}
+
+    monkeypatch.setattr(main.time, "sleep", lambda seconds: fake_clock.__setitem__("now", fake_clock["now"] + seconds))
+    monkeypatch.setattr(main.time, "time", lambda: fake_clock["now"])
+
+    cfg = main.default_config()
+    cfg["site"]["name"] = "Real Reset Verify Kit"
+    cfg["ilo"]["current_ip"] = "10.10.8.90"
+    cfg["ilo"]["host"] = "10.10.8.90"
+    cfg["ilo"]["username"] = "Administrator"
+    cfg["ilo"]["password"] = "secret"
+    cfg["ilo"]["target_ip"] = "10.10.8.91"
+    cfg["ilo"]["gateway"] = "10.10.8.1"
+    cfg["ilo"]["hostname"] = "ilo-reset-test"
+
+    class FakeResetVerifyClient(RecordingGen10SmartStorageWriteClient):
+        def __init__(self, cfg):
+            super().__init__()
+            self.cfg = cfg
+
+        def get_summary(self):
+            return {"redfish_version": "1.16.0", "system_manufacturer": "HPE", "system_model": "DL360 Gen10", "power_state": "On"}
+
+        def get_active_manager_interface(self):
+            return {"@odata.id": "/redfish/v1/Managers/1/EthernetInterfaces/1", "DHCPv4": {"DHCPEnabled": False}, "IPv4Addresses": [{"Address": self.cfg.host}]}
+
+        def set_static_ipv4_best_effort(self, address, subnet_mask, gateway):
+            return {
+                "applied_keys": ["DHCPv4", "IPv4StaticAddresses"],
+                "before_dhcpv4": {"DHCPEnabled": True},
+                "after_dhcpv4": {"DHCPEnabled": False},
+                "before_ipv4_addresses": [{"Address": "10.10.8.90"}],
+                "before_static_addresses": [],
+                "after_ipv4_addresses": [{"Address": address}],
+                "after_static_addresses": [{"Address": address, "SubnetMask": subnet_mask, "Gateway": gateway}],
+            }
+
+        def set_hostname_best_effort(self, desired_hostname):
+            return {"method": "patch", "before": "old-ilo", "after": desired_hostname, "matched": True}
+
+        def disable_ipv6_best_effort(self):
+            return {"method": "patch", "path": "/redfish/v1/Managers/1/EthernetInterfaces/1"}
+
+        def harden_snmp_best_effort(self, **kwargs):
+            del kwargs
+            return {
+                "applied_keys": ["SNMP.ProtocolEnabled", "SNMPv3Enabled"],
+                "verification": {"checks": [{"label": "protocol_enabled", "requested": True, "actual": True, "matched": True}]},
+                "matched": True,
+                "verified": True,
+                "status": "Verified",
+                "reset_recommended": True,
+                "notes": ["Requested SNMP values were verified after the write."],
+            }
+
+        def reset_ilo(self):
+            return {"path": "/redfish/v1/Managers/1/Actions/Manager.Reset", "reset_type": "GracefulRestart"}
+
+    monkeypatch.setattr(main, "ILOClient", lambda cfg_obj: FakeResetVerifyClient(cfg_obj))
+
+    main.run_ilo_real(cfg)
+    job = main.load_job("Real Reset Verify Kit")
+    joined_logs = "\n".join(job["logs"])
+
+    assert job["status"] == "Failed"
+    assert job["ilo_reset_status"] == "Failed"
+    assert job["ilo_stage_finished"] is False
+    assert "iLO reset was requested but completion was not verified" in joined_logs
+    assert "Storage and later stages were blocked because the iLO stage did not finish." in joined_logs
+
+
+def test_run_job_simulation_writes_run_bundle_files():
+    cfg = main.default_config()
+    cfg["site"]["name"] = "Preview Bundle Kit"
+    main.initialize_background_job(cfg["site"]["name"], "esxi")
+
+    main.run_job_simulation(cfg, "esxi")
+
+    job = main.load_job("Preview Bundle Kit")
+    assert job["status"] == "Preview complete"
+    assert Path(job["run_bundle_dir"]).is_dir()
+    live_log = Path(job["run_live_log_path"]).read_text(encoding="utf-8")
+    assert "[PREVIEW] Preview ESXi configuration" in live_log
+    assert "[DONE] Preview complete. No real changes were made." in live_log
+    summary_text = Path(job["run_summary_path"]).read_text(encoding="utf-8")
+    assert "Preview-Bundle-Kit" in summary_text
+    config_snapshot_text = Path(job["run_config_snapshot_path"]).read_text(encoding="utf-8")
+    assert "site:" in config_snapshot_text
 
 
 def test_set_dns_servers_best_effort_reports_verified_readback(monkeypatch):
@@ -2632,6 +2827,9 @@ def test_harden_snmp_best_effort_reports_mismatch_when_readback_differs(monkeypa
     before = {
         "SNMP": {
             "ProtocolEnabled": False,
+            "SNMPv1Enabled": True,
+            "SNMPv2cEnabled": True,
+            "SNMPv3Enabled": False,
             "SNMPv3Username": "olduser",
             "SNMPv3AuthProtocol": "MD5",
             "SNMPv3PrivacyProtocol": "DES",
@@ -2640,6 +2838,9 @@ def test_harden_snmp_best_effort_reports_mismatch_when_readback_differs(monkeypa
     after = {
         "SNMP": {
             "ProtocolEnabled": True,
+            "SNMPv1Enabled": False,
+            "SNMPv2cEnabled": False,
+            "SNMPv3Enabled": True,
             "SNMPv3Username": "olduser",
             "SNMPv3AuthProtocol": "MD5",
             "SNMPv3PrivacyProtocol": "DES",
@@ -2661,6 +2862,62 @@ def test_harden_snmp_best_effort_reports_mismatch_when_readback_differs(monkeypa
     assert result["status"] == "Mismatch"
     assert result["verified"] is False
     assert result["verification"]["mismatches"]
+
+
+def test_ensure_local_accounts_best_effort_creates_and_updates_accounts(monkeypatch):
+    client = ILOClient(ILOConfig(host="10.0.0.1", username="Administrator", password="secret"))
+    state = {
+        "/redfish/v1": {"AccountService": {"@odata.id": "/redfish/v1/AccountService"}},
+        "/redfish/v1/AccountService": {"Accounts": {"@odata.id": "/redfish/v1/AccountService/Accounts"}},
+        "/redfish/v1/AccountService/Accounts": {
+            "Members": [
+                {"@odata.id": "/redfish/v1/AccountService/Accounts/1"},
+            ]
+        },
+        "/redfish/v1/AccountService/Accounts/1": {
+            "@odata.id": "/redfish/v1/AccountService/Accounts/1",
+            "Id": "1",
+            "UserName": "Administrator",
+            "RoleId": "Administrator",
+            "Enabled": True,
+        },
+    }
+
+    def fake_get(path, timeout=None):
+        del timeout
+        path = path.rstrip("/") or "/"
+        return dict(state[path])
+
+    def fake_patch(path, payload):
+        state[path].update(payload)
+
+    def fake_post(path, payload=None):
+        payload = payload or {}
+        if path == "/redfish/v1/AccountService/Accounts":
+            new_path = "/redfish/v1/AccountService/Accounts/2"
+            state[new_path] = {
+                "@odata.id": new_path,
+                "Id": "2",
+                "UserName": payload["UserName"],
+                "RoleId": payload.get("RoleId", "Administrator"),
+                "Enabled": payload.get("Enabled", True),
+            }
+            state[path]["Members"].append({"@odata.id": new_path})
+        return {}
+
+    monkeypatch.setattr(client, "_get", fake_get)
+    monkeypatch.setattr(client, "_patch", fake_patch)
+    monkeypatch.setattr(client, "_post", fake_post)
+
+    result = client.ensure_local_accounts_best_effort([
+        {"username": "Administrator", "password": "new-secret", "role": "Administrator"},
+        {"username": "opsadmin", "password": "ops-secret", "role": "ReadOnly"},
+    ])
+
+    assert result["status"] == "Verified"
+    assert result["matched"] is True
+    assert [item["status"] for item in result["results"]] == ["Updated", "Created"]
+    assert any(item["username"] == "opsadmin" for item in result["after"])
 
 
 def test_prepare_execute_shows_storage_will_be_applied_in_real_run(client):

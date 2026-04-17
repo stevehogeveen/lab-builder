@@ -31,6 +31,7 @@ ARTIFACTS_DIR = BASE_DIR / "artifacts"
 GENERATED_DIR = ARTIFACTS_DIR / "generated"
 JOBS_DIR = ARTIFACTS_DIR / "jobs"
 HISTORY_DIR = ARTIFACTS_DIR / "history"
+RUNS_DIR = ARTIFACTS_DIR / "runs"
 ILO_CONFIG_EXPORT_DIR = HISTORY_DIR / "ilo-configs"
 CONFIG_EXPORT_DIR = HISTORY_DIR / "configs"
 LIVE_ILO_CONFIG_DIR = HISTORY_DIR / "ilo-live-configs"
@@ -50,6 +51,7 @@ KITS_DIR.mkdir(parents=True, exist_ok=True)
 GENERATED_DIR.mkdir(parents=True, exist_ok=True)
 JOBS_DIR.mkdir(parents=True, exist_ok=True)
 HISTORY_DIR.mkdir(parents=True, exist_ok=True)
+RUNS_DIR.mkdir(parents=True, exist_ok=True)
 ILO_CONFIG_EXPORT_DIR.mkdir(parents=True, exist_ok=True)
 CONFIG_EXPORT_DIR.mkdir(parents=True, exist_ok=True)
 LIVE_ILO_CONFIG_DIR.mkdir(parents=True, exist_ok=True)
@@ -125,6 +127,7 @@ PAGE_META = {
 }
 
 STORAGE_APPROVAL_CONFIRM = "APPROVE STORAGE"
+RUN_CENTER_STAGE_KEYS = ["ilo", "esxi", "windows", "qnap", "iosafe", "cisco_switch"]
 
 
 def sanitize_kit_name(name: str) -> str:
@@ -147,6 +150,36 @@ def kit_path(kit_name: str) -> Path:
 
 def list_kits():
     return sorted([p.stem for p in KITS_DIR.glob("*.yml")])
+
+
+def normalize_run_center_scope(scope: str | None, selected_scopes: list[str] | None = None) -> str:
+    normalized_scope = str(scope or "included").strip().lower() or "included"
+    picks: list[str] = []
+    for item in selected_scopes or []:
+        clean = str(item or "").strip().lower()
+        if not clean:
+            continue
+        if clean == "included":
+            return "included"
+        if clean in RUN_CENTER_STAGE_KEYS and clean not in picks:
+            picks.append(clean)
+    if picks:
+        if len(picks) == 1:
+            return picks[0]
+        return "multi__" + "__".join(picks)
+    return normalized_scope
+
+
+def run_center_scope_keys(scope: str, cfg: dict | None = None) -> list[str]:
+    normalized = str(scope or "included").strip().lower()
+    if normalized == "included":
+        included = (cfg or {}).get("included", {}) or {}
+        return [key for key in RUN_CENTER_STAGE_KEYS if included.get(key)]
+    if normalized.startswith("multi__"):
+        return [item for item in normalized.split("__")[1:] if item in RUN_CENTER_STAGE_KEYS]
+    if normalized in RUN_CENTER_STAGE_KEYS:
+        return [normalized]
+    return []
 
 
 def get_current_kit_name():
@@ -190,6 +223,123 @@ def job_path(kit_name: str) -> Path:
     return JOBS_DIR / f"{sanitize_kit_name(kit_name)}_job.yml"
 
 
+def run_bundle_root(kit_name: str) -> Path:
+    path = RUNS_DIR / sanitize_kit_name(kit_name)
+    path.mkdir(parents=True, exist_ok=True)
+    return path
+
+
+def scope_slug(scope: str) -> str:
+    value = re.sub(r"[^a-zA-Z0-9._-]+", "-", str(scope or "run").strip()).strip("-")
+    return value or "run"
+
+
+def write_run_bundle_files(kit_name: str, job: dict[str, Any]) -> None:
+    run_bundle_dir = str(job.get("run_bundle_dir") or "").strip()
+    if not run_bundle_dir:
+        return
+
+    bundle_dir = Path(run_bundle_dir)
+    bundle_dir.mkdir(parents=True, exist_ok=True)
+    live_log_path = Path(str(job.get("run_live_log_path") or bundle_dir / "live-job.log"))
+    trace_path = Path(str(job.get("run_trace_path") or bundle_dir / "trace.yml"))
+    summary_path = Path(str(job.get("run_summary_path") or bundle_dir / "summary.yml"))
+
+    logs = list(job.get("logs") or [])
+    live_log_text = "\n".join(str(line) for line in logs)
+    if live_log_text:
+        live_log_text += "\n"
+    live_log_path.write_text(live_log_text, encoding="utf-8")
+
+    trace_payload = {
+        "kit_name": sanitize_kit_name(kit_name),
+        "run_id": str(job.get("run_id") or ""),
+        "scope": str(job.get("scope") or ""),
+        "execution_mode": str(job.get("execution_mode") or ""),
+        "execution_mode_label": str(job.get("execution_mode_label") or ""),
+        "status": str(job.get("status") or ""),
+        "current_stage": str(job.get("current_stage") or ""),
+        "progress_percent": int(job.get("progress_percent") or 0),
+        "completed_steps": int(job.get("completed_steps") or 0),
+        "total_steps": int(job.get("total_steps") or 0),
+        "started_at": str(job.get("started_at") or ""),
+        "updated_at": str(job.get("updated_at") or ""),
+        "paths": {
+            "job_yaml": str(job_path(kit_name)),
+            "live_log": str(live_log_path),
+            "config_snapshot": str(job.get("run_config_snapshot_path") or ""),
+            "summary": str(summary_path),
+        },
+        "job_fields": {
+            key: value
+            for key, value in job.items()
+            if key
+            not in {
+                "logs",
+                "trace_events",
+            }
+        },
+        "events": list(job.get("trace_events") or []),
+    }
+    trace_path.write_text(yaml.safe_dump(trace_payload, sort_keys=False), encoding="utf-8")
+
+    summary_payload = {
+        "kit_name": sanitize_kit_name(kit_name),
+        "run_id": str(job.get("run_id") or ""),
+        "scope": str(job.get("scope") or ""),
+        "mode": str(job.get("execution_mode_label") or job.get("execution_mode") or ""),
+        "status": str(job.get("status") or ""),
+        "current_stage": str(job.get("current_stage") or ""),
+        "progress_percent": int(job.get("progress_percent") or 0),
+        "completed_steps": int(job.get("completed_steps") or 0),
+        "total_steps": int(job.get("total_steps") or 0),
+        "started_at": str(job.get("started_at") or ""),
+        "updated_at": str(job.get("updated_at") or ""),
+        "latest_log": str(logs[-1] if logs else ""),
+        "artifacts": {
+            "job_yaml": str(job_path(kit_name)),
+            "live_log": str(live_log_path),
+            "trace": str(trace_path),
+            "config_snapshot": str(job.get("run_config_snapshot_path") or ""),
+            "run_summary": str(job.get("run_summary_artifact") or ""),
+            "esxi_iso_path": str(job.get("esxi_iso_path") or ""),
+            "esxi_iso_url": str(job.get("esxi_iso_url") or ""),
+            "esxi_trace_path": str(job.get("esxi_trace_path") or ""),
+            "storage_run_directory": str(job.get("storage_run_directory") or ""),
+        },
+    }
+    summary_path.write_text(yaml.safe_dump(summary_payload, sort_keys=False), encoding="utf-8")
+
+
+def ensure_run_bundle_for_job(kit_name: str, job: dict[str, Any]) -> dict[str, Any]:
+    if job.get("run_bundle_dir"):
+        return job
+
+    stamp = time.strftime("%Y%m%d-%H%M%S")
+    run_id = f"{stamp}-{scope_slug(str(job.get('scope') or 'run'))}"
+    bundle_dir = run_bundle_root(kit_name) / run_id
+    bundle_dir.mkdir(parents=True, exist_ok=True)
+
+    cfg_snapshot = load_kit_config(kit_name)
+    runtime = dict(cfg_snapshot.get("_runtime", {}) or {})
+    if runtime:
+        cfg_snapshot["_runtime"] = runtime
+    config_snapshot_path = bundle_dir / "config-snapshot.yml"
+    config_snapshot_path.write_text(yaml.safe_dump(cfg_snapshot, sort_keys=False), encoding="utf-8")
+
+    job["run_id"] = run_id
+    job["run_bundle_dir"] = str(bundle_dir)
+    job["run_live_log_path"] = str(bundle_dir / "live-job.log")
+    job["run_trace_path"] = str(bundle_dir / "trace.yml")
+    job["run_summary_path"] = str(bundle_dir / "summary.yml")
+    job["run_config_snapshot_path"] = str(config_snapshot_path)
+    job["started_at"] = str(job.get("started_at") or time.strftime("%Y-%m-%d %H:%M:%S"))
+    job["updated_at"] = str(time.strftime("%Y-%m-%d %H:%M:%S"))
+    job["trace_events"] = list(job.get("trace_events") or [])
+    write_run_bundle_files(kit_name, job)
+    return job
+
+
 def load_job(kit_name: str):
     path = job_path(kit_name)
     if path.exists():
@@ -207,8 +357,11 @@ def load_job(kit_name: str):
 
 
 def save_job(kit_name: str, job: dict):
+    ensure_run_bundle_for_job(kit_name, job)
+    job["updated_at"] = time.strftime("%Y-%m-%d %H:%M:%S")
     with open(job_path(kit_name), "w", encoding="utf-8") as f:
         yaml.safe_dump(job, f, sort_keys=False)
+    write_run_bundle_files(kit_name, job)
 
 def history_path(kit_name: str) -> Path:
     return HISTORY_DIR / f"{sanitize_kit_name(kit_name)}_history.yml"
@@ -266,7 +419,8 @@ def build_history_config_summary(cfg: dict, scope: str) -> dict:
 def build_run_summary_artifacts(cfg: dict[str, Any], review: dict[str, Any], scope: str) -> list[dict[str, str]]:
     artifacts: list[dict[str, str]] = []
     storage_review = build_storage_review_context(cfg)
-    target_server = (cfg.get("ilo", {}).get("current_ip") or cfg.get("ilo", {}).get("host") or "").strip()
+    ilo_cfg = cfg.get("ilo", {}) or {}
+    target_server = (ilo_cfg.get("target_ip") or cfg.get("ip_plan", {}).get("ilo") or ilo_cfg.get("current_ip") or ilo_cfg.get("host") or "").strip()
 
     artifacts.append(
         {
@@ -947,6 +1101,7 @@ def resolve_storage_target_host(cfg: dict[str, Any]) -> dict[str, Any]:
 
     candidates = [
         ("explicit storage target override", str(storage_cfg.get("target_host_override") or "").strip()),
+        ("planned iLO target IP", str(ilo_cfg.get("target_ip") or cfg.get("ip_plan", {}).get("ilo") or "").strip()),
         ("current kit iLO IP", str(ilo_cfg.get("current_ip") or "").strip()),
         ("current kit iLO host", str(ilo_cfg.get("host") or "").strip()),
         ("latest discovery artifact", str(storage_cfg.get("latest_host") or "").strip()),
@@ -972,7 +1127,7 @@ def resolve_storage_target_host(cfg: dict[str, Any]) -> dict[str, Any]:
         "latest_artifact_host": str(storage_cfg.get("latest_host") or "").strip(),
         "approved_host": str(approval.get("host") or "").strip(),
         "valid": False,
-        "error": "No storage target host is resolved. Set the current kit iLO IP/host or an explicit storage target override before using Storage / RAID actions.",
+        "error": "No storage target host is resolved. Set the planned iLO IP on the iLO page or enter an explicit storage target override before using Storage setup actions.",
     }
 
 
@@ -1196,6 +1351,37 @@ def build_activity_feed(history: list[dict[str, Any]], limit: int = 8) -> list[d
             }
         )
     return feed
+
+
+def build_dashboard_job_status(history: list[dict[str, Any]]) -> dict[str, Any]:
+    workflow_defs = [
+        ("ilo", "iLO", ["ilo"]),
+        ("storage", "Storage", ["storage-apply", "storage-reboot"]),
+        ("esxi", "ESXi", ["esxi"]),
+        ("windows", "Windows", ["windows"]),
+        ("qnap", "QNAP", ["qnap"]),
+    ]
+    passed: list[dict[str, str]] = []
+    failed: list[dict[str, str]] = []
+    for _, label, scopes in workflow_defs:
+        latest = latest_history_entry_for_scope(history, scopes) or {}
+        if not latest:
+            continue
+        status = str(latest.get("status") or "")
+        item = {
+            "name": label,
+            "status": status or "Run recorded",
+            "time": str(latest.get("time") or ""),
+        }
+        lowered = status.lower()
+        if "fail" in lowered:
+            failed.append(item)
+        elif "complete" in lowered:
+            passed.append(item)
+    return {
+        "passed": passed,
+        "failed": failed,
+    }
 
 
 def validation_check(
@@ -1707,6 +1893,7 @@ def source_label(kind: str) -> str:
         "override": "Overridden on this page",
         "local": "Saved on this page",
         "current": "Using current iLO address",
+        "planned": "Using planned iLO address",
         "storage_override": "Overridden on this page",
         "storage_fallback": "Using previously saved address",
     }
@@ -1734,7 +1921,15 @@ def build_settings_sources(cfg: dict[str, Any]) -> dict[str, list[dict[str, str]
             {
                 "label": "Using right now",
                 "value": storage_target.get("resolved") or "Not set",
-                "source": source_label("storage_override") if storage_target.get("override_active") else source_label("current") if storage_target.get("source") in {"current kit iLO IP", "current kit iLO host"} else source_label("storage_fallback"),
+                "source": (
+                    source_label("storage_override")
+                    if storage_target.get("override_active")
+                    else source_label("planned")
+                    if storage_target.get("source") == "planned iLO target IP"
+                    else source_label("current")
+                    if storage_target.get("source") in {"current kit iLO IP", "current kit iLO host"}
+                    else source_label("storage_fallback")
+                ),
             },
             {"label": "Username", "value": storage_credentials.get("username") or "Not set", "source": source_label("override") if storage_credentials.get("username_source") == "storage page override" else source_label("local")},
             {"label": "Password", "value": mask_secret(storage_credentials.get("password") or ""), "source": source_label("override") if storage_credentials.get("password_source") == "storage page override" else source_label("local")},
@@ -1920,6 +2115,19 @@ def execution_mode_for_scope(scope: str) -> dict[str, str]:
             "run_note": "This is the live path. Real changes may be made.",
             "live_intro": "Live progress below is tracking a real run.",
         }
+    if scope == "esxi":
+        return {
+            "key": "real",
+            "label": "Real execution",
+            "badge": "Real run",
+            "summary": "This path performs the real ESXi install launch when you start it.",
+            "what_this_does": "Builds the custom ESXi installer ISO and boots the server from it.",
+            "real_changes": "Yes",
+            "next_step": "Start the run when the review looks correct.",
+            "run_button": "Start real ESXi run",
+            "run_note": "This is the live path. Real changes may be made.",
+            "live_intro": "Live progress below is tracking a real run.",
+        }
     return {
         "key": "preview",
         "label": "Preview / safety mode",
@@ -1975,6 +2183,7 @@ def build_execution_launch_options(cfg: dict[str, Any], scope: str) -> dict[str,
 def build_run_center_readiness_matrix(cfg: dict[str, Any], scope: str) -> list[dict[str, Any]]:
     included_cfg = cfg.get("included", {}) or {}
     storage_review = build_storage_review_context(cfg)
+    selected_keys = run_center_scope_keys(scope, cfg)
 
     def stage_in_scope(key: str) -> bool:
         if scope == "included":
@@ -1983,6 +2192,8 @@ def build_run_center_readiness_matrix(cfg: dict[str, Any], scope: str) -> list[d
             return bool(included_cfg.get(key))
         if scope == "ilo":
             return key in {"ilo", "storage"}
+        if scope.startswith("multi__"):
+            return key in selected_keys
         return key == scope
 
     shared_subnet = (cfg.get("shared_network", {}).get("subnet") or "").strip()
@@ -2071,11 +2282,12 @@ def build_run_summary(cfg: dict[str, Any], scope: str) -> dict[str, Any]:
     review = build_execution_review(cfg, scope)
     latest = latest_history_entry_for_scope(load_history(cfg.get("site", {}).get("name", "")), [scope, "included", "ilo", "storage-apply", "storage-reboot"]) or {}
     artifacts = build_run_summary_artifacts(cfg, review, scope)
+    ilo_cfg = cfg.get("ilo", {}) or {}
     return {
         "generated_at": time.strftime("%Y-%m-%d %H:%M:%S"),
         "kit": cfg.get("site", {}).get("name", ""),
         "scope": scope,
-        "target_server": (cfg.get("ilo", {}).get("current_ip") or cfg.get("ilo", {}).get("host") or ""),
+        "target_server": (ilo_cfg.get("target_ip") or cfg.get("ip_plan", {}).get("ilo") or ilo_cfg.get("current_ip") or ilo_cfg.get("host") or ""),
         "summary_items": review.get("summary_items", []),
         "stages": review.get("stages", []),
         "readiness_matrix": review.get("readiness_matrix", []),
@@ -2468,13 +2680,27 @@ def plan_drive_bays(drives: list[dict]) -> str:
     return ", ".join(bays)
 
 
-def build_raid_plan(discovery: dict, discovery_paths: dict[str, Path]) -> dict:
+def build_storage_planning_drives(summary: dict[str, Any] | None) -> list[dict[str, Any]]:
+    summary = summary or {}
+    standard = summary.get("standard_redfish_storage", {}) or {}
+    hpe = summary.get("hpe_smart_storage", {}) or {}
+    planning_drives = []
+    for source, items in (("hpe_smart_storage", hpe.get("drives", [])), ("standard_redfish_storage", standard.get("drives", []))):
+        for item in items or []:
+            drive = normalized_plan_drive(item, source)
+            drive["eligible"] = bool(drive["size_gib"] > 0 and storage_status_is_eligible(drive["status"]))
+            planning_drives.append(drive)
+    return sorted(planning_drives, key=storage_drive_sort_key)
+
+
+def build_raid_plan(discovery: dict, discovery_paths: dict[str, Path], overrides: dict[str, Any] | None = None) -> dict:
     summary = discovery.get("summary", {})
     standard = summary.get("standard_redfish_storage", {}) or {}
     hpe = summary.get("hpe_smart_storage", {}) or {}
     server = summary.get("server", {}) or {}
     warnings = []
     blockers = []
+    overrides = overrides or {}
 
     controllers = []
     for source, items in (("hpe_smart_storage", hpe.get("controllers", [])), ("standard_redfish_storage", standard.get("controllers", []))):
@@ -2505,19 +2731,75 @@ def build_raid_plan(discovery: dict, discovery_paths: dict[str, Path]) -> dict:
             else:
                 eligible_drives.append(drive)
 
-    os_pair, os_explanation = choose_os_drive_pair(sorted(eligible_drives, key=storage_drive_sort_key))
-    if len(os_pair) < 2:
-        blockers.append("Could not choose two suitable drives for the OS RAID 1 pair.")
+    default_os_pair, default_os_explanation = choose_os_drive_pair(sorted(eligible_drives, key=storage_drive_sort_key))
 
-    os_paths = {drive["path"] for drive in os_pair}
-    remaining = [drive for drive in eligible_drives if drive["path"] not in os_paths]
-    data_set, hot_spare, raid6_excluded, raid6_explanation, raid6_blockers = choose_raid6_layout(sorted(remaining, key=storage_drive_sort_key))
-    blockers.extend(raid6_blockers)
+    default_os_paths = {drive["path"] for drive in default_os_pair}
+    default_remaining = [drive for drive in eligible_drives if drive["path"] not in default_os_paths]
+    default_data_set, default_hot_spare, default_raid6_excluded, default_raid6_explanation, default_raid6_blockers = choose_raid6_layout(sorted(default_remaining, key=storage_drive_sort_key))
+
+    eligible_by_bay = {str(drive.get("bay") or ""): drive for drive in eligible_drives}
+    selected_os_bays = [str(item).strip() for item in list(overrides.get("os_bays") or []) if str(item).strip()]
+    selected_data_bays = [str(item).strip() for item in list(overrides.get("data_bays") or []) if str(item).strip()]
+    selected_spare_bay = str(overrides.get("hot_spare_bay") or "").strip()
+
+    customization_active = bool(selected_os_bays or selected_data_bays or selected_spare_bay)
+    os_pair = list(default_os_pair)
+    os_explanation = default_os_explanation
+    data_set = list(default_data_set)
+    hot_spare = dict(default_hot_spare) if default_hot_spare else {}
+    raid6_excluded = list(default_raid6_excluded)
+    raid6_explanation = default_raid6_explanation
+
+    if customization_active:
+        custom_blockers = []
+        overlap_blockers = []
+        if selected_os_bays:
+            os_pair = [eligible_by_bay[bay] for bay in selected_os_bays if bay in eligible_by_bay]
+            missing_os = [bay for bay in selected_os_bays if bay not in eligible_by_bay]
+            if missing_os:
+                custom_blockers.append(f"Selected OS drives are not eligible or were not found: {', '.join(missing_os)}.")
+            os_explanation = "Using the drives chosen below for the OS mirror."
+        if selected_data_bays:
+            data_set = [eligible_by_bay[bay] for bay in selected_data_bays if bay in eligible_by_bay]
+            missing_data = [bay for bay in selected_data_bays if bay not in eligible_by_bay]
+            if missing_data:
+                custom_blockers.append(f"Selected data drives are not eligible or were not found: {', '.join(missing_data)}.")
+            raid6_explanation = "Using the drives chosen below for the data array."
+        if selected_spare_bay:
+            hot_spare = dict(eligible_by_bay.get(selected_spare_bay) or {})
+            if not hot_spare:
+                custom_blockers.append(f"Selected hot spare bay was not eligible or was not found: {selected_spare_bay}.")
+        os_bays_set = {drive.get("bay") for drive in os_pair}
+        data_bays_set = {drive.get("bay") for drive in data_set}
+        if os_bays_set & data_bays_set:
+            overlap_blockers.append("The same drive cannot be used for both the OS mirror and the data array.")
+        if selected_spare_bay and (selected_spare_bay in os_bays_set or selected_spare_bay in data_bays_set):
+            overlap_blockers.append("The hot spare must be different from the OS and data drives.")
+        if len(os_pair) != 2:
+            custom_blockers.append("Choose exactly two drives for the OS RAID 1 pair.")
+        if len(data_set) < 4:
+            custom_blockers.append("Choose at least four compatible drives for the Data RAID 6 set.")
+        if hot_spare:
+            compatibility_group = {drive_group_key(drive) for drive in data_set + [hot_spare]}
+        else:
+            compatibility_group = {drive_group_key(drive) for drive in data_set}
+        if data_set and len(compatibility_group) > 1:
+            custom_blockers.append("The selected data drives and hot spare must use the same media type, protocol, and size.")
+        blockers.extend(custom_blockers + overlap_blockers)
+        raid6_excluded = [
+            {**drive, "exclude_reason": "Not selected for the custom data layout."}
+            for drive in eligible_drives
+            if drive.get("bay") not in {*(drive.get("bay") for drive in os_pair), *(drive.get("bay") for drive in data_set), selected_spare_bay}
+        ]
+        warnings.append("This plan was customized from the default drive selection.")
 
     excluded_drives.extend({**drive, "exclude_reason": "Reserved for OS RAID 1 pair."} for drive in os_pair)
     if hot_spare:
         excluded_drives.append({**hot_spare, "exclude_reason": "Reserved as the data-side hot spare."})
-    excluded_drives.extend(raid6_excluded)
+        excluded_drives.extend(raid6_excluded)
+    elif len(default_os_pair) < 2:
+        blockers.append("Could not choose two suitable drives for the OS RAID 1 pair.")
+        blockers.extend(default_raid6_blockers)
 
     apply_readiness = {
         "next_action": "wipe and rebuild" if existing_volumes else "create only",
@@ -2594,6 +2876,12 @@ def build_raid_plan(discovery: dict, discovery_paths: dict[str, Path]) -> dict:
             "os_volume": {"raid": "RAID 1", "target_size_gib": 500},
             "data_volume": {"raid": "RAID 6", "capacity": "remaining compatible eligible drives after reserving one hot spare"},
             "hot_spare": {"required": True, "scope": "data-side compatible spare"},
+        },
+        "customization": {
+            "active": customization_active,
+            "selected_os_bays": [str(drive.get("bay") or "") for drive in os_pair],
+            "selected_data_bays": [str(drive.get("bay") or "") for drive in data_set],
+            "selected_hot_spare_bay": str((hot_spare or {}).get("bay") or ""),
         },
         "planned_layout": planned_layout,
         "os_raid1": {"target_size_gib": 500, "drives": os_pair, "explanation": os_explanation},
@@ -4181,6 +4469,7 @@ def default_config():
             "v3_auth_password": "",
             "v3_priv_protocol": "AES",
             "v3_priv_password": "",
+            "users": [],
         },
         "ip_plan": {
             "gateway": "10.10.8.1",
@@ -4216,6 +4505,7 @@ def default_config():
             "hostname": "ilo01",
             "username": "Administrator",
             "password": "",
+            "additional_users": [],
         },
         "esxi": {
             "hostname": "esxi01",
@@ -4289,8 +4579,102 @@ def merge_defaults(cfg):
     return normalize_ilo_config(base)
 
 
+def normalize_ilo_additional_users(entries: list[dict[str, Any]] | Any) -> list[dict[str, str]]:
+    normalized: list[dict[str, str]] = []
+    if not isinstance(entries, list):
+        return normalized
+    for item in entries:
+        if not isinstance(item, dict):
+            continue
+        username = str(item.get("username") or "").strip()
+        password = str(item.get("password") or "")
+        role = str(item.get("role") or "Administrator").strip() or "Administrator"
+        if not username or not password:
+            continue
+        normalized.append({
+            "username": username,
+            "password": password,
+            "role": role,
+        })
+    return normalized
+
+
+def normalize_snmp_users(entries: list[dict[str, Any]] | Any) -> list[dict[str, str]]:
+    normalized: list[dict[str, str]] = []
+    if not isinstance(entries, list):
+        return normalized
+    for item in entries:
+        if not isinstance(item, dict):
+            continue
+        username = str(item.get("username") or "").strip()
+        auth_protocol = str(item.get("auth_protocol") or "SHA").strip() or "SHA"
+        auth_password = str(item.get("auth_password") or "")
+        priv_protocol = str(item.get("priv_protocol") or "AES").strip() or "AES"
+        priv_password = str(item.get("priv_password") or "")
+        if not username:
+            continue
+        normalized.append({
+            "username": username,
+            "auth_protocol": auth_protocol,
+            "auth_password": auth_password,
+            "priv_protocol": priv_protocol,
+            "priv_password": priv_password,
+        })
+    return normalized
+
+
+def extract_ilo_additional_users_from_form(form: Any) -> list[dict[str, str]]:
+    usernames = form.getlist("ilo_extra_username")
+    passwords = form.getlist("ilo_extra_password")
+    roles = form.getlist("ilo_extra_role")
+    entries: list[dict[str, str]] = []
+    for index, username in enumerate(usernames):
+        entries.append({
+            "username": username,
+            "password": passwords[index] if index < len(passwords) else "",
+            "role": roles[index] if index < len(roles) else "Administrator",
+        })
+    return normalize_ilo_additional_users(entries)
+
+
+def extract_snmp_users_from_form(
+    form: Any,
+    *,
+    primary_username: str,
+    primary_auth_protocol: str,
+    primary_auth_password: str,
+    primary_priv_protocol: str,
+    primary_priv_password: str,
+) -> list[dict[str, str]]:
+    entries: list[dict[str, str]] = []
+    if str(primary_username or "").strip():
+        entries.append({
+            "username": primary_username,
+            "auth_protocol": primary_auth_protocol,
+            "auth_password": primary_auth_password,
+            "priv_protocol": primary_priv_protocol,
+            "priv_password": primary_priv_password,
+        })
+
+    usernames = form.getlist("snmp_extra_username")
+    auth_protocols = form.getlist("snmp_extra_auth_protocol")
+    auth_passwords = form.getlist("snmp_extra_auth_password")
+    priv_protocols = form.getlist("snmp_extra_priv_protocol")
+    priv_passwords = form.getlist("snmp_extra_priv_password")
+    for index, username in enumerate(usernames):
+        entries.append({
+            "username": username,
+            "auth_protocol": auth_protocols[index] if index < len(auth_protocols) else "SHA",
+            "auth_password": auth_passwords[index] if index < len(auth_passwords) else "",
+            "priv_protocol": priv_protocols[index] if index < len(priv_protocols) else "AES",
+            "priv_password": priv_passwords[index] if index < len(priv_passwords) else "",
+        })
+    return normalize_snmp_users(entries)
+
+
 def normalize_ilo_config(cfg: dict):
     ilo_cfg = cfg.setdefault("ilo", {})
+    snmp_cfg = cfg.setdefault("shared_snmp", {})
     legacy_host = (ilo_cfg.get("host") or "").strip()
     current_ip = (ilo_cfg.get("current_ip") or legacy_host or "").strip()
     target_ip = (ilo_cfg.get("target_ip") or "").strip()
@@ -4315,6 +4699,26 @@ def normalize_ilo_config(cfg: dict):
     ilo_cfg["gateway"] = gateway
     ilo_cfg["dns_servers"] = normalized_dns
     ilo_cfg["host"] = current_ip
+    ilo_cfg["additional_users"] = normalize_ilo_additional_users(ilo_cfg.get("additional_users", []))
+
+    normalized_snmp_users = normalize_snmp_users(snmp_cfg.get("users", []))
+    if not normalized_snmp_users:
+        primary_snmp_username = str(snmp_cfg.get("v3_username") or "").strip()
+        if primary_snmp_username:
+            normalized_snmp_users = [{
+                "username": primary_snmp_username,
+                "auth_protocol": str(snmp_cfg.get("v3_auth_protocol") or "SHA").strip() or "SHA",
+                "auth_password": str(snmp_cfg.get("v3_auth_password") or ""),
+                "priv_protocol": str(snmp_cfg.get("v3_priv_protocol") or "AES").strip() or "AES",
+                "priv_password": str(snmp_cfg.get("v3_priv_password") or ""),
+            }]
+    snmp_cfg["users"] = normalized_snmp_users
+    primary_snmp_user = normalized_snmp_users[0] if normalized_snmp_users else {}
+    snmp_cfg["v3_username"] = primary_snmp_user.get("username", "")
+    snmp_cfg["v3_auth_protocol"] = primary_snmp_user.get("auth_protocol", str(snmp_cfg.get("v3_auth_protocol") or "SHA"))
+    snmp_cfg["v3_auth_password"] = primary_snmp_user.get("auth_password", str(snmp_cfg.get("v3_auth_password") or ""))
+    snmp_cfg["v3_priv_protocol"] = primary_snmp_user.get("priv_protocol", str(snmp_cfg.get("v3_priv_protocol") or "AES"))
+    snmp_cfg["v3_priv_password"] = primary_snmp_user.get("priv_password", str(snmp_cfg.get("v3_priv_password") or ""))
     return cfg
 
 
@@ -4510,6 +4914,8 @@ def build_execution_review(cfg: dict, scope: str):
     lines = [f"Execution scope: {scope}", ""]
     execution_mode = execution_mode_for_scope(scope)
     storage_review = build_storage_review_context(cfg)
+    esxi_install_review = build_esxi_install_review(cfg) if scope in {"esxi", "included"} else {}
+    selected_scope_keys = run_center_scope_keys(scope, cfg)
     storage_validation_error = None
     try:
         storage_execution = validate_storage_ready_for_ilo_run(cfg)
@@ -4594,7 +5000,10 @@ def build_execution_review(cfg: dict, scope: str):
                 f" -> final IP {cfg['ilo'].get('target_ip') or '(unchanged)'}"
             )
         if key == "esxi":
-            return f"Saved ESXi host {cfg['esxi'].get('hostname') or '(not set)'} at {cfg['esxi'].get('management_ip') or cfg.get('ip_plan', {}).get('esxi', '') or 'Not set'}"
+            return (
+                f"Saved ESXi host {esxi_install_review.get('hostname') or '(not set)'} at "
+                f"{esxi_install_review.get('management_ip') or 'Not set'}"
+            )
         if key == "windows":
             return f"Saved Windows VM {cfg['windows'].get('vm_name') or '(not set)'} at {cfg['windows'].get('ip_address') or cfg.get('ip_plan', {}).get('windows', '') or 'Not set'}"
         if key == "qnap":
@@ -4619,20 +5028,25 @@ def build_execution_review(cfg: dict, scope: str):
                 f"SNMP privacy: {cfg.get('shared_snmp', {}).get('v3_priv_protocol', 'AES')}",
             ]
         if key == "esxi":
-            esxi_cfg = cfg.get("esxi", {}) or {}
-            dns_values = [x for x in (esxi_cfg.get("dns_servers") or cfg.get("shared_network", {}).get("dns_servers", [])) if x and str(x).strip()]
             values = [
-                f"Management IP: {esxi_cfg.get('management_ip') or cfg.get('ip_plan', {}).get('esxi') or 'Not set'}",
-                f"Subnet mask: {esxi_cfg.get('subnet_mask') or 'Not set'}",
-                f"Gateway: {esxi_cfg.get('gateway') or cfg.get('ip_plan', {}).get('gateway') or 'Not set'}",
-                f"Hostname: {esxi_cfg.get('hostname') or 'Not set'}",
-                f"DNS servers: {', '.join(dns_values) or 'Not set'}",
-                f"Root password: {'Saved' if esxi_cfg.get('root_password') else 'Missing'}",
+                f"Source: {esxi_install_review.get('source_label') or 'Not set'}",
+                f"Management IP: {esxi_install_review.get('management_ip') or 'Not set'}",
+                f"Subnet mask: {esxi_install_review.get('subnet_mask') or 'Not set'}",
+                f"Gateway: {esxi_install_review.get('gateway') or 'Not set'}",
+                f"Hostname: {esxi_install_review.get('hostname') or 'Not set'}",
+                f"DNS servers: {', '.join(esxi_install_review.get('dns_servers') or []) or 'Not set'}",
+                f"Root password: {'Saved' if esxi_install_review.get('root_password_saved') else 'Missing'}",
+                f"Built ISO path: {esxi_install_review.get('output_iso_path') or 'Not set'}",
+                f"Virtual media URL: {esxi_install_review.get('virtual_media_url') or 'Not set'}",
+                f"Base ISO path: {esxi_install_review.get('base_iso_path') or 'Not set'}",
+                f"Manual test defaults: {esxi_install_review.get('manual_defaults_label') or 'Not set'}",
             ]
-            if esxi_cfg.get("vlan_id"):
-                values.append(f"VLAN ID: {esxi_cfg.get('vlan_id')}")
-            if esxi_cfg.get("ntp_server"):
-                values.append(f"NTP server: {esxi_cfg.get('ntp_server')}")
+            if esxi_install_review.get("vlan_id"):
+                values.append(f"VLAN ID: {esxi_install_review.get('vlan_id')}")
+            if esxi_install_review.get("ntp_server"):
+                values.append(f"NTP server: {esxi_install_review.get('ntp_server')}")
+            values.append(f"Enable SSH: {'Yes' if esxi_install_review.get('enable_ssh') else 'No'}")
+            values.append(f"Disable IPv6: {'Yes' if esxi_install_review.get('disable_ipv6') else 'No'}")
             return values
         if key == "windows":
             windows_cfg = cfg.get("windows", {}) or {}
@@ -4764,6 +5178,14 @@ def build_execution_review(cfg: dict, scope: str):
         if storage_included:
             lines.append(f"- Storage plan -> {'approved exact artifact' if storage_execution.get('included') else 'not ready'}")
             included_stages.append(stage_entry("storage", True))
+    elif scope.startswith("multi__"):
+        lines.append("Will act on the selected stages:")
+        for key in selected_scope_keys:
+            lines.append(f"- {components[key]['name']} -> {components[key]['target']}")
+            included_stages.append(stage_entry(key, True))
+        if "ilo" in selected_scope_keys and storage_review.get("include_in_ilo_run"):
+            lines.append(f"- Storage plan -> {'approved exact artifact' if storage_execution.get('included') else 'not ready'}")
+            included_stages.append(stage_entry("storage", True))
     else:
         lines.append(f"Will act only on stage: {scope}")
         if scope == "ilo":
@@ -4817,9 +5239,16 @@ def build_execution_review(cfg: dict, scope: str):
         will_not_run.append("Storage / RAID")
     if storage_validation_error and "Storage / RAID" not in will_not_run and any(stage["key"] == "storage" for stage in included_stages):
         will_not_run.append("Storage / RAID until it is reviewed again")
+    if scope == "included":
+        run_type_label = "Whole run"
+    elif scope.startswith("multi__"):
+        run_type_label = f"Selected stages: {', '.join([components[key]['name'] for key in selected_scope_keys])}"
+    else:
+        run_type_label = f"Single stage: {components.get(scope, {'name': scope}).get('name', scope)}"
+
     summary_items = [
         {"label": "Execution mode", "value": execution_mode["label"]},
-        {"label": "Run type", "value": "Full kit run" if scope == "included" else f"Single stage: {components.get(scope, {'name': scope}).get('name', scope)}"},
+        {"label": "Run type", "value": run_type_label},
         {"label": "Selected kit", "value": cfg.get("site", {}).get("name", "") or "Unknown"},
         {"label": "Storage in run", "value": "Yes" if (scope == "included" and cfg.get("included", {}).get("storage")) or (scope == "ilo" and storage_review.get("include_in_ilo_run")) else "No"},
         {"label": "Restart expected", "value": "Yes" if storage_review.get("approval", {}).get("reboot_expected") and any(stage["key"] == "storage" and stage["included"] for stage in included_stages) else "No"},
@@ -4844,7 +5273,9 @@ def build_execution_review(cfg: dict, scope: str):
     launch_options = build_execution_launch_options(cfg, scope)
     return {
         "scope": scope,
+        "selected_scopes_for_form": ["included"] if scope == "included" else selected_scope_keys or ([scope] if scope else ["included"]),
         "execution_mode": execution_mode,
+        "esxi_install_review": esxi_install_review,
         "execution_mode_rows": [
             {"label": "Mode", "value": execution_mode["badge"]},
             {"label": "What this does", "value": execution_mode["what_this_does"]},
@@ -4933,10 +5364,29 @@ def get_steps_for_scope(cfg: dict, scope: str):
             steps.append("Preview Cisco switch actions")
         steps.append("Preview complete - ready for real included-kit execution")
         return steps
+    if scope.startswith("multi__"):
+        steps = ["Preview selected stages"]
+        for key in run_center_scope_keys(scope, cfg):
+            label = {
+                "ilo": "Preview iLO actions",
+                "esxi": "Preview ESXi actions",
+                "windows": "Preview Windows actions",
+                "qnap": "Preview QNAP actions",
+                "iosafe": "Preview ioSafe actions",
+                "cisco_switch": "Preview Cisco switch actions",
+            }.get(key, f"Preview {key} actions")
+            steps.append(label)
+        steps.append("Preview complete - ready for the selected run")
+        return steps
     return ["Preview scope is not defined"]
 
 
 def validate_execution_scope(cfg: dict, scope: str) -> None:
+    if scope.startswith("multi__"):
+        selected = run_center_scope_keys(scope, cfg)
+        if "ilo" in selected:
+            validate_storage_ready_for_ilo_run(cfg)
+        return
     if scope not in {"ilo", "included"}:
         return
     included = cfg.get("included", {})
@@ -4956,12 +5406,24 @@ def update_job(
     log_line: str,
     progress_percent: int | None = None,
 ):
+    ensure_run_bundle_for_job(kit_name, job)
     job["status"] = status
     job["current_stage"] = current_stage
     job["completed_steps"] = completed
     job["total_steps"] = total
     job["progress_percent"] = progress_percent if progress_percent is not None else (int((completed / total) * 100) if total else 0)
     job["logs"].append(log_line)
+    job.setdefault("trace_events", []).append(
+        {
+            "time": time.strftime("%Y-%m-%d %H:%M:%S"),
+            "status": status,
+            "stage": current_stage,
+            "completed_steps": completed,
+            "total_steps": total,
+            "progress_percent": job["progress_percent"],
+            "log": log_line,
+        }
+    )
     save_job(kit_name, job)
 
 
@@ -4981,6 +5443,26 @@ def initialize_background_job(kit_name: str, scope: str):
             "logs": [f"[QUEUED] {mode['label']} requested for scope: {scope}"],
         },
     )
+
+
+def carry_forward_job_bundle_metadata(kit_name: str, job: dict[str, Any]) -> dict[str, Any]:
+    existing = load_job(kit_name)
+    for key in (
+        "run_id",
+        "run_bundle_dir",
+        "run_live_log_path",
+        "run_trace_path",
+        "run_summary_path",
+        "run_config_snapshot_path",
+        "started_at",
+    ):
+        if existing.get(key) and not job.get(key):
+            job[key] = existing.get(key)
+    if existing.get("trace_events") and not job.get("trace_events"):
+        job["trace_events"] = list(existing.get("trace_events") or [])
+    if existing.get("logs") and not job.get("logs"):
+        job["logs"] = list(existing.get("logs") or [])
+    return job
 
 
 def append_job_history_snapshot(cfg: dict, scope: str):
@@ -5006,6 +5488,10 @@ def append_job_history_snapshot(cfg: dict, scope: str):
             "total_steps": finished_job.get("total_steps", 0),
             "issues": issue_lines,
             "logs": logs,
+            "run_bundle_dir": str(finished_job.get("run_bundle_dir") or ""),
+            "run_live_log_path": str(finished_job.get("run_live_log_path") or ""),
+            "run_trace_path": str(finished_job.get("run_trace_path") or ""),
+            "run_config_snapshot_path": str(finished_job.get("run_config_snapshot_path") or ""),
             "config_summary": {
                 **build_history_config_summary(cfg, scope),
                 **(
@@ -5034,12 +5520,17 @@ def append_job_history_snapshot(cfg: dict, scope: str):
                         "snmp_priv_protocol": str(finished_job.get("snmp_priv_protocol") or ""),
                         "snmp_auth_secret_present": bool(finished_job.get("snmp_auth_secret_present")),
                         "snmp_priv_secret_present": bool(finished_job.get("snmp_priv_secret_present")),
+                        "local_account_status": str(finished_job.get("local_account_status") or ""),
+                        "local_accounts_requested": finished_job.get("local_accounts_requested") or [],
+                        "ilo_stage_finished": bool(finished_job.get("ilo_stage_finished")),
+                        "ilo_final_ip_verified": bool(finished_job.get("ilo_final_ip_verified")),
                     }
                     if (
                         finished_job.get("storage_run_directory")
                         or finished_job.get("apply_path")
                         or finished_job.get("dns_apply_status")
                         or finished_job.get("snmp_apply_status")
+                        or finished_job.get("local_account_status")
                         or finished_job.get("ilo_reset_status")
                         or finished_job.get("storage_server_reboot_status")
                     )
@@ -5057,7 +5548,7 @@ def execute_real_job_in_background(cfg: dict, scope: str):
         if scope == "ilo":
             run_ilo_real(cfg)
         elif scope == "esxi":
-            run_esxi_real(cfg)
+            run_esxi_real(cfg, run_stamp=str((cfg.get("_runtime", {}) or {}).get("esxi_run_stamp") or "").strip() or None)
         else:
             raise RuntimeError(f"Real execution is not wired for scope: {scope}")
     except Exception as e:
@@ -5117,6 +5608,65 @@ def build_esxi_iso_url(cfg: dict, output_iso: Path, target_host: str = "") -> st
     return f"{public_base_url}/esxi-built-iso/{quote(kit_name)}/{quote(output_name)}.iso"
 
 
+def build_esxi_install_review(cfg: dict, *, run_stamp: str | None = None) -> dict[str, Any]:
+    esxi_cfg = cfg.get("esxi", {}) or {}
+    ilo_cfg = cfg.get("ilo", {}) or {}
+    kit_name = sanitize_kit_name(cfg.get("site", {}).get("name", "Kit-01"))
+    login_ip = str(ilo_cfg.get("current_ip") or ilo_cfg.get("host") or "").strip()
+    stamp = (run_stamp or datetime.now().strftime("%Y%m%d-%H%M%S")).strip()
+    output_name = f"esxi-{stamp}"
+    output_iso = EXPORTS_DIR / "esxi-isos" / kit_name / output_name / f"{output_name}.iso"
+    management_ip = str(esxi_cfg.get("management_ip") or cfg.get("ip_plan", {}).get("esxi") or "").strip()
+    subnet_mask = str(esxi_cfg.get("subnet_mask") or "").strip()
+    gateway = str(esxi_cfg.get("gateway") or cfg.get("ip_plan", {}).get("gateway") or "").strip()
+    dns_servers = [
+        x.strip()
+        for x in (esxi_cfg.get("dns_servers") or cfg.get("shared_network", {}).get("dns_servers") or [])
+        if x and str(x).strip()
+    ]
+    hostname = str(esxi_cfg.get("hostname") or "").strip()
+    root_password = str(esxi_cfg.get("root_password") or "")
+    vlan_id = str(esxi_cfg.get("vlan_id") or "").strip()
+    ntp_server = str(esxi_cfg.get("ntp_server") or "").strip()
+    enable_ssh = bool(esxi_cfg.get("enable_ssh", True))
+    disable_ipv6 = bool(esxi_cfg.get("disable_ipv6", True))
+    base_iso_path = resolve_esxi_base_iso_path(cfg)
+    iso_url = build_esxi_iso_url(cfg, output_iso, login_ip)
+    return {
+        "run_stamp": stamp,
+        "source_label": "Saved kit values from the ESXi Setup page and shared defaults",
+        "manual_defaults_label": "Manual test script defaults are not used by Run Center",
+        "base_iso_path": str(base_iso_path),
+        "output_iso_path": str(output_iso),
+        "virtual_media_url": iso_url,
+        "hostname": hostname,
+        "management_ip": management_ip,
+        "subnet_mask": subnet_mask,
+        "gateway": gateway,
+        "dns_servers": dns_servers,
+        "root_password_saved": bool(root_password),
+        "vlan_id": vlan_id,
+        "ntp_server": ntp_server,
+        "enable_ssh": enable_ssh,
+        "disable_ipv6": disable_ipv6,
+    }
+
+
+def esxi_password_policy_valid(password: str) -> bool:
+    value = str(password or "")
+    return (
+        len(value) >= 8
+        and any(ch.islower() for ch in value)
+        and any(ch.isupper() for ch in value)
+        and any(ch.isdigit() for ch in value)
+    )
+
+
+def save_esxi_trace(trace_path: Path, payload: dict[str, Any]) -> None:
+    trace_path.parent.mkdir(parents=True, exist_ok=True)
+    trace_path.write_text(yaml.safe_dump(payload, sort_keys=False), encoding="utf-8")
+
+
 def choose_virtual_media_device(client: ILOClient) -> dict[str, Any]:
     devices = client.get_virtual_media()
     for item in devices:
@@ -5173,7 +5723,7 @@ def wait_for_esxi_management_ready(
     )
 
 
-def run_esxi_real(cfg: dict):
+def run_esxi_real(cfg: dict, run_stamp: str | None = None):
     kit_name = cfg["site"]["name"]
     ilo_cfg = cfg.get("ilo", {}) or {}
     esxi_cfg = cfg.get("esxi", {}) or {}
@@ -5193,7 +5743,9 @@ def run_esxi_real(cfg: dict):
         "logs": [],
         "esxi_iso_path": "",
         "esxi_iso_url": "",
+        "esxi_trace_path": "",
     }
+    job = carry_forward_job_bundle_metadata(kit_name, job)
     save_job(kit_name, job)
 
     if not login_ip or not username or not password:
@@ -5222,36 +5774,136 @@ def run_esxi_real(cfg: dict):
     save_job(kit_name, job)
 
     try:
-        base_iso_path = resolve_esxi_base_iso_path(cfg)
-        stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+        esxi_review = build_esxi_install_review(cfg, run_stamp=run_stamp)
+        trace_path = Path(esxi_review["output_iso_path"]).parent / "esxi-run-trace.yml"
+        trace_payload: dict[str, Any] = {
+            "workflow": "esxi",
+            "kit_name": kit_name,
+            "source_of_truth": esxi_review.get("source_label"),
+            "manual_defaults": esxi_review.get("manual_defaults_label"),
+            "install_values": {
+                "hostname": esxi_review.get("hostname"),
+                "management_ip": esxi_review.get("management_ip"),
+                "subnet_mask": esxi_review.get("subnet_mask"),
+                "gateway": esxi_review.get("gateway"),
+                "dns_servers": esxi_review.get("dns_servers"),
+                "root_password_saved": bool(root_password),
+                "root_password_policy_valid": esxi_password_policy_valid(root_password),
+                "vlan_id": esxi_review.get("vlan_id"),
+                "ntp_server": esxi_review.get("ntp_server"),
+                "enable_ssh": bool(esxi_review.get("enable_ssh")),
+                "disable_ipv6": bool(esxi_review.get("disable_ipv6")),
+            },
+            "artifacts": {
+                "base_iso_path": esxi_review.get("base_iso_path"),
+                "output_iso_path": esxi_review.get("output_iso_path"),
+                "virtual_media_url": esxi_review.get("virtual_media_url"),
+            },
+            "steps": [],
+        }
+        job["esxi_trace_path"] = str(trace_path)
+        save_job(kit_name, job)
+        save_esxi_trace(trace_path, trace_payload)
+        base_iso_path = Path(esxi_review["base_iso_path"])
         spec = EsxiBuildSpec(
             kit_name=sanitize_kit_name(kit_name),
             base_iso_path=base_iso_path,
-            output_name=f"esxi-{stamp}",
-            hostname=hostname,
-            management_ip=management_ip,
-            subnet_mask=subnet_mask,
-            gateway=gateway,
-            dns_servers=dns_servers,
+            output_name=Path(esxi_review["output_iso_path"]).stem,
+            hostname=esxi_review["hostname"],
+            management_ip=esxi_review["management_ip"],
+            subnet_mask=esxi_review["subnet_mask"],
+            gateway=esxi_review["gateway"],
+            dns_servers=esxi_review["dns_servers"],
             root_password=root_password,
-            vlan_id=str(esxi_cfg.get("vlan_id") or ""),
-            ntp_server=str(esxi_cfg.get("ntp_server") or ""),
-            enable_ssh=bool(esxi_cfg.get("enable_ssh", True)),
-            disable_ipv6=bool(esxi_cfg.get("disable_ipv6", True)),
+            vlan_id=esxi_review["vlan_id"],
+            ntp_server=esxi_review["ntp_server"],
+            enable_ssh=bool(esxi_review["enable_ssh"]),
+            disable_ipv6=bool(esxi_review["disable_ipv6"]),
         )
 
         client = ILOClient(ILOConfig(host=login_ip, username=username, password=password, verify_tls=False, timeout=15))
 
+        update_job(kit_name, job, "Running", "Generate KS.CFG", 1, total, "[RUNNING] Generating KS.CFG")
+        trace_payload["steps"].append({"stage": "generate_ks_cfg", "status": "running"})
+        save_esxi_trace(trace_path, trace_payload)
+        update_job(kit_name, job, "Running", "Review install values", 1, total, "[OK] KS.CFG generated")
+        update_job(
+            kit_name,
+            job,
+            "Running",
+            "Review install values",
+            1,
+            total,
+            (
+                "[INFO] ESXi install values: "
+                f"hostname={esxi_review['hostname']}, management_ip={esxi_review['management_ip']}, "
+                f"subnet_mask={esxi_review['subnet_mask']}, gateway={esxi_review['gateway']}, "
+                f"dns={','.join(esxi_review['dns_servers']) or '(none)'}"
+            ),
+        )
+        update_job(
+            kit_name,
+            job,
+            "Running",
+            "Review install values",
+            1,
+            total,
+            (
+                "[INFO] root_password=SET "
+                f"(policy-valid={'yes' if esxi_password_policy_valid(root_password) else 'no'})"
+            ),
+        )
+        update_job(
+            kit_name,
+            job,
+            "Running",
+            "Review install values",
+            1,
+            total,
+            (
+                "[INFO] Optional settings: "
+                f"vlan={esxi_review['vlan_id'] or '(none)'}, "
+                f"ntp={esxi_review['ntp_server'] or '(none)'}, "
+                f"ssh={'yes' if esxi_review['enable_ssh'] else 'no'}, "
+                f"disable_ipv6={'yes' if esxi_review['disable_ipv6'] else 'no'}"
+            ),
+        )
+        update_job(kit_name, job, "Running", "Review install values", 1, total, f"[INFO] Base ISO: {base_iso_path}")
+
         update_job(kit_name, job, "Running", "Building custom ESXi ISO", 1, total, "[RUNNING] Building custom ESXi ISO")
         output_iso = build_custom_iso(spec)
-        iso_url = build_esxi_iso_url(cfg, output_iso, login_ip)
+        iso_url = esxi_review["virtual_media_url"]
         job["esxi_iso_path"] = str(output_iso)
         job["esxi_iso_url"] = iso_url
         save_job(kit_name, job)
+        trace_payload["artifacts"]["output_iso_path"] = str(output_iso)
+        trace_payload["artifacts"]["virtual_media_url"] = iso_url
+        build_summary_path = output_iso.parent / "build-summary.yml"
+        if build_summary_path.exists():
+            try:
+                build_summary = yaml.safe_load(build_summary_path.read_text(encoding="utf-8")) or {}
+            except Exception:
+                build_summary = {}
+            trace_payload["builder_summary_path"] = str(build_summary_path)
+            trace_payload["builder_summary"] = build_summary
+            save_esxi_trace(trace_path, trace_payload)
+            generation = build_summary.get("generation", {}) or {}
+            if (generation.get("ks_cfg", {}) or {}).get("generated"):
+                update_job(kit_name, job, "Running", "Build complete", 2, total, "[OK] KS.CFG generated")
+            if (generation.get("boot_cfg", {}) or {}).get("patched"):
+                update_job(kit_name, job, "Running", "Build complete", 2, total, "[OK] BOOT.CFG patched")
+            efi_meta = generation.get("efi_boot_cfg", {}) or {}
+            if efi_meta.get("present"):
+                if efi_meta.get("patched"):
+                    update_job(kit_name, job, "Running", "Build complete", 2, total, "[OK] EFI/BOOT/BOOT.CFG patched")
+            else:
+                update_job(kit_name, job, "Running", "Build complete", 2, total, "[INFO] EFI/BOOT/BOOT.CFG not present in base ISO")
         update_job(kit_name, job, "Running", "Build complete", 2, total, f"[OK] Built ESXi ISO: {output_iso}")
-        update_job(kit_name, job, "Running", "Build complete", 2, total, f"[OK] ESXi ISO will be served from: {iso_url}")
+        update_job(kit_name, job, "Running", "Build complete", 2, total, f"[INFO] Virtual media URL: {iso_url}")
 
         update_job(kit_name, job, "Running", "Eject media", 3, total, "[RUNNING] Ejecting previous virtual media")
+        trace_payload["steps"].append({"stage": "eject_virtual_media", "status": "running"})
+        save_esxi_trace(trace_path, trace_payload)
         for vm in client.get_virtual_media():
             if vm.get("Inserted") and vm.get("@odata.id"):
                 client.eject_virtual_media(vm["@odata.id"])
@@ -5261,6 +5913,8 @@ def run_esxi_real(cfg: dict):
         current_power = str(current_system.get("PowerState") or "")
         if current_power.lower() != "off":
             update_job(kit_name, job, "Running", "Power off", 4, total, "[RUNNING] Powering server off before setting one-time boot")
+            trace_payload["steps"].append({"stage": "power_off", "status": "running", "from_state": current_power})
+            save_esxi_trace(trace_path, trace_payload)
             try:
                 client.power_reset(reset_type="GracefulShutdown", system_path=system_path)
             except Exception:
@@ -5273,14 +5927,58 @@ def run_esxi_real(cfg: dict):
         if not insert_target:
             raise ILOError("No InsertMedia action was found on the selected virtual media device.")
         update_job(kit_name, job, "Running", "Mount ISO", 6, total, "[RUNNING] Mounting custom ESXi ISO")
+        trace_payload["steps"].append({"stage": "mount_virtual_media", "status": "running", "target": insert_target, "image": iso_url})
+        save_esxi_trace(trace_path, trace_payload)
         client._post(insert_target, {"Image": iso_url, "Inserted": True, "WriteProtected": True})
         update_job(kit_name, job, "Running", "Mount ISO", 7, total, "[OK] Virtual media mounted")
 
-        update_job(kit_name, job, "Running", "Set boot override", 8, total, "[RUNNING] Setting one-time boot to virtual media")
-        client.set_one_time_boot_cd(system_path=system_path)
-        update_job(kit_name, job, "Running", "Set boot override", 8, total, "[OK] One-time boot set")
+        update_job(kit_name, job, "Running", "Set boot override", 8, total, "[RUNNING] Setting one-time boot to CD/DVD")
+        trace_payload["steps"].append({"stage": "set_one_time_boot", "status": "running", "system_path": system_path})
+        save_esxi_trace(trace_path, trace_payload)
+        boot_override = client.set_one_time_boot_cd(system_path=system_path)
+        before_enabled = boot_override.get("before_enabled") or "(empty)"
+        before_target = boot_override.get("before_target") or "(empty)"
+        after_enabled = boot_override.get("after_enabled") or "(empty)"
+        after_target = boot_override.get("after_target") or "(empty)"
+        update_job(kit_name, job, "Running", "Set boot override", 8, total, f"[INFO] Boot override before: enabled={before_enabled} target={before_target}")
+        if boot_override.get("matched"):
+            update_job(kit_name, job, "Running", "Set boot override", 8, total, "[OK] One-time boot set to CD/DVD")
+        else:
+            update_job(
+                kit_name,
+                job,
+                "Failed",
+                "Set boot override",
+                8,
+                total,
+                f"[FAILED] One-time boot did not stick; expected Once/Cd but got enabled={after_enabled} target={after_target}.",
+            )
+            job["logs"].append("[SKIP] Server power-on blocked because one-time boot was not verified")
+            save_job(kit_name, job)
+            trace_payload["steps"].append({"stage": "set_one_time_boot", "status": "mismatch", **boot_override})
+            trace_payload["result"] = {
+                "status": "Failed",
+                "error": f"One-time boot did not stick; expected Once/Cd but got enabled={after_enabled} target={after_target}.",
+            }
+            save_esxi_trace(trace_path, trace_payload)
+            return
+        update_job(kit_name, job, "Running", "Set boot override", 8, total, f"[INFO] Boot override after: enabled={after_enabled} target={after_target}")
+        if str(after_target).strip().lower() != "cd":
+            update_job(
+                kit_name,
+                job,
+                "Running",
+                "Set boot override",
+                8,
+                total,
+                f"[INFO] iLO returned an equivalent CD/DVD target value: {after_target}",
+            )
+        trace_payload["steps"].append({"stage": "set_one_time_boot", "status": "verified", **boot_override})
+        save_esxi_trace(trace_path, trace_payload)
 
         update_job(kit_name, job, "Running", "Power on", 9, total, "[RUNNING] Powering server on")
+        trace_payload["steps"].append({"stage": "power_on", "status": "running", "system_path": system_path})
+        save_esxi_trace(trace_path, trace_payload)
         client.power_reset(reset_type="On", system_path=system_path)
         update_job(kit_name, job, "Running", "Wait for server power", 10, total, "[RUNNING] Waiting for the server to power back on")
         wait_for_power_state(client, "On", timeout_seconds=300, poll_interval=5)
@@ -5296,6 +5994,11 @@ def run_esxi_real(cfg: dict):
             f"[RUNNING] Waiting for ESXi management network on {management_ip}",
         )
         ready_result = wait_for_esxi_management_ready(management_ip)
+        trace_payload["result"] = {
+            "status": "Completed",
+            "management_ready": ready_result,
+        }
+        save_esxi_trace(trace_path, trace_payload)
         update_job(
             kit_name,
             job,
@@ -5320,6 +6023,12 @@ def run_esxi_real(cfg: dict):
         detail = str(e).splitlines()[0]
         if "configured IP" in detail and "ESXi did not answer" in detail:
             detail += " This usually means the kickstart network settings did not apply or the installer did not finish."
+        if 'trace_path' in locals():
+            trace_payload["result"] = {
+                "status": "Failed",
+                "error": detail,
+            }
+            save_esxi_trace(trace_path, trace_payload)
         update_job(kit_name, job, "Failed", job.get("current_stage") or "ESXi real run failed", job.get("completed_steps", 0), total, f"[FAILED] {detail}")
 
 
@@ -5327,12 +6036,21 @@ def run_ilo_real(cfg: dict):
     kit_name = cfg["site"]["name"]
     ilo_cfg = cfg.get("ilo", {})
     snmp_cfg = cfg.get("shared_snmp", {})
+    snmp_users = normalize_snmp_users(snmp_cfg.get("users", []))
+    active_snmp_user = snmp_users[0] if snmp_users else {
+        "username": str(snmp_cfg.get("v3_username") or "").strip(),
+        "auth_protocol": str(snmp_cfg.get("v3_auth_protocol") or "SHA").strip() or "SHA",
+        "auth_password": str(snmp_cfg.get("v3_auth_password") or ""),
+        "priv_protocol": str(snmp_cfg.get("v3_priv_protocol") or "AES").strip() or "AES",
+        "priv_password": str(snmp_cfg.get("v3_priv_password") or ""),
+    }
+    additional_ilo_users = normalize_ilo_additional_users(ilo_cfg.get("additional_users", []))
     shared_dns = [x for x in cfg.get("shared_network", {}).get("dns_servers", []) if x and x.strip()]
     storage_execution = validate_storage_ready_for_ilo_run(cfg)
-    desired_auth_protocol = snmp_cfg.get("v3_auth_protocol", "SHA")
-    desired_priv_protocol = snmp_cfg.get("v3_priv_protocol", "AES")
+    desired_auth_protocol = active_snmp_user.get("auth_protocol", "SHA")
+    desired_priv_protocol = active_snmp_user.get("priv_protocol", "AES")
 
-    total = 30 if storage_execution.get("included") else 13
+    total = 32 if storage_execution.get("included") else 15
     job = {
         "status": "Running",
         "execution_mode": "real",
@@ -5352,19 +6070,26 @@ def run_ilo_real(cfg: dict):
         "dns_reset_recommended": False,
         "snmp_apply_status": "Not attempted",
         "snmp_applied_keys": [],
-        "snmp_username": snmp_cfg.get("v3_username", "") or "",
+        "snmp_username": active_snmp_user.get("username", "") or "",
         "snmp_auth_protocol": desired_auth_protocol,
         "snmp_priv_protocol": desired_priv_protocol,
-        "snmp_auth_secret_present": bool(snmp_cfg.get("v3_auth_password")),
-        "snmp_priv_secret_present": bool(snmp_cfg.get("v3_priv_password")),
+        "snmp_auth_secret_present": bool(active_snmp_user.get("auth_password")),
+        "snmp_priv_secret_present": bool(active_snmp_user.get("priv_password")),
         "snmp_verified_checks": [],
         "snmp_mismatches": [],
         "snmp_reset_recommended": False,
+        "snmp_profile_count": len(snmp_users),
+        "local_account_status": "Not attempted",
+        "local_accounts_requested": [item.get("username", "") for item in additional_ilo_users],
+        "local_account_results": [],
         "storage_server_reboot_required": False,
         "storage_server_reboot_status": "Not required",
         "ilo_reset_required": False,
         "ilo_reset_status": "Not required",
+        "ilo_stage_finished": False,
+        "ilo_final_ip_verified": False,
     }
+    job = carry_forward_job_bundle_metadata(kit_name, job)
     save_job(kit_name, job)
 
     login_ip = (ilo_cfg.get("current_ip") or ilo_cfg.get("host") or "").strip()
@@ -5378,6 +6103,7 @@ def run_ilo_real(cfg: dict):
     config_changes_attempted = False
     config_changes_succeeded = True
     reconnect_failed = False
+    ilo_stage_finished = False
 
     if not login_ip or not username or not password:
         update_job(kit_name, job, "Failed", "Validation failed", 0, total, "[FAILED] Missing iLO host, username, or password.")
@@ -5439,6 +6165,100 @@ def run_ilo_real(cfg: dict):
                     )
         return {"connected": False, "attempts": retries, "notes": notes}
 
+    def verify_active_ip_state(expected_ip: str, *, stage_name: str, step_index: int):
+        try:
+            iface = client.get_active_manager_interface()
+            ipv4_values = []
+            for item in list(iface.get("IPv4Addresses", []) or []) + list(iface.get("IPv4StaticAddresses", []) or []):
+                if isinstance(item, dict):
+                    ipv4_values.append(str(item.get("Address") or "").strip())
+            matched = bool(expected_ip) and expected_ip in ipv4_values
+            update_job(
+                kit_name,
+                job,
+                "Running",
+                stage_name,
+                step_index,
+                total,
+                (
+                    "[OK] Verified iLO active interface on final IP "
+                    if matched
+                    else "[WARN] iLO active interface did not read back on the expected final IP "
+                )
+                + f"{expected_ip or '(unchanged)'} | active_interface_ips={ipv4_values}",
+            )
+            return {"matched": matched, "active_ips": ipv4_values}
+        except Exception as e:
+            update_job(
+                kit_name,
+                job,
+                "Running",
+                stage_name,
+                step_index,
+                total,
+                f"[WARN] Could not verify the final iLO active interface IP: {str(e).splitlines()[0]}",
+            )
+            return {"matched": False, "active_ips": []}
+
+    def wait_for_ilo_reset_completion(expected_ip: str, *, stage_name: str, step_index: int, start_timeout: int = 90, return_timeout: int = 300, poll_interval: int = 5):
+        nonlocal client, active_ip
+        interrupt_observed = False
+        interrupt_detail = "No interruption was observed before timeout."
+        start_deadline = time.time() + max(start_timeout, 1)
+        while time.time() < start_deadline:
+            time.sleep(max(poll_interval, 1))
+            try:
+                build_ilo_client(expected_ip).get_summary()
+            except Exception as e:
+                interrupt_observed = True
+                interrupt_detail = str(e).splitlines()[0]
+                update_job(
+                    kit_name,
+                    job,
+                    "Running",
+                    stage_name,
+                    step_index,
+                    total,
+                    f"[OK] iLO reset started on {expected_ip}: {interrupt_detail}",
+                )
+                break
+
+        if not interrupt_observed:
+            return {
+                "matched": False,
+                "interrupt_observed": False,
+                "return_observed": False,
+                "interrupt_detail": interrupt_detail,
+                "return_detail": "",
+            }
+
+        return_deadline = time.time() + max(return_timeout, 1)
+        return_detail = "iLO did not come back before timeout."
+        while time.time() < return_deadline:
+            time.sleep(max(poll_interval, 1))
+            try:
+                candidate = build_ilo_client(expected_ip)
+                candidate.get_summary()
+                client = candidate
+                active_ip = expected_ip
+                return {
+                    "matched": True,
+                    "interrupt_observed": True,
+                    "return_observed": True,
+                    "interrupt_detail": interrupt_detail,
+                    "return_detail": f"Reconnected to iLO on {expected_ip}.",
+                }
+            except Exception as e:
+                return_detail = str(e).splitlines()[0]
+
+        return {
+            "matched": False,
+            "interrupt_observed": True,
+            "return_observed": False,
+            "interrupt_detail": interrupt_detail,
+            "return_detail": return_detail,
+        }
+
     try:
         update_job(kit_name, job, "Running", "Validate configuration", 0, total, f"[RUNNING] Validating iLO config for {login_ip}")
         update_job(
@@ -5464,12 +6284,24 @@ def run_ilo_real(cfg: dict):
             total,
             (
                 f"[CONFIG] shared_dns={', '.join(shared_dns) if shared_dns else '(none)'} | "
-                f"snmp_v3_user={snmp_cfg.get('v3_username', '') or '(none)'} | "
+                f"snmp_v3_user={active_snmp_user.get('username', '') or '(none)'} | "
                 f"auth={desired_auth_protocol} | priv={desired_priv_protocol} | "
-                f"auth_password={'set' if snmp_cfg.get('v3_auth_password') else 'missing'} | "
-                f"priv_password={'set' if snmp_cfg.get('v3_priv_password') else 'missing'}"
+                f"auth_password={'set' if active_snmp_user.get('auth_password') else 'missing'} | "
+                f"priv_password={'set' if active_snmp_user.get('priv_password') else 'missing'} | "
+                f"additional_ilo_users={len(additional_ilo_users)} | "
+                f"snmp_profiles={len(snmp_users) or (1 if active_snmp_user.get('username') else 0)}"
             ),
         )
+        if len(snmp_users) > 1:
+            update_job(
+                kit_name,
+                job,
+                "Running",
+                "Validate configuration",
+                0,
+                total,
+                "[INFO] Multiple SNMPv3 profiles are saved, but the current iLO Redfish path applies only the first profile.",
+            )
         client = build_ilo_client(active_ip)
 
         update_job(kit_name, job, "Running", "Connect to Redfish", 1, total, f"[RUNNING] Connecting to https://{active_ip}/redfish/v1/")
@@ -5803,18 +6635,18 @@ def run_ilo_real(cfg: dict):
                     total,
                     (
                         "[RUNNING] SNMP apply attempt | "
-                        f"target={active_ip} | username={snmp_cfg.get('v3_username', '') or '(none)'} | "
+                        f"target={active_ip} | username={active_snmp_user.get('username', '') or '(none)'} | "
                         f"auth={desired_auth_protocol} | priv={desired_priv_protocol} | "
-                        f"auth_secret={'Yes' if snmp_cfg.get('v3_auth_password') else 'No'} | "
-                        f"privacy_secret={'Yes' if snmp_cfg.get('v3_priv_password') else 'No'}"
+                        f"auth_secret={'Yes' if active_snmp_user.get('auth_password') else 'No'} | "
+                        f"privacy_secret={'Yes' if active_snmp_user.get('priv_password') else 'No'}"
                     )
                 )
                 snmp_result = client.harden_snmp_best_effort(
-                    v3_username=snmp_cfg.get("v3_username", ""),
-                    v3_auth_protocol=snmp_cfg.get("v3_auth_protocol", "SHA"),
-                    v3_auth_password=snmp_cfg.get("v3_auth_password", ""),
-                    v3_priv_protocol=snmp_cfg.get("v3_priv_protocol", "AES"),
-                    v3_priv_password=snmp_cfg.get("v3_priv_password", ""),
+                    v3_username=active_snmp_user.get("username", ""),
+                    v3_auth_protocol=active_snmp_user.get("auth_protocol", "SHA"),
+                    v3_auth_password=active_snmp_user.get("auth_password", ""),
+                    v3_priv_protocol=active_snmp_user.get("priv_protocol", "AES"),
+                    v3_priv_password=active_snmp_user.get("priv_password", ""),
                 )
                 job["snmp_apply_status"] = str(snmp_result.get("status") or "Mismatch")
                 job["snmp_applied_keys"] = list(snmp_result.get("applied_keys") or [])
@@ -5827,30 +6659,30 @@ def run_ilo_real(cfg: dict):
                     config_changes_succeeded = False
                 update_job(
                     kit_name,
-                        job,
-                        "Running",
-                        "Harden SNMP",
-                        12,
-                        total,
+                    job,
+                    "Running",
+                    "Harden SNMP",
+                    12,
+                    total,
+                    (
                         (
-                            (
-                                "[OK] SNMP verified after apply"
-                                if snmp_matched
-                                else "[WARN] SNMP settings partially matched after apply"
-                            )
-                            + " | "
-                            + f"path={snmp_result.get('path', '(unknown)')} | "
-                            + f"username={snmp_cfg.get('v3_username', '') or '(none)'} | "
-                            + f"active_ip={active_ip} | "
-                            + f"auth={desired_auth_protocol} | priv={desired_priv_protocol} | "
-                            + f"auth_secret={'Yes' if snmp_cfg.get('v3_auth_password') else 'No'} | "
-                            + f"privacy_secret={'Yes' if snmp_cfg.get('v3_priv_password') else 'No'} | "
-                            + f"checks={snmp_result.get('verification', {}).get('checks', [])} | "
-                            + f"mismatches={snmp_result.get('mismatches', []) or '(none)'} | "
-                            + f"reset_recommended={snmp_result.get('reset_recommended')} | "
-                            + f"notes={snmp_result.get('notes', [])}"
+                            "[OK] SNMP verified after apply"
+                            if snmp_matched
+                            else "[WARN] SNMP settings partially matched after apply"
                         )
+                        + " | "
+                        + f"path={snmp_result.get('path', '(unknown)')} | "
+                        + f"username={active_snmp_user.get('username', '') or '(none)'} | "
+                        + f"active_ip={active_ip} | "
+                        + f"auth={desired_auth_protocol} | priv={desired_priv_protocol} | "
+                        + f"auth_secret={'Yes' if active_snmp_user.get('auth_password') else 'No'} | "
+                        + f"privacy_secret={'Yes' if active_snmp_user.get('priv_password') else 'No'} | "
+                        + f"checks={snmp_result.get('verification', {}).get('checks', [])} | "
+                        + f"mismatches={snmp_result.get('mismatches', []) or '(none)'} | "
+                        + f"reset_recommended={snmp_result.get('reset_recommended')} | "
+                        + f"notes={snmp_result.get('notes', [])}"
                     )
+                )
             except Exception as e:
                 config_changes_succeeded = False
                 job["snmp_apply_status"] = "Failed"
@@ -5862,36 +6694,286 @@ def run_ilo_real(cfg: dict):
                     "Harden SNMP",
                     12,
                     total,
-                        (
-                            "[FAILED] SNMP settings could not be verified after apply | "
-                            f"target={active_ip} | username={snmp_cfg.get('v3_username', '') or '(none)'} | "
-                            f"auth={desired_auth_protocol} | priv={desired_priv_protocol} | "
-                            f"auth_secret={'Yes' if snmp_cfg.get('v3_auth_password') else 'No'} | "
-                            f"privacy_secret={'Yes' if snmp_cfg.get('v3_priv_password') else 'No'} | "
+                    (
+                        "[FAILED] SNMP settings could not be verified after apply | "
+                        f"target={active_ip} | username={active_snmp_user.get('username', '') or '(none)'} | "
+                        f"auth={desired_auth_protocol} | priv={desired_priv_protocol} | "
+                        f"auth_secret={'Yes' if active_snmp_user.get('auth_password') else 'No'} | "
+                        f"privacy_secret={'Yes' if active_snmp_user.get('priv_password') else 'No'} | "
                         f"error={e}"
                     )
                 )
 
-        storage_result = None
-        if reconnect_failed and storage_execution.get("included"):
+        if reconnect_failed:
+            job["local_account_status"] = "Skipped"
+            save_job(kit_name, job)
             update_job(
                 kit_name,
                 job,
                 "Running",
-                "Skip storage stage",
+                "Apply local users",
                 13,
                 total,
-                f"[SKIP] Storage stage was not started because iLO did not come back on the new IP {active_ip}.",
+                f"[SKIP] Additional local iLO users were not applied because iLO did not come back on the new IP {active_ip}.",
             )
-        elif storage_execution.get("included"):
+        elif additional_ilo_users:
+            try:
+                config_changes_attempted = True
+                update_job(
+                    kit_name,
+                    job,
+                    "Running",
+                    "Apply local users",
+                    13,
+                    total,
+                    f"[RUNNING] Ensuring additional local iLO users: {', '.join([item.get('username', '') for item in additional_ilo_users])}",
+                )
+                accounts_result = client.ensure_local_accounts_best_effort(additional_ilo_users)
+                job["local_account_status"] = str(accounts_result.get("status") or "Mismatch")
+                job["local_account_results"] = list(accounts_result.get("results") or [])
+                save_job(kit_name, job)
+                if not accounts_result.get("matched"):
+                    config_changes_succeeded = False
+                update_job(
+                    kit_name,
+                    job,
+                    "Running",
+                    "Apply local users",
+                    13,
+                    total,
+                    (
+                        "[OK] Additional local iLO users verified"
+                        if accounts_result.get("matched")
+                        else "[WARN] Additional local iLO users did not fully verify"
+                    )
+                    + f" | path={accounts_result.get('path', '(unknown)')} | results={accounts_result.get('results', [])}",
+                )
+            except Exception as e:
+                config_changes_succeeded = False
+                job["local_account_status"] = "Failed"
+                save_job(kit_name, job)
+                update_job(
+                    kit_name,
+                    job,
+                    "Running",
+                    "Apply local users",
+                    13,
+                    total,
+                    f"[FAILED] Additional local iLO users could not be applied: {str(e).splitlines()[0]}",
+                )
+        else:
+            job["local_account_status"] = "Skipped"
+            save_job(kit_name, job)
+            update_job(
+                kit_name,
+                job,
+                "Running",
+                "Apply local users",
+                13,
+                total,
+                "[SKIP] No additional local iLO users were requested.",
+            )
+
+        storage_result = None
+        reset_recommended = bool(desired_hostname) or job.get("dns_reset_recommended") or job.get("snmp_reset_recommended") or job.get("local_account_status") == "Verified"
+
+        if config_changes_attempted and not config_changes_succeeded:
+            job["ilo_reset_required"] = False
+            job["ilo_reset_status"] = "Not requested"
+            save_job(kit_name, job)
+            update_job(
+                kit_name,
+                job,
+                "Failed",
+                "Finish iLO stage",
+                14,
+                total,
+                (
+                    "[FAILED] Real run finished with iLO config failures. "
+                    f"DNS={job.get('dns_apply_status')} | SNMP={job.get('snmp_apply_status')} | "
+                    f"local_accounts={job.get('local_account_status')}. Review the iLO stage logs before retrying."
+                )
+            )
+            update_job(
+                kit_name,
+                job,
+                "Failed",
+                "Finish iLO stage",
+                14,
+                total,
+                "[SKIP] Storage and later stages were blocked because the iLO stage did not finish.",
+            )
+            return
+
+        if config_changes_attempted and reset_recommended:
+            job["ilo_reset_required"] = True
+            job["ilo_reset_status"] = "Requested"
+            save_job(kit_name, job)
+            try:
+                update_job(
+                    kit_name,
+                    job,
+                    "Running",
+                    "Reset iLO",
+                    14,
+                    total,
+                    "[RUNNING] iLO reset is required before the next stage can start.",
+                )
+                reset_result = client.reset_ilo()
+                update_job(
+                    kit_name,
+                    job,
+                    "Running",
+                    "Reset iLO",
+                    14,
+                    total,
+                    f"[OK] iLO reset requested via {reset_result.get('path')} ({reset_result.get('reset_type')}).",
+                )
+                reset_wait_result = wait_for_ilo_reset_completion(active_ip, stage_name="Wait for iLO reset", step_index=14)
+                if not reset_wait_result.get("matched"):
+                    job["ilo_reset_status"] = "Failed"
+                    save_job(kit_name, job)
+                    update_job(
+                        kit_name,
+                        job,
+                        "Failed",
+                        "Wait for iLO reset",
+                        14,
+                        total,
+                        (
+                            "[FAILED] iLO reset was requested but completion was not verified | "
+                            f"interrupt_observed={reset_wait_result.get('interrupt_observed')} | "
+                            f"interrupt_detail={reset_wait_result.get('interrupt_detail') or '(none)'} | "
+                            f"return_detail={reset_wait_result.get('return_detail') or '(none)'}"
+                        )
+                    )
+                    update_job(
+                        kit_name,
+                        job,
+                        "Failed",
+                        "Wait for iLO reset",
+                        14,
+                        total,
+                        "[SKIP] Storage and later stages were blocked because the iLO stage did not finish.",
+                    )
+                    return
+                ip_check = verify_active_ip_state(active_ip, stage_name="Verify iLO final state", step_index=14)
+                if target_ip and not ip_check.get("matched"):
+                    job["ilo_reset_status"] = "Failed"
+                    save_job(kit_name, job)
+                    update_job(
+                        kit_name,
+                        job,
+                        "Failed",
+                        "Verify iLO final state",
+                        14,
+                        total,
+                        f"[FAILED] iLO came back after reset, but the final IP did not read back as {active_ip}.",
+                    )
+                    update_job(
+                        kit_name,
+                        job,
+                        "Failed",
+                        "Verify iLO final state",
+                        14,
+                        total,
+                        "[SKIP] Storage and later stages were blocked because the iLO stage did not finish.",
+                    )
+                    return
+                job["ilo_reset_status"] = "Completed"
+                job["ilo_final_ip_verified"] = True
+                job["ilo_stage_finished"] = True
+                save_job(kit_name, job)
+                ilo_stage_finished = True
+                update_job(
+                    kit_name,
+                    job,
+                    "Running",
+                    "Finish iLO stage",
+                    14,
+                    total,
+                    f"[OK] iLO reset completed and the final iLO endpoint is reachable on {active_ip}.",
+                )
+            except Exception as e:
+                job["ilo_reset_status"] = "Failed"
+                save_job(kit_name, job)
+                update_job(
+                    kit_name,
+                    job,
+                    "Failed",
+                    "Reset iLO",
+                    14,
+                    total,
+                    f"[FAILED] iLO reset failed after successful config changes: {str(e).splitlines()[0]}",
+                )
+                update_job(
+                    kit_name,
+                    job,
+                    "Failed",
+                    "Reset iLO",
+                    14,
+                    total,
+                    "[SKIP] Storage and later stages were blocked because the iLO stage did not finish.",
+                )
+                return
+        else:
+            ip_check = verify_active_ip_state(active_ip, stage_name="Finish iLO stage", step_index=14)
+            if target_ip and not ip_check.get("matched"):
+                update_job(
+                    kit_name,
+                    job,
+                    "Failed",
+                    "Finish iLO stage",
+                    14,
+                    total,
+                    f"[FAILED] iLO changes were applied, but the final IP did not read back as {active_ip}.",
+                )
+                update_job(
+                    kit_name,
+                    job,
+                    "Failed",
+                    "Finish iLO stage",
+                    14,
+                    total,
+                    "[SKIP] Storage and later stages were blocked because the iLO stage did not finish.",
+                )
+                return
+            job["ilo_reset_required"] = False
+            job["ilo_reset_status"] = "Not required"
+            job["ilo_final_ip_verified"] = bool(active_ip)
+            job["ilo_stage_finished"] = True
+            save_job(kit_name, job)
+            ilo_stage_finished = True
+            update_job(
+                kit_name,
+                job,
+                "Running",
+                "Finish iLO stage",
+                14,
+                total,
+                "[OK] iLO stage finished and no separate iLO reset was needed.",
+            )
+
+        if storage_execution.get("included"):
+            if not ilo_stage_finished:
+                update_job(
+                    kit_name,
+                    job,
+                    "Failed",
+                    "Run storage stage",
+                    15,
+                    total,
+                    "[SKIP] Storage stage was blocked because the iLO stage did not finish.",
+                )
+                return
             update_job(
                 kit_name,
                 job,
                 "Running",
                 "Run storage stage",
-                13,
+                15,
                 total,
-                "[RUNNING] Starting the approved storage stage as part of this real run.",
+                "[RUNNING] Starting the approved storage stage after the iLO stage finished.",
             )
             storage_result = run_storage_as_part_of_real_run(
                 cfg,
@@ -5901,7 +6983,7 @@ def run_ilo_real(cfg: dict):
                 storage_execution,
                 kit_name,
                 job,
-                13,
+                15,
                 total,
             )
             job["storage_server_reboot_required"] = bool(storage_result["apply_state"].get("reboot_required"))
@@ -5913,126 +6995,23 @@ def run_ilo_real(cfg: dict):
                 else "Not required"
             )
             save_job(kit_name, job)
-            update_job(
-                kit_name,
-                job,
-                "Running",
-                "Finalize combined run",
-                29,
-                total,
-                (
-                    f"[OK] Storage stage finished in the real run | "
-                    f"apply_path={storage_result['apply_state'].get('apply_path')} | "
-                    f"reboot_required={storage_result['apply_state'].get('reboot_required')} | "
-                    f"run_dir={storage_result['apply_paths']['directory']}"
-                ),
-            )
-            if storage_result["apply_state"].get("reboot_required"):
-                update_job(
-                    kit_name,
-                    job,
-                    "Running",
-                    "Finalize combined run",
-                    29,
-                    total,
-                    "[OK] Server reboot requested and completed for the storage stage.",
-                )
 
-        reset_recommended = bool(desired_hostname) or job.get("dns_reset_recommended") or job.get("snmp_reset_recommended")
-        if config_changes_attempted and config_changes_succeeded and reset_recommended:
-            job["ilo_reset_required"] = True
-            job["ilo_reset_status"] = "Requested"
-            save_job(kit_name, job)
-            try:
-                update_job(
-                    kit_name,
-                    job,
-                    "Running",
-                    "Reset iLO",
-                    total,
-                    total,
-                    (
-                        "[OK] iLO reset requested | "
-                        "reason=management-controller config changes succeeded"
-                        + (
-                            " after the storage server reboot completed"
-                            if storage_result and storage_result["apply_state"].get("reboot_required")
-                            else ""
-                        )
-                    )
-                )
-                reset_result = client.reset_ilo()
-                job["ilo_reset_status"] = "Completed"
-                save_job(kit_name, job)
-                update_job(
-                    kit_name,
-                    job,
-                    "Completed",
-                    "Finished",
-                    total,
-                    total,
-                    (
-                        "[DONE] Real run finished. "
-                        f"[OK] iLO reset completed via {reset_result.get('path')} ({reset_result.get('reset_type')}). "
-                        f"Storage server reboot status={job.get('storage_server_reboot_status')} | "
-                        f"DNS={job.get('dns_apply_status')} | SNMP={job.get('snmp_apply_status')}"
-                    )
-                )
-            except Exception as e:
-                job["ilo_reset_status"] = "Failed"
-                save_job(kit_name, job)
-                update_job(
-                    kit_name,
-                    job,
-                    "Failed",
-                    "Reset iLO",
-                    total,
-                    total,
-                    f"[FAILED] iLO reset failed after successful config changes: {e}"
-                )
-        else:
-            reason = "No config changes were requested."
-            if config_changes_attempted and not config_changes_succeeded:
-                reason = "One or more config changes did not succeed."
-                job["ilo_reset_required"] = False
-                job["ilo_reset_status"] = "Not requested"
-                save_job(kit_name, job)
-                update_job(
-                    kit_name,
-                    job,
-                    "Failed",
-                    "Finished",
-                    total,
-                    total,
-                    (
-                        "[FAILED] Real run finished with iLO config failures. "
-                        f"DNS={job.get('dns_apply_status')} | SNMP={job.get('snmp_apply_status')} | "
-                        f"Storage server reboot status={job.get('storage_server_reboot_status')}. "
-                        "Review the iLO stage logs before retrying."
-                    )
-                )
-                return
-            elif storage_result and storage_result["apply_state"].get("reboot_required"):
-                reason = "Storage reboot and post-validation completed as part of the real run."
-            elif config_changes_attempted and config_changes_succeeded:
-                reason = "The requested iLO changes did not need a separate iLO reset."
-            else:
-                job["ilo_reset_required"] = False
-                job["ilo_reset_status"] = "Not required"
-                save_job(kit_name, job)
-            update_job(
-                kit_name,
-                job,
-                "Completed",
-                "Finished",
-                total,
-                total,
-                (
-                    f"[DONE] Real run finished. [SKIP] No iLO reset was needed. {reason}"
-                    if config_changes_attempted and config_changes_succeeded
-                    else f"[DONE] Real run finished without a separate iLO reset. {reason}"
-                )
+        update_job(
+            kit_name,
+            job,
+            "Completed",
+            "Finished",
+            total,
+            total,
+            (
+                "[DONE] Real run finished. "
+                f"iLO reset status={job.get('ilo_reset_status')} | "
+                f"iLO final IP verified={job.get('ilo_final_ip_verified')} | "
+                f"Storage server reboot status={job.get('storage_server_reboot_status')} | "
+                f"DNS={job.get('dns_apply_status')} | SNMP={job.get('snmp_apply_status')} | "
+                f"Local users={job.get('local_account_status')}"
             )
+        )
     except ILOError as e:
         update_job(kit_name, job, "Failed", "iLO error", job.get("completed_steps", 0), total, f"[FAILED] {e}")
     except Exception as e:
@@ -6053,6 +7032,7 @@ def run_job_simulation(cfg: dict, scope: str):
         "total_steps": total,
         "logs": [],
     }
+    job = carry_forward_job_bundle_metadata(kit_name, job)
     save_job(kit_name, job)
 
     for idx, step in enumerate(steps, start=1):
@@ -6123,6 +7103,16 @@ def render_page(
     storage_target = resolve_storage_target_host(cfg)
     storage_credentials = resolve_storage_target_credentials(cfg)
     storage_execution_status = build_storage_execution_status(cfg)
+    storage_planning_drives = build_storage_planning_drives((storage_discovery or {}).get("summary") if storage_discovery else None)
+    storage_plan_defaults = storage_plan
+    if not storage_plan_defaults and storage_discovery and storage_export_paths:
+        try:
+            storage_plan_defaults = build_raid_plan(
+                {"summary": storage_discovery, "raw": {"source_host": storage_target.get("resolved", "")}},
+                storage_export_paths,
+            )
+        except Exception:
+            storage_plan_defaults = None
     workflow_contexts = build_workflow_contexts(cfg, job, history)
     if storage_workflow_state:
         workflow_state = storage_workflow_state.get("workflow_state", "")
@@ -6143,6 +7133,7 @@ def render_page(
     page_comparisons = build_page_comparisons(cfg, workflow_contexts, history)
     recommended_next_step = build_recommended_next_step(cfg, workflow_contexts)
     activity_feed = build_activity_feed(history)
+    dashboard_job_status = build_dashboard_job_status(history)
     report_center = build_report_center(
         cfg,
         query=str(request.query_params.get("report_query", "") or ""),
@@ -6151,6 +7142,7 @@ def render_page(
     page_briefing = build_page_briefing(active_page, cfg, workflow_contexts, history, execution_review)
     page_runbook = PAGE_RUNBOOKS.get(active_page, {})
     settings_sources = build_settings_sources(cfg)
+    selected_run_scopes = ["included"] if not confirm_scope else (run_center_scope_keys(confirm_scope, cfg) or ([confirm_scope] if confirm_scope == "included" else []))
     ilo_inclusion = component_inclusion_status(cfg, "ilo")
     esxi_inclusion = component_inclusion_status(cfg, "esxi")
     windows_inclusion = component_inclusion_status(cfg, "windows")
@@ -6184,6 +7176,7 @@ def render_page(
         "execution_preview": execution_preview,
         "execution_review": execution_review,
         "confirm_scope": confirm_scope,
+        "selected_run_scopes": selected_run_scopes,
         "config_view_title": config_view_title,
         "config_view_content": config_view_content,
         "action_feedback": action_feedback,
@@ -6198,10 +7191,13 @@ def render_page(
         "storage_target": storage_target,
         "storage_credentials": storage_credentials,
         "storage_execution_status": storage_execution_status,
+        "storage_planning_drives": storage_planning_drives,
+        "storage_plan_defaults": storage_plan_defaults,
         "workflow_contexts": workflow_contexts,
         "page_comparisons": page_comparisons,
         "recommended_next_step": recommended_next_step,
         "activity_feed": activity_feed,
+        "dashboard_job_status": dashboard_job_status,
         "report_center": report_center,
         "page_briefing": page_briefing,
         "page_runbook": page_runbook,
@@ -6317,15 +7313,22 @@ async def save_storage_target(
     storage_target_host: str = Form(""),
     storage_username: str = Form(""),
     storage_password: str = Form(""),
+    storage_target_mode: str = Form("override"),
 ):
     cfg = load_kit_config()
     storage_cfg = ensure_storage_config(cfg)
-    storage_cfg["target_host_override"] = storage_target_host.strip()
-    storage_cfg["username"] = storage_username.strip()
-    storage_cfg["password"] = storage_password
+    if storage_target_mode == "defaults":
+        storage_cfg["target_host_override"] = ""
+        storage_cfg["username"] = ""
+        storage_cfg["password"] = ""
+    else:
+        storage_cfg["target_host_override"] = storage_target_host.strip()
+        storage_cfg["username"] = storage_username.strip()
+        storage_cfg["password"] = storage_password
     refresh_storage_approval_from_saved_state(cfg)
     save_kit_config(cfg)
     target = resolve_storage_target_host(cfg)
+    using_defaults = storage_target_mode == "defaults"
     append_activity_event(
         cfg["site"]["name"],
         "storage_target_saved",
@@ -6342,14 +7345,15 @@ async def save_storage_target(
         cfg,
         active_page=return_page,
         action_feedback=build_action_feedback(
-            "Storage target saved",
-            "Saved the server address and sign-in details for storage setup.",
+            "Storage target updated",
+            "Storage setup will now use the selected server address and sign-in details.",
             tone="ready",
             outcomes=[
                 f"Server address: {target.get('resolved') or 'Not resolved yet'}",
-                f"Next step: Read current storage",
+                "Using iLO defaults." if using_defaults else "Using the entered address and sign-in details.",
+                "Next step: Display current storage setup",
             ],
-            links=[{"label": "Read current storage", "href": "/storage"}],
+            links=[{"label": "Open storage setup", "href": "/storage"}],
         ),
     )
 
@@ -6451,6 +7455,7 @@ async def save_config_route(
     cisco_switch_password: str = Form(""),
 ):
     existing_cfg = load_kit_config()
+    form = await request.form()
     previous_subnet = existing_cfg.get("shared_network", {}).get("subnet", "")
     previous_plan = existing_cfg.get("ip_plan", {})
     submitted_plan = {
@@ -6492,6 +7497,14 @@ async def save_config_route(
             "v3_auth_password": snmp_v3_auth_password,
             "v3_priv_protocol": snmp_v3_priv_protocol,
             "v3_priv_password": snmp_v3_priv_password,
+            "users": extract_snmp_users_from_form(
+                form,
+                primary_username=snmp_v3_username,
+                primary_auth_protocol=snmp_v3_auth_protocol,
+                primary_auth_password=snmp_v3_auth_password,
+                primary_priv_protocol=snmp_v3_priv_protocol,
+                primary_priv_password=snmp_v3_priv_password,
+            ),
         },
         "included": {
             "ilo": included_ilo == "on",
@@ -6518,6 +7531,7 @@ async def save_config_route(
             "hostname": ilo_hostname,
             "username": ilo_username,
             "password": ilo_password,
+            "additional_users": extract_ilo_additional_users_from_form(form),
         },
         "esxi": {
             "hostname": esxi_hostname,
@@ -6610,6 +7624,7 @@ async def save_global_settings_route(
     included_storage: str | None = Form(None),
 ):
     cfg = load_kit_config()
+    form = await request.form()
     cfg["site"]["name"] = sanitize_kit_name(site_name)
     cfg["shared_network"]["subnet"] = shared_subnet
     cfg["shared_network"]["dns_servers"] = [dns1, dns2, dns3, dns4]
@@ -6619,6 +7634,14 @@ async def save_global_settings_route(
         "v3_auth_password": snmp_v3_auth_password,
         "v3_priv_protocol": snmp_v3_priv_protocol,
         "v3_priv_password": snmp_v3_priv_password,
+        "users": extract_snmp_users_from_form(
+            form,
+            primary_username=snmp_v3_username,
+            primary_auth_protocol=snmp_v3_auth_protocol,
+            primary_auth_password=snmp_v3_auth_password,
+            primary_priv_protocol=snmp_v3_priv_protocol,
+            primary_priv_password=snmp_v3_priv_password,
+        ),
     }
     cfg["included"].update(
         {
@@ -6676,19 +7699,20 @@ async def save_ilo_settings_route(
     ilo_hostname: str = Form(""),
     ilo_username: str = Form(""),
     ilo_password: str = Form(""),
-    included_ilo: str | None = Form(None),
 ):
     cfg = load_kit_config()
+    form = await request.form()
     cfg["ilo"]["current_ip"] = ilo_current_ip.strip()
     cfg["ilo"]["host"] = cfg["ilo"]["current_ip"]
     if ilo_target_ip.strip():
         cfg["ilo"]["target_ip"] = ilo_target_ip.strip()
         cfg["ip_plan"]["ilo"] = ilo_target_ip.strip()
-    cfg["ilo"]["gateway"] = ilo_gateway.strip()
+    cfg["ilo"]["gateway"] = (ilo_gateway.strip() or cfg.get("ip_plan", {}).get("gateway", "") or "").strip()
     cfg["ilo"]["hostname"] = ilo_hostname
     cfg["ilo"]["username"] = ilo_username
     cfg["ilo"]["password"] = ilo_password
-    cfg["included"]["ilo"] = included_ilo == "on"
+    cfg["ilo"]["additional_users"] = extract_ilo_additional_users_from_form(form)
+    cfg["included"]["ilo"] = True
     cfg = apply_ip_plan(cfg)
     save_kit_config(cfg)
     append_activity_event(
@@ -6710,14 +7734,14 @@ async def save_ilo_settings_route(
             "iLO setup saved",
             "Updated the saved iLO target and local sign-in settings for this kit.",
             tone="ready",
-            outcomes=[
-                f"Target: {cfg['ilo'].get('current_ip') or cfg['ilo'].get('host', '') or 'Not set'}",
-                f"Planned final IP: {cfg['ilo'].get('target_ip') or 'Unchanged'}",
-                f"Gateway: {cfg['ilo'].get('gateway') or 'Not set'}",
-            ],
-            links=[{"label": "Review run prep", "href": "/execution"}],
-        ),
-    )
+        outcomes=[
+            f"Target: {cfg['ilo'].get('current_ip') or cfg['ilo'].get('host', '') or 'Not set'}",
+            f"Planned final IP: {cfg['ilo'].get('target_ip') or 'Unchanged'}",
+            f"Gateway: {cfg['ilo'].get('gateway') or 'Not set'}",
+        ],
+        links=[{"label": "Open Storage setup", "href": "/storage"}, {"label": "Review run prep", "href": "/execution"}],
+    ),
+)
 
 
 @app.post("/save-esxi-settings", response_class=HTMLResponse)
@@ -7089,11 +8113,11 @@ async def read_current_storage(
             cfg,
             active_page=return_page,
             action_feedback=build_action_feedback(
-                "Current storage read complete",
-                "Read what is on the server and saved a fresh discovery snapshot.",
+                "Current storage setup loaded",
+                "Read what is on the server and displayed the current storage setup.",
                 tone="ready",
                 outcomes=[
-                    "The current storage layout is now available for planning.",
+                    "The current storage layout is now ready to review.",
                     "Next step: Build storage plan",
                 ],
                 links=[
@@ -7119,6 +8143,9 @@ async def plan_raid_layout(
     request: Request,
     return_page: str = Form("storage"),
     discovery_raw_path: str = Form(""),
+    os_bays: list[str] = Form([]),
+    data_bays: list[str] = Form([]),
+    hot_spare_bay: str = Form(""),
 ):
     cfg = load_kit_config()
     storage_target = resolve_storage_target_host(cfg)
@@ -7133,7 +8160,15 @@ async def plan_raid_layout(
 
     try:
         discovery, discovery_paths = load_storage_discovery_artifact(discovery_raw_path, expected_host=host)
-        plan = build_raid_plan(discovery, discovery_paths)
+        plan = build_raid_plan(
+            discovery,
+            discovery_paths,
+            overrides={
+                "os_bays": os_bays,
+                "data_bays": data_bays,
+                "hot_spare_bay": hot_spare_bay,
+            },
+        )
         plan_paths = export_raid_plan_snapshot(cfg, plan, discovery_paths)
         update_storage_latest_state(cfg, discovery=discovery, discovery_paths=discovery_paths, plan=plan, plan_paths=plan_paths)
         save_kit_config(cfg)
@@ -7686,8 +8721,14 @@ async def download_built_esxi_iso(kit_name: str, output_name: str):
 
 
 @app.post("/prepare-execute", response_class=HTMLResponse)
-async def prepare_execute(request: Request, scope: str = Form(...), return_page: str = Form("execution")):
+async def prepare_execute(
+    request: Request,
+    scope: str = Form("included"),
+    selected_scopes: list[str] = Form([]),
+    return_page: str = Form("execution"),
+):
     cfg = load_kit_config()
+    scope = normalize_run_center_scope(scope, selected_scopes)
     preview_error = None
     try:
         validate_execution_scope(cfg, scope)
@@ -7708,12 +8749,20 @@ async def prepare_execute(request: Request, scope: str = Form(...), return_page:
 @app.post("/execute", response_class=HTMLResponse)
 async def execute_scope(
     request: Request,
-    scope: str = Form(...),
+    scope: str = Form("included"),
+    selected_scopes: list[str] = Form([]),
     confirm_phrase: str = Form(""),
     confirm_checkbox: str | None = Form(None),
+    esxi_run_stamp: str = Form(""),
     return_page: str = Form("execution"),
 ):
     cfg = load_kit_config()
+    scope = normalize_run_center_scope(scope, selected_scopes)
+    runtime = dict(cfg.get("_runtime", {}) or {})
+    if esxi_run_stamp.strip():
+        runtime["esxi_run_stamp"] = esxi_run_stamp.strip()
+    if runtime:
+        cfg["_runtime"] = runtime
     try:
         validate_execution_scope(cfg, scope)
     except Exception as e:
@@ -7770,10 +8819,12 @@ async def execute_scope(
 @app.post("/execute-preview", response_class=HTMLResponse)
 async def execute_preview_scope(
     request: Request,
-    scope: str = Form(...),
+    scope: str = Form("included"),
+    selected_scopes: list[str] = Form([]),
     return_page: str = Form("execution"),
 ):
     cfg = load_kit_config()
+    scope = normalize_run_center_scope(scope, selected_scopes)
     try:
         validate_execution_scope(cfg, scope)
     except Exception as e:
