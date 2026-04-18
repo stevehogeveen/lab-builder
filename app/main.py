@@ -335,6 +335,7 @@ def write_run_bundle_files(kit_name: str, job: dict[str, Any]) -> None:
                 "builder_summary_path": str(job.get("esxi_builder_summary_path") or ""),
             },
             "builder_generation": dict(job.get("esxi_builder_generation") or {}),
+            "builder_self_check": dict(job.get("esxi_builder_self_check") or {}),
             "virtual_media": dict(job.get("esxi_virtual_media") or {}),
             "boot_override": dict(job.get("esxi_boot_override") or {}),
             "power_transitions": dict(job.get("esxi_power_transitions") or {}),
@@ -1550,6 +1551,17 @@ def build_validation_checks(cfg: dict[str, Any], workflow: str) -> list[dict[str
             )
         )
         if workflow == "esxi":
+            esxi_values = get_esxi_effective_values(cfg)
+            checks.append(
+                validation_check(
+                    "Required ESXi values",
+                    not esxi_values["missing_fields"],
+                    "Ready" if not esxi_values["missing_fields"] else f"Missing: {', '.join(esxi_values['missing_fields'])}.",
+                    why="The ESXi installer cannot be built or launched until the required install values are saved.",
+                    fix="Open the ESXi page and save the missing setup values.",
+                    href="/esxi",
+                )
+            )
             checks.append(
                 validation_check(
                     "Depends on iLO setup",
@@ -5265,6 +5277,8 @@ def build_execution_review(cfg: dict, scope: str):
                 values.append(f"NTP server: {esxi_install_review.get('ntp_server')}")
             values.append(f"Enable SSH: {'Yes' if esxi_install_review.get('enable_ssh') else 'No'}")
             values.append(f"Disable IPv6: {'Yes' if esxi_install_review.get('disable_ipv6') else 'No'}")
+            if esxi_install_review.get("missing_fields"):
+                values.append(f"Missing required values: {', '.join(esxi_install_review.get('missing_fields') or [])}")
             return values
         if key == "windows":
             windows_cfg = cfg.get("windows", {}) or {}
@@ -5601,6 +5615,19 @@ def get_steps_for_scope(cfg: dict, scope: str):
 
 
 def validate_execution_scope(cfg: dict, scope: str) -> None:
+    if scope == "esxi":
+        esxi_values = get_esxi_effective_values(cfg)
+        if esxi_values["missing_fields"]:
+            raise ValueError(f"ESXi setup is missing: {', '.join(esxi_values['missing_fields'])}.")
+        if not (cfg.get("ilo", {}).get("current_ip") or cfg.get("ilo", {}).get("host") or "").strip():
+            raise ValueError("ESXi setup also needs the current iLO address saved first.")
+        if cfg.get("included", {}).get("storage"):
+            storage_review = build_storage_review_context(cfg)
+            if storage_review.get("stale"):
+                raise ValueError("The approved storage plan is stale and must be reviewed again before an ESXi run.")
+            if not storage_review.get("approved"):
+                raise ValueError("ESXi depends on storage for this kit, but no approved storage plan is saved.")
+        return
     if scope.startswith("multi__"):
         selected = run_center_scope_keys(scope, cfg)
         if "ilo" in selected:
@@ -5618,6 +5645,10 @@ def validate_execution_scope(cfg: dict, scope: str) -> None:
             raise ValueError("The approved storage plan is stale and must be reviewed again before a storage run.")
         if not storage_review.get("approved"):
             raise ValueError("No approved storage plan is saved for this kit.")
+        if "esxi" in selected:
+            esxi_values = get_esxi_effective_values(cfg)
+            if esxi_values["missing_fields"]:
+                raise ValueError(f"ESXi setup is missing: {', '.join(esxi_values['missing_fields'])}.")
         return
     if scope not in {"ilo", "included"}:
         return
@@ -5860,28 +5891,47 @@ def build_esxi_iso_url(cfg: dict, output_iso: Path, target_host: str = "") -> st
     return f"{public_base_url}/esxi-built-iso/{quote(kit_name)}/{quote(output_name)}.iso"
 
 
-def build_esxi_install_review(cfg: dict, *, run_stamp: str | None = None) -> dict[str, Any]:
+def get_esxi_effective_values(cfg: dict[str, Any]) -> dict[str, Any]:
     esxi_cfg = cfg.get("esxi", {}) or {}
+    values = {
+        "hostname": str(esxi_cfg.get("hostname") or "").strip(),
+        "management_ip": str(esxi_cfg.get("management_ip") or cfg.get("ip_plan", {}).get("esxi") or "").strip(),
+        "subnet_mask": str(esxi_cfg.get("subnet_mask") or "").strip(),
+        "gateway": str(esxi_cfg.get("gateway") or cfg.get("ip_plan", {}).get("gateway") or "").strip(),
+        "dns_servers": [
+            x.strip()
+            for x in (esxi_cfg.get("dns_servers") or cfg.get("shared_network", {}).get("dns_servers") or [])
+            if x and str(x).strip()
+        ],
+        "root_password": str(esxi_cfg.get("root_password") or ""),
+        "vlan_id": str(esxi_cfg.get("vlan_id") or "").strip(),
+        "ntp_server": str(esxi_cfg.get("ntp_server") or "").strip(),
+        "enable_ssh": bool(esxi_cfg.get("enable_ssh", True)),
+        "disable_ipv6": bool(esxi_cfg.get("disable_ipv6", True)),
+    }
+    missing: list[str] = []
+    if not values["hostname"]:
+        missing.append("hostname")
+    if not values["management_ip"]:
+        missing.append("management IP")
+    if not values["subnet_mask"]:
+        missing.append("subnet mask")
+    if not values["gateway"]:
+        missing.append("gateway")
+    if not values["root_password"]:
+        missing.append("root password")
+    values["missing_fields"] = missing
+    return values
+
+
+def build_esxi_install_review(cfg: dict, *, run_stamp: str | None = None) -> dict[str, Any]:
     ilo_cfg = cfg.get("ilo", {}) or {}
     kit_name = sanitize_kit_name(cfg.get("site", {}).get("name", "Kit-01"))
     login_ip = str(ilo_cfg.get("current_ip") or ilo_cfg.get("host") or "").strip()
     stamp = (run_stamp or datetime.now().strftime("%Y%m%d-%H%M%S")).strip()
     output_name = f"esxi-{stamp}"
     output_iso = EXPORTS_DIR / "esxi-isos" / kit_name / output_name / f"{output_name}.iso"
-    management_ip = str(esxi_cfg.get("management_ip") or cfg.get("ip_plan", {}).get("esxi") or "").strip()
-    subnet_mask = str(esxi_cfg.get("subnet_mask") or "").strip()
-    gateway = str(esxi_cfg.get("gateway") or cfg.get("ip_plan", {}).get("gateway") or "").strip()
-    dns_servers = [
-        x.strip()
-        for x in (esxi_cfg.get("dns_servers") or cfg.get("shared_network", {}).get("dns_servers") or [])
-        if x and str(x).strip()
-    ]
-    hostname = str(esxi_cfg.get("hostname") or "").strip()
-    root_password = str(esxi_cfg.get("root_password") or "")
-    vlan_id = str(esxi_cfg.get("vlan_id") or "").strip()
-    ntp_server = str(esxi_cfg.get("ntp_server") or "").strip()
-    enable_ssh = bool(esxi_cfg.get("enable_ssh", True))
-    disable_ipv6 = bool(esxi_cfg.get("disable_ipv6", True))
+    values = get_esxi_effective_values(cfg)
     base_iso_path = resolve_esxi_base_iso_path(cfg)
     iso_url = build_esxi_iso_url(cfg, output_iso, login_ip)
     return {
@@ -5891,16 +5941,17 @@ def build_esxi_install_review(cfg: dict, *, run_stamp: str | None = None) -> dic
         "base_iso_path": str(base_iso_path),
         "output_iso_path": str(output_iso),
         "virtual_media_url": iso_url,
-        "hostname": hostname,
-        "management_ip": management_ip,
-        "subnet_mask": subnet_mask,
-        "gateway": gateway,
-        "dns_servers": dns_servers,
-        "root_password_saved": bool(root_password),
-        "vlan_id": vlan_id,
-        "ntp_server": ntp_server,
-        "enable_ssh": enable_ssh,
-        "disable_ipv6": disable_ipv6,
+        "hostname": values["hostname"],
+        "management_ip": values["management_ip"],
+        "subnet_mask": values["subnet_mask"],
+        "gateway": values["gateway"],
+        "dns_servers": values["dns_servers"],
+        "root_password_saved": bool(values["root_password"]),
+        "vlan_id": values["vlan_id"],
+        "ntp_server": values["ntp_server"],
+        "enable_ssh": values["enable_ssh"],
+        "disable_ipv6": values["disable_ipv6"],
+        "missing_fields": list(values["missing_fields"]),
     }
 
 
@@ -6012,14 +6063,15 @@ def run_esxi_real(cfg: dict, run_stamp: str | None = None):
         update_job(kit_name, job, "Failed", "Validation failed", 0, total, "[FAILED] Missing iLO host, username, or password.")
         return
 
-    management_ip = str(esxi_cfg.get("management_ip") or cfg.get("ip_plan", {}).get("esxi") or "").strip()
-    subnet_mask = str(esxi_cfg.get("subnet_mask") or "").strip()
-    gateway = str(esxi_cfg.get("gateway") or cfg.get("ip_plan", {}).get("gateway") or "").strip()
-    dns_servers = [x.strip() for x in (esxi_cfg.get("dns_servers") or cfg.get("shared_network", {}).get("dns_servers") or []) if x and str(x).strip()]
-    hostname = str(esxi_cfg.get("hostname") or "").strip()
-    root_password = str(esxi_cfg.get("root_password") or "")
+    esxi_values = get_esxi_effective_values(cfg)
+    management_ip = str(esxi_values["management_ip"])
+    subnet_mask = str(esxi_values["subnet_mask"])
+    gateway = str(esxi_values["gateway"])
+    dns_servers = list(esxi_values["dns_servers"])
+    hostname = str(esxi_values["hostname"])
+    root_password = str(esxi_values["root_password"])
 
-    if not management_ip or not subnet_mask or not gateway or not hostname or not root_password:
+    if esxi_values["missing_fields"]:
         update_job(
             kit_name,
             job,
@@ -6027,7 +6079,7 @@ def run_esxi_real(cfg: dict, run_stamp: str | None = None):
             "Validation failed",
             0,
             total,
-            "[FAILED] Missing ESXi hostname, management IP, subnet mask, gateway, or root password.",
+            f"[FAILED] Missing ESXi setup values: {', '.join(esxi_values['missing_fields'])}.",
         )
         return
     job["esxi_expected_ip"] = management_ip
@@ -6150,9 +6202,11 @@ def run_esxi_real(cfg: dict, run_stamp: str | None = None):
             trace_payload["builder_summary"] = build_summary
             job["esxi_builder_summary_path"] = str(build_summary_path)
             job["esxi_builder_generation"] = dict(build_summary.get("generation", {}) or {})
+            job["esxi_builder_self_check"] = dict(build_summary.get("self_check", {}) or {})
             save_job(kit_name, job)
             save_esxi_trace(trace_path, trace_payload)
             generation = build_summary.get("generation", {}) or {}
+            self_check = build_summary.get("self_check", {}) or {}
             if (generation.get("ks_cfg", {}) or {}).get("generated"):
                 update_job(kit_name, job, "Running", "Build complete", 2, total, "[OK] KS.CFG generated")
             if (generation.get("boot_cfg", {}) or {}).get("patched"):
@@ -6163,6 +6217,24 @@ def run_esxi_real(cfg: dict, run_stamp: str | None = None):
                     update_job(kit_name, job, "Running", "Build complete", 2, total, "[OK] EFI/BOOT/BOOT.CFG patched")
             else:
                 update_job(kit_name, job, "Running", "Build complete", 2, total, "[INFO] EFI/BOOT/BOOT.CFG not present in base ISO")
+            output_boot = self_check.get("output_boot_report", {}) or {}
+            output_files = self_check.get("output_files_present", {}) or {}
+            update_job(
+                kit_name,
+                job,
+                "Running",
+                "Build complete",
+                2,
+                total,
+                (
+                    "[INFO] ISO self-check: "
+                    f"bios_boot={'yes' if output_boot.get('bios_entry_present') else 'no'}, "
+                    f"uefi_boot={'yes' if output_boot.get('uefi_entry_present') else 'no'}, "
+                    f"ks_cfg={'yes' if output_files.get('ks_cfg') else 'no'}, "
+                    f"boot_cfg={'yes' if output_files.get('boot_cfg') else 'no'}, "
+                    f"efi_boot_cfg={'yes' if output_files.get('efi_boot_cfg') else 'no'}"
+                ),
+            )
         update_job(kit_name, job, "Running", "Build complete", 2, total, f"[OK] Built ESXi ISO: {output_iso}")
         update_job(kit_name, job, "Running", "Build complete", 2, total, f"[INFO] Virtual media URL: {iso_url}")
 
@@ -6202,6 +6274,56 @@ def run_esxi_real(cfg: dict, run_stamp: str | None = None):
         trace_payload["steps"].append({"stage": "mount_virtual_media", "status": "running", "target": insert_target, "image": iso_url})
         save_esxi_trace(trace_path, trace_payload)
         client._post(insert_target, {"Image": iso_url, "Inserted": True, "WriteProtected": True})
+        mount_readback = {}
+        for item in client.get_virtual_media():
+            if str(item.get("@odata.id") or "") == str(vm.get("@odata.id") or ""):
+                mount_readback = {
+                    "device_path": str(item.get("@odata.id") or ""),
+                    "inserted": bool(item.get("Inserted")),
+                    "image": str(item.get("Image") or ""),
+                    "write_protected": item.get("WriteProtected"),
+                }
+                break
+        if mount_readback:
+            image_matches = mount_readback.get("image") == iso_url
+            job["esxi_virtual_media"] = {
+                **dict(job.get("esxi_virtual_media") or {}),
+                "post_mount_inserted": bool(mount_readback.get("inserted")),
+                "post_mount_image": str(mount_readback.get("image") or ""),
+                "post_mount_image_matches": bool(image_matches),
+                "post_mount_write_protected": mount_readback.get("write_protected"),
+            }
+            save_job(kit_name, job)
+            update_job(
+                kit_name,
+                job,
+                "Running",
+                "Mount ISO",
+                7,
+                total,
+                (
+                    "[INFO] Virtual media readback: "
+                    f"inserted={'yes' if mount_readback.get('inserted') else 'no'} "
+                    f"image={mount_readback.get('image') or '(empty)'}"
+                ),
+            )
+            if not mount_readback.get("inserted") or not image_matches:
+                update_job(
+                    kit_name,
+                    job,
+                    "Failed",
+                    "Mount ISO",
+                    7,
+                    total,
+                    "[FAILED] Virtual media mount readback did not match the built ESXi ISO URL.",
+                )
+                trace_payload["steps"].append({"stage": "mount_virtual_media", "status": "mismatch", "readback": mount_readback, "expected_image": iso_url})
+                trace_payload["result"] = {
+                    "status": "Failed",
+                    "error": "Virtual media mount readback did not match the built ESXi ISO URL.",
+                }
+                save_esxi_trace(trace_path, trace_payload)
+                return
         update_job(kit_name, job, "Running", "Mount ISO", 7, total, "[OK] Virtual media mounted")
 
         update_job(kit_name, job, "Running", "Set boot override", 8, total, "[RUNNING] Setting one-time boot to CD/DVD")
@@ -6237,6 +6359,8 @@ def run_esxi_real(cfg: dict, run_stamp: str | None = None):
             save_esxi_trace(trace_path, trace_payload)
             return
         update_job(kit_name, job, "Running", "Set boot override", 8, total, f"[INFO] Boot override after: enabled={after_enabled} target={after_target}")
+        for note in boot_override.get("notes", []) or []:
+            update_job(kit_name, job, "Running", "Set boot override", 8, total, f"[INFO] Boot override note: {note}")
         if str(after_target).strip().lower() != "cd":
             update_job(
                 kit_name,

@@ -56,6 +56,15 @@ def write_boot_report(iso_path: Path, report_path: Path) -> None:
     )
 
 
+def analyze_boot_report(report_text: str) -> dict[str, bool]:
+    return {
+        "bios_entry_present": "El Torito boot img :   1  BIOS" in report_text or " BIOS " in report_text,
+        "uefi_entry_present": "El Torito boot img :   2  UEFI" in report_text or " UEFI " in report_text,
+        "isolinux_present": "/ISOLINUX.BIN" in report_text,
+        "efiboot_img_present": "/EFIBOOT.IMG" in report_text,
+    }
+
+
 def build_custom_iso(spec: EsxiBuildSpec) -> Path:
     require_tool("7zz")
     require_tool("xorriso")
@@ -69,17 +78,22 @@ def build_custom_iso(spec: EsxiBuildSpec) -> Path:
 
         ks_path = stage_dir / "KS.CFG"
         ks_path.write_text(build_kickstart(spec), encoding="utf-8")
+        ks_generated = ks_path.exists()
 
         boot_cfg = stage_dir / "BOOT.CFG"
         efi_boot_cfg = stage_dir / "EFI" / "BOOT" / "BOOT.CFG"
+        boot_cfg_patched = False
+        efi_boot_cfg_patched = False
 
         if not extract_iso_file(spec.base_iso_path, "BOOT.CFG", boot_cfg):
             raise RuntimeError("BOOT.CFG was not found in the base ESXi ISO.")
         patch_boot_cfg(boot_cfg)
+        boot_cfg_patched = True
 
         efi_present = extract_iso_file(spec.base_iso_path, "EFI/BOOT/BOOT.CFG", efi_boot_cfg)
         if efi_present:
             patch_boot_cfg(efi_boot_cfg)
+            efi_boot_cfg_patched = True
 
         output_iso = run_dir / f"{spec.output_name}.iso"
         if output_iso.exists():
@@ -122,19 +136,48 @@ def build_custom_iso(spec: EsxiBuildSpec) -> Path:
         run_checked(xorriso_cmd)
 
         write_boot_report(output_iso, output_boot_report)
+        base_boot_report_text = base_boot_report.read_text(encoding="utf-8")
+        output_boot_report_text = output_boot_report.read_text(encoding="utf-8")
+        inspect_dir = run_dir / "inspection"
+        inspect_dir.mkdir(parents=True, exist_ok=True)
+        extracted_ks_cfg = inspect_dir / "KS.CFG"
+        extracted_boot_cfg = inspect_dir / "BOOT.CFG"
+        extracted_efi_boot_cfg = inspect_dir / "EFI-BOOT-BOOT.CFG"
+        output_ks_present = extract_iso_file(output_iso, "KS.CFG", extracted_ks_cfg)
+        output_boot_cfg_present = extract_iso_file(output_iso, "BOOT.CFG", extracted_boot_cfg)
+        output_efi_boot_cfg_present = extract_iso_file(output_iso, "EFI/BOOT/BOOT.CFG", extracted_efi_boot_cfg)
 
         summary = {
             "kit_name": spec.kit_name,
             "base_iso": str(spec.base_iso_path),
             "output_iso": str(output_iso),
-            "hostname": spec.hostname,
-            "management_ip": spec.management_ip,
-            "gateway": spec.gateway,
-            "dns_servers": spec.dns_servers,
-            "vlan_id": spec.vlan_id,
-            "ntp_server": spec.ntp_server,
-            "enable_ssh": spec.enable_ssh,
-            "disable_ipv6": spec.disable_ipv6,
+            "install_values": {
+                "hostname": spec.hostname,
+                "management_ip": spec.management_ip,
+                "subnet_mask": spec.subnet_mask,
+                "gateway": spec.gateway,
+                "dns_servers": spec.dns_servers,
+                "root_password_saved": bool(spec.root_password),
+                "vlan_id": spec.vlan_id,
+                "ntp_server": spec.ntp_server,
+                "enable_ssh": spec.enable_ssh,
+                "disable_ipv6": spec.disable_ipv6,
+            },
+            "generation": {
+                "ks_cfg": {
+                    "path": str(ks_path),
+                    "generated": ks_generated,
+                },
+                "boot_cfg": {
+                    "path": str(boot_cfg),
+                    "patched": boot_cfg_patched,
+                },
+                "efi_boot_cfg": {
+                    "path": str(efi_boot_cfg),
+                    "present": efi_present,
+                    "patched": efi_boot_cfg_patched,
+                },
+            },
             "patched_files": [
                 "/KS.CFG",
                 "/BOOT.CFG",
@@ -143,6 +186,20 @@ def build_custom_iso(spec: EsxiBuildSpec) -> Path:
             "boot_reports": {
                 "base": str(base_boot_report),
                 "output": str(output_boot_report),
+            },
+            "self_check": {
+                "base_boot_report": analyze_boot_report(base_boot_report_text),
+                "output_boot_report": analyze_boot_report(output_boot_report_text),
+                "output_files_present": {
+                    "ks_cfg": output_ks_present,
+                    "boot_cfg": output_boot_cfg_present,
+                    "efi_boot_cfg": output_efi_boot_cfg_present,
+                },
+                "inspection_files": {
+                    "ks_cfg": str(extracted_ks_cfg) if output_ks_present else "",
+                    "boot_cfg": str(extracted_boot_cfg) if output_boot_cfg_present else "",
+                    "efi_boot_cfg": str(extracted_efi_boot_cfg) if output_efi_boot_cfg_present else "",
+                },
             },
         }
         (run_dir / "build-summary.yml").write_text(
