@@ -4906,6 +4906,18 @@ def test_history_and_report_center_show_run_bundle_links(client):
     assert "Load a saved kit config" in configs_response.text
 
 
+def test_load_job_handles_partial_yaml_without_crashing():
+    path = main.job_path("Partial YAML Kit")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("status: Running\nlogs:\n- 'unterminated", encoding="utf-8")
+
+    job = main.load_job("Partial YAML Kit")
+
+    assert job["status"] == "Updating"
+    assert job["current_stage"] == "Refreshing live status"
+    assert "[WARN] Live job state was mid-write. Refreshing." in job["logs"][0]
+
+
 def test_history_page_renders_boolean_config_summary_values(client):
     cfg = main.default_config()
     cfg["site"]["name"] = "History Bool Kit"

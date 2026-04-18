@@ -376,8 +376,21 @@ def ensure_run_bundle_for_job(kit_name: str, job: dict[str, Any]) -> dict[str, A
 def load_job(kit_name: str):
     path = job_path(kit_name)
     if path.exists():
-        with open(path, "r", encoding="utf-8") as f:
-            return yaml.safe_load(f) or {}
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                return yaml.safe_load(f) or {}
+        except yaml.YAMLError:
+            # The websocket poller can race with a background writer.
+            # Treat a partially-written job file as transient instead of crashing.
+            return {
+                "status": "Updating",
+                "scope": "",
+                "current_stage": "Refreshing live status",
+                "progress_percent": 0,
+                "completed_steps": 0,
+                "total_steps": 0,
+                "logs": ["[WARN] Live job state was mid-write. Refreshing."],
+            }
     return {
         "status": "Idle",
         "scope": "",
@@ -392,8 +405,11 @@ def load_job(kit_name: str):
 def save_job(kit_name: str, job: dict):
     ensure_run_bundle_for_job(kit_name, job)
     job["updated_at"] = time.strftime("%Y-%m-%d %H:%M:%S")
-    with open(job_path(kit_name), "w", encoding="utf-8") as f:
+    path = job_path(kit_name)
+    tmp_path = path.with_suffix(path.suffix + ".tmp")
+    with open(tmp_path, "w", encoding="utf-8") as f:
         yaml.safe_dump(job, f, sort_keys=False)
+    os.replace(tmp_path, path)
     write_run_bundle_files(kit_name, job)
 
 def history_path(kit_name: str) -> Path:
