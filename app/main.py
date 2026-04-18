@@ -338,6 +338,7 @@ def write_run_bundle_files(kit_name: str, job: dict[str, Any]) -> None:
             "builder_self_check": dict(job.get("esxi_builder_self_check") or {}),
             "virtual_media": dict(job.get("esxi_virtual_media") or {}),
             "boot_override": dict(job.get("esxi_boot_override") or {}),
+            "boot_evidence": dict(job.get("esxi_boot_evidence") or {}),
             "power_transitions": dict(job.get("esxi_power_transitions") or {}),
             "management_network": dict(job.get("esxi_management_network") or {}),
         }
@@ -6042,6 +6043,54 @@ def wait_for_esxi_management_ready(
     )
 
 
+def collect_esxi_boot_evidence(client: ILOClient, *, system_path: str | None = None) -> dict[str, Any]:
+    try:
+        if not system_path:
+            systems = client.get_systems()
+            system_path = systems[0] if systems else None
+    except Exception:
+        system_path = system_path or None
+
+    system: dict[str, Any] = {}
+    if system_path:
+        try:
+            system = client.get_system(system_path) or {}
+        except Exception as exc:
+            system = {"@error": str(exc)}
+
+    boot = dict(system.get("Boot") or {}) if isinstance(system, dict) else {}
+    boot_progress = dict(system.get("BootProgress") or {}) if isinstance(system, dict) else {}
+    post_state = str((((system.get("Oem") or {}).get("Hpe") or {}).get("PostState") or "")) if isinstance(system, dict) else ""
+
+    virtual_media_items: list[dict[str, Any]] = []
+    try:
+        for item in client.get_virtual_media():
+            virtual_media_items.append(
+                {
+                    "device_path": str(item.get("@odata.id") or ""),
+                    "inserted": bool(item.get("Inserted")),
+                    "image": str(item.get("Image") or ""),
+                    "write_protected": item.get("WriteProtected"),
+                    "media_types": list(item.get("MediaTypes") or []),
+                }
+            )
+    except Exception as exc:
+        virtual_media_items.append({"@error": str(exc)})
+
+    mounted = next((item for item in virtual_media_items if item.get("inserted")), {}) if virtual_media_items else {}
+
+    return {
+        "system_path": str(system_path or ""),
+        "power_state": str(system.get("PowerState") or ""),
+        "boot_override_enabled": str(boot.get("BootSourceOverrideEnabled") or ""),
+        "boot_override_target": str(boot.get("BootSourceOverrideTarget") or ""),
+        "boot_progress_state": str(boot_progress.get("LastState") or ""),
+        "post_state": post_state,
+        "mounted_virtual_media": dict(mounted or {}),
+        "virtual_media": virtual_media_items,
+    }
+
+
 def run_esxi_real(cfg: dict, run_stamp: str | None = None):
     kit_name = cfg["site"]["name"]
     ilo_cfg = cfg.get("ilo", {}) or {}
@@ -6441,6 +6490,44 @@ def run_esxi_real(cfg: dict, run_stamp: str | None = None):
         }
         save_job(kit_name, job)
         update_job(kit_name, job, "Running", "Wait for server power", 11, total, "[OK] Server powered back on")
+        boot_evidence = run_with_session_refresh(
+            "Wait for server power",
+            lambda c: collect_esxi_boot_evidence(c, system_path=system_path),
+        )
+        job["esxi_boot_evidence"] = dict(boot_evidence or {})
+        save_job(kit_name, job)
+        trace_payload["post_power_boot_evidence"] = dict(boot_evidence or {})
+        save_esxi_trace(trace_path, trace_payload)
+        mounted_vm = dict((boot_evidence or {}).get("mounted_virtual_media") or {})
+        update_job(
+            kit_name,
+            job,
+            "Running",
+            "Wait for server power",
+            11,
+            total,
+            (
+                "[INFO] Post-power boot evidence: "
+                f"power={boot_evidence.get('power_state') or '(unknown)'}, "
+                f"post_state={boot_evidence.get('post_state') or '(unknown)'}, "
+                f"boot_progress={boot_evidence.get('boot_progress_state') or '(unknown)'}, "
+                f"boot_override={boot_evidence.get('boot_override_enabled') or '(empty)'}/"
+                f"{boot_evidence.get('boot_override_target') or '(empty)'}"
+            ),
+        )
+        update_job(
+            kit_name,
+            job,
+            "Running",
+            "Wait for server power",
+            11,
+            total,
+            (
+                "[INFO] Post-power virtual media: "
+                f"inserted={'yes' if mounted_vm.get('inserted') else 'no'}, "
+                f"image={mounted_vm.get('image') or '(none)'}"
+            ),
+        )
 
         update_job(
             kit_name,
@@ -6482,6 +6569,45 @@ def run_esxi_real(cfg: dict, run_stamp: str | None = None):
     except Exception as e:
         detail = str(e).splitlines()[0]
         if "configured IP" in detail and "ESXi did not answer" in detail:
+            try:
+                if "client" in locals() and client:
+                    final_boot_evidence = collect_esxi_boot_evidence(client, system_path=locals().get("system_path"))
+                    job["esxi_boot_evidence"] = dict(final_boot_evidence or {})
+                    save_job(kit_name, job)
+                    trace_payload["final_boot_evidence"] = dict(final_boot_evidence or {})
+                    save_esxi_trace(trace_path, trace_payload)
+                    mounted_vm = dict((final_boot_evidence or {}).get("mounted_virtual_media") or {})
+                    update_job(
+                        kit_name,
+                        job,
+                        "Running",
+                        "Wait for ESXi network",
+                        12,
+                        total,
+                        (
+                            "[INFO] Final boot evidence before timeout: "
+                            f"power={final_boot_evidence.get('power_state') or '(unknown)'}, "
+                            f"post_state={final_boot_evidence.get('post_state') or '(unknown)'}, "
+                            f"boot_progress={final_boot_evidence.get('boot_progress_state') or '(unknown)'}, "
+                            f"boot_override={final_boot_evidence.get('boot_override_enabled') or '(empty)'}/"
+                            f"{final_boot_evidence.get('boot_override_target') or '(empty)'}"
+                        ),
+                    )
+                    update_job(
+                        kit_name,
+                        job,
+                        "Running",
+                        "Wait for ESXi network",
+                        12,
+                        total,
+                        (
+                            "[INFO] Final virtual media state before timeout: "
+                            f"inserted={'yes' if mounted_vm.get('inserted') else 'no'}, "
+                            f"image={mounted_vm.get('image') or '(none)'}"
+                        ),
+                    )
+            except Exception:
+                pass
             detail += " This usually means the kickstart network settings did not apply or the installer did not finish."
         if 'trace_path' in locals():
             trace_payload["result"] = {

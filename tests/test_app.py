@@ -2464,7 +2464,12 @@ def test_run_esxi_real_builds_iso_and_starts_virtual_media_boot(monkeypatch, tmp
 
         def get_system(self, system_path):
             assert system_path == "/redfish/v1/Systems/1"
-            return {"PowerState": self.power_state, **self.boot_state}
+            return {
+                "PowerState": self.power_state,
+                "BootProgress": {"LastState": "OSBootStarted" if self.power_state == "On" else "None"},
+                "Oem": {"Hpe": {"PostState": "FinishedPost" if self.power_state == "On" else "Off"}},
+                **self.boot_state,
+            }
 
         def power_reset(self, reset_type="ForceRestart", system_path=None):
             self.calls.append(("power_reset", reset_type, system_path))
@@ -2579,6 +2584,8 @@ def test_run_esxi_real_builds_iso_and_starts_virtual_media_boot(monkeypatch, tmp
     assert summary["esxi_run_summary"]["builder_generation"]["boot_cfg"]["patched"] is True
     assert summary["esxi_run_summary"]["builder_self_check"]["output_boot_report"]["uefi_entry_present"] is True
     assert summary["esxi_run_summary"]["boot_override"]["matched"] is True
+    assert summary["esxi_run_summary"]["boot_evidence"]["power_state"] == "On"
+    assert summary["esxi_run_summary"]["boot_evidence"]["boot_progress_state"] == "OSBootStarted"
     assert summary["esxi_run_summary"]["virtual_media"]["insert_target"].endswith("VirtualMedia.InsertMedia")
     assert summary["esxi_run_summary"]["virtual_media"]["post_mount_inserted"] is True
     assert summary["esxi_run_summary"]["virtual_media"]["post_mount_image_matches"] is True
@@ -2652,7 +2659,12 @@ def test_run_esxi_real_reconnects_after_build_when_ilo_session_has_expired(monke
             return ["/redfish/v1/Systems/1"]
 
         def get_system(self, system_path):
-            return {"PowerState": self.power_state, **self.boot_state}
+            return {
+                "PowerState": self.power_state,
+                "BootProgress": {"LastState": "FirmwareReady"},
+                "Oem": {"Hpe": {"PostState": "FinishedPost" if self.power_state == "On" else "Off"}},
+                **self.boot_state,
+            }
 
         def power_reset(self, reset_type="ForceRestart", system_path=None):
             self.calls.append(("power_reset", reset_type, system_path))
@@ -2735,10 +2747,10 @@ def test_run_esxi_real_blocks_power_on_when_boot_override_does_not_stick(monkeyp
                 "@odata.id": "/redfish/v1/Managers/1/VirtualMedia/2",
                 "Inserted": False,
                 "MediaTypes": ["CD", "DVD"],
-                "Actions": {
-                    "#VirtualMedia.InsertMedia": {"target": "/redfish/v1/Managers/1/VirtualMedia/2/Actions/VirtualMedia.InsertMedia"},
-                },
-            }]
+                    "Actions": {
+                        "#VirtualMedia.InsertMedia": {"target": "/redfish/v1/Managers/1/VirtualMedia/2/Actions/VirtualMedia.InsertMedia"},
+                    },
+                }]
             self.calls = []
 
         def eject_virtual_media(self, vm_path):
@@ -2748,7 +2760,12 @@ def test_run_esxi_real_blocks_power_on_when_boot_override_does_not_stick(monkeyp
             return ["/redfish/v1/Systems/1"]
 
         def get_system(self, system_path):
-            return {"PowerState": self.power_state, **self.boot_state}
+            return {
+                "PowerState": self.power_state,
+                "BootProgress": {"LastState": "FirmwareReady"},
+                "Oem": {"Hpe": {"PostState": "FinishedPost" if self.power_state == "On" else "Off"}},
+                **self.boot_state,
+            }
 
         def power_reset(self, reset_type="ForceRestart", system_path=None):
             self.calls.append(("power_reset", reset_type, system_path))
@@ -2844,7 +2861,12 @@ def test_run_esxi_real_fails_when_virtual_media_readback_does_not_match(monkeypa
             return ["/redfish/v1/Systems/1"]
 
         def get_system(self, system_path):
-            return {"PowerState": self.power_state, **self.boot_state}
+            return {
+                "PowerState": self.power_state,
+                "BootProgress": {"LastState": "FirmwareReady"},
+                "Oem": {"Hpe": {"PostState": "FinishedPost" if self.power_state == "On" else "Off"}},
+                **self.boot_state,
+            }
 
         def power_reset(self, reset_type="ForceRestart", system_path=None):
             self.calls.append(("power_reset", reset_type, system_path))
@@ -2917,16 +2939,18 @@ def test_run_esxi_real_fails_when_expected_management_ip_never_comes_up(monkeypa
                     "BootSourceOverrideTarget": "None",
                 }
             }
-
-        def get_virtual_media(self):
-            return [{
+            self.vm = {
                 "@odata.id": "/redfish/v1/Managers/1/VirtualMedia/2",
                 "Inserted": False,
+                "Image": "",
                 "MediaTypes": ["CD", "DVD"],
                 "Actions": {
                     "#VirtualMedia.InsertMedia": {"target": "/redfish/v1/Managers/1/VirtualMedia/2/Actions/VirtualMedia.InsertMedia"},
                 },
-            }]
+            }
+
+        def get_virtual_media(self):
+            return [dict(self.vm)]
 
         def eject_virtual_media(self, vm_path):
             return None
@@ -2935,7 +2959,12 @@ def test_run_esxi_real_fails_when_expected_management_ip_never_comes_up(monkeypa
             return ["/redfish/v1/Systems/1"]
 
         def get_system(self, system_path):
-            return {"PowerState": self.power_state, **self.boot_state}
+            return {
+                "PowerState": self.power_state,
+                "BootProgress": {"LastState": "FirmwareReady"},
+                "Oem": {"Hpe": {"PostState": "FinishedPost" if self.power_state == "On" else "Off"}},
+                **self.boot_state,
+            }
 
         def power_reset(self, reset_type="ForceRestart", system_path=None):
             if reset_type in {"GracefulShutdown", "ForceOff"}:
@@ -2945,6 +2974,16 @@ def test_run_esxi_real_fails_when_expected_management_ip_never_comes_up(monkeypa
             return {"reset_type": reset_type, "system_path": system_path}
 
         def _post(self, target, payload):
+            self.vm = {
+                "@odata.id": "/redfish/v1/Managers/1/VirtualMedia/2",
+                "Inserted": True,
+                "Image": payload["Image"],
+                "WriteProtected": True,
+                "MediaTypes": ["CD", "DVD"],
+                "Actions": {
+                    "#VirtualMedia.InsertMedia": {"target": "/redfish/v1/Managers/1/VirtualMedia/2/Actions/VirtualMedia.InsertMedia"},
+                },
+            }
             return None
 
         def set_one_time_boot_cd(self, system_path=None):
@@ -2973,6 +3012,8 @@ def test_run_esxi_real_fails_when_expected_management_ip_never_comes_up(monkeypa
     joined_logs = "\n".join(job["logs"])
 
     assert job["status"] == "Failed"
+    assert "[INFO] Final boot evidence before timeout: power=On, post_state=FinishedPost, boot_progress=FirmwareReady, boot_override=Once/Cd" in joined_logs
+    assert "[INFO] Final virtual media state before timeout: inserted=yes" in joined_logs
     assert "ESXi did not answer on configured IP 10.10.8.10:443 before timeout." in joined_logs
     assert "This usually means the kickstart network settings did not apply or the installer did not finish." in joined_logs
 
