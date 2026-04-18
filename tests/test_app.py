@@ -3921,6 +3921,54 @@ def test_set_one_time_boot_cd_accepts_equivalent_target(monkeypatch):
     assert result["matched"] is True
 
 
+def test_set_one_time_boot_cd_prefers_matching_uefi_boot_option(monkeypatch):
+    client = ILOClient(ILOConfig(host="10.0.0.1", username="Administrator", password="secret"))
+    state = {
+        "Boot": {
+            "BootSourceOverrideEnabled": "Disabled",
+            "BootSourceOverrideTarget": "None",
+            "UefiTargetBootSourceOverride": "",
+        },
+        "BootOptions": {"@odata.id": "/redfish/v1/Systems/1/BootOptions"},
+    }
+    boot_options = {
+        "/redfish/v1/Systems/1/BootOptions": {
+            "Members": [
+                {"@odata.id": "/redfish/v1/Systems/1/BootOptions/1"},
+                {"@odata.id": "/redfish/v1/Systems/1/BootOptions/2"},
+            ]
+        },
+        "/redfish/v1/Systems/1/BootOptions/1": {
+            "BootOptionReference": "Boot0001",
+            "DisplayName": "UEFI Hard Disk",
+        },
+        "/redfish/v1/Systems/1/BootOptions/2": {
+            "BootOptionReference": "Boot0009",
+            "DisplayName": "iLO Virtual CD/DVD ROM",
+        },
+    }
+
+    def fake_get(path):
+        if path in boot_options:
+            return dict(boot_options[path])
+        return dict(state)
+
+    monkeypatch.setattr(client, "get_system", lambda system_path=None: dict(state))
+    monkeypatch.setattr(client, "_safe_get", fake_get)
+
+    def fake_patch(path, payload):
+        state["Boot"].update(payload["Boot"])
+
+    monkeypatch.setattr(client, "_patch", fake_patch)
+
+    result = client.set_one_time_boot_cd("/redfish/v1/Systems/1")
+
+    assert result["after_target"] == "UefiTarget"
+    assert result["after_uefi_target"] == "Boot0009"
+    assert result["selected_boot_option_reference"] == "Boot0009"
+    assert result["matched"] is True
+
+
 def test_harden_snmp_best_effort_reports_mismatch_when_readback_differs(monkeypatch):
     client = ILOClient(ILOConfig(host="10.0.0.1", username="Administrator", password="secret"))
     before = {

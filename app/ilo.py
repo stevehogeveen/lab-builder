@@ -949,6 +949,8 @@ class ILOClient:
             verified_field = "NameServers"
 
         verified = bool(verified_field)
+        before_matched = self._values_match_exact(before_static_normalized, dns_servers) or self._values_match_exact(before_names_normalized, dns_servers)
+        changed = verified and not before_matched
 
         mismatches = []
         if not verified:
@@ -990,7 +992,8 @@ class ILOClient:
             "applied_keys": sorted(list(patch_payload.keys())),
             "matched": verified,
             "mismatches": mismatches,
-            "reset_recommended": bool(patch_payload),
+            "changed": changed,
+            "reset_recommended": False,
             "notes": notes,
             "verified": verified,
             "verified_field": verified_field,
@@ -1611,6 +1614,7 @@ class ILOClient:
                 "before": before_name,
                 "after": after_name,
                 "matched": after_name == desired_hostname,
+                "changed": before_name != after_name,
             }
         except Exception as e:
             errors.append(f"NetworkProtocol.HostName failed: {e}")
@@ -1631,6 +1635,7 @@ class ILOClient:
                 "before": before_name,
                 "after": after_name,
                 "matched": after_name == desired_hostname,
+                "changed": before_name != after_name,
             }
         except Exception as e:
             errors.append(f"EthernetInterface.HostName failed: {e}")
@@ -1710,6 +1715,23 @@ class ILOClient:
             "EnableSNMPv1",
             "SNMPv1RequestsEnabled",
             "SNMPv1TrapEnabled",
+            "SNMPv1GetEnabled",
+            "SNMPv1SetEnabled",
+        ):
+            if key in snmp:
+                patch_block[key] = False
+
+        # Try to disable older SNMP variants where the field exists.
+        for key in (
+            "SNMPv2Enabled",
+            "EnableSNMPv2",
+            "SNMPv2RequestsEnabled",
+            "SNMPv2TrapEnabled",
+            "SNMPv2cEnabled",
+            "EnableSNMPv2c",
+            "SNMPv2cRequestsEnabled",
+            "SNMPv2cTrapEnabled",
+            "CommunityAccessEnabled",
         ):
             if key in snmp:
                 patch_block[key] = False
@@ -1785,8 +1807,87 @@ class ILOClient:
                 "matched": after.get("ProtocolEnabled") is True,
             })
 
+        for key in (
+            "SNMPv1Enabled",
+            "EnableSNMPv1",
+            "SNMPv1RequestsEnabled",
+            "SNMPv1TrapEnabled",
+            "SNMPv1GetEnabled",
+            "SNMPv1SetEnabled",
+            "SNMPv2Enabled",
+            "EnableSNMPv2",
+            "SNMPv2RequestsEnabled",
+            "SNMPv2TrapEnabled",
+            "SNMPv2cEnabled",
+            "EnableSNMPv2c",
+            "SNMPv2cRequestsEnabled",
+            "SNMPv2cTrapEnabled",
+            "CommunityAccessEnabled",
+        ):
+            if key in patch_block:
+                verification_checks.append({
+                    "label": key,
+                    "requested": False,
+                    "actual": after.get(key),
+                    "matched": after.get(key) is False,
+                })
+
+        for key in (
+            "SNMPv3RequestsEnabled",
+            "SNMPv3Enabled",
+            "SNMPv3TrapEnabled",
+        ):
+            if key in patch_block:
+                verification_checks.append({
+                    "label": key,
+                    "requested": True,
+                    "actual": after.get(key),
+                    "matched": after.get(key) is True,
+                })
+
         matched = bool(verification_checks) and all(item["matched"] for item in verification_checks)
         mismatches = [item for item in verification_checks if not item["matched"]]
+        before_changed_checks: list[dict[str, Any]] = []
+        if any(key in patch_block for key in ("UserName", "Username", "SNMPv3UserName", "SNMPv3Username")):
+            before_changed_checks.append({
+                "requested": v3_username,
+                "actual": self._first_present(before, ("UserName", "Username", "SNMPv3UserName", "SNMPv3Username")),
+            })
+        if any(key in patch_block for key in ("AuthProtocol", "SNMPv3AuthProtocol")):
+            before_changed_checks.append({
+                "requested": v3_auth_protocol,
+                "actual": self._first_present(before, ("AuthProtocol", "SNMPv3AuthProtocol")),
+            })
+        if any(key in patch_block for key in ("PrivacyProtocol", "SNMPv3PrivacyProtocol")):
+            before_changed_checks.append({
+                "requested": v3_priv_protocol,
+                "actual": self._first_present(before, ("PrivacyProtocol", "SNMPv3PrivacyProtocol")),
+            })
+        if "ProtocolEnabled" in patch_block:
+            before_changed_checks.append({"requested": True, "actual": before.get("ProtocolEnabled")})
+        for key in (
+            "SNMPv1Enabled",
+            "EnableSNMPv1",
+            "SNMPv1RequestsEnabled",
+            "SNMPv1TrapEnabled",
+            "SNMPv1GetEnabled",
+            "SNMPv1SetEnabled",
+            "SNMPv2Enabled",
+            "EnableSNMPv2",
+            "SNMPv2RequestsEnabled",
+            "SNMPv2TrapEnabled",
+            "SNMPv2cEnabled",
+            "EnableSNMPv2c",
+            "SNMPv2cRequestsEnabled",
+            "SNMPv2cTrapEnabled",
+            "CommunityAccessEnabled",
+        ):
+            if key in patch_block:
+                before_changed_checks.append({"requested": False, "actual": before.get(key)})
+        for key in ("SNMPv3RequestsEnabled", "SNMPv3Enabled", "SNMPv3TrapEnabled"):
+            if key in patch_block:
+                before_changed_checks.append({"requested": True, "actual": before.get(key)})
+        changed = any(item.get("actual") != item.get("requested") for item in before_changed_checks)
         notes = [
             f"Wrote SNMP values using {', '.join(sorted(list(patch_block.keys())))}."
         ]
@@ -1813,11 +1914,154 @@ class ILOClient:
             },
             "matched": matched,
             "mismatches": mismatches,
-            "reset_recommended": bool(patch_block),
+            "changed": changed,
+            "reset_recommended": False,
             "notes": notes,
             "verified": matched,
             "status": "Verified" if matched else "Mismatch",
             "details": notes[-1],
+        }
+
+    def ensure_local_accounts_best_effort(self, desired_accounts: list[dict[str, Any]]) -> dict[str, Any]:
+        sanitized_accounts = []
+        for item in desired_accounts or []:
+            username = str(item.get("username") or "").strip()
+            password = str(item.get("password") or "")
+            role = str(item.get("role") or "Administrator").strip() or "Administrator"
+            if not username or not password:
+                continue
+            sanitized_accounts.append({
+                "username": username,
+                "password": password,
+                "role": role,
+            })
+
+        if not sanitized_accounts:
+            return {
+                "action": "ensure_local_accounts",
+                "path": "",
+                "before": [],
+                "after": [],
+                "requested": [],
+                "results": [],
+                "matched": True,
+                "mismatches": [],
+                "status": "Skipped",
+                "notes": ["No additional iLO users were requested."],
+            }
+
+        service_root = self.get_service_root()
+        account_service_path = service_root.get("AccountService", {}).get("@odata.id")
+        if not account_service_path:
+            raise ILOError("AccountService path not found.")
+
+        account_service = self._get(account_service_path)
+        accounts_path = account_service.get("Accounts", {}).get("@odata.id")
+        if not accounts_path:
+            raise ILOError("AccountService Accounts collection not found.")
+
+        before_accounts = self._expand_collection(accounts_path)
+        before_summary = self._build_account_summary(before_accounts)
+        existing_by_username = {
+            str(item.get("UserName") or "").strip().lower(): item
+            for item in before_accounts
+            if str(item.get("UserName") or "").strip()
+        }
+
+        results: list[dict[str, Any]] = []
+        notes: list[str] = []
+
+        for desired in sanitized_accounts:
+            username = desired["username"]
+            password = desired["password"]
+            role = desired["role"]
+            existing = existing_by_username.get(username.lower())
+            try:
+                if existing and existing.get("@odata.id"):
+                    account_path = str(existing.get("@odata.id") or "")
+                    payload: dict[str, Any] = {"Password": password, "RoleId": role}
+                    if "Enabled" in existing:
+                        payload["Enabled"] = True
+                    self._patch(account_path, payload)
+                    after_account = self._get(account_path)
+                    result_status = "Updated"
+                else:
+                    payload = {
+                        "UserName": username,
+                        "Password": password,
+                        "RoleId": role,
+                    }
+                    try:
+                        self._post(accounts_path, {**payload, "Enabled": True})
+                    except Exception:
+                        self._post(accounts_path, payload)
+
+                    refreshed_accounts = self._expand_collection(accounts_path)
+                    after_account = next(
+                        (
+                            item
+                            for item in refreshed_accounts
+                            if str(item.get("UserName") or "").strip().lower() == username.lower()
+                        ),
+                        {},
+                    )
+                    if not after_account:
+                        raise ILOError(f"Account {username} did not appear in AccountService after create.")
+                    result_status = "Created"
+
+                after_role = str(after_account.get("RoleId") or "")
+                after_enabled = after_account.get("Enabled")
+                matched = bool(after_account) and (after_role == role if role else True) and (after_enabled is not False)
+                result = {
+                    "username": username,
+                    "requested_role": role,
+                    "actual_role": after_role,
+                    "actual_enabled": after_enabled,
+                    "status": result_status,
+                    "matched": matched,
+                    "password_requested": True,
+                }
+                results.append(result)
+                if matched:
+                    notes.append(f"{result_status} local iLO user {username} with role {role}.")
+                else:
+                    notes.append(
+                        f"{result_status} local iLO user {username}, but readback did not match the requested role/enabled state."
+                    )
+            except Exception as e:
+                results.append({
+                    "username": username,
+                    "requested_role": role,
+                    "actual_role": "",
+                    "actual_enabled": None,
+                    "status": "Failed",
+                    "matched": False,
+                    "password_requested": True,
+                    "error": str(e).splitlines()[0],
+                })
+                notes.append(f"Failed to ensure local iLO user {username}: {str(e).splitlines()[0]}")
+
+        after_summary = self._build_account_summary(self._expand_collection(accounts_path))
+        mismatches = [item for item in results if not item.get("matched")]
+        matched = bool(results) and not mismatches
+        return {
+            "action": "ensure_local_accounts",
+            "path": accounts_path,
+            "before": before_summary,
+            "after": after_summary,
+            "requested": [
+                {
+                    "username": item["username"],
+                    "role": item["role"],
+                    "password_requested": True,
+                }
+                for item in sanitized_accounts
+            ],
+            "results": results,
+            "matched": matched,
+            "mismatches": mismatches,
+            "status": "Verified" if matched else "Mismatch",
+            "notes": notes,
         }
 
     def manager_reset_best_effort(self, reset_type: str = "GracefulRestart") -> dict[str, Any]:
@@ -1844,19 +2088,147 @@ class ILOClient:
             raise ILOError(f"No eject action found for virtual media {vm_path}")
         self._post(target, {})
 
-    def set_one_time_boot_cd(self, system_path: str | None = None) -> None:
+    @staticmethod
+    def _boot_override_snapshot(system: dict[str, Any]) -> dict[str, str]:
+        boot = system.get("Boot", {}) if isinstance(system, dict) else {}
+        if not isinstance(boot, dict):
+            boot = {}
+        return {
+            "enabled": str(boot.get("BootSourceOverrideEnabled") or ""),
+            "target": str(boot.get("BootSourceOverrideTarget") or ""),
+            "uefi_target": str(boot.get("UefiTargetBootSourceOverride") or ""),
+        }
+
+    @staticmethod
+    def _boot_target_matches_cd(value: str) -> bool:
+        normalized = re.sub(r"[^a-z0-9]+", "", str(value or "").strip().lower())
+        if not normalized:
+            return False
+        return normalized in {
+            "cd",
+            "cdrom",
+            "dvd",
+            "cddvd",
+            "ueficd",
+            "ueficddvd",
+            "ueficdrom",
+        } or ("cd" in normalized and "uefi" in normalized)
+
+    @staticmethod
+    def _boot_option_text(option: dict[str, Any]) -> str:
+        fields = [
+            option.get("BootOptionReference"),
+            option.get("DisplayName"),
+            option.get("Alias"),
+            option.get("Name"),
+            option.get("Description"),
+            option.get("UefiDevicePath"),
+        ]
+        return " ".join(str(x or "") for x in fields)
+
+    def _find_virtual_cd_boot_option(self, system: dict[str, Any]) -> dict[str, Any] | None:
+        boot_options_path = ((system.get("BootOptions") or {}).get("@odata.id") or "").strip()
+        if not boot_options_path:
+            return None
+        collection = self._safe_get(boot_options_path)
+        members = collection.get("Members", []) if isinstance(collection, dict) else []
+        options: list[dict[str, Any]] = []
+        for member in members:
+            path = (member.get("@odata.id") or "").strip() if isinstance(member, dict) else ""
+            if not path:
+                continue
+            option = self._safe_get(path)
+            if isinstance(option, dict) and not option.get("@error"):
+                options.append(option)
+        preferred_terms = (
+            "virtual cd",
+            "virtual dvd",
+            "cd/dvd",
+            "dvd/cd",
+            "virtual media",
+            "ilo virtual",
+            "embedded virtual media",
+        )
+        for option in options:
+            text = self._boot_option_text(option).lower()
+            if any(term in text for term in preferred_terms):
+                return option
+        for option in options:
+            text = self._boot_option_text(option).lower()
+            if "cd" in text or "dvd" in text:
+                return option
+        return None
+
+    def set_one_time_boot_cd(self, system_path: str | None = None) -> dict[str, Any]:
         if not system_path:
             systems = self.get_systems()
             if not systems:
                 raise ILOError("No Redfish systems found.")
             system_path = systems[0]
 
-        self._patch(system_path, {
-            "Boot": {
+        before = self.get_system(system_path)
+        before_boot = self._boot_override_snapshot(before)
+        payload_boot: dict[str, Any] = {
+            "BootSourceOverrideEnabled": "Once",
+            "BootSourceOverrideTarget": "Cd",
+        }
+        selected_boot_option = self._find_virtual_cd_boot_option(before)
+        selected_boot_option_ref = str((selected_boot_option or {}).get("BootOptionReference") or "").strip()
+        if selected_boot_option_ref:
+            payload_boot = {
                 "BootSourceOverrideEnabled": "Once",
-                "BootSourceOverrideTarget": "Cd"
+                "BootSourceOverrideTarget": "UefiTarget",
+                "UefiTargetBootSourceOverride": selected_boot_option_ref,
             }
-        })
+        self._patch(system_path, {"Boot": payload_boot})
+        after = self.get_system(system_path)
+        after_boot = self._boot_override_snapshot(after)
+        matched = after_boot.get("enabled", "").lower() == "once" and (
+            (
+                after_boot.get("target", "").strip().lower() == "uefitarget"
+                and selected_boot_option_ref
+                and after_boot.get("uefi_target", "").strip() == selected_boot_option_ref
+            )
+            or self._boot_target_matches_cd(after_boot.get("target", ""))
+        )
+        notes = [
+            f"Requested one-time boot override on {system_path} to CD/DVD.",
+            f"Before: enabled={before_boot.get('enabled') or '(empty)'} target={before_boot.get('target') or '(empty)'}.",
+            f"After: enabled={after_boot.get('enabled') or '(empty)'} target={after_boot.get('target') or '(empty)'}"
+            + (
+                f" uefi_target={after_boot.get('uefi_target') or '(empty)'}."
+                if after_boot.get("uefi_target") or selected_boot_option_ref
+                else "."
+            ),
+        ]
+        if selected_boot_option_ref:
+            notes.append(
+                "Selected UEFI boot option "
+                f"{selected_boot_option_ref} for virtual CD/DVD: "
+                f"{self._boot_option_text(selected_boot_option or {}) or '(unnamed option)'}."
+            )
+        if matched:
+            if after_boot.get("target", "").strip().lower() == "uefitarget" and selected_boot_option_ref:
+                notes.append("One-time boot override read back on the selected UEFI boot option.")
+            elif after_boot.get("target", "").strip().lower() != "cd":
+                notes.append(f"iLO returned equivalent boot target {after_boot.get('target')} and it was accepted as CD/DVD.")
+            else:
+                notes.append("One-time boot override read back exactly as requested.")
+        else:
+            notes.append("One-time boot override did not read back as the requested CD/DVD setting.")
+        return {
+            "system_path": system_path,
+            "before_enabled": before_boot.get("enabled", ""),
+            "before_target": before_boot.get("target", ""),
+            "before_uefi_target": before_boot.get("uefi_target", ""),
+            "after_enabled": after_boot.get("enabled", ""),
+            "after_target": after_boot.get("target", ""),
+            "after_uefi_target": after_boot.get("uefi_target", ""),
+            "selected_boot_option_reference": selected_boot_option_ref,
+            "matched": matched,
+            "notes": notes,
+            "action": "set_one_time_boot_cd",
+        }
 
     def power_reset(self, reset_type: str = "ForceRestart", system_path: str | None = None) -> dict[str, Any]:
         if not system_path:
