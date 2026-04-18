@@ -3969,6 +3969,42 @@ def test_set_one_time_boot_cd_prefers_matching_uefi_boot_option(monkeypatch):
     assert result["matched"] is True
 
 
+def test_set_one_time_boot_cd_records_empty_boot_option_inventory(monkeypatch):
+    client = ILOClient(ILOConfig(host="10.0.0.1", username="Administrator", password="secret"))
+    state = {
+        "Boot": {
+            "BootSourceOverrideEnabled": "Disabled",
+            "BootSourceOverrideTarget": "None",
+        }
+    }
+
+    monkeypatch.setattr(client, "get_system", lambda system_path=None: dict(state))
+    monkeypatch.setattr(
+        client,
+        "collect_boot_option_inventory",
+        lambda system_path=None: {
+            "system_path": system_path or "/redfish/v1/Systems/1",
+            "boot": {"enabled": "Disabled", "target": "None", "uefi_target": "", "boot_order": [], "boot_order_property_selection": ""},
+            "boot_options_path": "",
+            "boot_options_count": 0,
+            "boot_options": [],
+            "oem_hpe_keys": [],
+        },
+    )
+
+    def fake_patch(path, payload):
+        state["Boot"]["BootSourceOverrideEnabled"] = payload["Boot"]["BootSourceOverrideEnabled"]
+        state["Boot"]["BootSourceOverrideTarget"] = payload["Boot"]["BootSourceOverrideTarget"]
+
+    monkeypatch.setattr(client, "_patch", fake_patch)
+
+    result = client.set_one_time_boot_cd("/redfish/v1/Systems/1")
+
+    assert result["selected_boot_option_reference"] == ""
+    assert result["boot_option_inventory"]["boot_options_count"] == 0
+    assert result["after_target"] == "Cd"
+
+
 def test_harden_snmp_best_effort_reports_mismatch_when_readback_differs(monkeypatch):
     client = ILOClient(ILOConfig(host="10.0.0.1", username="Administrator", password="secret"))
     before = {

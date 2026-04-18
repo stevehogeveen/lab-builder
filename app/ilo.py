@@ -2159,6 +2159,56 @@ class ILOClient:
                 return option
         return None
 
+    def collect_boot_option_inventory(self, system_path: str | None = None) -> dict[str, Any]:
+        if not system_path:
+            systems = self.get_systems()
+            if not systems:
+                raise ILOError("No Redfish systems found.")
+            system_path = systems[0]
+
+        system = self.get_system(system_path)
+        boot = dict(system.get("Boot") or {}) if isinstance(system, dict) else {}
+        boot_options_path = ((system.get("BootOptions") or {}).get("@odata.id") or "").strip()
+        collection = self._safe_get(boot_options_path) if boot_options_path else {}
+        members = collection.get("Members", []) if isinstance(collection, dict) else []
+
+        options: list[dict[str, Any]] = []
+        for member in members:
+            path = (member.get("@odata.id") or "").strip() if isinstance(member, dict) else ""
+            if not path:
+                continue
+            option = self._safe_get(path)
+            if not isinstance(option, dict):
+                continue
+            options.append(
+                {
+                    "path": path,
+                    "boot_option_reference": str(option.get("BootOptionReference") or ""),
+                    "display_name": str(option.get("DisplayName") or ""),
+                    "alias": str(option.get("Alias") or ""),
+                    "name": str(option.get("Name") or ""),
+                    "description": str(option.get("Description") or ""),
+                    "uefi_device_path": str(option.get("UefiDevicePath") or ""),
+                    "raw_error": str(option.get("@error") or ""),
+                }
+            )
+
+        oem_hpe = dict(((system.get("Oem") or {}).get("Hpe") or {})) if isinstance(system, dict) else {}
+        return {
+            "system_path": str(system_path),
+            "boot": {
+                "enabled": str(boot.get("BootSourceOverrideEnabled") or ""),
+                "target": str(boot.get("BootSourceOverrideTarget") or ""),
+                "uefi_target": str(boot.get("UefiTargetBootSourceOverride") or ""),
+                "boot_order": list(boot.get("BootOrder") or []),
+                "boot_order_property_selection": str(boot.get("BootOrderPropertySelection") or ""),
+            },
+            "boot_options_path": boot_options_path,
+            "boot_options_count": len(options),
+            "boot_options": options,
+            "oem_hpe_keys": sorted(oem_hpe.keys()),
+        }
+
     def set_one_time_boot_cd(self, system_path: str | None = None) -> dict[str, Any]:
         if not system_path:
             systems = self.get_systems()
@@ -2168,6 +2218,7 @@ class ILOClient:
 
         before = self.get_system(system_path)
         before_boot = self._boot_override_snapshot(before)
+        boot_inventory = self.collect_boot_option_inventory(system_path)
         payload_boot: dict[str, Any] = {
             "BootSourceOverrideEnabled": "Once",
             "BootSourceOverrideTarget": "Cd",
@@ -2225,6 +2276,7 @@ class ILOClient:
             "after_target": after_boot.get("target", ""),
             "after_uefi_target": after_boot.get("uefi_target", ""),
             "selected_boot_option_reference": selected_boot_option_ref,
+            "boot_option_inventory": boot_inventory,
             "matched": matched,
             "notes": notes,
             "action": "set_one_time_boot_cd",
