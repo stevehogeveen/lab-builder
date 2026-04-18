@@ -2518,7 +2518,7 @@ def test_run_esxi_real_builds_iso_and_starts_virtual_media_boot(monkeypatch, tmp
 
     job = main.load_job("Real ESXi Run Kit")
     joined_logs = "\n".join(job["logs"])
-    client = created_clients[0]
+    client = created_clients[-1]
     spec = built["spec"]
 
     assert "[RUNNING] Building custom ESXi ISO" in joined_logs
@@ -2549,6 +2549,7 @@ def test_run_esxi_real_builds_iso_and_starts_virtual_media_boot(monkeypatch, tmp
     assert "[OK] ESXi responded on configured IP 10.10.8.10:443 after 2 checks. ESXi boot sequence started." in joined_logs
     assert "esxisecret" not in joined_logs
     assert job["status"] == "Completed"
+    assert len(created_clients) == 1
     assert job["esxi_iso_path"] == str(built_iso)
     assert job["esxi_iso_url"].endswith("/esxi-built-iso/Real-ESXi-Run-Kit/esxi-20260416-120000.iso")
     assert job["esxi_expected_ip"] == "10.10.8.10"
@@ -2596,6 +2597,109 @@ def test_run_esxi_real_builds_iso_and_starts_virtual_media_boot(monkeypatch, tmp
     ) in client.calls
     assert ("set_one_time_boot_cd", "/redfish/v1/Systems/1") in client.calls
     assert ("power_reset", "On", "/redfish/v1/Systems/1") in client.calls
+
+
+def test_run_esxi_real_reconnects_after_build_when_ilo_session_has_expired(monkeypatch, tmp_path):
+    cfg = main.default_config()
+    cfg["site"]["name"] = "Real ESXi Session Refresh Kit"
+    cfg["ilo"]["current_ip"] = "10.10.8.90"
+    cfg["ilo"]["host"] = "10.10.8.90"
+    cfg["ilo"]["username"] = "Administrator"
+    cfg["ilo"]["password"] = "secret"
+    cfg["esxi"]["hostname"] = "esxi-lab"
+    cfg["esxi"]["management_ip"] = "10.10.8.10"
+    cfg["esxi"]["subnet_mask"] = "255.255.255.0"
+    cfg["esxi"]["gateway"] = "10.10.8.1"
+    cfg["esxi"]["root_password"] = "esxisecret"
+
+    built_iso = tmp_path / "esxi-refresh.iso"
+    built_iso.write_text("iso", encoding="utf-8")
+
+    class FakeEsxiILOClient:
+        def __init__(self, cfg, *, expire_on_first_media=False):
+            self.cfg = cfg
+            self.expire_on_first_media = expire_on_first_media
+            self.media_checked = False
+            self.power_state = "Off"
+            self.boot_state = {
+                "Boot": {
+                    "BootSourceOverrideEnabled": "Disabled",
+                    "BootSourceOverrideTarget": "None",
+                }
+            }
+            self.virtual_media = {
+                "@odata.id": "/redfish/v1/Managers/1/VirtualMedia/2",
+                "Inserted": False,
+                "Image": "",
+                "MediaTypes": ["CD", "DVD"],
+                "Actions": {
+                    "#VirtualMedia.InsertMedia": {"target": "/redfish/v1/Managers/1/VirtualMedia/2/Actions/VirtualMedia.InsertMedia"},
+                },
+            }
+            self.calls = []
+
+        def get_virtual_media(self):
+            self.calls.append(("get_virtual_media",))
+            if self.expire_on_first_media and not self.media_checked:
+                self.media_checked = True
+                raise main.ILOError('GET https://10.10.8.90/redfish/v1/Managers failed with HTTP 401: {"error":{"@Message.ExtendedInfo":[{"MessageId":"Base.1.18.NoValidSession"}]}}')
+            return [dict(self.virtual_media)]
+
+        def eject_virtual_media(self, vm_path):
+            self.calls.append(("eject", vm_path))
+
+        def get_systems(self):
+            return ["/redfish/v1/Systems/1"]
+
+        def get_system(self, system_path):
+            return {"PowerState": self.power_state, **self.boot_state}
+
+        def power_reset(self, reset_type="ForceRestart", system_path=None):
+            self.calls.append(("power_reset", reset_type, system_path))
+            if reset_type == "On":
+                self.power_state = "On"
+            return {"reset_type": reset_type, "system_path": system_path}
+
+        def _post(self, target, payload):
+            self.calls.append(("post", target, payload))
+            self.virtual_media["Inserted"] = True
+            self.virtual_media["Image"] = payload["Image"]
+            self.virtual_media["WriteProtected"] = True
+
+        def set_one_time_boot_cd(self, system_path=None):
+            self.calls.append(("set_one_time_boot_cd", system_path))
+            return {
+                "system_path": system_path or "/redfish/v1/Systems/1",
+                "before_enabled": "Disabled",
+                "before_target": "None",
+                "after_enabled": "Once",
+                "after_target": "Cd",
+                "matched": True,
+                "notes": ["Verified one-time boot override."],
+            }
+
+    monkeypatch.setattr(main, "build_custom_iso", lambda spec: built_iso)
+    monkeypatch.setattr(main, "resolve_esxi_base_iso_path", lambda cfg_obj: main.Path("/tmp/base-esxi.iso"))
+    monkeypatch.setattr(main, "detect_public_base_url", lambda target_host="": "http://lab-builder.local:8000")
+    monkeypatch.setattr(main, "wait_for_esxi_management_ready", lambda host, **kwargs: {"host": host, "port": 443, "attempts": 1})
+    created_clients = []
+
+    def build_client(cfg_obj):
+        client = FakeEsxiILOClient(cfg_obj, expire_on_first_media=(len(created_clients) == 0))
+        created_clients.append(client)
+        return client
+
+    monkeypatch.setattr(main, "ILOClient", build_client)
+
+    main.run_esxi_real(cfg, run_stamp="20260418-120000")
+
+    job = main.load_job("Real ESXi Session Refresh Kit")
+    joined_logs = "\n".join(job["logs"])
+
+    assert job["status"] == "Completed"
+    assert len(created_clients) == 2
+    assert "[INFO] Reconnected to iLO after ISO build" in joined_logs
+    assert "[INFO] iLO session expired during ESXi orchestration. Reconnecting and retrying once." in joined_logs
 
 
 def test_run_esxi_real_blocks_power_on_when_boot_override_does_not_stick(monkeypatch, tmp_path):

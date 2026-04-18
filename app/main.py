@@ -6135,7 +6135,35 @@ def run_esxi_real(cfg: dict, run_stamp: str | None = None):
             disable_ipv6=bool(esxi_review["disable_ipv6"]),
         )
 
-        client = ILOClient(ILOConfig(host=login_ip, username=username, password=password, verify_tls=False, timeout=15))
+        def build_esxi_ilo_client() -> ILOClient:
+            return ILOClient(ILOConfig(host=login_ip, username=username, password=password, verify_tls=False, timeout=15))
+
+        def is_ilo_session_expired_error(exc: Exception) -> bool:
+            text = str(exc)
+            return "NoValidSession" in text or ("HTTP 401" in text and "redfish" in text.lower())
+
+        client: ILOClient | None = None
+
+        def run_with_session_refresh(stage_label: str, operation):
+            nonlocal client
+            if client is None:
+                client = build_esxi_ilo_client()
+            try:
+                return operation(client)
+            except Exception as exc:
+                if not is_ilo_session_expired_error(exc):
+                    raise
+                update_job(
+                    kit_name,
+                    job,
+                    "Running",
+                    stage_label,
+                    job.get("completed_steps", 0),
+                    total,
+                    "[INFO] iLO session expired during ESXi orchestration. Reconnecting and retrying once.",
+                )
+                client = build_esxi_ilo_client()
+                return operation(client)
 
         update_job(kit_name, job, "Running", "Generate KS.CFG", 1, total, "[RUNNING] Generating KS.CFG")
         trace_payload["steps"].append({"stage": "generate_ks_cfg", "status": "running"})
@@ -6237,29 +6265,31 @@ def run_esxi_real(cfg: dict, run_stamp: str | None = None):
             )
         update_job(kit_name, job, "Running", "Build complete", 2, total, f"[OK] Built ESXi ISO: {output_iso}")
         update_job(kit_name, job, "Running", "Build complete", 2, total, f"[INFO] Virtual media URL: {iso_url}")
+        client = build_esxi_ilo_client()
+        update_job(kit_name, job, "Running", "Build complete", 2, total, "[INFO] Reconnected to iLO after ISO build")
 
         update_job(kit_name, job, "Running", "Eject media", 3, total, "[RUNNING] Ejecting previous virtual media")
         trace_payload["steps"].append({"stage": "eject_virtual_media", "status": "running"})
         save_esxi_trace(trace_path, trace_payload)
-        for vm in client.get_virtual_media():
+        for vm in run_with_session_refresh("Eject media", lambda c: c.get_virtual_media()):
             if vm.get("Inserted") and vm.get("@odata.id"):
-                client.eject_virtual_media(vm["@odata.id"])
+                run_with_session_refresh("Eject media", lambda c, vm_path=vm["@odata.id"]: c.eject_virtual_media(vm_path))
 
-        system_path = client.get_systems()[0]
-        current_system = client.get_system(system_path)
+        system_path = run_with_session_refresh("Power off", lambda c: c.get_systems())[0]
+        current_system = run_with_session_refresh("Power off", lambda c: c.get_system(system_path))
         current_power = str(current_system.get("PowerState") or "")
         if current_power.lower() != "off":
             update_job(kit_name, job, "Running", "Power off", 4, total, "[RUNNING] Powering server off before setting one-time boot")
             trace_payload["steps"].append({"stage": "power_off", "status": "running", "from_state": current_power})
             save_esxi_trace(trace_path, trace_payload)
             try:
-                client.power_reset(reset_type="GracefulShutdown", system_path=system_path)
+                run_with_session_refresh("Power off", lambda c: c.power_reset(reset_type="GracefulShutdown", system_path=system_path))
             except Exception:
-                client.power_reset(reset_type="ForceOff", system_path=system_path)
+                run_with_session_refresh("Power off", lambda c: c.power_reset(reset_type="ForceOff", system_path=system_path))
             wait_for_power_state(client, "Off", timeout_seconds=180, poll_interval=5)
         update_job(kit_name, job, "Running", "Power off", 5, total, "[OK] Server is off")
 
-        vm = choose_virtual_media_device(client)
+        vm = run_with_session_refresh("Mount ISO", lambda c: choose_virtual_media_device(c))
         insert_target = ((vm.get("Actions") or {}).get("#VirtualMedia.InsertMedia") or {}).get("target")
         if not insert_target:
             raise ILOError("No InsertMedia action was found on the selected virtual media device.")
@@ -6273,9 +6303,12 @@ def run_esxi_real(cfg: dict, run_stamp: str | None = None):
         update_job(kit_name, job, "Running", "Mount ISO", 6, total, "[RUNNING] Mounting custom ESXi ISO")
         trace_payload["steps"].append({"stage": "mount_virtual_media", "status": "running", "target": insert_target, "image": iso_url})
         save_esxi_trace(trace_path, trace_payload)
-        client._post(insert_target, {"Image": iso_url, "Inserted": True, "WriteProtected": True})
+        run_with_session_refresh(
+            "Mount ISO",
+            lambda c: c._post(insert_target, {"Image": iso_url, "Inserted": True, "WriteProtected": True}),
+        )
         mount_readback = {}
-        for item in client.get_virtual_media():
+        for item in run_with_session_refresh("Mount ISO", lambda c: c.get_virtual_media()):
             if str(item.get("@odata.id") or "") == str(vm.get("@odata.id") or ""):
                 mount_readback = {
                     "device_path": str(item.get("@odata.id") or ""),
@@ -6329,7 +6362,7 @@ def run_esxi_real(cfg: dict, run_stamp: str | None = None):
         update_job(kit_name, job, "Running", "Set boot override", 8, total, "[RUNNING] Setting one-time boot to CD/DVD")
         trace_payload["steps"].append({"stage": "set_one_time_boot", "status": "running", "system_path": system_path})
         save_esxi_trace(trace_path, trace_payload)
-        boot_override = client.set_one_time_boot_cd(system_path=system_path)
+        boot_override = run_with_session_refresh("Set boot override", lambda c: c.set_one_time_boot_cd(system_path=system_path))
         before_enabled = boot_override.get("before_enabled") or "(empty)"
         before_target = boot_override.get("before_target") or "(empty)"
         after_enabled = boot_override.get("after_enabled") or "(empty)"
@@ -6383,7 +6416,7 @@ def run_esxi_real(cfg: dict, run_stamp: str | None = None):
         }
         save_job(kit_name, job)
         save_esxi_trace(trace_path, trace_payload)
-        client.power_reset(reset_type="On", system_path=system_path)
+        run_with_session_refresh("Power on", lambda c: c.power_reset(reset_type="On", system_path=system_path))
         update_job(kit_name, job, "Running", "Wait for server power", 10, total, "[RUNNING] Waiting for the server to power back on")
         wait_for_power_state(client, "On", timeout_seconds=300, poll_interval=5)
         job["esxi_power_transitions"] = {
