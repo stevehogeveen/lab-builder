@@ -3018,6 +3018,125 @@ def test_run_esxi_real_fails_when_expected_management_ip_never_comes_up(monkeypa
     assert "This usually means the kickstart network settings did not apply or the installer did not finish." in joined_logs
 
 
+def test_run_esxi_real_fails_early_when_stuck_in_post(monkeypatch, tmp_path):
+    cfg = main.default_config()
+    cfg["site"]["name"] = "Real ESXi Stuck Post Kit"
+    cfg["ilo"]["current_ip"] = "10.10.8.90"
+    cfg["ilo"]["host"] = "10.10.8.90"
+    cfg["ilo"]["username"] = "Administrator"
+    cfg["ilo"]["password"] = "secret"
+    cfg["esxi"]["hostname"] = "esxi-lab"
+    cfg["esxi"]["management_ip"] = "10.10.8.10"
+    cfg["esxi"]["subnet_mask"] = "255.255.255.0"
+    cfg["esxi"]["gateway"] = "10.10.8.1"
+    cfg["esxi"]["root_password"] = "esxisecret"
+
+    built_iso = tmp_path / "esxi-stuck.iso"
+    built_iso.write_text("iso", encoding="utf-8")
+
+    class FakeEsxiILOClient:
+        def __init__(self, cfg):
+            self.cfg = cfg
+            self.power_state = "On"
+            self.boot_state = {
+                "Boot": {
+                    "BootSourceOverrideEnabled": "Disabled",
+                    "BootSourceOverrideTarget": "None",
+                }
+            }
+            self.vm = {
+                "@odata.id": "/redfish/v1/Managers/1/VirtualMedia/2",
+                "Inserted": False,
+                "Image": "",
+                "MediaTypes": ["CD", "DVD"],
+                "Actions": {
+                    "#VirtualMedia.InsertMedia": {"target": "/redfish/v1/Managers/1/VirtualMedia/2/Actions/VirtualMedia.InsertMedia"},
+                },
+            }
+
+        def get_virtual_media(self):
+            return [dict(self.vm)]
+
+        def eject_virtual_media(self, vm_path):
+            return None
+
+        def get_systems(self):
+            return ["/redfish/v1/Systems/1"]
+
+        def get_system(self, system_path):
+            return {
+                "PowerState": self.power_state,
+                "BootProgress": {"LastState": ""},
+                "Oem": {"Hpe": {"PostState": "InPost" if self.power_state == "On" else "Off"}},
+                **self.boot_state,
+            }
+
+        def power_reset(self, reset_type="ForceRestart", system_path=None):
+            if reset_type in {"GracefulShutdown", "ForceOff"}:
+                self.power_state = "Off"
+            elif reset_type == "On":
+                self.power_state = "On"
+            return {"reset_type": reset_type, "system_path": system_path}
+
+        def _post(self, target, payload):
+            self.vm = {
+                "@odata.id": "/redfish/v1/Managers/1/VirtualMedia/2",
+                "Inserted": True,
+                "Image": payload["Image"],
+                "WriteProtected": True,
+                "MediaTypes": ["CD", "DVD"],
+                "Actions": {
+                    "#VirtualMedia.InsertMedia": {"target": "/redfish/v1/Managers/1/VirtualMedia/2/Actions/VirtualMedia.InsertMedia"},
+                },
+            }
+            return None
+
+        def set_one_time_boot_cd(self, system_path=None):
+            self.boot_state["Boot"] = {
+                "BootSourceOverrideEnabled": "Once",
+                "BootSourceOverrideTarget": "Cd",
+            }
+            return {
+                "system_path": system_path or "/redfish/v1/Systems/1",
+                "before_enabled": "Disabled",
+                "before_target": "None",
+                "after_enabled": "Once",
+                "after_target": "Cd",
+                "matched": True,
+                "notes": ["Verified one-time boot override."],
+            }
+
+    def fake_wait(host, **kwargs):
+        on_poll = kwargs["on_poll"]
+        for attempt in range(1, 9):
+            on_poll(
+                {
+                    "attempts": attempt,
+                    "host": host,
+                    "port": 443,
+                    "last_error": "timed out",
+                    "remaining_seconds": 600,
+                }
+            )
+        raise AssertionError("wait loop should have failed from stuck POST detection before timeout")
+
+    monkeypatch.setattr(main, "build_custom_iso", lambda spec: built_iso)
+    monkeypatch.setattr(main, "resolve_esxi_base_iso_path", lambda cfg_obj: main.Path("/tmp/base-esxi.iso"))
+    monkeypatch.setattr(main, "detect_public_base_url", lambda target_host="": "http://lab-builder.local:8000")
+    monkeypatch.setattr(main, "wait_for_esxi_management_ready", fake_wait)
+    monkeypatch.setattr(main, "ILOClient", lambda cfg_obj: FakeEsxiILOClient(cfg_obj))
+
+    main.run_esxi_real(cfg)
+    job = main.load_job("Real ESXi Stuck Post Kit")
+    joined_logs = "\n".join(job["logs"])
+
+    assert job["status"] == "Failed"
+    assert "[INFO] ESXi wait poll " in joined_logs
+    assert "post_state=InPost" in joined_logs
+    assert "boot_override=Once/Cd" in joined_logs
+    assert "Server appears stuck in firmware/POST with the virtual CD/DVD still mounted and the one-time CD/DVD boot override still pending." in joined_logs
+
+
 def test_build_kickstart_uses_explicit_management_network_fields():
     spec = main.EsxiBuildSpec(
         kit_name="Test-Kit",

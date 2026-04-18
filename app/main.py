@@ -339,6 +339,7 @@ def write_run_bundle_files(kit_name: str, job: dict[str, Any]) -> None:
             "virtual_media": dict(job.get("esxi_virtual_media") or {}),
             "boot_override": dict(job.get("esxi_boot_override") or {}),
             "boot_evidence": dict(job.get("esxi_boot_evidence") or {}),
+            "boot_evidence_samples": list(job.get("esxi_boot_evidence_samples") or []),
             "power_transitions": dict(job.get("esxi_power_transitions") or {}),
             "management_network": dict(job.get("esxi_management_network") or {}),
         }
@@ -6025,6 +6026,7 @@ def wait_for_esxi_management_ready(
     timeout_seconds: int = 2400,
     poll_interval: int = 15,
     port: int = 443,
+    on_poll: Callable[[dict[str, Any]], None] | None = None,
 ) -> dict[str, Any]:
     deadline = time.time() + max(timeout_seconds, 1)
     attempts = 0
@@ -6036,6 +6038,16 @@ def wait_for_esxi_management_ready(
                 return {"host": host, "port": port, "attempts": attempts}
         except Exception as e:
             last_error = str(e).splitlines()[0]
+        if on_poll:
+            on_poll(
+                {
+                    "attempts": attempts,
+                    "host": host,
+                    "port": port,
+                    "last_error": last_error,
+                    "remaining_seconds": max(int(deadline - time.time()), 0),
+                }
+            )
         time.sleep(max(poll_interval, 1))
     raise ILOError(
         f"ESXi did not answer on configured IP {host}:{port} before timeout. "
@@ -6118,6 +6130,8 @@ def run_esxi_real(cfg: dict, run_stamp: str | None = None):
         "esxi_install_values": {},
         "esxi_virtual_media": {},
         "esxi_boot_override": {},
+        "esxi_boot_evidence": {},
+        "esxi_boot_evidence_samples": [],
         "esxi_power_transitions": {},
         "esxi_management_network": {},
     }
@@ -6538,7 +6552,84 @@ def run_esxi_real(cfg: dict, run_stamp: str | None = None):
             total,
             f"[RUNNING] Waiting for ESXi management network on {management_ip}",
         )
-        ready_result = wait_for_esxi_management_ready(management_ip)
+        boot_evidence_samples: list[dict[str, Any]] = list(job.get("esxi_boot_evidence_samples") or [])
+        last_boot_signature: tuple[Any, ...] | None = None
+        stuck_post_polls = 0
+
+        def on_esxi_wait_poll(state: dict[str, Any]) -> None:
+            nonlocal last_boot_signature, stuck_post_polls
+            attempts = int(state.get("attempts") or 0)
+            if attempts != 1 and attempts % 2 != 0:
+                return
+            evidence = run_with_session_refresh(
+                "Wait for ESXi network",
+                lambda c: collect_esxi_boot_evidence(c, system_path=system_path),
+            )
+            mounted_vm = dict((evidence or {}).get("mounted_virtual_media") or {})
+            sample = {
+                "attempt": attempts,
+                "time": time.strftime("%Y-%m-%d %H:%M:%S"),
+                "last_error": str(state.get("last_error") or ""),
+                "power_state": str(evidence.get("power_state") or ""),
+                "post_state": str(evidence.get("post_state") or ""),
+                "boot_progress_state": str(evidence.get("boot_progress_state") or ""),
+                "boot_override_enabled": str(evidence.get("boot_override_enabled") or ""),
+                "boot_override_target": str(evidence.get("boot_override_target") or ""),
+                "virtual_media_inserted": bool(mounted_vm.get("inserted")),
+                "virtual_media_image": str(mounted_vm.get("image") or ""),
+            }
+            boot_evidence_samples.append(sample)
+            job["esxi_boot_evidence_samples"] = list(boot_evidence_samples[-12:])
+            job["esxi_boot_evidence"] = dict(evidence or {})
+            save_job(kit_name, job)
+            trace_payload["boot_evidence_samples"] = list(job["esxi_boot_evidence_samples"])
+            save_esxi_trace(trace_path, trace_payload)
+
+            signature = (
+                sample["post_state"],
+                sample["boot_progress_state"],
+                sample["boot_override_enabled"],
+                sample["boot_override_target"],
+                sample["virtual_media_inserted"],
+                sample["virtual_media_image"],
+            )
+            if signature != last_boot_signature:
+                update_job(
+                    kit_name,
+                    job,
+                    "Running",
+                    "Wait for ESXi network",
+                    12,
+                    total,
+                    (
+                        f"[INFO] ESXi wait poll {attempts}: "
+                        f"post_state={sample['post_state'] or '(unknown)'}, "
+                        f"boot_progress={sample['boot_progress_state'] or '(unknown)'}, "
+                        f"boot_override={sample['boot_override_enabled'] or '(empty)'}/"
+                        f"{sample['boot_override_target'] or '(empty)'}, "
+                        f"virtual_media={'yes' if sample['virtual_media_inserted'] else 'no'}"
+                    ),
+                )
+                last_boot_signature = signature
+
+            stuck_in_post = (
+                sample["power_state"] == "On"
+                and sample["post_state"] == "InPost"
+                and sample["boot_override_enabled"] == "Once"
+                and sample["boot_override_target"] == "Cd"
+                and sample["virtual_media_inserted"]
+            )
+            if stuck_in_post:
+                stuck_post_polls += 1
+            else:
+                stuck_post_polls = 0
+            if stuck_post_polls >= 4:
+                raise ILOError(
+                    "Server appears stuck in firmware/POST with the virtual CD/DVD still mounted "
+                    "and the one-time CD/DVD boot override still pending."
+                )
+
+        ready_result = wait_for_esxi_management_ready(management_ip, on_poll=on_esxi_wait_poll)
         job["esxi_management_network"] = dict(ready_result or {})
         save_job(kit_name, job)
         trace_payload["result"] = {
