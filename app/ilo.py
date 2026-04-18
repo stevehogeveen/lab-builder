@@ -2117,29 +2117,39 @@ class ILOClient:
     @staticmethod
     def _boot_option_text(option: dict[str, Any]) -> str:
         fields = [
-            option.get("BootOptionReference"),
-            option.get("DisplayName"),
-            option.get("Alias"),
-            option.get("Name"),
-            option.get("Description"),
-            option.get("UefiDevicePath"),
+            option.get("BootOptionReference") or option.get("boot_option_reference"),
+            option.get("DisplayName") or option.get("display_name"),
+            option.get("Alias") or option.get("alias"),
+            option.get("Name") or option.get("name"),
+            option.get("Description") or option.get("description"),
+            option.get("UefiDevicePath") or option.get("uefi_device_path"),
         ]
         return " ".join(str(x or "") for x in fields)
 
-    def _find_virtual_cd_boot_option(self, system: dict[str, Any]) -> dict[str, Any] | None:
-        boot_options_path = ((system.get("BootOptions") or {}).get("@odata.id") or "").strip()
-        if not boot_options_path:
-            return None
-        collection = self._safe_get(boot_options_path)
-        members = collection.get("Members", []) if isinstance(collection, dict) else []
-        options: list[dict[str, Any]] = []
-        for member in members:
-            path = (member.get("@odata.id") or "").strip() if isinstance(member, dict) else ""
-            if not path:
-                continue
-            option = self._safe_get(path)
-            if isinstance(option, dict) and not option.get("@error"):
-                options.append(option)
+    @staticmethod
+    def _summarize_boot_option(option: dict[str, Any]) -> dict[str, Any]:
+        return {
+            "path": str(option.get("@odata.id") or option.get("path") or ""),
+            "boot_option_reference": str(option.get("BootOptionReference") or option.get("boot_option_reference") or ""),
+            "display_name": str(option.get("DisplayName") or option.get("display_name") or ""),
+            "alias": str(option.get("Alias") or option.get("alias") or ""),
+            "name": str(option.get("Name") or option.get("name") or ""),
+            "description": str(option.get("Description") or option.get("description") or ""),
+            "uefi_device_path": str(option.get("UefiDevicePath") or option.get("uefi_device_path") or ""),
+            "raw_error": str(option.get("@error") or option.get("raw_error") or ""),
+        }
+
+    @staticmethod
+    def _summarize_oem_scalars(block: dict[str, Any]) -> dict[str, Any]:
+        summary: dict[str, Any] = {}
+        for key, value in (block or {}).items():
+            if isinstance(value, (str, int, float, bool)) or value is None:
+                summary[key] = value
+            elif isinstance(value, list) and all(isinstance(item, (str, int, float, bool)) or item is None for item in value):
+                summary[key] = list(value)
+        return summary
+
+    def _find_virtual_cd_boot_option_in_options(self, options: list[dict[str, Any]]) -> dict[str, Any] | None:
         preferred_terms = (
             "virtual cd",
             "virtual dvd",
@@ -2159,6 +2169,28 @@ class ILOClient:
                 return option
         return None
 
+    def _find_virtual_cd_boot_option(self, system: dict[str, Any]) -> dict[str, Any] | None:
+        boot = system.get("Boot", {}) if isinstance(system, dict) else {}
+        if not isinstance(boot, dict):
+            boot = {}
+        boot_options_path = (
+            ((boot.get("BootOptions") or {}).get("@odata.id") or "")
+            or ((system.get("BootOptions") or {}).get("@odata.id") or "")
+        ).strip()
+        if not boot_options_path:
+            return None
+        collection = self._safe_get(boot_options_path)
+        members = collection.get("Members", []) if isinstance(collection, dict) else []
+        options: list[dict[str, Any]] = []
+        for member in members:
+            path = (member.get("@odata.id") or "").strip() if isinstance(member, dict) else ""
+            if not path:
+                continue
+            option = self._safe_get(path)
+            if isinstance(option, dict) and not option.get("@error"):
+                options.append(option)
+        return self._find_virtual_cd_boot_option_in_options(options)
+
     def collect_boot_option_inventory(self, system_path: str | None = None) -> dict[str, Any]:
         if not system_path:
             systems = self.get_systems()
@@ -2168,7 +2200,10 @@ class ILOClient:
 
         system = self.get_system(system_path)
         boot = dict(system.get("Boot") or {}) if isinstance(system, dict) else {}
-        boot_options_path = ((system.get("BootOptions") or {}).get("@odata.id") or "").strip()
+        boot_options_path = (
+            ((boot.get("BootOptions") or {}).get("@odata.id") or "")
+            or ((system.get("BootOptions") or {}).get("@odata.id") or "")
+        ).strip()
         collection = self._safe_get(boot_options_path) if boot_options_path else {}
         members = collection.get("Members", []) if isinstance(collection, dict) else []
 
@@ -2180,18 +2215,7 @@ class ILOClient:
             option = self._safe_get(path)
             if not isinstance(option, dict):
                 continue
-            options.append(
-                {
-                    "path": path,
-                    "boot_option_reference": str(option.get("BootOptionReference") or ""),
-                    "display_name": str(option.get("DisplayName") or ""),
-                    "alias": str(option.get("Alias") or ""),
-                    "name": str(option.get("Name") or ""),
-                    "description": str(option.get("Description") or ""),
-                    "uefi_device_path": str(option.get("UefiDevicePath") or ""),
-                    "raw_error": str(option.get("@error") or ""),
-                }
-            )
+            options.append(self._summarize_boot_option({"@odata.id": path, **option}))
 
         oem_hpe = dict(((system.get("Oem") or {}).get("Hpe") or {})) if isinstance(system, dict) else {}
         return {
@@ -2207,6 +2231,7 @@ class ILOClient:
             "boot_options_count": len(options),
             "boot_options": options,
             "oem_hpe_keys": sorted(oem_hpe.keys()),
+            "oem_hpe_values": self._summarize_oem_scalars(oem_hpe),
         }
 
     def set_one_time_boot_cd(self, system_path: str | None = None) -> dict[str, Any]:
@@ -2223,14 +2248,33 @@ class ILOClient:
             "BootSourceOverrideEnabled": "Once",
             "BootSourceOverrideTarget": "Cd",
         }
-        selected_boot_option = self._find_virtual_cd_boot_option(before)
-        selected_boot_option_ref = str((selected_boot_option or {}).get("BootOptionReference") or "").strip()
+        selected_boot_option = self._find_virtual_cd_boot_option_in_options(
+            list(boot_inventory.get("boot_options") or [])
+        )
+        selected_boot_option_ref = str(
+            (selected_boot_option or {}).get("BootOptionReference")
+            or (selected_boot_option or {}).get("boot_option_reference")
+            or ""
+        ).strip()
+        selected_boot_option_target = str(
+            (selected_boot_option or {}).get("UefiDevicePath")
+            or (selected_boot_option or {}).get("uefi_device_path")
+            or selected_boot_option_ref
+        ).strip()
+        selection_reason = ""
         if selected_boot_option_ref:
             payload_boot = {
                 "BootSourceOverrideEnabled": "Once",
                 "BootSourceOverrideTarget": "UefiTarget",
-                "UefiTargetBootSourceOverride": selected_boot_option_ref,
+                "UefiTargetBootSourceOverride": selected_boot_option_target,
             }
+            selection_reason = f"Matched virtual-media UEFI boot option {selected_boot_option_ref}."
+        elif not str(boot_inventory.get("boot_options_path") or "").strip():
+            selection_reason = "System did not expose a Redfish BootOptions collection."
+        elif not int(boot_inventory.get("boot_options_count") or 0):
+            selection_reason = "Redfish BootOptions collection was present but empty."
+        else:
+            selection_reason = "BootOptions were exposed, but none looked like a virtual CD/DVD boot option."
         self._patch(system_path, {"Boot": payload_boot})
         after = self.get_system(system_path)
         after_boot = self._boot_override_snapshot(after)
@@ -2238,7 +2282,7 @@ class ILOClient:
             (
                 after_boot.get("target", "").strip().lower() == "uefitarget"
                 and selected_boot_option_ref
-                and after_boot.get("uefi_target", "").strip() == selected_boot_option_ref
+                and after_boot.get("uefi_target", "").strip() in {selected_boot_option_target, selected_boot_option_ref}
             )
             or self._boot_target_matches_cd(after_boot.get("target", ""))
         )
@@ -2258,6 +2302,10 @@ class ILOClient:
                 f"{selected_boot_option_ref} for virtual CD/DVD: "
                 f"{self._boot_option_text(selected_boot_option or {}) or '(unnamed option)'}."
             )
+            if selected_boot_option_target and selected_boot_option_target != selected_boot_option_ref:
+                notes.append(f"Using UEFI target override value: {selected_boot_option_target}.")
+        else:
+            notes.append(selection_reason)
         if matched:
             if after_boot.get("target", "").strip().lower() == "uefitarget" and selected_boot_option_ref:
                 notes.append("One-time boot override read back on the selected UEFI boot option.")
@@ -2276,6 +2324,8 @@ class ILOClient:
             "after_target": after_boot.get("target", ""),
             "after_uefi_target": after_boot.get("uefi_target", ""),
             "selected_boot_option_reference": selected_boot_option_ref,
+            "selected_uefi_target": selected_boot_option_target,
+            "boot_option_selection_reason": selection_reason,
             "boot_option_inventory": boot_inventory,
             "matched": matched,
             "notes": notes,

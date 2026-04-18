@@ -2500,8 +2500,48 @@ def test_run_esxi_real_builds_iso_and_starts_virtual_media_boot(monkeypatch, tmp
                 "system_path": system_path or "/redfish/v1/Systems/1",
                 "before_enabled": before["BootSourceOverrideEnabled"],
                 "before_target": before["BootSourceOverrideTarget"],
+                "before_uefi_target": "",
                 "after_enabled": after["BootSourceOverrideEnabled"],
-                "after_target": after["BootSourceOverrideTarget"],
+                "after_target": "UefiTarget",
+                "after_uefi_target": "Boot0009",
+                "selected_boot_option_reference": "Boot0009",
+                "boot_option_selection_reason": "Matched virtual-media UEFI boot option Boot0009.",
+                "boot_option_inventory": {
+                    "system_path": system_path or "/redfish/v1/Systems/1",
+                    "boot": {
+                        "enabled": "Disabled",
+                        "target": "None",
+                        "uefi_target": "",
+                        "boot_order": [],
+                        "boot_order_property_selection": "",
+                    },
+                    "boot_options_path": "/redfish/v1/Systems/1/BootOptions",
+                    "boot_options_count": 2,
+                    "boot_options": [
+                        {
+                            "path": "/redfish/v1/Systems/1/BootOptions/1",
+                            "boot_option_reference": "Boot0001",
+                            "display_name": "UEFI Hard Disk",
+                            "alias": "",
+                            "name": "",
+                            "description": "",
+                            "uefi_device_path": "",
+                            "raw_error": "",
+                        },
+                        {
+                            "path": "/redfish/v1/Systems/1/BootOptions/2",
+                            "boot_option_reference": "Boot0009",
+                            "display_name": "iLO Virtual CD/DVD ROM",
+                            "alias": "",
+                            "name": "",
+                            "description": "",
+                            "uefi_device_path": "",
+                            "raw_error": "",
+                        },
+                    ],
+                    "oem_hpe_keys": ["PostState"],
+                    "oem_hpe_values": {"PostState": "Off"},
+                },
                 "matched": True,
                 "notes": ["Verified one-time boot override."],
             }
@@ -2547,7 +2587,12 @@ def test_run_esxi_real_builds_iso_and_starts_virtual_media_boot(monkeypatch, tmp
     assert "[RUNNING] Setting one-time boot to CD/DVD" in joined_logs
     assert "[INFO] Boot override before: enabled=Disabled target=None" in joined_logs
     assert "[OK] One-time boot set to CD/DVD" in joined_logs
-    assert "[INFO] Boot override after: enabled=Once target=Cd" in joined_logs
+    assert "[INFO] Boot override after: enabled=Once target=UefiTarget" in joined_logs
+    assert "[INFO] BootOptions path: /redfish/v1/Systems/1/BootOptions" in joined_logs
+    assert "[INFO] BootOptions count: 2" in joined_logs
+    assert "[INFO] Matching UEFI virtual-media option: Boot0009" in joined_logs
+    assert "[INFO] HPE OEM boot keys: PostState" in joined_logs
+    assert "[INFO] HPE OEM boot values: PostState=Off" in joined_logs
     assert "[INFO] Boot override note: Verified one-time boot override." in joined_logs
     assert "[RUNNING] Powering server on" in joined_logs
     assert "[RUNNING] Waiting for ESXi management network on 10.10.8.10" in joined_logs
@@ -2584,6 +2629,12 @@ def test_run_esxi_real_builds_iso_and_starts_virtual_media_boot(monkeypatch, tmp
     assert summary["esxi_run_summary"]["builder_generation"]["boot_cfg"]["patched"] is True
     assert summary["esxi_run_summary"]["builder_self_check"]["output_boot_report"]["uefi_entry_present"] is True
     assert summary["esxi_run_summary"]["boot_override"]["matched"] is True
+    assert summary["esxi_run_summary"]["boot_override"]["selected_boot_option_reference"] == "Boot0009"
+    assert summary["esxi_run_summary"]["boot_override"]["boot_option_selection_reason"] == "Matched virtual-media UEFI boot option Boot0009."
+    assert summary["esxi_run_summary"]["boot_override"]["boot_option_inventory"]["boot_options_path"] == "/redfish/v1/Systems/1/BootOptions"
+    assert summary["esxi_run_summary"]["boot_override"]["boot_option_inventory"]["boot_options_count"] == 2
+    assert summary["esxi_run_summary"]["boot_override"]["boot_option_inventory"]["oem_hpe_keys"] == ["PostState"]
+    assert summary["esxi_run_summary"]["boot_override"]["boot_option_inventory"]["oem_hpe_values"]["PostState"] == "Off"
     assert summary["esxi_run_summary"]["boot_evidence"]["power_state"] == "On"
     assert summary["esxi_run_summary"]["boot_evidence"]["boot_progress_state"] == "OSBootStarted"
     assert summary["esxi_run_summary"]["virtual_media"]["insert_target"].endswith("VirtualMedia.InsertMedia")
@@ -3928,8 +3979,8 @@ def test_set_one_time_boot_cd_prefers_matching_uefi_boot_option(monkeypatch):
             "BootSourceOverrideEnabled": "Disabled",
             "BootSourceOverrideTarget": "None",
             "UefiTargetBootSourceOverride": "",
+            "BootOptions": {"@odata.id": "/redfish/v1/Systems/1/BootOptions"},
         },
-        "BootOptions": {"@odata.id": "/redfish/v1/Systems/1/BootOptions"},
     }
     boot_options = {
         "/redfish/v1/Systems/1/BootOptions": {
@@ -3945,6 +3996,7 @@ def test_set_one_time_boot_cd_prefers_matching_uefi_boot_option(monkeypatch):
         "/redfish/v1/Systems/1/BootOptions/2": {
             "BootOptionReference": "Boot0009",
             "DisplayName": "iLO Virtual CD/DVD ROM",
+            "UefiDevicePath": "PciRoot(0x0)/Pci(0x1C,0x4)/Pci(0x0,0x4)/USB(0x1,0x0)",
         },
     }
 
@@ -3964,9 +4016,43 @@ def test_set_one_time_boot_cd_prefers_matching_uefi_boot_option(monkeypatch):
     result = client.set_one_time_boot_cd("/redfish/v1/Systems/1")
 
     assert result["after_target"] == "UefiTarget"
-    assert result["after_uefi_target"] == "Boot0009"
+    assert result["after_uefi_target"] == "PciRoot(0x0)/Pci(0x1C,0x4)/Pci(0x0,0x4)/USB(0x1,0x0)"
     assert result["selected_boot_option_reference"] == "Boot0009"
+    assert result["selected_uefi_target"] == "PciRoot(0x0)/Pci(0x1C,0x4)/Pci(0x0,0x4)/USB(0x1,0x0)"
     assert result["matched"] is True
+
+
+def test_collect_boot_option_inventory_reads_boot_scoped_bootoptions(monkeypatch):
+    client = ILOClient(ILOConfig(host="10.0.0.1", username="Administrator", password="secret"))
+    system = {
+        "Boot": {
+            "BootSourceOverrideEnabled": "Disabled",
+            "BootSourceOverrideTarget": "None",
+            "UefiTargetBootSourceOverride": "None",
+            "BootOptions": {"@odata.id": "/redfish/v1/Systems/1/BootOptions"},
+        },
+        "Oem": {"Hpe": {"PostState": "PowerOff"}},
+    }
+    boot_options = {
+        "/redfish/v1/Systems/1/BootOptions": {
+            "Members": [{"@odata.id": "/redfish/v1/Systems/1/BootOptions/9"}],
+        },
+        "/redfish/v1/Systems/1/BootOptions/9": {
+            "BootOptionReference": "Boot0012",
+            "DisplayName": "iLO Virtual USB 3 : iLO Virtual CD-ROM",
+            "UefiDevicePath": "PciRoot(0x0)/Pci(0x1C,0x4)/Pci(0x0,0x4)/USB(0x1,0x0)",
+        },
+    }
+
+    monkeypatch.setattr(client, "get_system", lambda system_path=None: dict(system))
+    monkeypatch.setattr(client, "_safe_get", lambda path: dict(boot_options.get(path, {})))
+
+    result = client.collect_boot_option_inventory("/redfish/v1/Systems/1")
+
+    assert result["boot_options_path"] == "/redfish/v1/Systems/1/BootOptions"
+    assert result["boot_options_count"] == 1
+    assert result["boot_options"][0]["boot_option_reference"] == "Boot0012"
+    assert result["boot_options"][0]["uefi_device_path"] == "PciRoot(0x0)/Pci(0x1C,0x4)/Pci(0x0,0x4)/USB(0x1,0x0)"
 
 
 def test_set_one_time_boot_cd_records_empty_boot_option_inventory(monkeypatch):
@@ -4002,7 +4088,120 @@ def test_set_one_time_boot_cd_records_empty_boot_option_inventory(monkeypatch):
 
     assert result["selected_boot_option_reference"] == ""
     assert result["boot_option_inventory"]["boot_options_count"] == 0
+    assert result["boot_option_selection_reason"] == "System did not expose a Redfish BootOptions collection."
     assert result["after_target"] == "Cd"
+
+
+def test_run_esxi_real_persists_boot_option_fallback_reason(monkeypatch, tmp_path):
+    cfg = main.default_config()
+    cfg["site"]["name"] = "Real ESXi Boot Fallback Kit"
+    cfg["ilo"]["current_ip"] = "10.10.8.90"
+    cfg["ilo"]["host"] = "10.10.8.90"
+    cfg["ilo"]["username"] = "Administrator"
+    cfg["ilo"]["password"] = "secret"
+    cfg["esxi"]["hostname"] = "esxi-lab"
+    cfg["esxi"]["management_ip"] = "10.10.8.10"
+    cfg["esxi"]["subnet_mask"] = "255.255.255.0"
+    cfg["esxi"]["gateway"] = "10.10.8.1"
+    cfg["esxi"]["root_password"] = "esxisecret"
+
+    built_iso = tmp_path / "esxi-fallback.iso"
+    built_iso.write_text("iso", encoding="utf-8")
+
+    class FakeEsxiILOClient:
+        def __init__(self, cfg):
+            self.cfg = cfg
+            self.power_state = "Off"
+            self.boot_state = {
+                "Boot": {
+                    "BootSourceOverrideEnabled": "Disabled",
+                    "BootSourceOverrideTarget": "None",
+                }
+            }
+            self.virtual_media = {
+                "@odata.id": "/redfish/v1/Managers/1/VirtualMedia/2",
+                "Inserted": False,
+                "Image": "",
+                "MediaTypes": ["CD", "DVD"],
+                "Actions": {
+                    "#VirtualMedia.InsertMedia": {"target": "/redfish/v1/Managers/1/VirtualMedia/2/Actions/VirtualMedia.InsertMedia"},
+                },
+            }
+
+        def get_virtual_media(self):
+            return [dict(self.virtual_media)]
+
+        def eject_virtual_media(self, vm_path):
+            return None
+
+        def get_systems(self):
+            return ["/redfish/v1/Systems/1"]
+
+        def get_system(self, system_path):
+            return {
+                "PowerState": self.power_state,
+                "BootProgress": {"LastState": "OSBootStarted" if self.power_state == "On" else "None"},
+                "Oem": {"Hpe": {"PostState": "FinishedPost" if self.power_state == "On" else "Off"}},
+                **self.boot_state,
+            }
+
+        def power_reset(self, reset_type="ForceRestart", system_path=None):
+            if reset_type == "On":
+                self.power_state = "On"
+            return {"reset_type": reset_type, "system_path": system_path}
+
+        def _post(self, target, payload):
+            self.virtual_media["Inserted"] = True
+            self.virtual_media["Image"] = payload["Image"]
+            self.virtual_media["WriteProtected"] = True
+
+        def set_one_time_boot_cd(self, system_path=None):
+            return {
+                "system_path": system_path or "/redfish/v1/Systems/1",
+                "before_enabled": "Disabled",
+                "before_target": "None",
+                "before_uefi_target": "",
+                "after_enabled": "Once",
+                "after_target": "Cd",
+                "after_uefi_target": "",
+                "selected_boot_option_reference": "",
+                "boot_option_selection_reason": "System did not expose a Redfish BootOptions collection.",
+                "boot_option_inventory": {
+                    "system_path": system_path or "/redfish/v1/Systems/1",
+                    "boot": {
+                        "enabled": "Disabled",
+                        "target": "None",
+                        "uefi_target": "",
+                        "boot_order": [],
+                        "boot_order_property_selection": "",
+                    },
+                    "boot_options_path": "",
+                    "boot_options_count": 0,
+                    "boot_options": [],
+                    "oem_hpe_keys": [],
+                    "oem_hpe_values": {},
+                },
+                "matched": True,
+                "notes": ["One-time boot override read back exactly as requested."],
+            }
+
+    monkeypatch.setattr(main, "build_custom_iso", lambda spec: built_iso)
+    monkeypatch.setattr(main, "resolve_esxi_base_iso_path", lambda cfg_obj: main.Path("/tmp/base-esxi.iso"))
+    monkeypatch.setattr(main, "detect_public_base_url", lambda target_host="": "http://lab-builder.local:8000")
+    monkeypatch.setattr(main, "wait_for_esxi_management_ready", lambda host, **kwargs: {"host": host, "port": 443, "attempts": 1})
+    monkeypatch.setattr(main, "ILOClient", lambda cfg_obj: FakeEsxiILOClient(cfg_obj))
+
+    main.run_esxi_real(cfg, run_stamp="20260418-180000")
+    job = main.load_job("Real ESXi Boot Fallback Kit")
+    joined_logs = "\n".join(job["logs"])
+    summary = yaml.safe_load(main.Path(job["run_summary_path"]).read_text(encoding="utf-8"))
+
+    assert "[INFO] BootOptions path: (none)" in joined_logs
+    assert "[INFO] BootOptions count: 0" in joined_logs
+    assert "[INFO] Matching UEFI virtual-media option: (none)" in joined_logs
+    assert "[WARN] No concrete UEFI boot option was found; falling back to generic Cd (System did not expose a Redfish BootOptions collection.)" in joined_logs
+    assert summary["esxi_run_summary"]["boot_override"]["boot_option_selection_reason"] == "System did not expose a Redfish BootOptions collection."
+    assert summary["esxi_run_summary"]["boot_override"]["boot_option_inventory"]["boot_options_count"] == 0
 
 
 def test_harden_snmp_best_effort_reports_mismatch_when_readback_differs(monkeypatch):

@@ -6480,13 +6480,19 @@ def run_esxi_real(cfg: dict, run_stamp: str | None = None):
                 "Set boot override",
                 8,
                 total,
-                (
-                    "[INFO] Boot option inventory: "
-                    f"path={boot_inventory.get('boot_options_path') or '(none)'}, "
-                    f"count={boot_inventory.get('boot_options_count', 0)}"
-                ),
+                f"[INFO] BootOptions path: {boot_inventory.get('boot_options_path') or '(none)'}",
+            )
+            update_job(
+                kit_name,
+                job,
+                "Running",
+                "Set boot override",
+                8,
+                total,
+                f"[INFO] BootOptions count: {boot_inventory.get('boot_options_count', 0)}",
             )
             selected_ref = str(boot_override.get("selected_boot_option_reference") or "")
+            selected_target = str(boot_override.get("selected_uefi_target") or "")
             if selected_ref:
                 update_job(
                     kit_name,
@@ -6495,18 +6501,18 @@ def run_esxi_real(cfg: dict, run_stamp: str | None = None):
                     "Set boot override",
                     8,
                     total,
-                    f"[INFO] Selected concrete UEFI boot option: {selected_ref}",
+                    f"[INFO] Matching UEFI virtual-media option: {selected_ref}",
                 )
-            elif not boot_inventory.get("boot_options_count"):
-                update_job(
-                    kit_name,
-                    job,
-                    "Running",
-                    "Set boot override",
-                    8,
-                    total,
-                    "[WARN] No Redfish BootOptions were exposed for this system. Falling back to the generic CD/DVD boot target.",
-                )
+                if selected_target and selected_target != selected_ref:
+                    update_job(
+                        kit_name,
+                        job,
+                        "Running",
+                        "Set boot override",
+                        8,
+                        total,
+                        f"[INFO] UEFI target override value: {selected_target}",
+                    )
             else:
                 update_job(
                     kit_name,
@@ -6515,7 +6521,44 @@ def run_esxi_real(cfg: dict, run_stamp: str | None = None):
                     "Set boot override",
                     8,
                     total,
-                    "[WARN] No concrete virtual-media UEFI boot option was found. Falling back to the generic CD/DVD boot target.",
+                    "[INFO] Matching UEFI virtual-media option: (none)",
+                )
+                update_job(
+                    kit_name,
+                    job,
+                    "Running",
+                    "Set boot override",
+                    8,
+                    total,
+                    "[WARN] No concrete UEFI boot option was found; falling back to generic Cd"
+                    + (
+                        f" ({boot_override.get('boot_option_selection_reason')})"
+                        if boot_override.get("boot_option_selection_reason")
+                        else ""
+                    ),
+                )
+            oem_keys = list(boot_inventory.get("oem_hpe_keys") or [])
+            oem_values = dict(boot_inventory.get("oem_hpe_values") or {})
+            if oem_keys:
+                update_job(
+                    kit_name,
+                    job,
+                    "Running",
+                    "Set boot override",
+                    8,
+                    total,
+                    f"[INFO] HPE OEM boot keys: {', '.join(oem_keys)}",
+                )
+            if oem_values:
+                update_job(
+                    kit_name,
+                    job,
+                    "Running",
+                    "Set boot override",
+                    8,
+                    total,
+                    "[INFO] HPE OEM boot values: "
+                    + ", ".join(f"{key}={value}" for key, value in oem_values.items()),
                 )
         for note in boot_override.get("notes", []) or []:
             update_job(kit_name, job, "Running", "Set boot override", 8, total, f"[INFO] Boot override note: {note}")
