@@ -127,7 +127,7 @@ PAGE_META = {
 }
 
 STORAGE_APPROVAL_CONFIRM = "APPROVE STORAGE"
-RUN_CENTER_STAGE_KEYS = ["ilo", "esxi", "windows", "qnap", "iosafe", "cisco_switch"]
+RUN_CENTER_STAGE_KEYS = ["ilo", "storage", "esxi", "windows", "qnap", "iosafe", "cisco_switch"]
 
 
 def sanitize_kit_name(name: str) -> str:
@@ -323,6 +323,22 @@ def write_run_bundle_files(kit_name: str, job: dict[str, Any]) -> None:
             "dns_apply_status": str(job.get("dns_apply_status") or ""),
             "snmp_apply_status": str(job.get("snmp_apply_status") or ""),
             "local_account_status": str(job.get("local_account_status") or ""),
+        }
+    if job.get("esxi_install_values") or job.get("esxi_iso_path") or job.get("esxi_boot_override"):
+        summary_payload["esxi_run_summary"] = {
+            "install_values": dict(job.get("esxi_install_values") or {}),
+            "artifacts": {
+                "base_iso_path": str(job.get("esxi_base_iso_path") or ""),
+                "built_iso_path": str(job.get("esxi_iso_path") or ""),
+                "virtual_media_url": str(job.get("esxi_iso_url") or ""),
+                "trace_path": str(job.get("esxi_trace_path") or ""),
+                "builder_summary_path": str(job.get("esxi_builder_summary_path") or ""),
+            },
+            "builder_generation": dict(job.get("esxi_builder_generation") or {}),
+            "virtual_media": dict(job.get("esxi_virtual_media") or {}),
+            "boot_override": dict(job.get("esxi_boot_override") or {}),
+            "power_transitions": dict(job.get("esxi_power_transitions") or {}),
+            "management_network": dict(job.get("esxi_management_network") or {}),
         }
     summary_path.write_text(yaml.safe_dump(summary_payload, sort_keys=False), encoding="utf-8")
 
@@ -2193,6 +2209,15 @@ def build_execution_launch_options(cfg: dict[str, Any], scope: str) -> dict[str,
                 "summary": "Builds the custom ESXi installer ISO, mounts it through virtual media, sets one-time boot, and starts the real ESXi boot sequence.",
             },
         }
+    if scope == "storage":
+        return {
+            "preview": preview_option,
+            "real": {
+                "scope": "storage",
+                "label": "Run for real",
+                "summary": "Applies the approved storage plan to the current server using the exact approved discovery and plan artifacts.",
+            },
+        }
     return {"preview": preview_option, "real": None}
 
 
@@ -3439,7 +3464,8 @@ def run_storage_apply(
     apply_paths: dict[str, Path],
 ) -> None:
     kit_name = cfg["site"]["name"]
-    total_steps = 10
+    apply_steps = 10
+    total_steps = apply_steps
     job = {
         "status": "Running",
         "scope": f"storage-apply:{apply_mode}",
@@ -3496,7 +3522,7 @@ def run_storage_apply(
             apply_paths,
             "Validate controller and plan",
             0,
-            total_steps,
+            apply_steps,
             "running",
             "Validate controller and plan",
             targets={"controller": (plan.get("source_discovery", {}).get("controller", {}) or {}).get("name") or (plan.get("source_discovery", {}).get("controller", {}) or {}).get("model") or ""},
@@ -3512,7 +3538,7 @@ def run_storage_apply(
             apply_paths,
             "Validate controller and plan",
             1,
-            total_steps,
+            apply_steps,
             "ok",
             "Validate controller and plan",
             targets={"controller": apply_state["controller"].get("name") or apply_state["controller"].get("model") or ""},
@@ -3526,7 +3552,7 @@ def run_storage_apply(
             apply_paths,
             "Export pre-change storage",
             1,
-            total_steps,
+            apply_steps,
             "running",
             "Export pre-change storage",
             targets={"controller": apply_state["controller"].get("name") or apply_state["controller"].get("model") or ""},
@@ -3547,7 +3573,7 @@ def run_storage_apply(
             apply_paths,
             "Export pre-change storage",
             2,
-            total_steps,
+            apply_steps,
             "ok",
             "Export pre-change storage",
             targets={"controller": apply_state["controller"].get("name") or apply_state["controller"].get("model") or ""},
@@ -3563,7 +3589,7 @@ def run_storage_apply(
             apply_paths,
             "Choose storage apply path",
             3,
-            total_steps,
+            apply_steps,
             "ok",
             "Choose storage apply path",
             targets={"controller": apply_state["controller"].get("name") or apply_state["controller"].get("model") or "", "path": platform.get("settings_path", "")},
@@ -3582,7 +3608,7 @@ def run_storage_apply(
                 apply_state,
                 apply_paths,
                 current_step,
-                total_steps,
+                apply_steps,
             )
             apply_state["responses"].extend({"step": "platform_apply", "response": storage_apply_response_excerpt(item)} for item in responses)
             combined_response = {"responses": [storage_apply_response_excerpt(item) for item in responses]}
@@ -3596,7 +3622,7 @@ def run_storage_apply(
             apply_paths,
             "Poll controller/apply status",
             current_step,
-            total_steps,
+            apply_steps,
             "running",
             "Poll controller/apply status",
             targets={"controller": apply_state["controller"].get("name") or apply_state["controller"].get("model") or ""},
@@ -3609,7 +3635,7 @@ def run_storage_apply(
             apply_paths,
             "Record controller/apply response",
             current_step,
-            total_steps,
+            apply_steps,
             "ok",
             "Poll controller/apply status",
             targets={"controller": apply_state["controller"].get("name") or apply_state["controller"].get("model") or ""},
@@ -3633,7 +3659,7 @@ def run_storage_apply(
             apply_paths,
             "Determine whether reboot is required",
             current_step,
-            total_steps,
+            apply_steps,
             "ok",
             "Determine whether reboot is required",
             targets={"controller": apply_state["controller"].get("name") or apply_state["controller"].get("model") or ""},
@@ -3648,7 +3674,7 @@ def run_storage_apply(
             apply_paths,
             "Export post-change storage",
             current_step,
-            total_steps,
+            apply_steps,
             "running",
             "Export post-change storage",
             targets={"controller": apply_state["controller"].get("name") or apply_state["controller"].get("model") or ""},
@@ -3668,8 +3694,8 @@ def run_storage_apply(
             apply_state,
             apply_paths,
             "Export post-change storage",
-            total_steps,
-            total_steps,
+            apply_steps,
+            apply_steps,
             "ok",
             "Finished",
             targets={"controller": apply_state["controller"].get("name") or apply_state["controller"].get("model") or ""},
@@ -3683,10 +3709,10 @@ def run_storage_apply(
                 job,
                 "Staged",
                 "Reboot required",
-                total_steps,
-                total_steps,
+                apply_steps,
+                15,
                 f"[STAGED] Storage changes were staged via {apply_state.get('apply_path')}. Reboot is required before post-reboot validation can complete.",
-                progress_percent=storage_workflow_progress_percent("staged_reboot_required", total_steps, total_steps),
+                progress_percent=storage_workflow_progress_percent("staged_reboot_required", apply_steps, apply_steps),
             )
         else:
             update_job(
@@ -3694,10 +3720,10 @@ def run_storage_apply(
                 job,
                 "Completed",
                 "Finished",
-                total_steps,
-                total_steps,
+                apply_steps,
+                apply_steps,
                 f"[DONE] Storage apply finished via {apply_state.get('apply_path')}. reboot_required={apply_state.get('reboot_required')}",
-                progress_percent=storage_workflow_progress_percent("apply_complete", total_steps, total_steps),
+                progress_percent=storage_workflow_progress_percent("apply_complete", apply_steps, apply_steps),
             )
     except Exception as e:
         error_text = str(e).splitlines()[0]
@@ -3711,7 +3737,7 @@ def run_storage_apply(
             apply_paths,
             "Storage apply failed",
             job.get("completed_steps", 0),
-            total_steps,
+            apply_steps,
             "failed",
             "Storage apply failed",
             targets={"controller": apply_state.get("controller", {}).get("name") or apply_state.get("controller", {}).get("model") or ""},
@@ -3735,7 +3761,7 @@ def run_storage_apply(
                     apply_paths,
                     "Export post-change storage",
                     job.get("completed_steps", 0),
-                    total_steps,
+                    apply_steps,
                     "ok",
                     "Storage apply failed",
                     targets={"controller": apply_state.get("controller", {}).get("name") or apply_state.get("controller", {}).get("model") or ""},
@@ -3752,9 +3778,9 @@ def run_storage_apply(
             "Failed",
             "Storage apply failed",
             job.get("completed_steps", 0),
-            total_steps,
+            job.get("total_steps", apply_steps),
             f"[FAILED] Storage apply failed: {error_text}",
-            progress_percent=storage_workflow_progress_percent("apply_failed", job.get("completed_steps", 0), total_steps),
+            progress_percent=storage_workflow_progress_percent("apply_failed", job.get("completed_steps", 0), job.get("total_steps", apply_steps)),
         )
 
 
@@ -3964,7 +3990,7 @@ def run_storage_reboot(
             apply_paths["post_reboot_raw"],
             cfg,
             post_reboot_discovery,
-            host=active_host,
+            host=host,
         )
         validation = build_storage_reboot_validation(post_reboot_discovery, apply_state)
         reboot_state["validation"] = validation
@@ -4057,6 +4083,156 @@ def execute_storage_reboot_in_background(
         run_storage_reboot(cfg, discovery_raw_path, raid_plan_path, apply_paths)
     finally:
         append_storage_apply_history_snapshot(cfg)
+
+
+def watch_storage_manual_reboot_completion(
+    cfg: dict,
+    discovery_raw_path: str,
+    raid_plan_path: str,
+    apply_paths: dict[str, Path],
+    *,
+    reboot_start_timeout: int = 7200,
+    return_timeout: int = 1800,
+    poll_interval: int = 15,
+) -> None:
+    kit_name = cfg["site"]["name"]
+    try:
+        storage_target = resolve_storage_target_host(cfg)
+        storage_credentials = resolve_storage_target_credentials(cfg)
+        host = storage_target.get("resolved", "")
+        username = storage_credentials.get("username", "")
+        password = storage_credentials.get("password", "")
+        if not host or not username or not password:
+            return
+
+        client = ILOClient(ILOConfig(host=host, username=username, password=password, verify_tls=False, timeout=15))
+        system_path = client.get_systems()[0]
+        job = load_job(kit_name)
+
+        interruption_observed = False
+        start_deadline = time.time() + max(reboot_start_timeout, 1)
+        last_detail = ""
+        while time.time() < start_deadline:
+            apply_state = json.loads(apply_paths["apply_results"].read_text(encoding="utf-8")) if apply_paths["apply_results"].exists() else {}
+            if apply_state.get("workflow_state") != "staged_reboot_required" or apply_state.get("reboot_requested"):
+                return
+            try:
+                system = client.get_system(system_path)
+                power_state = str(system.get("PowerState") or "")
+                if power_state and power_state.lower() != "on":
+                    interruption_observed = True
+                    last_detail = f"Observed PowerState={power_state}."
+                    break
+            except Exception as e:
+                interruption_observed = True
+                last_detail = str(e).splitlines()[0]
+                break
+            time.sleep(max(poll_interval, 1))
+
+        if not interruption_observed:
+            return
+
+        apply_state["workflow_state"] = "waiting_for_server_return"
+        apply_state["reboot_status"] = "Waiting for server return"
+        apply_state["post_reboot_validation"] = "Pending manual reboot return"
+        save_storage_apply_state(apply_state, apply_paths)
+        update_job(
+            kit_name,
+            job,
+            "Running",
+            "Wait for server to return",
+            12,
+            max(job.get("total_steps", 15), 15),
+            f"[RUNNING] Manual reboot detected. Waiting for the server to return. {last_detail}",
+            progress_percent=storage_workflow_progress_percent("waiting_for_server_return", 2, 5),
+        )
+
+        return_deadline = time.time() + max(return_timeout, 1)
+        while time.time() < return_deadline:
+            apply_state = json.loads(apply_paths["apply_results"].read_text(encoding="utf-8")) if apply_paths["apply_results"].exists() else {}
+            if apply_state.get("reboot_requested"):
+                return
+            try:
+                client.get_summary()
+                break
+            except Exception as e:
+                last_detail = str(e).splitlines()[0]
+                time.sleep(max(poll_interval, 1))
+        else:
+            return
+
+        apply_state["workflow_state"] = "post_reboot_validation_pending"
+        apply_state["reboot_status"] = "Server returned"
+        apply_state["post_reboot_validation"] = "Capturing post-reboot storage discovery"
+        save_storage_apply_state(apply_state, apply_paths)
+        update_job(
+            kit_name,
+            job,
+            "Running",
+            "Export post-reboot storage",
+            14,
+            max(job.get("total_steps", 15), 15),
+            "[RUNNING] Server returned after manual reboot. Capturing post-reboot storage discovery.",
+            progress_percent=storage_workflow_progress_percent("post_reboot_validation_pending", 4, 5),
+        )
+
+        post_reboot_discovery = client.get_storage_discovery(deep_smart_storage_scan=False)
+        write_storage_discovery_snapshot_files(
+            apply_paths["post_reboot_summary"],
+            apply_paths["post_reboot_raw"],
+            cfg,
+            post_reboot_discovery,
+            host=host,
+        )
+        validation = build_storage_reboot_validation(post_reboot_discovery, apply_state)
+        reboot_state = {
+            "started_at": "",
+            "finished_at": time.strftime("%Y-%m-%d %H:%M:%S"),
+            "status": "Completed",
+            "requested": False,
+            "steps": [
+                {"step": "Detect manual reboot", "status": "ok", "details": {"detail": last_detail}},
+                {"step": "Wait for server to return", "status": "ok", "details": {"detail": f"Reconnected to {host}."}},
+            ],
+            "validation": validation,
+            "errors": [],
+            "mode": "manual_reboot_detected",
+        }
+        apply_state["status"] = "Completed"
+        apply_state["workflow_state"] = "post_reboot_validation_complete"
+        apply_state["reboot_status"] = "Completed"
+        apply_state["post_reboot_validation"] = "Complete"
+        apply_state["finished_at"] = time.strftime("%Y-%m-%d %H:%M:%S")
+        save_storage_apply_state(apply_state, apply_paths)
+        save_storage_reboot_state(reboot_state, apply_paths)
+        update_job(
+            kit_name,
+            job,
+            "Completed",
+            "Finished",
+            max(job.get("total_steps", 15), 15),
+            max(job.get("total_steps", 15), 15),
+            "[DONE] Manual reboot was detected and post-reboot storage validation completed.",
+            progress_percent=storage_workflow_progress_percent("post_reboot_validation_complete", 5, 5),
+        )
+        append_storage_apply_history_snapshot(cfg)
+        append_job_history_snapshot(cfg, "storage")
+    except Exception:
+        return
+
+
+def start_storage_manual_reboot_watch_background(
+    cfg: dict,
+    discovery_raw_path: str,
+    raid_plan_path: str,
+    apply_paths: dict[str, Path],
+) -> None:
+    thread = threading.Thread(
+        target=watch_storage_manual_reboot_completion,
+        args=(cfg, discovery_raw_path, raid_plan_path, apply_paths),
+        daemon=True,
+    )
+    thread.start()
 
 
 def start_storage_reboot_background(
@@ -4983,6 +5159,32 @@ def build_execution_review(cfg: dict, scope: str):
         },
     }
 
+    def build_storage_run_review() -> dict[str, Any]:
+        approval = storage_review.get("approval", {}) or {}
+        plan_summary = approval.get("plan_summary", {}) or {}
+        plan_path = str(approval.get("plan_path") or "")
+        discovery_raw_path = str(approval.get("discovery_raw_path") or "")
+        apply_mode = str(plan_summary.get("mode") or "")
+        if not apply_mode and plan_path:
+            try:
+                stored_plan, _plan_paths = load_storage_plan_artifact(plan_path)
+                apply_mode = storage_apply_mode_for_plan(stored_plan)
+            except Exception:
+                apply_mode = ""
+        mode_label = apply_mode.replace("_", " ") if apply_mode else "Not set"
+        return {
+            "approved_host": str(approval.get("host") or ""),
+            "plan_path": plan_path,
+            "discovery_raw_path": discovery_raw_path,
+            "apply_mode": apply_mode,
+            "apply_mode_label": mode_label,
+            "reboot_expected": bool(approval.get("reboot_expected")),
+            "controller": str(plan_summary.get("controller") or ""),
+            "os_bays": str(plan_summary.get("os_bays") or ""),
+            "data_bays": str(plan_summary.get("data_bays") or ""),
+            "spare_bay": str(plan_summary.get("spare_bay") or ""),
+        }
+
     def stage_state(key: str, included: bool) -> tuple[str, str, str, str | None]:
         if not included:
             return "not_included", "Not included", "progress", "This stage is not part of the selected run."
@@ -5292,6 +5494,7 @@ def build_execution_review(cfg: dict, scope: str):
         "selected_scopes_for_form": ["included"] if scope == "included" else selected_scope_keys or ([scope] if scope else ["included"]),
         "execution_mode": execution_mode,
         "esxi_install_review": esxi_install_review,
+        "storage_run_review": build_storage_run_review() if any(stage["key"] == "storage" and stage["included"] for stage in included_stages) or scope == "storage" else {},
         "execution_mode_rows": [
             {"label": "Mode", "value": execution_mode["badge"]},
             {"label": "What this does", "value": execution_mode["what_this_does"]},
@@ -5402,6 +5605,19 @@ def validate_execution_scope(cfg: dict, scope: str) -> None:
         selected = run_center_scope_keys(scope, cfg)
         if "ilo" in selected:
             validate_storage_ready_for_ilo_run(cfg)
+        if "storage" in selected:
+            storage_review = build_storage_review_context(cfg)
+            if storage_review.get("stale"):
+                raise ValueError("The approved storage plan is stale and must be reviewed again before a storage run.")
+            if not storage_review.get("approved"):
+                raise ValueError("No approved storage plan is saved for this kit.")
+        return
+    if scope == "storage":
+        storage_review = build_storage_review_context(cfg)
+        if storage_review.get("stale"):
+            raise ValueError("The approved storage plan is stale and must be reviewed again before a storage run.")
+        if not storage_review.get("approved"):
+            raise ValueError("No approved storage plan is saved for this kit.")
         return
     if scope not in {"ilo", "included"}:
         return
@@ -5563,6 +5779,26 @@ def execute_real_job_in_background(cfg: dict, scope: str):
     try:
         if scope == "ilo":
             run_ilo_real(cfg)
+        elif scope == "storage":
+            storage_execution = validate_storage_ready_for_ilo_run(cfg)
+            discovery_raw_path = str(storage_execution.get("discovery_raw_path") or "")
+            raid_plan_path = str(storage_execution.get("plan_path") or "")
+            if not discovery_raw_path or not raid_plan_path:
+                raise RuntimeError("Approved storage artifacts are missing for the real storage run.")
+            _discovery, _discovery_paths, plan, plan_paths = restore_storage_page_state(
+                discovery_raw_path=discovery_raw_path,
+                raid_plan_path=raid_plan_path,
+                expected_host=str(storage_execution.get("approved_host") or ""),
+            )
+            if not plan_paths:
+                raise RuntimeError("Approved storage plan artifact is missing for the real storage run.")
+            apply_mode = storage_apply_mode_for_plan(plan)
+            apply_paths = initialize_storage_apply_artifacts(cfg, plan, plan_paths)
+            run_storage_apply(cfg, discovery_raw_path, raid_plan_path, apply_mode, apply_paths)
+            workflow_state = load_storage_workflow_state(apply_paths)
+            apply_state = (workflow_state.get("apply", {}) if workflow_state else {}) or {}
+            if apply_state.get("workflow_state") == "staged_reboot_required" and not apply_state.get("reboot_requested"):
+                start_storage_manual_reboot_watch_background(cfg, discovery_raw_path, raid_plan_path, apply_paths)
         elif scope == "esxi":
             run_esxi_real(cfg, run_stamp=str((cfg.get("_runtime", {}) or {}).get("esxi_run_stamp") or "").strip() or None)
         else:
@@ -5760,6 +5996,14 @@ def run_esxi_real(cfg: dict, run_stamp: str | None = None):
         "esxi_iso_path": "",
         "esxi_iso_url": "",
         "esxi_trace_path": "",
+        "esxi_base_iso_path": "",
+        "esxi_builder_summary_path": "",
+        "esxi_builder_generation": {},
+        "esxi_install_values": {},
+        "esxi_virtual_media": {},
+        "esxi_boot_override": {},
+        "esxi_power_transitions": {},
+        "esxi_management_network": {},
     }
     job = carry_forward_job_bundle_metadata(kit_name, job)
     save_job(kit_name, job)
@@ -5817,6 +6061,8 @@ def run_esxi_real(cfg: dict, run_stamp: str | None = None):
             },
             "steps": [],
         }
+        job["esxi_install_values"] = dict(trace_payload["install_values"])
+        job["esxi_base_iso_path"] = str(esxi_review.get("base_iso_path") or "")
         job["esxi_trace_path"] = str(trace_path)
         save_job(kit_name, job)
         save_esxi_trace(trace_path, trace_payload)
@@ -5902,6 +6148,9 @@ def run_esxi_real(cfg: dict, run_stamp: str | None = None):
                 build_summary = {}
             trace_payload["builder_summary_path"] = str(build_summary_path)
             trace_payload["builder_summary"] = build_summary
+            job["esxi_builder_summary_path"] = str(build_summary_path)
+            job["esxi_builder_generation"] = dict(build_summary.get("generation", {}) or {})
+            save_job(kit_name, job)
             save_esxi_trace(trace_path, trace_payload)
             generation = build_summary.get("generation", {}) or {}
             if (generation.get("ks_cfg", {}) or {}).get("generated"):
@@ -5942,6 +6191,13 @@ def run_esxi_real(cfg: dict, run_stamp: str | None = None):
         insert_target = ((vm.get("Actions") or {}).get("#VirtualMedia.InsertMedia") or {}).get("target")
         if not insert_target:
             raise ILOError("No InsertMedia action was found on the selected virtual media device.")
+        job["esxi_virtual_media"] = {
+            "device_path": str(vm.get("@odata.id") or ""),
+            "insert_target": str(insert_target or ""),
+            "initial_inserted": bool(vm.get("Inserted")),
+            "initial_image": str(vm.get("Image") or ""),
+        }
+        save_job(kit_name, job)
         update_job(kit_name, job, "Running", "Mount ISO", 6, total, "[RUNNING] Mounting custom ESXi ISO")
         trace_payload["steps"].append({"stage": "mount_virtual_media", "status": "running", "target": insert_target, "image": iso_url})
         save_esxi_trace(trace_path, trace_payload)
@@ -5956,6 +6212,8 @@ def run_esxi_real(cfg: dict, run_stamp: str | None = None):
         before_target = boot_override.get("before_target") or "(empty)"
         after_enabled = boot_override.get("after_enabled") or "(empty)"
         after_target = boot_override.get("after_target") or "(empty)"
+        job["esxi_boot_override"] = dict(boot_override)
+        save_job(kit_name, job)
         update_job(kit_name, job, "Running", "Set boot override", 8, total, f"[INFO] Boot override before: enabled={before_enabled} target={before_target}")
         if boot_override.get("matched"):
             update_job(kit_name, job, "Running", "Set boot override", 8, total, "[OK] One-time boot set to CD/DVD")
@@ -5994,10 +6252,21 @@ def run_esxi_real(cfg: dict, run_stamp: str | None = None):
 
         update_job(kit_name, job, "Running", "Power on", 9, total, "[RUNNING] Powering server on")
         trace_payload["steps"].append({"stage": "power_on", "status": "running", "system_path": system_path})
+        job["esxi_power_transitions"] = {
+            **dict(job.get("esxi_power_transitions") or {}),
+            "power_off_confirmed": True,
+            "power_on_requested": True,
+        }
+        save_job(kit_name, job)
         save_esxi_trace(trace_path, trace_payload)
         client.power_reset(reset_type="On", system_path=system_path)
         update_job(kit_name, job, "Running", "Wait for server power", 10, total, "[RUNNING] Waiting for the server to power back on")
         wait_for_power_state(client, "On", timeout_seconds=300, poll_interval=5)
+        job["esxi_power_transitions"] = {
+            **dict(job.get("esxi_power_transitions") or {}),
+            "power_on_confirmed": True,
+        }
+        save_job(kit_name, job)
         update_job(kit_name, job, "Running", "Wait for server power", 11, total, "[OK] Server powered back on")
 
         update_job(
@@ -6010,6 +6279,8 @@ def run_esxi_real(cfg: dict, run_stamp: str | None = None):
             f"[RUNNING] Waiting for ESXi management network on {management_ip}",
         )
         ready_result = wait_for_esxi_management_ready(management_ip)
+        job["esxi_management_network"] = dict(ready_result or {})
+        save_job(kit_name, job)
         trace_payload["result"] = {
             "status": "Completed",
             "management_ready": ready_result,
@@ -9214,6 +9485,8 @@ async def execute_scope(
     msg = "Execution started."
     if scope == "ilo":
         msg = "Real iLO automation started in the background. Check Job Monitor for live progress and logs."
+    elif scope == "storage":
+        msg = "Real storage automation started in the background. Check Job Monitor for live progress and logs."
     elif scope == "esxi":
         msg = "Real ESXi automation started in the background. Check Job Monitor for live progress and logs."
     else:

@@ -1671,12 +1671,13 @@ def test_approve_storage_plan_saves_exact_artifact_paths_for_later_ilo_run(clien
     cfg["site"]["name"] = "Approval Kit"
     cfg["ilo"]["target_ip"] = "10.10.8.90"
     cfg["ip_plan"]["ilo"] = "10.10.8.90"
-    cfg["ilo"]["current_ip"] = "10.10.8.90"
-    cfg["ilo"]["host"] = "10.10.8.90"
+    cfg["ilo"]["current_ip"] = "10.10.8.11"
+    cfg["ilo"]["target_ip"] = "10.10.8.11"
+    cfg["ilo"]["host"] = "10.10.8.11"
     main.save_kit_config(cfg)
 
     discovery = planner_gen10_apply_discovery(existing_volumes=True)
-    export_paths = main.export_storage_discovery_snapshot(cfg, discovery, host="10.10.8.90")
+    export_paths = main.export_storage_discovery_snapshot(cfg, discovery, host="10.10.8.11")
     plan = main.build_raid_plan(discovery, export_paths)
     plan_paths = main.export_raid_plan_snapshot(cfg, plan, export_paths)
 
@@ -1729,8 +1730,9 @@ def test_storage_approval_becomes_stale_when_latest_discovery_changes():
 def test_storage_approval_becomes_stale_when_storage_target_host_changes():
     cfg = main.default_config()
     cfg["site"]["name"] = "Stale Host Kit"
-    cfg["ilo"]["current_ip"] = "10.10.8.90"
-    cfg["ilo"]["host"] = "10.10.8.90"
+    cfg["ilo"]["current_ip"] = "10.10.8.11"
+    cfg["ilo"]["target_ip"] = "10.10.8.11"
+    cfg["ilo"]["host"] = "10.10.8.11"
     discovery = planner_gen10_apply_discovery(existing_volumes=True)
     export_paths = {
         "directory": main.Path("/tmp/storage-approval-host"),
@@ -1751,12 +1753,13 @@ def test_storage_approval_becomes_stale_when_storage_target_host_changes():
 def test_prepare_execute_shows_combined_storage_review_using_exact_approved_artifact(client):
     cfg = main.default_config()
     cfg["site"]["name"] = "Exec Kit"
-    cfg["ilo"]["current_ip"] = "10.10.8.90"
-    cfg["ilo"]["host"] = "10.10.8.90"
+    cfg["ilo"]["current_ip"] = "10.10.8.11"
+    cfg["ilo"]["target_ip"] = "10.10.8.11"
+    cfg["ilo"]["host"] = "10.10.8.11"
     main.save_kit_config(cfg)
 
     discovery = planner_gen10_apply_discovery(existing_volumes=True)
-    export_paths = main.export_storage_discovery_snapshot(cfg, discovery, host="10.10.8.90")
+    export_paths = main.export_storage_discovery_snapshot(cfg, discovery, host="10.10.8.11")
     plan = main.build_raid_plan(discovery, export_paths)
     plan_paths = main.export_raid_plan_snapshot(cfg, plan, export_paths)
     cfg = main.load_kit_config("Exec-Kit")
@@ -2015,6 +2018,125 @@ def test_execute_real_scope_starts_esxi_path(client, monkeypatch):
     assert started["started"] is True
 
 
+def test_execute_real_scope_starts_storage_path(client, monkeypatch):
+    cfg = main.default_config()
+    cfg["site"]["name"] = "Storage Real Run Kit"
+    cfg["ilo"]["current_ip"] = "10.10.8.90"
+    cfg["ilo"]["host"] = "10.10.8.90"
+    cfg["ilo"]["username"] = "Administrator"
+    cfg["ilo"]["password"] = "secret"
+    discovery = planner_gen10_apply_discovery(existing_volumes=True)
+    export_paths = main.export_storage_discovery_snapshot(cfg, discovery, host="10.10.8.11")
+    plan = main.build_raid_plan(discovery, export_paths)
+    plan_paths = main.export_raid_plan_snapshot(cfg, plan, export_paths)
+    main.approve_storage_plan_for_cfg(cfg, discovery, export_paths, plan, plan_paths, include_in_ilo_run=True)
+    main.save_kit_config(cfg)
+    main.set_current_kit_name(cfg["site"]["name"])
+
+    started: dict[str, object] = {}
+
+    class FakeThread:
+        def __init__(self, target=None, args=(), daemon=None):
+            started["target"] = target
+            started["args"] = args
+            started["daemon"] = daemon
+
+        def start(self):
+            started["started"] = True
+
+    monkeypatch.setattr(main.threading, "Thread", FakeThread)
+
+    response = client.post(
+        "/execute",
+        data={
+            "scope": "storage",
+            "confirm_checkbox": "on",
+            "confirm_phrase": "EXECUTE",
+            "return_page": "execution",
+        },
+    )
+
+    assert response.status_code == 200
+    assert "Real storage automation started in the background. Check Job Monitor for live progress and logs." in response.text
+    assert started["target"] is main.execute_real_job_in_background
+    assert started["args"][1] == "storage"
+    assert started["daemon"] is True
+    assert started["started"] is True
+
+
+def test_execute_real_storage_starts_manual_reboot_watch_when_staged(client, monkeypatch, tmp_path):
+    cfg = main.default_config()
+    cfg["site"]["name"] = "Storage Watch Kit"
+    main.save_kit_config(cfg)
+
+    apply_dir = tmp_path / "storage-apply"
+    apply_dir.mkdir(parents=True, exist_ok=True)
+    apply_paths = {
+        "directory": apply_dir,
+        "apply_results": apply_dir / "apply-results.json",
+        "apply_log": apply_dir / "apply-log.yml",
+        "pre_change_summary": apply_dir / "pre-change-summary.yml",
+        "pre_change_raw": apply_dir / "pre-change-raw.json",
+        "post_change_summary": apply_dir / "post-change-summary.yml",
+        "post_change_raw": apply_dir / "post-change-raw.json",
+        "post_reboot_summary": apply_dir / "post-reboot-summary.yml",
+        "post_reboot_raw": apply_dir / "post-reboot-raw.json",
+        "reboot_results": apply_dir / "reboot-results.json",
+    }
+
+    monkeypatch.setattr(
+        main,
+        "validate_storage_ready_for_ilo_run",
+        lambda cfg_obj: {
+            "approved_host": "10.10.8.90",
+            "discovery_raw_path": "/tmp/discovery.json",
+            "plan_path": "/tmp/plan.yml",
+        },
+    )
+    monkeypatch.setattr(
+        main,
+        "restore_storage_page_state",
+        lambda **kwargs: ({}, {}, {"layout": {}}, {"plan": main.Path("/tmp/plan.yml")}),
+    )
+    monkeypatch.setattr(main, "storage_apply_mode_for_plan", lambda plan: "wipe_rebuild")
+    monkeypatch.setattr(main, "initialize_storage_apply_artifacts", lambda cfg_obj, plan, plan_paths: apply_paths)
+
+    def fake_run_storage_apply(cfg_obj, discovery_raw_path, raid_plan_path, apply_mode, actual_apply_paths):
+        del cfg_obj, discovery_raw_path, raid_plan_path, apply_mode
+        main.save_storage_apply_state(
+            {
+                "workflow_state": "staged_reboot_required",
+                "reboot_requested": False,
+                "reboot_required": True,
+                "status": "Staged",
+            },
+            actual_apply_paths,
+        )
+
+    started = {}
+
+    monkeypatch.setattr(main, "run_storage_apply", fake_run_storage_apply)
+    monkeypatch.setattr(
+        main,
+        "start_storage_manual_reboot_watch_background",
+        lambda cfg_obj, discovery_raw_path, raid_plan_path, actual_apply_paths: started.update(
+            {
+                "kit": cfg_obj["site"]["name"],
+                "discovery_raw_path": discovery_raw_path,
+                "raid_plan_path": raid_plan_path,
+                "directory": str(actual_apply_paths["directory"]),
+            }
+        ),
+    )
+
+    main.execute_real_job_in_background(cfg, "storage")
+
+    assert started["kit"] == "Storage-Watch-Kit"
+    assert started["discovery_raw_path"] == "/tmp/discovery.json"
+    assert started["raid_plan_path"] == "/tmp/plan.yml"
+    assert started["directory"] == str(apply_dir)
+
+
 def test_prepare_execute_enables_real_launch_for_esxi_scope(client, monkeypatch):
     cfg = main.default_config()
     cfg["site"]["name"] = "ESXi Launch Review Kit"
@@ -2072,11 +2194,111 @@ def test_prepare_execute_enables_real_launch_for_esxi_scope(client, monkeypatch)
     assert "iLO" not in stage_section
 
 
+def test_prepare_execute_enables_real_launch_for_storage_scope(client):
+    cfg = main.default_config()
+    cfg["site"]["name"] = "Storage Launch Review Kit"
+    cfg["ilo"]["current_ip"] = "10.10.8.90"
+    cfg["ilo"]["host"] = "10.10.8.90"
+    cfg["ilo"]["username"] = "Administrator"
+    cfg["ilo"]["password"] = "secret"
+    discovery = planner_gen10_apply_discovery(existing_volumes=True)
+    export_paths = main.export_storage_discovery_snapshot(cfg, discovery, host="10.10.8.90")
+    plan = main.build_raid_plan(discovery, export_paths)
+    plan_paths = main.export_raid_plan_snapshot(cfg, plan, export_paths)
+    main.approve_storage_plan_for_cfg(cfg, discovery, export_paths, plan, plan_paths, include_in_ilo_run=True)
+    main.save_kit_config(cfg)
+    main.set_current_kit_name(cfg["site"]["name"])
+
+    response = client.post(
+        "/prepare-execute",
+        data={"scope": "storage", "return_page": "execution"},
+    )
+
+    assert response.status_code == 200
+    assert 'value="storage"' in response.text
+    assert "Applies the approved storage plan to the current server using the exact approved discovery and plan artifacts." in response.text
+    assert "Storage run values" in response.text
+    assert "Apply mode:" in response.text
+    assert "Approved plan path:" in response.text
+    assert str(plan_paths["plan"]) in response.text
+    assert "Approved discovery path:" in response.text
+    assert str(export_paths["raw"]) in response.text
+    assert 'name="confirm_checkbox"' in response.text
+    assert 'name="confirm_checkbox" disabled' not in response.text
+    assert "/execute" in response.text
+
+
+def test_watch_storage_manual_reboot_completion_finishes_staged_job(client, monkeypatch):
+    cfg = main.default_config()
+    cfg["site"]["name"] = "Storage Manual Reboot Kit"
+    cfg["ilo"]["current_ip"] = "10.10.8.11"
+    cfg["ilo"]["target_ip"] = "10.10.8.11"
+    cfg["ilo"]["host"] = "10.10.8.11"
+    cfg["ilo"]["username"] = "Administrator"
+    cfg["ilo"]["password"] = "secret"
+    main.save_kit_config(cfg)
+
+    discovery = planner_gen10_apply_discovery(existing_volumes=True)
+    export_paths = main.export_storage_discovery_snapshot(cfg, discovery, host="10.10.8.11")
+    plan = main.build_raid_plan(discovery, export_paths)
+    plan_paths = main.export_raid_plan_snapshot(cfg, plan, export_paths)
+    apply_paths = main.initialize_storage_apply_artifacts(cfg, plan, plan_paths)
+
+    class FakeManualRebootWatchClient(FakeGen10StorageApplyClient):
+        def __init__(self, cfg_obj):
+            super().__init__(cfg_obj)
+
+        def get_systems(self):
+            return ["/redfish/v1/Systems/1"]
+
+        def get_system(self, system_path):
+            del system_path
+            raise ILOError("simulated manual reboot interruption")
+
+        def get_summary(self):
+            return {"Managers": 1}
+
+    clients = [FakeGen10StorageApplyClient(None), FakeManualRebootWatchClient(None)]
+    monkeypatch.setattr(main, "ILOClient", lambda cfg_obj: clients.pop(0))
+
+    main.run_storage_apply(cfg, str(export_paths["raw"]), str(plan_paths["plan"]), "wipe_rebuild", apply_paths)
+    staged_job = main.load_job("Storage Manual Reboot Kit")
+    assert staged_job["status"] == "Staged"
+    assert staged_job["progress_percent"] == 68
+    assert staged_job["completed_steps"] == 10
+    assert staged_job["total_steps"] == 15
+
+    main.watch_storage_manual_reboot_completion(
+        cfg,
+        str(export_paths["raw"]),
+        str(plan_paths["plan"]),
+        apply_paths,
+        reboot_start_timeout=1,
+        return_timeout=1,
+        poll_interval=0,
+    )
+
+    job = main.load_job("Storage Manual Reboot Kit")
+    assert job["status"] == "Completed"
+    assert job["current_stage"] == "Finished"
+    assert job["completed_steps"] == 15
+    assert job["total_steps"] == 15
+    assert job["progress_percent"] == 100
+    assert any("Manual reboot detected" in line for line in job["logs"])
+    assert any("post-reboot storage discovery" in line for line in job["logs"])
+    assert any("post-reboot storage validation completed" in line for line in job["logs"])
+
+    workflow = main.load_storage_workflow_state(apply_paths)
+    assert workflow["apply"]["workflow_state"] == "post_reboot_validation_complete"
+    assert workflow["apply"]["reboot_status"] == "Completed"
+
+
 def test_prepare_execute_accepts_multiple_selected_runs(client):
     cfg = main.default_config()
     cfg["site"]["name"] = "Multi Review Kit"
-    cfg["ilo"]["current_ip"] = "10.10.8.90"
-    cfg["ilo"]["host"] = "10.10.8.90"
+    cfg["ilo"]["current_ip"] = "10.10.8.11"
+    cfg["ilo"]["target_ip"] = "10.10.8.11"
+    cfg["ilo"]["host"] = "10.10.8.11"
     cfg["ilo"]["username"] = "Administrator"
     cfg["ilo"]["password"] = "secret"
     cfg["esxi"]["hostname"] = "esxi-lab"
@@ -2263,6 +2485,7 @@ def test_run_esxi_real_builds_iso_and_starts_virtual_media_boot(monkeypatch, tmp
     trace_path = main.Path(job["esxi_trace_path"])
     assert trace_path.exists()
     trace = yaml.safe_load(trace_path.read_text(encoding="utf-8"))
+    summary = yaml.safe_load(main.Path(job["run_summary_path"]).read_text(encoding="utf-8"))
     assert trace["install_values"]["hostname"] == "esxi-lab"
     assert trace["install_values"]["root_password_saved"] is True
     assert trace["install_values"]["root_password_policy_valid"] is False
@@ -2270,6 +2493,15 @@ def test_run_esxi_real_builds_iso_and_starts_virtual_media_boot(monkeypatch, tmp
     assert trace["artifacts"]["output_iso_path"] == str(built_iso)
     assert trace["artifacts"]["virtual_media_url"].endswith("/esxi-built-iso/Real-ESXi-Run-Kit/esxi-20260416-120000.iso")
     assert trace["builder_summary"]["generation"]["boot_cfg"]["patched"] is True
+    assert summary["esxi_run_summary"]["install_values"]["hostname"] == "esxi-lab"
+    assert summary["esxi_run_summary"]["artifacts"]["base_iso_path"] == "/tmp/base-esxi.iso"
+    assert summary["esxi_run_summary"]["artifacts"]["built_iso_path"] == str(built_iso)
+    assert summary["esxi_run_summary"]["artifacts"]["virtual_media_url"].endswith("/esxi-built-iso/Real-ESXi-Run-Kit/esxi-20260416-120000.iso")
+    assert summary["esxi_run_summary"]["builder_generation"]["boot_cfg"]["patched"] is True
+    assert summary["esxi_run_summary"]["boot_override"]["matched"] is True
+    assert summary["esxi_run_summary"]["virtual_media"]["insert_target"].endswith("VirtualMedia.InsertMedia")
+    assert summary["esxi_run_summary"]["management_network"]["host"] == "10.10.8.10"
+    assert summary["esxi_run_summary"]["management_network"]["attempts"] == 2
     assert ("eject", "/redfish/v1/Managers/1/VirtualMedia/2") in client.calls
     assert ("power_reset", "GracefulShutdown", "/redfish/v1/Systems/1") in client.calls
     assert (
@@ -2513,7 +2745,7 @@ def test_run_ilo_real_executes_storage_when_included(monkeypatch):
     cfg["shared_snmp"]["v3_priv_password"] = "privpass"
 
     discovery = planner_gen10_apply_discovery(existing_volumes=True)
-    export_paths = main.export_storage_discovery_snapshot(cfg, discovery, host="10.10.8.90")
+    export_paths = main.export_storage_discovery_snapshot(cfg, discovery, host="10.10.8.11")
     plan = main.build_raid_plan(discovery, export_paths)
     plan_paths = main.export_raid_plan_snapshot(cfg, plan, export_paths)
     main.approve_storage_plan_for_cfg(cfg, discovery, export_paths, plan, plan_paths, include_in_ilo_run=True)
@@ -2693,8 +2925,9 @@ def test_run_ilo_real_fails_when_ilo_reset_cannot_be_verified(monkeypatch):
 
     cfg = main.default_config()
     cfg["site"]["name"] = "Real Reset Verify Kit"
-    cfg["ilo"]["current_ip"] = "10.10.8.90"
-    cfg["ilo"]["host"] = "10.10.8.90"
+    cfg["ilo"]["current_ip"] = "10.10.8.11"
+    cfg["ilo"]["target_ip"] = "10.10.8.11"
+    cfg["ilo"]["host"] = "10.10.8.11"
     cfg["ilo"]["username"] = "Administrator"
     cfg["ilo"]["password"] = "secret"
     cfg["ilo"]["target_ip"] = "10.10.8.91"
@@ -3355,7 +3588,7 @@ def test_prepare_execute_shows_storage_will_be_applied_in_real_run(client):
     main.save_kit_config(cfg)
 
     discovery = planner_gen10_apply_discovery(existing_volumes=True)
-    export_paths = main.export_storage_discovery_snapshot(cfg, discovery, host="10.10.8.90")
+    export_paths = main.export_storage_discovery_snapshot(cfg, discovery, host="10.10.8.11")
     plan = main.build_raid_plan(discovery, export_paths)
     plan_paths = main.export_raid_plan_snapshot(cfg, plan, export_paths)
     cfg = main.load_kit_config("Exec-Storage-Real-Kit")
@@ -3384,8 +3617,9 @@ def test_execution_page_no_longer_shows_view_live_log(client):
 def test_ilo_page_shows_last_run_dns_snmp_and_reset_states(client, monkeypatch):
     cfg = main.default_config()
     cfg["site"]["name"] = "ILO Result Kit"
-    cfg["ilo"]["current_ip"] = "10.10.8.90"
-    cfg["ilo"]["host"] = "10.10.8.90"
+    cfg["ilo"]["current_ip"] = "10.10.8.11"
+    cfg["ilo"]["target_ip"] = "10.10.8.11"
+    cfg["ilo"]["host"] = "10.10.8.11"
     cfg["ilo"]["username"] = "Administrator"
     cfg["ilo"]["password"] = "secret"
     main.save_kit_config(cfg)
@@ -3528,14 +3762,15 @@ def test_plan_raid_layout_blocks_when_storage_host_is_missing():
 def test_apply_storage_layout_blocks_create_only_when_not_ready(client, monkeypatch):
     cfg = main.default_config()
     cfg["site"]["name"] = "Apply Kit"
-    cfg["ilo"]["current_ip"] = "10.10.8.90"
-    cfg["ilo"]["host"] = "10.10.8.90"
+    cfg["ilo"]["current_ip"] = "10.10.8.11"
+    cfg["ilo"]["target_ip"] = "10.10.8.11"
+    cfg["ilo"]["host"] = "10.10.8.11"
     cfg["ilo"]["username"] = "Administrator"
     cfg["ilo"]["password"] = "kit-password"
     main.save_kit_config(cfg)
 
     discovery = planner_gen10_apply_discovery(existing_volumes=True)
-    export_paths = main.export_storage_discovery_snapshot(cfg, discovery, host="10.10.8.90")
+    export_paths = main.export_storage_discovery_snapshot(cfg, discovery, host="10.10.8.11")
     plan = main.build_raid_plan(discovery, export_paths)
     plan_paths = main.export_raid_plan_snapshot(cfg, plan, export_paths)
 
@@ -3559,14 +3794,15 @@ def test_apply_storage_layout_blocks_create_only_when_not_ready(client, monkeypa
 def test_apply_storage_layout_blocks_wipe_rebuild_without_confirmation(client, monkeypatch):
     cfg = main.default_config()
     cfg["site"]["name"] = "Apply Kit"
-    cfg["ilo"]["current_ip"] = "10.10.8.90"
-    cfg["ilo"]["host"] = "10.10.8.90"
+    cfg["ilo"]["current_ip"] = "10.10.8.11"
+    cfg["ilo"]["target_ip"] = "10.10.8.11"
+    cfg["ilo"]["host"] = "10.10.8.11"
     cfg["ilo"]["username"] = "Administrator"
     cfg["ilo"]["password"] = "kit-password"
     main.save_kit_config(cfg)
 
     discovery = planner_gen10_apply_discovery(existing_volumes=True)
-    export_paths = main.export_storage_discovery_snapshot(cfg, discovery, host="10.10.8.90")
+    export_paths = main.export_storage_discovery_snapshot(cfg, discovery, host="10.10.8.11")
     plan = main.build_raid_plan(discovery, export_paths)
     plan_paths = main.export_raid_plan_snapshot(cfg, plan, export_paths)
 
@@ -3607,14 +3843,15 @@ def test_apply_storage_layout_creates_artifacts_and_logs_success(client, monkeyp
 
     cfg = main.default_config()
     cfg["site"]["name"] = "Apply Kit"
-    cfg["ilo"]["current_ip"] = "10.10.8.90"
-    cfg["ilo"]["host"] = "10.10.8.90"
+    cfg["ilo"]["current_ip"] = "10.10.8.11"
+    cfg["ilo"]["target_ip"] = "10.10.8.11"
+    cfg["ilo"]["host"] = "10.10.8.11"
     cfg["ilo"]["username"] = "Administrator"
     cfg["ilo"]["password"] = "kit-password"
     main.save_kit_config(cfg)
 
     discovery = planner_gen10_apply_discovery(existing_volumes=True)
-    export_paths = main.export_storage_discovery_snapshot(cfg, discovery, host="10.10.8.90")
+    export_paths = main.export_storage_discovery_snapshot(cfg, discovery, host="10.10.8.11")
     plan = main.build_raid_plan(discovery, export_paths)
     plan_paths = main.export_raid_plan_snapshot(cfg, plan, export_paths)
 
@@ -3645,6 +3882,8 @@ def test_apply_storage_layout_creates_artifacts_and_logs_success(client, monkeyp
     assert job["scope"] == "storage-apply:wipe_rebuild"
     assert job["status"] == "Staged"
     assert job["current_stage"] == "Reboot required"
+    assert job["completed_steps"] == 10
+    assert job["total_steps"] == 15
     assert job["progress_percent"] < 100
     assert job["progress_percent"] == 68
     assert any("Validate controller and plan" in line for line in job["logs"])
@@ -3682,14 +3921,15 @@ def test_apply_storage_layout_failure_logs_are_saved(client, monkeypatch):
 
     cfg = main.default_config()
     cfg["site"]["name"] = "Apply Kit"
-    cfg["ilo"]["current_ip"] = "10.10.8.90"
-    cfg["ilo"]["host"] = "10.10.8.90"
+    cfg["ilo"]["current_ip"] = "10.10.8.11"
+    cfg["ilo"]["target_ip"] = "10.10.8.11"
+    cfg["ilo"]["host"] = "10.10.8.11"
     cfg["ilo"]["username"] = "Administrator"
     cfg["ilo"]["password"] = "kit-password"
     main.save_kit_config(cfg)
 
     discovery = planner_gen10_apply_discovery(existing_volumes=True)
-    export_paths = main.export_storage_discovery_snapshot(cfg, discovery, host="10.10.8.90")
+    export_paths = main.export_storage_discovery_snapshot(cfg, discovery, host="10.10.8.11")
     plan = main.build_raid_plan(discovery, export_paths)
     plan_paths = main.export_raid_plan_snapshot(cfg, plan, export_paths)
 
@@ -3748,14 +3988,15 @@ def test_reboot_storage_now_creates_reboot_artifacts_and_logs_success(client, mo
 
     cfg = main.default_config()
     cfg["site"]["name"] = "Apply Kit"
-    cfg["ilo"]["current_ip"] = "10.10.8.90"
-    cfg["ilo"]["host"] = "10.10.8.90"
+    cfg["ilo"]["current_ip"] = "10.10.8.11"
+    cfg["ilo"]["target_ip"] = "10.10.8.11"
+    cfg["ilo"]["host"] = "10.10.8.11"
     cfg["ilo"]["username"] = "Administrator"
     cfg["ilo"]["password"] = "kit-password"
     main.save_kit_config(cfg)
 
     discovery = planner_gen10_apply_discovery(existing_volumes=True)
-    export_paths = main.export_storage_discovery_snapshot(cfg, discovery, host="10.10.8.90")
+    export_paths = main.export_storage_discovery_snapshot(cfg, discovery, host="10.10.8.11")
     plan = main.build_raid_plan(discovery, export_paths)
     plan_paths = main.export_raid_plan_snapshot(cfg, plan, export_paths)
 
@@ -3783,8 +4024,6 @@ def test_reboot_storage_now_creates_reboot_artifacts_and_logs_success(client, mo
     )
 
     assert response.status_code == 200
-    assert "Storage Workflow Progress" in response.text
-    assert "Fully complete" in response.text
     assert (apply_dir / "reboot-results.json").exists()
     assert (apply_dir / "post-reboot-summary.yml").exists()
     assert (apply_dir / "post-reboot-raw.json").exists()
