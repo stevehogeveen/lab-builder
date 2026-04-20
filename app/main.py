@@ -6455,21 +6455,15 @@ def run_esxi_real(cfg: dict, run_stamp: str | None = None):
             update_job(
                 kit_name,
                 job,
-                "Failed",
+                "Running",
                 "Set boot override",
                 8,
                 total,
-                f"[FAILED] One-time boot did not stick; expected Once/Cd but got enabled={after_enabled} target={after_target}.",
+                f"[WARN] One-time boot did not stick cleanly; got enabled={after_enabled} target={after_target}. Continuing because mounted virtual media is verified on this hardware.",
             )
-            job["logs"].append("[SKIP] Server power-on blocked because one-time boot was not verified")
             save_job(kit_name, job)
-            trace_payload["steps"].append({"stage": "set_one_time_boot", "status": "mismatch", **boot_override})
-            trace_payload["result"] = {
-                "status": "Failed",
-                "error": f"One-time boot did not stick; expected Once/Cd but got enabled={after_enabled} target={after_target}.",
-            }
+            trace_payload["steps"].append({"stage": "set_one_time_boot", "status": "warning_mismatch", **boot_override})
             save_esxi_trace(trace_path, trace_payload)
-            return
         update_job(kit_name, job, "Running", "Set boot override", 8, total, f"[INFO] Boot override after: enabled={after_enabled} target={after_target}")
         boot_inventory = dict(boot_override.get("boot_option_inventory") or {})
         if boot_inventory:
@@ -6536,6 +6530,15 @@ def run_esxi_real(cfg: dict, run_stamp: str | None = None):
                         if boot_override.get("boot_option_selection_reason")
                         else ""
                     ),
+                )
+                update_job(
+                    kit_name,
+                    job,
+                    "Running",
+                    "Set boot override",
+                    8,
+                    total,
+                    "[WARN] No concrete UEFI boot option was selected; continuing because mounted virtual media is verified on this hardware.",
                 )
             oem_keys = list(boot_inventory.get("oem_hpe_keys") or [])
             oem_values = dict(boot_inventory.get("oem_hpe_values") or {})

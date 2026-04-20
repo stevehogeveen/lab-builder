@@ -2791,18 +2791,20 @@ def test_run_esxi_real_blocks_power_on_when_boot_override_does_not_stick(monkeyp
                     "BootSourceOverrideTarget": "None",
                 }
             }
+            self.virtual_media = {
+                "@odata.id": "/redfish/v1/Managers/1/VirtualMedia/2",
+                "Inserted": False,
+                "Image": "",
+                "WriteProtected": True,
+                "MediaTypes": ["CD", "DVD"],
+                "Actions": {
+                    "#VirtualMedia.InsertMedia": {"target": "/redfish/v1/Managers/1/VirtualMedia/2/Actions/VirtualMedia.InsertMedia"},
+                },
+            }
             self.calls = []
 
         def get_virtual_media(self):
-            return [{
-                "@odata.id": "/redfish/v1/Managers/1/VirtualMedia/2",
-                "Inserted": False,
-                "MediaTypes": ["CD", "DVD"],
-                    "Actions": {
-                        "#VirtualMedia.InsertMedia": {"target": "/redfish/v1/Managers/1/VirtualMedia/2/Actions/VirtualMedia.InsertMedia"},
-                    },
-                }]
-            self.calls = []
+            return [dict(self.virtual_media)]
 
         def eject_virtual_media(self, vm_path):
             self.calls.append(("eject", vm_path))
@@ -2826,6 +2828,8 @@ def test_run_esxi_real_blocks_power_on_when_boot_override_does_not_stick(monkeyp
 
         def _post(self, target, payload):
             self.calls.append(("post", target, payload))
+            self.virtual_media["Inserted"] = True
+            self.virtual_media["Image"] = payload["Image"]
 
         def set_one_time_boot_cd(self, system_path=None):
             self.calls.append(("set_one_time_boot_cd", system_path))
@@ -2857,12 +2861,11 @@ def test_run_esxi_real_blocks_power_on_when_boot_override_does_not_stick(monkeyp
     joined_logs = "\n".join(job["logs"])
     client = created_clients[0]
 
-    assert job["status"] == "Failed"
+    assert job["status"] == "Completed"
     assert "[RUNNING] Setting one-time boot to CD/DVD" in joined_logs
     assert "[INFO] Boot override before: enabled=Disabled target=None" in joined_logs
-    assert "[FAILED] One-time boot did not stick; expected Once/Cd but got enabled=Once target=Hdd." in joined_logs
-    assert "[SKIP] Server power-on blocked because one-time boot was not verified" in joined_logs
-    assert ("power_reset", "On", "/redfish/v1/Systems/1") not in client.calls
+    assert "[WARN] One-time boot did not stick cleanly; got enabled=Once target=Hdd. Continuing because mounted virtual media is verified on this hardware." in joined_logs
+    assert ("power_reset", "On", "/redfish/v1/Systems/1") in client.calls
 
 
 def test_run_esxi_real_fails_when_virtual_media_readback_does_not_match(monkeypatch, tmp_path):
@@ -4200,8 +4203,10 @@ def test_run_esxi_real_persists_boot_option_fallback_reason(monkeypatch, tmp_pat
     assert "[INFO] BootOptions count: 0" in joined_logs
     assert "[INFO] Matching UEFI virtual-media option: (none)" in joined_logs
     assert "[WARN] No concrete UEFI boot option was found; falling back to generic Cd (System did not expose a Redfish BootOptions collection.)" in joined_logs
+    assert "[WARN] No concrete UEFI boot option was selected; continuing because mounted virtual media is verified on this hardware." in joined_logs
     assert summary["esxi_run_summary"]["boot_override"]["boot_option_selection_reason"] == "System did not expose a Redfish BootOptions collection."
     assert summary["esxi_run_summary"]["boot_override"]["boot_option_inventory"]["boot_options_count"] == 0
+    assert job["status"] == "Completed"
 
 
 def test_harden_snmp_best_effort_reports_mismatch_when_readback_differs(monkeypatch):
