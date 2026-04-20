@@ -6352,7 +6352,31 @@ def run_esxi_real(cfg: dict, run_stamp: str | None = None):
         save_esxi_trace(trace_path, trace_payload)
         for vm in run_with_session_refresh("Eject media", lambda c: c.get_virtual_media()):
             if vm.get("Inserted") and vm.get("@odata.id"):
-                run_with_session_refresh("Eject media", lambda c, vm_path=vm["@odata.id"]: c.eject_virtual_media(vm_path))
+                try:
+                    run_with_session_refresh("Eject media", lambda c, vm_path=vm["@odata.id"]: c.eject_virtual_media(vm_path))
+                except Exception as e:
+                    error_text = str(e)
+                    if "iLO.2.25.UnsupportedOperation" in error_text or "UnsupportedOperation" in error_text:
+                        update_job(
+                            kit_name,
+                            job,
+                            "Running",
+                            "Eject media",
+                            3,
+                            total,
+                            "[WARN] iLO did not support ejecting the current virtual media. Continuing with best-effort media replacement.",
+                        )
+                        trace_payload["steps"].append(
+                            {
+                                "stage": "eject_virtual_media",
+                                "status": "warning_unsupported",
+                                "device_path": str(vm.get("@odata.id") or ""),
+                                "error": error_text,
+                            }
+                        )
+                        save_esxi_trace(trace_path, trace_payload)
+                        continue
+                    raise
 
         system_path = run_with_session_refresh("Power off", lambda c: c.get_systems())[0]
         current_system = run_with_session_refresh("Power off", lambda c: c.get_system(system_path))
