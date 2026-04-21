@@ -2219,6 +2219,29 @@ def test_prepare_execute_shows_exact_missing_esxi_fields(client, monkeypatch):
     assert "Root password: Missing" in response.text
 
 
+def test_download_built_esxi_iso_serves_nested_output_path(client, monkeypatch, tmp_path):
+    exports_dir = tmp_path / "exports"
+    iso_dir = exports_dir / "esxi-isos" / "Home-Kit-Test" / "esxi-20260420-200440"
+    iso_dir.mkdir(parents=True, exist_ok=True)
+    iso_path = iso_dir / "esxi-20260420-200440.iso"
+    iso_path.write_text("fake iso", encoding="utf-8")
+
+    monkeypatch.setattr(main, "EXPORTS_DIR", exports_dir)
+
+    response = client.get("/esxi-built-iso/Home-Kit-Test/esxi-20260420-200440.iso")
+
+    assert response.status_code == 200
+    assert response.content == b"fake iso"
+    access_log = iso_dir / "iso-access.log"
+    assert access_log.exists()
+    assert "method=GET" in access_log.read_text(encoding="utf-8")
+
+    response = client.head("/esxi-built-iso/Home-Kit-Test/esxi-20260420-200440.iso")
+
+    assert response.status_code == 200
+    assert "method=HEAD" in access_log.read_text(encoding="utf-8")
+
+
 def test_prepare_execute_enables_real_launch_for_storage_scope(client):
     cfg = main.default_config()
     cfg["site"]["name"] = "Storage Launch Review Kit"
@@ -4119,6 +4142,55 @@ def test_set_one_time_boot_cd_prefers_matching_uefi_boot_option(monkeypatch):
     assert result["selected_boot_option_reference"] == "Boot0009"
     assert result["selected_uefi_target"] == "PciRoot(0x0)/Pci(0x1C,0x4)/Pci(0x0,0x4)/USB(0x1,0x0)"
     assert result["matched"] is True
+
+
+def test_set_one_time_boot_cd_does_not_confuse_mac_hex_with_cd_media(monkeypatch):
+    client = ILOClient(ILOConfig(host="10.0.0.1", username="Administrator", password="secret"))
+    state = {
+        "Boot": {
+            "BootSourceOverrideEnabled": "Disabled",
+            "BootSourceOverrideTarget": "None",
+            "UefiTargetBootSourceOverride": "",
+            "BootOptions": {"@odata.id": "/redfish/v1/Systems/1/BootOptions"},
+        },
+    }
+    boot_options = {
+        "/redfish/v1/Systems/1/BootOptions": {
+            "Members": [
+                {"@odata.id": "/redfish/v1/Systems/1/BootOptions/5"},
+                {"@odata.id": "/redfish/v1/Systems/1/BootOptions/9"},
+            ]
+        },
+        "/redfish/v1/Systems/1/BootOptions/5": {
+            "BootOptionReference": "Boot000E",
+            "DisplayName": "Embedded LOM 1 Port 1 : HPE Ethernet 1Gb 4-port 331i Adapter - NIC (HTTP(S) IPv4)",
+            "UefiDevicePath": "PciRoot(0x0)/Pci(0x1C,0x0)/Pci(0x0,0x0)/MAC(20677CD582A4,0x1)/IPv4(0.0.0.0)/Uri()",
+        },
+        "/redfish/v1/Systems/1/BootOptions/9": {
+            "BootOptionReference": "Boot0012",
+            "DisplayName": "iLO Virtual USB 3 : iLO Virtual CD-ROM",
+            "UefiDevicePath": "PciRoot(0x0)/Pci(0x1C,0x4)/Pci(0x0,0x4)/USB(0x1,0x0)",
+        },
+    }
+
+    def fake_get(path):
+        if path in boot_options:
+            return dict(boot_options[path])
+        return dict(state)
+
+    monkeypatch.setattr(client, "get_system", lambda system_path=None: dict(state))
+    monkeypatch.setattr(client, "_safe_get", fake_get)
+
+    def fake_patch(path, payload):
+        state["Boot"].update(payload["Boot"])
+
+    monkeypatch.setattr(client, "_patch", fake_patch)
+
+    result = client.set_one_time_boot_cd("/redfish/v1/Systems/1")
+
+    assert result["selected_boot_option_reference"] == "Boot0012"
+    assert result["after_target"] == "UefiTarget"
+    assert result["after_uefi_target"] == "PciRoot(0x0)/Pci(0x1C,0x4)/Pci(0x0,0x4)/USB(0x1,0x0)"
 
 
 def test_collect_boot_option_inventory_reads_boot_scoped_bootoptions(monkeypatch):

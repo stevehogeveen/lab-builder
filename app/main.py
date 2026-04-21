@@ -9893,13 +9893,36 @@ async def download_run_summary(scope: str = Form(...)):
     return FileResponse(path=path, filename=path.name, media_type="application/x-yaml")
 
 
-@app.get("/esxi-built-iso/{kit_name}/{output_name}.iso")
-async def download_built_esxi_iso(kit_name: str, output_name: str):
+def resolve_built_esxi_iso_path(kit_name: str, output_name: str) -> Path:
     safe_kit_name = sanitize_kit_name(kit_name)
     safe_output_name = sanitize_kit_name(output_name)
-    path = EXPORTS_DIR / "esxi-isos" / safe_kit_name / f"{safe_output_name}.iso"
+    nested_path = EXPORTS_DIR / "esxi-isos" / safe_kit_name / safe_output_name / f"{safe_output_name}.iso"
+    flat_path = EXPORTS_DIR / "esxi-isos" / safe_kit_name / f"{safe_output_name}.iso"
+    return nested_path if nested_path.exists() else flat_path
+
+
+def append_esxi_iso_access_log(path: Path, request: Request) -> None:
+    try:
+        client_host = request.client.host if request.client else ""
+        range_header = request.headers.get("range", "")
+        user_agent = request.headers.get("user-agent", "")
+        line = (
+            f"{datetime.now().isoformat(timespec='seconds')} "
+            f"method={request.method} client={client_host} "
+            f"range={range_header or '-'} user_agent={user_agent or '-'}\n"
+        )
+        with (path.parent / "iso-access.log").open("a", encoding="utf-8") as f:
+            f.write(line)
+    except Exception:
+        pass
+
+
+@app.api_route("/esxi-built-iso/{kit_name}/{output_name}.iso", methods=["GET", "HEAD"])
+async def download_built_esxi_iso(request: Request, kit_name: str, output_name: str):
+    path = resolve_built_esxi_iso_path(kit_name, output_name)
     if not path.exists():
         return HTMLResponse(f"Built ESXi ISO not found: {path}", status_code=404)
+    append_esxi_iso_access_log(path, request)
     return FileResponse(path=path, filename=path.name, media_type="application/octet-stream")
 
 
