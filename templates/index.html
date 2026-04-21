@@ -381,6 +381,38 @@
         .result { background: color-mix(in srgb, var(--accent) 7%, var(--panel)); color: var(--text); }
         .error { background: color-mix(in srgb, var(--bad) 10%, var(--panel)); color: var(--text); border-color: color-mix(in srgb, var(--bad) 35%, var(--border)); }
 
+        .global-warning-popup {
+            display: flex;
+            gap: 14px;
+            align-items: flex-start;
+            padding: 16px 18px;
+            border-radius: 18px;
+            border: 2px solid color-mix(in srgb, var(--bad) 48%, var(--border));
+            background: linear-gradient(180deg, var(--bad-soft), color-mix(in srgb, var(--bad-soft) 70%, white 30%));
+            color: var(--text);
+            box-shadow: 0 18px 42px rgba(194, 102, 93, 0.18);
+        }
+
+        .warning-icon {
+            display: grid;
+            place-items: center;
+            width: 34px;
+            height: 34px;
+            border-radius: 999px;
+            background: var(--bad);
+            color: white;
+            font-weight: 900;
+            flex: 0 0 auto;
+        }
+
+        .htmx-global-warning {
+            position: fixed;
+            top: 18px;
+            right: 18px;
+            z-index: 9999;
+            max-width: min(520px, calc(100vw - 36px));
+        }
+
         .codeblock {
             background: color-mix(in srgb, var(--panel3) 76%, white 24%);
             color: var(--text);
@@ -827,6 +859,38 @@
 
 <script>
 (function () {
+    function showGlobalWarning(message) {
+        let shell = document.getElementById("htmx-global-warning");
+        if (!shell) {
+            shell = document.createElement("div");
+            shell.id = "htmx-global-warning";
+            shell.className = "global-warning-popup htmx-global-warning";
+            shell.setAttribute("role", "alert");
+            shell.setAttribute("aria-live", "assertive");
+            shell.innerHTML = '<div class="warning-icon">!</div><div><div class="text-lg font-semibold">Warning: action failed</div><div class="text-sm" data-warning-message></div></div>';
+            document.body.appendChild(shell);
+        }
+        const target = shell.querySelector("[data-warning-message]");
+        if (target) target.textContent = message;
+        shell.style.display = "flex";
+        shell.scrollIntoView({ behavior: "smooth", block: "nearest" });
+    }
+
+    document.body.addEventListener("htmx:responseError", function (event) {
+        const xhr = event.detail && event.detail.xhr;
+        const status = xhr ? xhr.status : "unknown";
+        let message = "The app could not finish that action.";
+        if (xhr && xhr.responseText) {
+            const text = xhr.responseText.replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim();
+            if (text) message = text.slice(0, 500);
+        }
+        showGlobalWarning(`HTTP ${status}: ${message}`);
+    });
+
+    document.body.addEventListener("htmx:sendError", function () {
+        showGlobalWarning("The app could not send the request. Check that the server is still running.");
+    });
+
     const kitName = {{ current_kit|tojson }};
     const proto = window.location.protocol === "https:" ? "wss" : "ws";
     const wsUrl = `${proto}://${window.location.host}/ws/job/${encodeURIComponent(kitName)}`;

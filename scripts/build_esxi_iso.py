@@ -5,7 +5,7 @@ from app.esxi.builder import build_custom_iso
 
 spec = EsxiBuildSpec(
     kit_name="manual-test",
-    base_iso_path=Path("media/esxi/base/VMware-ESXi.iso"),
+    base_iso_path=Path("media/esxi/base/VMware-ESXi-7.0.3-23794027-HPE-703.0.0.11.8.0.4-Sep2024.iso"),
     output_name="custom-esxi",
     hostname="esxi01.lab.local",
     management_ip="192.168.1.50",

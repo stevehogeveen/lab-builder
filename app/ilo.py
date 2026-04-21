@@ -294,13 +294,23 @@ class ILOClient:
         }
 
     def _normalize_smart_storage_volume(self, volume: dict[str, Any]) -> dict[str, Any]:
+        data_drive_link = ((volume.get("Links") or {}).get("DataDrives") or {}).get("@odata.id", "")
+        spare_drive_link = (
+            ((volume.get("Links") or {}).get("StandbySpareDrives") or {}).get("@odata.id", "")
+            or ((volume.get("Links") or {}).get("SpareDrives") or {}).get("@odata.id", "")
+        )
         return {
             "path": volume.get("@odata.id", ""),
             "id": volume.get("Id", ""),
-            "name": volume.get("Name") or volume.get("LogicalDriveName") or "",
+            "name": volume.get("LogicalDriveName") or volume.get("Name") or "",
+            "logical_drive_name": volume.get("LogicalDriveName") or "",
             "raid_type": volume.get("RAIDType") or volume.get("Raid") or volume.get("LogicalDriveType") or "",
             "capacity_gib": self._storage_capacity_gib(volume.get("CapacityBytes")) or self._storage_capacity_mib_to_gib(volume.get("CapacityMiB")),
             "status": self._storage_status_text(volume) or str(volume.get("Status", "")),
+            "data_drives_path": data_drive_link,
+            "spare_drives_path": spare_drive_link,
+            "drive_bays": [],
+            "spare_bays": [],
         }
 
     def _normalize_smart_storage_drive(self, drive: dict[str, Any]) -> dict[str, Any]:
@@ -682,6 +692,23 @@ class ILOClient:
                             normalized_drive = self._normalize_smart_storage_drive(child)
                             if normalized_drive not in smart_drives:
                                 smart_drives.append(normalized_drive)
+
+        drive_bay_by_path = {str(drive.get("path") or ""): str(drive.get("bay") or drive.get("id") or "") for drive in smart_drives}
+        for volume in smart_volumes:
+            for link_key, output_key in (("data_drives_path", "drive_bays"), ("spare_drives_path", "spare_bays")):
+                linked_path = str(volume.get(link_key) or "").strip()
+                if not linked_path:
+                    continue
+                linked_docs = self._expand_collection(linked_path)
+                bays = []
+                for linked_doc in linked_docs:
+                    linked_doc_path = str(linked_doc.get("@odata.id") or "").strip()
+                    bay = drive_bay_by_path.get(linked_doc_path)
+                    if not bay:
+                        bay = self._normalize_smart_storage_drive(linked_doc).get("bay", "")
+                    if bay:
+                        bays.append(str(bay))
+                volume[output_key] = sorted(set(bays), key=lambda item: int(re.sub(r"\D+", "", item) or "999999"))
 
         if smart_controllers and not smart_volumes and not smart_drives:
             smart_storage_diagnostics["warnings"].append(
@@ -2127,6 +2154,17 @@ class ILOClient:
         return " ".join(str(x or "") for x in fields)
 
     @staticmethod
+    def _boot_option_label_text(option: dict[str, Any]) -> str:
+        fields = [
+            option.get("BootOptionReference") or option.get("boot_option_reference"),
+            option.get("DisplayName") or option.get("display_name"),
+            option.get("Alias") or option.get("alias"),
+            option.get("Name") or option.get("name"),
+            option.get("Description") or option.get("description"),
+        ]
+        return " ".join(str(x or "") for x in fields)
+
+    @staticmethod
     def _summarize_boot_option(option: dict[str, Any]) -> dict[str, Any]:
         return {
             "path": str(option.get("@odata.id") or option.get("path") or ""),
@@ -2160,12 +2198,12 @@ class ILOClient:
             "embedded virtual media",
         )
         for option in options:
-            text = self._boot_option_text(option).lower()
+            text = self._boot_option_label_text(option).lower()
             if any(term in text for term in preferred_terms):
                 return option
         for option in options:
-            text = self._boot_option_text(option).lower()
-            if "cd" in text or "dvd" in text:
+            text = self._boot_option_label_text(option).lower()
+            if re.search(r"\b(cd|cd-rom|cdrom|dvd)\b", text):
                 return option
         return None
 

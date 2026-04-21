@@ -8,9 +8,14 @@
             const line = rawLine.replace(/\r$/, "");
             if (!line.trim()) continue;
 
-            if (line.startsWith("  - ")) {
+            if (/^\s*-\s/.test(line)) {
                 if (currentKey && Array.isArray(data[currentKey])) {
-                    data[currentKey].push(line.replace(/^  - /, ""));
+                    let item = line.replace(/^\s*-\s/, "").trim();
+                    item = item.replace(/^["']|["']$/g, "");
+                    if (/^\d+$/.test(item)) item = parseInt(item, 10);
+                    if (item === "true") item = true;
+                    if (item === "false") item = false;
+                    data[currentKey].push(item);
                 }
                 continue;
             }
@@ -78,6 +83,10 @@
         if (data.execution_mode === "preview") return "Preview only. No real changes are being made.";
         if (data.execution_mode === "real") return "Real execution is running. Changes may be made.";
         return "Choose a review above to see whether the next run is preview-only or real.";
+    }
+
+    function statusTone(status) {
+        return ["Idle", "Complete", "Preview complete", "Completed"].includes(status) ? "ready" : "progress";
     }
 
     function updateActionStatusCard(payload) {
@@ -184,6 +193,49 @@
 
             lastWorkflowState = data.workflow_state || "";
             lastScope = scope;
+        };
+    };
+
+    window.bindExecutionLiveCard = function bindExecutionLiveCard(opts) {
+        const card = document.getElementById("execution-live-card");
+        if (!card || !opts || !opts.kitName) return;
+        const liveLogDetails = card.querySelector(".execution-live-log");
+
+        const proto = window.location.protocol === "https:" ? "wss" : "ws";
+        const wsUrl = `${proto}://${window.location.host}/ws/job/${encodeURIComponent(opts.kitName)}`;
+        const ws = new WebSocket(wsUrl);
+
+        ws.onmessage = function (event) {
+            const data = parseJobPayload(event.data);
+            const status = String(data.status || "Idle");
+            const mode = data.execution_mode_label || data.execution_mode || "Not running";
+            const currentStep = data.current_stage || "Nothing is running right now.";
+            const progress = `${data.progress_percent || 0}%`;
+            const completed = `${data.completed_steps || 0} / ${data.total_steps || 0}`;
+
+            setText("execution-live-mode", mode);
+            setText("execution-live-step", currentStep);
+            setText("execution-live-progress", progress);
+            setText("execution-live-completed", completed);
+
+            const statusNode = document.getElementById("execution-live-status");
+            if (statusNode) {
+                statusNode.textContent = status;
+                statusNode.className = `status ${statusTone(status)}`;
+            }
+
+            const bar = document.getElementById("execution-live-bar");
+            if (bar) bar.style.width = progress;
+
+            const logs = document.getElementById("execution-live-logs");
+            if (logs) {
+                if (Array.isArray(data.logs) && data.logs.length) {
+                    logs.textContent = data.logs.join("\n");
+                    if (liveLogDetails) liveLogDetails.open = true;
+                } else {
+                    logs.textContent = "Nothing is running right now. Start a preview or a real run to see live updates here.";
+                }
+            }
         };
     };
 

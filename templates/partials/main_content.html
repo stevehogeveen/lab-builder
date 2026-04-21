@@ -6,6 +6,15 @@
         </div>
         <div class="text-sm text-slate-300" id="page-action-status-summary">The page will update when this action finishes.</div>
     </div>
+    {% if error_message %}
+    <section class="global-warning-popup" role="alert" aria-live="assertive" tabindex="-1">
+        <div class="warning-icon">!</div>
+        <div>
+            <div class="text-lg font-semibold">Warning: something needs attention</div>
+            <div class="text-sm">{{ error_message }}</div>
+        </div>
+    </section>
+    {% endif %}
     {% if action_feedback %}
     <section class="card">
         <div class="flex items-center justify-between gap-3 mb-3">
@@ -51,6 +60,22 @@
         </summary>
         <div class="codeblock mt-4">{{ config_view_content }}</div>
     </details>
+    {% elif config_view_title and config_view_content and active_page == "ilo" %}
+    <section class="card">
+        <div class="flex items-center justify-between gap-3 mb-3">
+            <div class="text-lg font-semibold">{{ config_view_title }}</div>
+            <span class="status ready">Current iLO</span>
+        </div>
+        <div class="codeblock mt-4">{{ config_view_content }}</div>
+        <div class="actions mt-4">
+            <form action="/download-latest-live-summary" method="post">
+                <button class="btn btn-primary" type="submit">Download current iLO summary</button>
+            </form>
+            <form action="/download-latest-live-raw" method="post">
+                <button class="btn" type="submit">Download raw iLO data</button>
+            </form>
+        </div>
+    </section>
     {% elif config_view_title and config_view_content and active_page in setup_pages %}
     <section class="card">
         <div class="text-lg font-semibold mb-2">Technical details were saved</div>
@@ -60,30 +85,6 @@
         </div>
     </section>
     {% endif %}
-
-    {% if page_briefing and active_page not in ["configs", "history", "kits", "execution"] %}
-    <section class="panel">
-        <div class="grid grid-cols-1 lg:grid-cols-[minmax(0,1.25fr)_minmax(0,1fr)_minmax(0,1fr)] gap-4 items-start">
-            <div class="card">
-                <div class="text-xs font-bold uppercase text-slate-400 mb-1">What this page is for</div>
-                <div class="text-base font-semibold">{{ page_briefing.title }}</div>
-                <div class="text-sm text-slate-400 mt-2">{{ page_briefing.purpose }}</div>
-            </div>
-            <div class="card">
-                <div class="text-xs font-bold uppercase text-slate-400 mb-1">What to do next</div>
-                <div class="text-sm">{{ page_briefing.next }}</div>
-            </div>
-            <div class="card">
-                <div class="text-xs font-bold uppercase text-slate-400 mb-1">What happened last</div>
-                <div class="text-sm">{{ page_briefing.last }}</div>
-                {% if page_briefing.next_href and page_briefing.next_label %}
-                <div class="text-xs text-slate-400 mt-3">Next place to open: {{ page_briefing.next_label }}</div>
-                {% endif %}
-            </div>
-        </div>
-    </section>
-    {% endif %}
-
     {% if active_page == "dashboard" %}
         {% include "partials/pages/dashboard.html" %}
     {% elif active_page in ["global_settings", "configuration"] %}

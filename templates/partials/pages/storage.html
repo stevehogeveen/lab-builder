@@ -38,18 +38,6 @@
             <div class="text-xs text-slate-400 mt-3">Using {{ storage_target.resolved }} with {{ storage_credentials.username or 'saved iLO sign-in' }}.</div>
             {% endif %}
         </div>
-        {% if storage_target.valid and storage_credentials.valid and not storage_discovery and not storage_export_paths %}
-        <form
-            id="storage-autoload-form"
-            hx-post="/read-current-storage"
-            hx-target="#main-content"
-            hx-swap="outerHTML"
-            hx-trigger="load"
-            style="display: none;"
-        >
-            <input type="hidden" name="return_page" value="storage">
-        </form>
-        {% endif %}
         {% if storage_apply_paths %}
         {% set workflow = storage_workflow_state or {} %}
         {% set apply_state = workflow.get('apply', {}) %}
@@ -126,22 +114,21 @@
             {% elif not storage_credentials.valid %}
             <div class="text-sm text-amber-300">Current storage cannot be loaded yet because the storage sign-in details are incomplete.</div>
             {% elif not storage_discovery %}
-            <div id="read-storage-progress" class="result" style="margin-top: 0;">
-                Loading the current storage setup from the server.
-                <div class="progress-shell">
-                    <div class="progress-bar" style="width: 100%;"></div>
-                </div>
-            </div>
+            <div class="result" style="margin-top: 0;">No storage read has been run on this page yet.</div>
+            <form hx-post="/read-current-storage" hx-target="#main-content" hx-swap="outerHTML" class="actions mt-3" data-action-title="Reading current storage" data-action-start="Connecting to iLO and reading the current controller, volumes, and drives.">
+                <input type="hidden" name="return_page" value="storage">
+                <button class="btn btn-primary action-button" type="submit">Display current storage setup</button>
+            </form>
             {% endif %}
             {% if storage_discovery %}
             {% set hpe = storage_discovery.hpe_smart_storage or {} %}
             {% set standard = storage_discovery.standard_redfish_storage or {} %}
-            {% set controller = (hpe.controllers or standard.controllers or [])[0] if (hpe.controllers or standard.controllers) else {} %}
+            {% set controller = storage_display_controller or {} %}
             {% set volumes = (hpe.volumes or []) + (standard.volumes or []) %}
-            {% set drives = storage_planning_drives or [] %}
+            {% set drives = storage_display_drives or storage_planning_drives or [] %}
             <div class="mt-4 space-y-4">
                 <div class="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-3 text-sm">
-                    <div><span class="text-slate-400">Controller:</span> {{ controller.name or controller.model or "Not found" }}</div>
+                    <div><span class="text-slate-400">Controller:</span> {{ controller.model or controller.name or "Not found" }}</div>
                     <div><span class="text-slate-400">Firmware:</span> {{ controller.firmware_version or "Unknown" }}</div>
                     <div><span class="text-slate-400">Current volumes:</span> {{ volumes|length }}</div>
                     <div><span class="text-slate-400">Usable drives:</span> {{ drives|selectattr('eligible')|list|length }} / {{ drives|length }}</div>
@@ -150,13 +137,15 @@
                 <div>
                     <div class="text-sm font-semibold mb-2">Current volumes</div>
                     <table class="table">
-                        <thead><tr><th>Name</th><th>RAID</th><th>Capacity GiB</th><th>Status</th></tr></thead>
+                        <thead><tr><th>Name</th><th>RAID</th><th>Capacity GiB</th><th>Drives</th><th>Spare</th><th>Status</th></tr></thead>
                         <tbody>
                         {% for volume in volumes %}
                             <tr>
-                                <td>{{ volume.name or volume.id }}</td>
+                                <td>{{ volume.logical_drive_name or volume.name or volume.id }}</td>
                                 <td>{{ volume.raid_type or "Unknown" }}</td>
                                 <td>{{ volume.capacity_gib or "" }}</td>
+                                <td>{{ volume.drive_bays|join(", ") if volume.drive_bays else "Unknown" }}</td>
+                                <td>{{ volume.spare_bays|join(", ") if volume.spare_bays else "None detected" }}</td>
                                 <td>{{ volume.status or "" }}</td>
                             </tr>
                         {% endfor %}
@@ -168,7 +157,7 @@
                 <div>
                     <div class="text-sm font-semibold mb-2">Drives you can plan with</div>
                     <table class="table">
-                        <thead><tr><th>Bay</th><th>Model</th><th>Size GiB</th><th>Media</th><th>Status</th></tr></thead>
+                        <thead><tr><th>Bay</th><th>Model</th><th>Size GiB</th><th>Media</th><th>Volume / role</th><th>Status</th></tr></thead>
                         <tbody>
                         {% for drive in drives %}
                             <tr>
@@ -176,6 +165,7 @@
                                 <td>{{ drive.model or drive.name }}</td>
                                 <td>{{ drive.size_gib|round|int }}</td>
                                 <td>{{ drive.media_type }}</td>
+                                <td>{{ drive.volume_membership or "Unknown" }}</td>
                                 <td>{% if drive.eligible %}Ready{% else %}Skip: {{ drive.status or "Not usable" }}{% endif %}</td>
                             </tr>
                         {% endfor %}
@@ -187,7 +177,7 @@
                     <button
                         class="btn"
                         type="button"
-                        onclick="(function(){ const details = document.getElementById('storage-technical-details'); if (!details) return; details.open = true; details.scrollIntoView({ behavior: 'smooth', block: 'start' }); })();"
+                        onclick="(function(){ const details = document.getElementById('storage-discovery-details'); if (!details) return; details.open = true; details.scrollIntoView({ behavior: 'smooth', block: 'start' }); })();"
                     >
                         See detailed storage information
                     </button>
@@ -465,7 +455,7 @@
             {% set standard = storage_discovery.standard_redfish_storage or {} %}
             {% set hpe = storage_discovery.hpe_smart_storage or {} %}
             {% set hpe_diagnostics = hpe.diagnostics or capabilities.hpe_smart_storage_diagnostics or {} %}
-            <details class="mt-4">
+            <details class="mt-4" id="storage-discovery-details">
                 <summary class="summary-row">
                     <span class="text-sm font-bold text-slate-300">Storage discovery details</span>
                     <span class="status progress">details</span>

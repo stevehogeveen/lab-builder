@@ -4,7 +4,7 @@
         <div class="text-sm text-slate-400">Save the shared defaults here once. The other setup pages can reuse them automatically.</div>
     </div>
 
-    <form hx-post="/save-global-settings" hx-target="#main-content" hx-swap="outerHTML" class="space-y-4">
+    <form hx-post="/save-global-settings" hx-target="#main-content" hx-swap="outerHTML" class="space-y-4" x-data='{"snmpUsers": {{ cfg.get("shared_snmp", {}).get("users", [])[1:]|tojson }} }'>
         <input type="hidden" name="return_page" value="global_settings">
 
         <section class="card">
@@ -101,6 +101,50 @@
                     <label class="block text-sm font-bold text-slate-300 mb-2">SNMP privacy password</label>
                     <input type="password" name="snmp_v3_priv_password" value="{{ cfg.get('shared_snmp', {}).get('v3_priv_password', '') }}" class="input">
                 </div>
+            </div>
+            <div class="space-y-3 mt-4">
+                <div class="flex items-center justify-between gap-3">
+                    <div>
+                        <div class="text-sm font-bold text-slate-300">Additional SNMPv3 users</div>
+                        <div class="text-xs text-slate-400">The current iLO Redfish path can apply one SNMPv3 profile directly. Extra profiles are saved here for later use.</div>
+                    </div>
+                    <button class="btn" type="button" @click="snmpUsers.push({username: '', auth_protocol: 'SHA', auth_password: '', priv_protocol: 'AES', priv_password: ''})">+ Add user</button>
+                </div>
+                <template x-for="(user, index) in snmpUsers" :key="index">
+                    <div class="card">
+                        <div class="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-5 gap-4">
+                            <div>
+                                <label class="block text-sm font-bold text-slate-300 mb-2">Username</label>
+                                <input class="input" type="text" name="snmp_extra_username" x-model="user.username">
+                            </div>
+                            <div>
+                                <label class="block text-sm font-bold text-slate-300 mb-2">Auth type</label>
+                                <select class="input" name="snmp_extra_auth_protocol" x-model="user.auth_protocol">
+                                    <option value="SHA">SHA</option>
+                                    <option value="MD5">MD5</option>
+                                </select>
+                            </div>
+                            <div>
+                                <label class="block text-sm font-bold text-slate-300 mb-2">Auth password</label>
+                                <input class="input" type="password" name="snmp_extra_auth_password" x-model="user.auth_password">
+                            </div>
+                            <div>
+                                <label class="block text-sm font-bold text-slate-300 mb-2">Privacy type</label>
+                                <select class="input" name="snmp_extra_priv_protocol" x-model="user.priv_protocol">
+                                    <option value="AES">AES</option>
+                                    <option value="DES">DES</option>
+                                </select>
+                            </div>
+                            <div>
+                                <label class="block text-sm font-bold text-slate-300 mb-2">Privacy password</label>
+                                <input class="input" type="password" name="snmp_extra_priv_password" x-model="user.priv_password">
+                            </div>
+                        </div>
+                        <div class="actions mt-3">
+                            <button class="btn" type="button" @click="snmpUsers.splice(index, 1)">Remove user</button>
+                        </div>
+                    </div>
+                </template>
             </div>
         </section>
 

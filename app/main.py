@@ -2191,6 +2191,19 @@ def build_recoverability_notes(cfg: dict[str, Any], scope: str, stages: list[dic
 
 
 def execution_mode_for_scope(scope: str) -> dict[str, str]:
+    if str(scope or "").startswith("multi__"):
+        return {
+            "key": "real",
+            "label": "Real execution",
+            "badge": "Real run",
+            "summary": "This path performs the selected real stages in order.",
+            "what_this_does": "Runs the selected live stages in sequence.",
+            "real_changes": "Yes",
+            "next_step": "Start the run when the review looks correct.",
+            "run_button": "Start selected real run",
+            "run_note": "This is the live path. Real changes may be made.",
+            "live_intro": "Live progress below is tracking a real run.",
+        }
     if scope == "ilo":
         return {
             "key": "real",
@@ -2465,9 +2478,21 @@ def validate_storage_ready_for_ilo_run(cfg: dict[str, Any]) -> dict[str, Any]:
             raise ValueError("Storage is included in the iLO run, but the approved storage plan is stale and must be re-approved.")
         raise ValueError("Storage is included in the iLO run, but no approved storage plan is saved for this kit.")
     approval = storage_review.get("approval", {}) or {}
+    discovery_raw_path = str(approval.get("discovery_raw_path") or "")
+    approved_host = str(approval.get("host") or "").strip()
+    if discovery_raw_path:
+        try:
+            raw_path = Path(discovery_raw_path).expanduser().resolve()
+            if raw_path.is_relative_to(STORAGE_RAID_EXPORT_DIR.resolve()) and raw_path.exists():
+                raw_payload = json.loads(raw_path.read_text(encoding="utf-8"))
+                approved_host = str(raw_payload.get("source_host") or approved_host).strip()
+        except Exception:
+            pass
     return {
         "included": True,
-        "discovery_raw_path": approval.get("discovery_raw_path", ""),
+        "approved_host": approved_host,
+        "approved_serial_number": approval.get("serial_number", ""),
+        "discovery_raw_path": discovery_raw_path,
         "plan_path": approval.get("plan_path", ""),
         "reboot_expected": bool(approval.get("reboot_expected")),
         "plan_summary": approval.get("plan_summary", {}),
@@ -4416,10 +4441,25 @@ def run_storage_as_part_of_real_run(
 ) -> dict[str, Any]:
     discovery_raw_path = str(storage_execution.get("discovery_raw_path") or "")
     raid_plan_path = str(storage_execution.get("plan_path") or "")
+    approved_artifact_host = str(storage_execution.get("approved_host") or "").strip()
+    expected_artifact_host = approved_artifact_host or validation_host
+    if approved_artifact_host and active_host and approved_artifact_host != active_host:
+        update_job(
+            kit_name,
+            job,
+            "Running",
+            "Run storage stage",
+            start_step,
+            total_steps,
+            (
+                "[INFO] Storage plan was approved from the previous iLO address "
+                f"{approved_artifact_host}; applying it through the verified active iLO endpoint {active_host}."
+            ),
+        )
     discovery, _discovery_paths, plan, plan_paths = restore_storage_page_state(
         discovery_raw_path=discovery_raw_path,
         raid_plan_path=raid_plan_path,
-        expected_host=validation_host,
+        expected_host=expected_artifact_host,
     )
     if not plan_paths:
         raise ValueError("Approved storage plan artifact is missing for the real run.")
@@ -4822,7 +4862,7 @@ def default_config():
         "included": {
             "ilo": True,
             "esxi": True,
-            "windows": True,
+            "windows": False,
             "qnap": False,
             "iosafe": False,
             "cisco_switch": False,
@@ -6577,6 +6617,10 @@ def run_esxi_real(cfg: dict, run_stamp: str | None = None):
             except Exception:
                 run_with_session_refresh("Power off", lambda c: c.power_reset(reset_type="ForceOff", system_path=system_path))
             wait_for_power_state(client, "Off", timeout_seconds=180, poll_interval=5)
+        else:
+            update_job(kit_name, job, "Running", "Power off", 4, total, "[OK] Server was already off; no shutdown request was needed before setting one-time boot")
+            trace_payload["steps"].append({"stage": "power_off", "status": "already_off", "from_state": current_power})
+            save_esxi_trace(trace_path, trace_payload)
         update_job(kit_name, job, "Running", "Power off", 5, total, "[OK] Server is off")
 
         vm = run_with_session_refresh("Mount ISO", lambda c: choose_virtual_media_device(c))

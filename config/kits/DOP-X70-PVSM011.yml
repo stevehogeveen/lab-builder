@@ -3,8 +3,8 @@ site:
 shared_network:
   subnet: 10.122.141.0/26
   dns_servers:
-  - 8.8.8.8
-  - 1.1.1.1
+  - 3.3.3.3
+  - 4.4.4.4
   - ''
   - ''
 shared_snmp:
@@ -13,6 +13,12 @@ shared_snmp:
   v3_auth_password: P@ssw0rd
   v3_priv_protocol: AES
   v3_priv_password: P@ssw0d
+  users:
+  - username: Private
+    auth_protocol: SHA
+    auth_password: P@ssw0rd
+    priv_protocol: AES
+    priv_password: P@ssw0d
 ip_plan:
   subnet: 10.122.141.0/26
   netmask: 255.255.255.192
@@ -22,14 +28,14 @@ ip_plan:
   max_usable_offset: 62
   gateway: 10.122.141.1
   switch: 10.122.141.2
-  esxi: 10.122.141.10
-  ilo: 10.122.141.11
+  esxi: 10.122.141.15
+  ilo: 10.122.141.30
   windows: 10.122.141.20
-  qnap: 10.122.141.30
+  qnap: 10.122.141.40
   iosafe: 10.122.141.31
 included:
   ilo: true
-  esxi: false
+  esxi: true
   windows: false
   qnap: false
   iosafe: false
@@ -41,9 +47,9 @@ section_completion:
   included: true
   credentials: true
 ilo:
-  host: 10.122.141.10
-  current_ip: 10.122.141.10
-  target_ip: 10.122.141.11
+  host: 10.122.141.30
+  current_ip: 10.122.141.30
+  target_ip: 10.122.141.30
   subnet_mask: 255.255.255.192
   gateway: 10.122.141.1
   dns_servers:
@@ -54,15 +60,16 @@ ilo:
   hostname: DOP-X70-ILO-Test
   username: esbaccess
   password: '!ESB43v3r!'
+  additional_users: []
 esxi:
-  hostname: esxi01
-  management_ip: 10.122.141.10
+  hostname: dop-esxi-test
+  management_ip: 10.122.141.15
   subnet_mask: 255.255.255.192
   gateway: 10.122.141.1
   dns_servers: &id001
-  - 8.8.8.8
-  - 1.1.1.1
-  root_password: ''
+  - 3.3.3.3
+  - 4.4.4.4
+  root_password: P@ssw0rd
 windows:
   vm_name: win2022-01
   admin_password: ''
@@ -72,7 +79,7 @@ windows:
   dns_servers: *id001
 qnap:
   hostname: ''
-  ip: 10.122.141.30
+  ip: 10.122.141.40
   username: ''
   password: ''
 iosafe:
@@ -90,7 +97,7 @@ storage:
   username: esbaccess
   password: '!ESB43v3r!'
   include_in_ilo_run: true
-  latest_discovery_raw_path: /home/administrator/lab-builder/artifacts/exports/storage-raid/MXQ85103SX/20260414-113624/raw.json
+  latest_discovery_raw_path: /home/administrator/lab-builder/artifacts/exports/storage-raid/MXQ85103SX/20260421-082516/raw.json
   latest_discovery_fingerprint: '{"controllers":[{"firmware_version":"1.98","model":"HPE
     Smart Array P408i-a SR Gen10","name":"Hpe Smart Storage Array Controller","path":"/redfish/v1/Systems/1/SmartStorage/ArrayControllers/0"},{"firmware_version":"","model":"","name":"","path":"/redfish/v1/systems/1/smartstorageconfig/"},{"firmware_version":"","model":"","name":"","path":"/redfish/v1/systems/1/smartstorageconfig/"},{"firmware_version":"","model":"","name":"","path":"/redfish/v1/systems/1/smartstorageconfig/settings/"}],"drives":[{"bay":"1","model":"EG001200JWJNQ","path":"/redfish/v1/Systems/1/SmartStorage/ArrayControllers/0/DiskDrives/0","serial_number":"WFK1YDG1","size_gib":1117.81,"smart_storage_location":"1I:1:1","status":"OK
     / Enabled"},{"bay":"2","model":"EG001200JWJNQ","path":"/redfish/v1/Systems/1/SmartStorage/ArrayControllers/0/DiskDrives/1","serial_number":"WFK1SN79","size_gib":1117.81,"smart_storage_location":"1I:1:2","status":"OK
@@ -100,26 +107,27 @@ storage:
     / Enabled"},{"bay":"6","model":"EG001200JWJNQ","path":"/redfish/v1/Systems/1/SmartStorage/ArrayControllers/0/DiskDrives/5","serial_number":"WFK1ZJ1W","size_gib":1117.81,"smart_storage_location":"2I:1:6","status":"OK
     / Enabled"},{"bay":"7","model":"EG001200JWJNQ","path":"/redfish/v1/Systems/1/SmartStorage/ArrayControllers/0/DiskDrives/6","serial_number":"WFK1SQZB","size_gib":1117.81,"smart_storage_location":"2I:1:7","status":"OK
     / Enabled"},{"bay":"8","model":"EG001200JWJNQ","path":"/redfish/v1/Systems/1/SmartStorage/ArrayControllers/0/DiskDrives/7","serial_number":"WFK1SQZW","size_gib":1117.81,"smart_storage_location":"2I:1:8","status":"OK
-    / Enabled"}],"server":{"generation":"Gen10","model":"ProLiant DL360 Gen10","serial_number":"MXQ85103SX"},"volumes":[{"capacity_gib":500.0,"name":"HpeSmartStorageLogicalDrive","path":"/redfish/v1/Systems/1/SmartStorage/ArrayControllers/0/LogicalDrives/1","raid_type":"1"},{"capacity_gib":3353.35,"name":"HpeSmartStorageLogicalDrive","path":"/redfish/v1/Systems/1/SmartStorage/ArrayControllers/0/LogicalDrives/2","raid_type":"6"}]}'
-  latest_plan_path: /home/administrator/lab-builder/artifacts/exports/storage-raid/MXQ85103SX/20260414-110028/raid-plan.yml
+    / Enabled"}],"server":{"generation":"Gen10","model":"ProLiant DL360 Gen10","serial_number":"MXQ85103SX"},"volumes":[{"capacity_gib":500.0,"name":"OS
+    RAID 1","path":"/redfish/v1/Systems/1/SmartStorage/ArrayControllers/0/LogicalDrives/1","raid_type":"1"},{"capacity_gib":3353.35,"name":"Data
+    RAID 6","path":"/redfish/v1/Systems/1/SmartStorage/ArrayControllers/0/LogicalDrives/2","raid_type":"6"}]}'
+  latest_plan_path: /home/administrator/lab-builder/artifacts/exports/storage-raid/MXQ85103SX/20260421-082516/raid-plan.yml
   latest_plan_summary:
     controller: ''
     os_bays: 1, 2
     data_bays: 3, 4, 5, 6, 7
     spare_bay: '8'
     mode: wipe and rebuild
-  latest_host: 10.122.141.10
+  latest_host: 10.122.141.11
   latest_serial_number: MXQ85103SX
-  state: stale
-  status_reason: Current storage target host (10.122.141.11) differs from the approved
-    storage host (10.122.141.10).
+  state: approved
+  status_reason: ''
   approval:
-    state: stale
-    approved_at: '2026-04-09 14:02:33'
-    host: 10.122.141.10
+    state: approved
+    approved_at: '2026-04-21 08:26:23'
+    host: 10.122.141.11
     serial_number: MXQ85103SX
-    discovery_raw_path: /home/administrator/lab-builder/artifacts/exports/storage-raid/MXQ85103SX/20260409-140201/raw.json
-    plan_path: /home/administrator/lab-builder/artifacts/exports/storage-raid/MXQ85103SX/20260409-140201/raid-plan.yml
+    discovery_raw_path: /home/administrator/lab-builder/artifacts/exports/storage-raid/MXQ85103SX/20260421-082516/raw.json
+    plan_path: /home/administrator/lab-builder/artifacts/exports/storage-raid/MXQ85103SX/20260421-082516/raid-plan.yml
     discovery_fingerprint: '{"controllers":[{"firmware_version":"1.98","model":"HPE
       Smart Array P408i-a SR Gen10","name":"Hpe Smart Storage Array Controller","path":"/redfish/v1/Systems/1/SmartStorage/ArrayControllers/0"},{"firmware_version":"","model":"","name":"","path":"/redfish/v1/systems/1/smartstorageconfig/"},{"firmware_version":"","model":"","name":"","path":"/redfish/v1/systems/1/smartstorageconfig/"},{"firmware_version":"","model":"","name":"","path":"/redfish/v1/systems/1/smartstorageconfig/settings/"}],"drives":[{"bay":"1","model":"EG001200JWJNQ","path":"/redfish/v1/Systems/1/SmartStorage/ArrayControllers/0/DiskDrives/0","serial_number":"WFK1YDG1","size_gib":1117.81,"smart_storage_location":"1I:1:1","status":"OK
       / Enabled"},{"bay":"2","model":"EG001200JWJNQ","path":"/redfish/v1/Systems/1/SmartStorage/ArrayControllers/0/DiskDrives/1","serial_number":"WFK1SN79","size_gib":1117.81,"smart_storage_location":"1I:1:2","status":"OK
@@ -129,7 +137,9 @@ storage:
       / Enabled"},{"bay":"6","model":"EG001200JWJNQ","path":"/redfish/v1/Systems/1/SmartStorage/ArrayControllers/0/DiskDrives/5","serial_number":"WFK1ZJ1W","size_gib":1117.81,"smart_storage_location":"2I:1:6","status":"OK
       / Enabled"},{"bay":"7","model":"EG001200JWJNQ","path":"/redfish/v1/Systems/1/SmartStorage/ArrayControllers/0/DiskDrives/6","serial_number":"WFK1SQZB","size_gib":1117.81,"smart_storage_location":"2I:1:7","status":"OK
       / Enabled"},{"bay":"8","model":"EG001200JWJNQ","path":"/redfish/v1/Systems/1/SmartStorage/ArrayControllers/0/DiskDrives/7","serial_number":"WFK1SQZW","size_gib":1117.81,"smart_storage_location":"2I:1:8","status":"OK
-      / Enabled"}],"server":{"generation":"Gen10","model":"ProLiant DL360 Gen10","serial_number":"MXQ85103SX"},"volumes":[{"capacity_gib":500.0,"name":"HpeSmartStorageLogicalDrive","path":"/redfish/v1/Systems/1/SmartStorage/ArrayControllers/0/LogicalDrives/1","raid_type":"1"},{"capacity_gib":3353.35,"name":"HpeSmartStorageLogicalDrive","path":"/redfish/v1/Systems/1/SmartStorage/ArrayControllers/0/LogicalDrives/2","raid_type":"6"}]}'
+      / Enabled"}],"server":{"generation":"Gen10","model":"ProLiant DL360 Gen10","serial_number":"MXQ85103SX"},"volumes":[{"capacity_gib":500.0,"name":"OS
+      RAID 1","path":"/redfish/v1/Systems/1/SmartStorage/ArrayControllers/0/LogicalDrives/1","raid_type":"1"},{"capacity_gib":3353.35,"name":"Data
+      RAID 6","path":"/redfish/v1/Systems/1/SmartStorage/ArrayControllers/0/LogicalDrives/2","raid_type":"6"}]}'
     plan_summary:
       controller: ''
       os_bays: 1, 2
@@ -137,3 +147,5 @@ storage:
       spare_bay: '8'
       mode: wipe and rebuild
     reboot_expected: true
+_runtime:
+  esxi_run_stamp: 20260421-103335

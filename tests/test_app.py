@@ -2659,10 +2659,12 @@ def test_run_esxi_real_builds_iso_and_starts_virtual_media_boot(monkeypatch, tmp
         )
         return built_iso
 
+    initial_power_state = {"value": "On"}
+
     class FakeEsxiILOClient:
         def __init__(self, cfg):
             self.cfg = cfg
-            self.power_state = "On"
+            self.power_state = initial_power_state["value"]
             self.boot_state = {
                 "Boot": {
                     "BootSourceOverrideEnabled": "Disabled",
@@ -2886,6 +2888,19 @@ def test_run_esxi_real_builds_iso_and_starts_virtual_media_boot(monkeypatch, tmp
     ) in client.calls
     assert ("set_one_time_boot_cd", "/redfish/v1/Systems/1") in client.calls
     assert ("power_reset", "On", "/redfish/v1/Systems/1") in client.calls
+
+    initial_power_state["value"] = "Off"
+    created_clients.clear()
+    cfg["site"]["name"] = "Real ESXi Already Off Kit"
+    main.run_esxi_real(cfg, run_stamp="20260416-120001")
+    off_job = main.load_job("Real ESXi Already Off Kit")
+    off_logs = "\n".join(off_job["logs"])
+    off_client = created_clients[-1]
+
+    assert "[OK] Server was already off; no shutdown request was needed before setting one-time boot" in off_logs
+    assert ("power_reset", "GracefulShutdown", "/redfish/v1/Systems/1") not in off_client.calls
+    assert ("power_reset", "ForceOff", "/redfish/v1/Systems/1") not in off_client.calls
+    assert ("power_reset", "On", "/redfish/v1/Systems/1") in off_client.calls
 
 
 def test_run_esxi_real_reconnects_after_build_when_ilo_session_has_expired(monkeypatch, tmp_path):
@@ -3699,6 +3714,7 @@ def test_run_ilo_real_executes_storage_when_included(monkeypatch):
     client = created_clients[0]
 
     assert "[RUNNING] Starting the approved storage stage after the iLO stage finished." in joined_logs
+    assert "Storage plan was approved from the previous iLO address 10.10.8.11; applying it through the verified active iLO endpoint 10.10.8.91." in joined_logs
     assert "Submitted the consolidated SmartStorageConfig pending payload" in joined_logs
     assert "DNS apply attempt" in joined_logs
     assert "DNS verified" in joined_logs
