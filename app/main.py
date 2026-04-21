@@ -155,18 +155,22 @@ def list_kits():
 def normalize_run_center_scope(scope: str | None, selected_scopes: list[str] | None = None) -> str:
     normalized_scope = str(scope or "included").strip().lower() or "included"
     picks: list[str] = []
+    includes_whole_run = False
     for item in selected_scopes or []:
         clean = str(item or "").strip().lower()
         if not clean:
             continue
         if clean == "included":
-            return "included"
+            includes_whole_run = True
+            continue
         if clean in RUN_CENTER_STAGE_KEYS and clean not in picks:
             picks.append(clean)
     if picks:
         if len(picks) == 1:
             return picks[0]
         return "multi__" + "__".join(picks)
+    if includes_whole_run:
+        return "included"
     return normalized_scope
 
 
@@ -969,6 +973,10 @@ def storage_discovery_fingerprint(discovery: dict[str, Any]) -> str:
     return json.dumps(payload, sort_keys=True, separators=(",", ":"))
 
 
+def storage_item_display_name(item: dict[str, Any]) -> str:
+    return str(item.get("logical_drive_name") or item.get("name") or item.get("id") or "").strip()
+
+
 def ensure_storage_config(cfg: dict[str, Any]) -> dict[str, Any]:
     storage_cfg = cfg.setdefault("storage", {})
     approval = storage_cfg.setdefault("approval", {})
@@ -1180,6 +1188,25 @@ def resolve_storage_target_host(cfg: dict[str, Any]) -> dict[str, Any]:
         "valid": False,
         "error": "No storage target host is resolved. Set the planned iLO IP on the iLO page or enter an explicit storage target override before using Storage setup actions.",
     }
+
+
+def resolve_ilo_control_host(cfg: dict[str, Any]) -> str:
+    ilo_cfg = cfg.get("ilo", {}) or {}
+    return str(
+        ilo_cfg.get("target_ip")
+        or cfg.get("ip_plan", {}).get("ilo")
+        or ilo_cfg.get("current_ip")
+        or ilo_cfg.get("host")
+        or ""
+    ).strip()
+
+
+def promote_final_ilo_endpoint(cfg: dict[str, Any], final_ip: str | None = None) -> dict[str, Any]:
+    final = str(final_ip or resolve_ilo_control_host(cfg) or "").strip()
+    if final:
+        cfg.setdefault("ilo", {})["current_ip"] = final
+        cfg.setdefault("ilo", {})["host"] = final
+    return cfg
 
 
 def resolve_storage_target_credentials(cfg: dict[str, Any]) -> dict[str, Any]:
@@ -2221,15 +2248,49 @@ def build_execution_launch_options(cfg: dict[str, Any], scope: str) -> dict[str,
                 "summary": "Starts the live iLO run and may apply real changes to the server." + (" The approved storage plan will also be applied." if storage_real else ""),
             },
         }
-    if scope == "included" and cfg.get("included", {}).get("ilo"):
-        return {
-            "preview": preview_option,
-            "real": {
-                "scope": "ilo",
-                "label": "Run for real",
-                "summary": "Starts the live iLO run for this kit." + (" The approved storage plan will also be applied." if storage_real else ""),
-            },
-        }
+    if scope == "included":
+        selected = run_center_scope_keys(scope, cfg)
+        supported_real = [item for item in selected if item in {"ilo", "storage", "esxi"}]
+        unsupported_real = [item for item in selected if item not in {"ilo", "storage", "esxi"}]
+        if unsupported_real:
+            return {"preview": preview_option, "real": None}
+        if len(supported_real) > 1:
+            real_scope = "multi__" + "__".join(supported_real)
+            return {
+                "preview": preview_option,
+                "real": {
+                    "scope": real_scope,
+                    "label": "Run whole kit for real",
+                    "summary": "Runs the included iLO, storage, and ESXi stages in order. Later stages use the final iLO IP after the iLO stage finishes.",
+                },
+            }
+        if supported_real == ["ilo"]:
+            return {
+                "preview": preview_option,
+                "real": {
+                    "scope": "ilo",
+                    "label": "Run for real",
+                    "summary": "Starts the live iLO run for this kit." + (" The approved storage plan will also be applied." if storage_real else ""),
+                },
+            }
+        if supported_real == ["storage"]:
+            return {
+                "preview": preview_option,
+                "real": {
+                    "scope": "storage",
+                    "label": "Run for real",
+                    "summary": "Applies the approved storage plan to the current server using the exact approved discovery and plan artifacts.",
+                },
+            }
+        if supported_real == ["esxi"]:
+            return {
+                "preview": preview_option,
+                "real": {
+                    "scope": "esxi",
+                    "label": "Run for real",
+                    "summary": "Builds the custom ESXi installer ISO, mounts it through virtual media, sets one-time boot, and starts the real ESXi boot sequence.",
+                },
+            }
     if scope == "esxi":
         return {
             "preview": preview_option,
@@ -2248,6 +2309,17 @@ def build_execution_launch_options(cfg: dict[str, Any], scope: str) -> dict[str,
                 "summary": "Applies the approved storage plan to the current server using the exact approved discovery and plan artifacts.",
             },
         }
+    if scope.startswith("multi__"):
+        selected = run_center_scope_keys(scope, cfg)
+        if selected and all(item in {"ilo", "storage", "esxi"} for item in selected):
+            return {
+                "preview": preview_option,
+                "real": {
+                    "scope": scope,
+                    "label": "Run selected for real",
+                    "summary": "Runs the selected iLO, storage, and ESXi stages in order. Later stages use the final iLO IP after the iLO stage finishes.",
+                },
+            }
     return {"preview": preview_option, "real": None}
 
 
@@ -2762,6 +2834,51 @@ def build_storage_planning_drives(summary: dict[str, Any] | None) -> list[dict[s
             drive["eligible"] = bool(drive["size_gib"] > 0 and storage_status_is_eligible(drive["status"]))
             planning_drives.append(drive)
     return sorted(planning_drives, key=storage_drive_sort_key)
+
+
+def select_primary_storage_controller(summary: dict[str, Any] | None) -> dict[str, Any]:
+    summary = summary or {}
+    standard = summary.get("standard_redfish_storage", {}) or {}
+    hpe = summary.get("hpe_smart_storage", {}) or {}
+    controllers = list(hpe.get("controllers", []) or []) + list(standard.get("controllers", []) or [])
+    for controller in controllers:
+        if controller.get("model") or controller.get("name"):
+            return {**controller, "firmware_version": storage_firmware_display(controller.get("firmware_version"))}
+    if controllers:
+        return {**controllers[0], "firmware_version": storage_firmware_display(controllers[0].get("firmware_version"))}
+    return {}
+
+
+def build_storage_display_drives(summary: dict[str, Any] | None) -> list[dict[str, Any]]:
+    summary = summary or {}
+    standard = summary.get("standard_redfish_storage", {}) or {}
+    hpe = summary.get("hpe_smart_storage", {}) or {}
+    volumes = list(hpe.get("volumes", []) or []) + list(standard.get("volumes", []) or [])
+    membership_by_bay: dict[str, list[str]] = {}
+    spare_by_bay: dict[str, list[str]] = {}
+    for volume in volumes:
+        volume_label = storage_item_display_name(volume) or "Logical volume"
+        if volume.get("raid_type"):
+            volume_label = f"{volume_label} / RAID {volume.get('raid_type')}"
+        for bay in volume.get("drive_bays", []) or []:
+            membership_by_bay.setdefault(str(bay), []).append(volume_label)
+        for bay in volume.get("spare_bays", []) or []:
+            spare_by_bay.setdefault(str(bay), []).append(volume_label)
+
+    display_drives = []
+    for drive in build_storage_planning_drives(summary):
+        bay = str(drive.get("bay") or drive.get("id") or "")
+        memberships = membership_by_bay.get(bay, [])
+        spare_for = spare_by_bay.get(bay, [])
+        role = "Unassigned"
+        if memberships and spare_for:
+            role = f"{'; '.join(memberships)}; spare for {'; '.join(spare_for)}"
+        elif memberships:
+            role = "; ".join(memberships)
+        elif spare_for:
+            role = f"Spare for {'; '.join(spare_for)}"
+        display_drives.append({**drive, "volume_membership": role})
+    return display_drives
 
 
 def build_raid_plan(discovery: dict, discovery_paths: dict[str, Path], overrides: dict[str, Any] | None = None) -> dict:
@@ -5030,9 +5147,16 @@ def normalize_ip_plan(cfg: dict, subnet: str) -> dict:
         for key in DEFAULT_IP_OFFSETS
     }
 
-    unique_values = list(plan.values())
-    if len(unique_values) != len(set(unique_values)):
-        raise ValueError("Each device IP must be unique within the kit")
+    ip_owners: dict[str, list[str]] = {}
+    for key, value in plan.items():
+        ip_owners.setdefault(value, []).append(key.replace("_", " "))
+    duplicates = [
+        f"{ip} ({', '.join(labels)})"
+        for ip, labels in ip_owners.items()
+        if len(labels) > 1
+    ]
+    if duplicates:
+        raise ValueError("Each device IP must be unique within the kit. Duplicate: " + "; ".join(duplicates))
     return plan
 
 
@@ -5136,8 +5260,8 @@ def build_execution_review(cfg: dict, scope: str):
     lines = [f"Execution scope: {scope}", ""]
     execution_mode = execution_mode_for_scope(scope)
     storage_review = build_storage_review_context(cfg)
-    esxi_install_review = build_esxi_install_review(cfg) if scope in {"esxi", "included"} else {}
     selected_scope_keys = run_center_scope_keys(scope, cfg)
+    esxi_install_review = build_esxi_install_review(cfg) if scope in {"esxi", "included"} or "esxi" in selected_scope_keys else {}
     storage_validation_error = None
     try:
         storage_execution = validate_storage_ready_for_ilo_run(cfg)
@@ -5656,6 +5780,10 @@ def validate_execution_scope(cfg: dict, scope: str) -> None:
                 raise ValueError("The approved storage plan is stale and must be reviewed again before a storage run.")
             if not storage_review.get("approved"):
                 raise ValueError("No approved storage plan is saved for this kit.")
+        if "esxi" in selected:
+            esxi_values = get_esxi_effective_values(cfg)
+            if esxi_values["missing_fields"]:
+                raise ValueError(f"ESXi setup is missing: {', '.join(esxi_values['missing_fields'])}.")
         return
     if scope == "storage":
         storage_review = build_storage_review_context(cfg)
@@ -5663,10 +5791,6 @@ def validate_execution_scope(cfg: dict, scope: str) -> None:
             raise ValueError("The approved storage plan is stale and must be reviewed again before a storage run.")
         if not storage_review.get("approved"):
             raise ValueError("No approved storage plan is saved for this kit.")
-        if "esxi" in selected:
-            esxi_values = get_esxi_effective_values(cfg)
-            if esxi_values["missing_fields"]:
-                raise ValueError(f"ESXi setup is missing: {', '.join(esxi_values['missing_fields'])}.")
         return
     if scope not in {"ilo", "included"}:
         return
@@ -5826,9 +5950,61 @@ def append_job_history_snapshot(cfg: dict, scope: str):
 def execute_real_job_in_background(cfg: dict, scope: str):
     kit_name = cfg["site"]["name"]
     try:
+        if scope.startswith("multi__"):
+            selected = run_center_scope_keys(scope, cfg)
+            if not selected:
+                raise RuntimeError("No stages were selected for the real run.")
+            if not all(item in {"ilo", "storage", "esxi"} for item in selected):
+                raise RuntimeError("Real selected-stage execution currently supports iLO, storage, and ESXi only.")
+            storage_was_handled_by_ilo = False
+            if "ilo" in selected:
+                run_ilo_real(cfg)
+                finished_job = load_job(kit_name)
+                if finished_job.get("status") == "Failed":
+                    return
+                cfg = load_kit_config(kit_name)
+                promote_final_ilo_endpoint(cfg)
+                save_kit_config(cfg)
+                storage_was_handled_by_ilo = bool((finished_job.get("storage_run_directory") or "") or cfg.get("storage", {}).get("include_in_ilo_run"))
+            if "storage" in selected and not storage_was_handled_by_ilo:
+                cfg = load_kit_config(kit_name)
+                promote_final_ilo_endpoint(cfg)
+                save_kit_config(cfg)
+                storage_execution = validate_storage_ready_for_ilo_run(cfg)
+                discovery_raw_path = str(storage_execution.get("discovery_raw_path") or "")
+                raid_plan_path = str(storage_execution.get("plan_path") or "")
+                if not discovery_raw_path or not raid_plan_path:
+                    raise RuntimeError("Approved storage artifacts are missing for the real storage run.")
+                _discovery, _discovery_paths, plan, plan_paths = restore_storage_page_state(
+                    discovery_raw_path=discovery_raw_path,
+                    raid_plan_path=raid_plan_path,
+                    expected_host=str(storage_execution.get("approved_host") or ""),
+                )
+                if not plan_paths:
+                    raise RuntimeError("Approved storage plan artifact is missing for the real storage run.")
+                apply_mode = storage_apply_mode_for_plan(plan)
+                apply_paths = initialize_storage_apply_artifacts(cfg, plan, plan_paths)
+                run_storage_apply(cfg, discovery_raw_path, raid_plan_path, apply_mode, apply_paths)
+                workflow_state = load_storage_workflow_state(apply_paths)
+                apply_state = (workflow_state.get("apply", {}) if workflow_state else {}) or {}
+                if apply_state.get("workflow_state") == "staged_reboot_required" and not apply_state.get("reboot_requested"):
+                    start_storage_manual_reboot_watch_background(cfg, discovery_raw_path, raid_plan_path, apply_paths)
+                    return
+            elif "storage" in selected and storage_was_handled_by_ilo:
+                cfg = load_kit_config(kit_name)
+                promote_final_ilo_endpoint(cfg)
+                save_kit_config(cfg)
+            if "esxi" in selected:
+                cfg = load_kit_config(kit_name)
+                promote_final_ilo_endpoint(cfg)
+                save_kit_config(cfg)
+                run_esxi_real(cfg, run_stamp=str((cfg.get("_runtime", {}) or {}).get("esxi_run_stamp") or "").strip() or None)
+            return
         if scope == "ilo":
             run_ilo_real(cfg)
         elif scope == "storage":
+            promote_final_ilo_endpoint(cfg)
+            save_kit_config(cfg)
             storage_execution = validate_storage_ready_for_ilo_run(cfg)
             discovery_raw_path = str(storage_execution.get("discovery_raw_path") or "")
             raid_plan_path = str(storage_execution.get("plan_path") or "")
@@ -5849,6 +6025,8 @@ def execute_real_job_in_background(cfg: dict, scope: str):
             if apply_state.get("workflow_state") == "staged_reboot_required" and not apply_state.get("reboot_requested"):
                 start_storage_manual_reboot_watch_background(cfg, discovery_raw_path, raid_plan_path, apply_paths)
         elif scope == "esxi":
+            promote_final_ilo_endpoint(cfg)
+            save_kit_config(cfg)
             run_esxi_real(cfg, run_stamp=str((cfg.get("_runtime", {}) or {}).get("esxi_run_stamp") or "").strip() or None)
         else:
             raise RuntimeError(f"Real execution is not wired for scope: {scope}")
@@ -5945,7 +6123,7 @@ def get_esxi_effective_values(cfg: dict[str, Any]) -> dict[str, Any]:
 def build_esxi_install_review(cfg: dict, *, run_stamp: str | None = None) -> dict[str, Any]:
     ilo_cfg = cfg.get("ilo", {}) or {}
     kit_name = sanitize_kit_name(cfg.get("site", {}).get("name", "Kit-01"))
-    login_ip = str(ilo_cfg.get("current_ip") or ilo_cfg.get("host") or "").strip()
+    login_ip = resolve_ilo_control_host(cfg)
     stamp = (run_stamp or datetime.now().strftime("%Y%m%d-%H%M%S")).strip()
     output_name = f"esxi-{stamp}"
     output_iso = EXPORTS_DIR / "esxi-isos" / kit_name / output_name / f"{output_name}.iso"
@@ -6107,7 +6285,7 @@ def run_esxi_real(cfg: dict, run_stamp: str | None = None):
     kit_name = cfg["site"]["name"]
     ilo_cfg = cfg.get("ilo", {}) or {}
     esxi_cfg = cfg.get("esxi", {}) or {}
-    login_ip = str(ilo_cfg.get("current_ip") or ilo_cfg.get("host") or "").strip()
+    login_ip = resolve_ilo_control_host(cfg)
     username = str(ilo_cfg.get("username") or "").strip()
     password = ilo_cfg.get("password", "")
     total = 13
@@ -6288,6 +6466,15 @@ def run_esxi_real(cfg: dict, run_stamp: str | None = None):
                 f"ssh={'yes' if esxi_review['enable_ssh'] else 'no'}, "
                 f"disable_ipv6={'yes' if esxi_review['disable_ipv6'] else 'no'}"
             ),
+        )
+        update_job(
+            kit_name,
+            job,
+            "Running",
+            "Review install values",
+            1,
+            total,
+            "[INFO] First boot network check: attach ESXi management to the first physical NIC with link",
         )
         update_job(kit_name, job, "Running", "Review install values", 1, total, f"[INFO] Base ISO: {base_iso_path}")
 
@@ -8045,6 +8232,8 @@ def run_ilo_real(cfg: dict):
                 job["ilo_reset_status"] = "Completed"
                 job["ilo_final_ip_verified"] = True
                 job["ilo_stage_finished"] = True
+                promote_final_ilo_endpoint(cfg, expected_final_ip)
+                save_kit_config(cfg)
                 save_job(kit_name, job)
                 ilo_stage_finished = True
                 update_job(
@@ -8125,6 +8314,8 @@ def run_ilo_real(cfg: dict):
             job["ilo_reset_status"] = "Not required"
             job["ilo_final_ip_verified"] = bool(expected_final_ip)
             job["ilo_stage_finished"] = True
+            promote_final_ilo_endpoint(cfg, expected_final_ip)
+            save_kit_config(cfg)
             save_job(kit_name, job)
             ilo_stage_finished = True
             update_job(
@@ -8286,7 +8477,10 @@ def render_page(
     storage_target = resolve_storage_target_host(cfg)
     storage_credentials = resolve_storage_target_credentials(cfg)
     storage_execution_status = build_storage_execution_status(cfg)
-    storage_planning_drives = build_storage_planning_drives((storage_discovery or {}).get("summary") if storage_discovery else None)
+    storage_discovery_summary = (storage_discovery or {}).get("summary", storage_discovery) if storage_discovery else None
+    storage_planning_drives = build_storage_planning_drives(storage_discovery_summary)
+    storage_display_controller = select_primary_storage_controller(storage_discovery_summary)
+    storage_display_drives = build_storage_display_drives(storage_discovery_summary)
     storage_plan_defaults = storage_plan
     if not storage_plan_defaults and storage_discovery and storage_export_paths:
         try:
@@ -8375,6 +8569,8 @@ def render_page(
         "storage_credentials": storage_credentials,
         "storage_execution_status": storage_execution_status,
         "storage_planning_drives": storage_planning_drives,
+        "storage_display_controller": storage_display_controller,
+        "storage_display_drives": storage_display_drives,
         "storage_plan_defaults": storage_plan_defaults,
         "workflow_contexts": workflow_contexts,
         "page_comparisons": page_comparisons,
@@ -8403,6 +8599,60 @@ def render_page(
         name=template_name,
         context=context,
     )
+
+
+def page_name_from_request_path(path: str) -> str:
+    first = (path or "/").strip("/").split("/", 1)[0].replace("-", "_")
+    route_map = {
+        "": "dashboard",
+        "global_settings": "global_settings",
+        "save_global_settings": "global_settings",
+        "save_config": "configuration",
+        "save_ilo_settings": "ilo",
+        "export_ilo_inventory": "ilo",
+        "save_storage_target": "storage",
+        "read_current_storage": "storage",
+        "plan_raid_layout": "storage",
+        "approve_storage_plan": "storage",
+        "clear_storage_approval": "storage",
+        "apply_storage_layout": "storage",
+        "reboot_storage_now": "storage",
+        "save_esxi_settings": "esxi",
+        "save_windows_settings": "windows",
+        "save_qnap_settings": "qnap",
+        "prepare_execute": "execution",
+        "execute": "execution",
+        "configs": "configs",
+        "reports": "configs",
+        "history": "history",
+        "kits": "kits",
+    }
+    return normalize_page_name(route_map.get(first, first))
+
+
+@app.exception_handler(Exception)
+async def global_http_exception_handler(request: Request, exc: Exception):
+    error_text = str(exc).splitlines()[0] or exc.__class__.__name__
+    print(f"[ERROR] Unhandled request error on {request.url.path}: {exc!r}")
+    try:
+        cfg = load_kit_config()
+        response = render_page(
+            request,
+            cfg,
+            active_page=page_name_from_request_path(request.url.path),
+            error_message=f"The app hit an unexpected error: {error_text}",
+        )
+        response.status_code = 500
+        return response
+    except Exception as render_exc:
+        print(f"[ERROR] Could not render error page: {render_exc!r}")
+        return HTMLResponse(
+            f"<div id='main-content'><section class='global-warning-popup' role='alert'>"
+            f"<div><strong>Warning: something went wrong</strong></div>"
+            f"<div>The app hit an unexpected error: {error_text}</div>"
+            f"</section></div>",
+            status_code=500,
+        )
 
 
 @app.websocket("/ws/job/{kit_name}")
@@ -8896,7 +9146,10 @@ async def save_ilo_settings_route(
     cfg["ilo"]["password"] = ilo_password
     cfg["ilo"]["additional_users"] = extract_ilo_additional_users_from_form(form)
     cfg["included"]["ilo"] = True
-    cfg = apply_ip_plan(cfg)
+    try:
+        cfg = apply_ip_plan(cfg)
+    except Exception as e:
+        return render_page(request, cfg, active_page=return_page, error_message=f"Could not save iLO setup: {e}")
     save_kit_config(cfg)
     append_activity_event(
         cfg["site"]["name"],
@@ -9964,6 +10217,19 @@ async def execute_scope(
 ):
     cfg = load_kit_config()
     scope = normalize_run_center_scope(scope, selected_scopes)
+    launch_options = build_execution_launch_options(cfg, scope)
+    real_launch = launch_options.get("real")
+    if not real_launch:
+        return render_page(
+            request,
+            cfg,
+            active_page=return_page,
+            error_message="Execution blocked: a real run is not available for the selected stages.",
+            execution_preview=build_execution_review(cfg, scope).get("detail_text"),
+            execution_review=build_execution_review(cfg, scope),
+            confirm_scope=scope,
+        )
+    scope = str(real_launch.get("scope") or scope)
     runtime = dict(cfg.get("_runtime", {}) or {})
     if esxi_run_stamp.strip():
         runtime["esxi_run_stamp"] = esxi_run_stamp.strip()
@@ -10018,6 +10284,8 @@ async def execute_scope(
         msg = "Real storage automation started in the background. Check Job Monitor for live progress and logs."
     elif scope == "esxi":
         msg = "Real ESXi automation started in the background. Check Job Monitor for live progress and logs."
+    elif scope.startswith("multi__"):
+        msg = "Real selected-stage automation started in the background. Check Job Monitor for live progress and logs."
     else:
         msg = f"Preview started for scope: {scope}. No real changes will be made."
 

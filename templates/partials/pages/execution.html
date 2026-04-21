@@ -54,21 +54,27 @@
             data-action-title="Preparing run review"
             data-action-start="Checking the selected run."
         >
+            {% set selected_values = execution_review.selected_scopes_for_form if execution_review and execution_review.selected_scopes_for_form else selected_run_scopes %}
             <input type="hidden" name="return_page" value="execution">
-            <div class="grid grid-cols-1 md:grid-cols-[minmax(0,1fr)_auto] gap-4 items-end">
+            <div class="space-y-4">
                 <div>
-                    <label class="block text-sm font-bold text-slate-300 mb-2">Choose run</label>
-                    <select name="scope" class="input">
-                        <option value="included" {% if confirm_scope == 'included' %}selected{% endif %}>Whole run</option>
-                        <option value="ilo" {% if confirm_scope == 'ilo' %}selected{% endif %}>iLO</option>
-                        <option value="esxi" {% if confirm_scope == 'esxi' %}selected{% endif %}>ESXi</option>
-                        <option value="windows" {% if confirm_scope == 'windows' %}selected{% endif %}>Windows</option>
-                        <option value="qnap" {% if confirm_scope == 'qnap' %}selected{% endif %}>QNAP</option>
-                        <option value="iosafe" {% if confirm_scope == 'iosafe' %}selected{% endif %}>ioSafe</option>
-                        <option value="cisco_switch" {% if confirm_scope == 'cisco_switch' %}selected{% endif %}>Cisco Switch</option>
-                    </select>
+                    <label class="block text-sm font-bold text-slate-300 mb-2">Choose what to run</label>
+                    <div class="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-3">
+                        <label class="check card card-compact">
+                            <input type="checkbox" name="selected_scopes" value="included" {% if 'included' in selected_values %}checked{% endif %}>
+                            <span>Whole run</span>
+                        </label>
+                        {% for item in [('ilo', 'iLO'), ('storage', 'Storage'), ('esxi', 'ESXi'), ('windows', 'Windows'), ('qnap', 'QNAP'), ('iosafe', 'ioSafe'), ('cisco_switch', 'Cisco Switch')] %}
+                        <label class="check card card-compact">
+                            <input type="checkbox" name="selected_scopes" value="{{ item[0] }}" {% if item[0] in selected_values %}checked{% endif %}>
+                            <span>{{ item[1] }}</span>
+                        </label>
+                        {% endfor %}
+                    </div>
                 </div>
-                <button class="btn btn-primary action-button" type="submit">Review run before execution</button>
+                <div class="actions">
+                    <button class="btn btn-primary action-button" type="submit">Review run before execution</button>
+                </div>
             </div>
         </form>
     </section>
@@ -91,6 +97,60 @@
             </div>
             {% endfor %}
         </div>
+
+        {% if execution_review.esxi_install_review %}
+        <div class="card card-compact">
+            <div class="flex items-center justify-between gap-3 mb-3">
+                <div>
+                    <div class="text-sm font-bold text-slate-300">ESXi installer values</div>
+                    <div class="text-xs text-slate-400">These are the exact saved values that Run Center will bake into the installer ISO for this real run.</div>
+                </div>
+                <span class="status ready">saved kit values</span>
+            </div>
+            <div class="grid grid-cols-1 md:grid-cols-2 gap-2 text-sm">
+                <div class="result" style="margin-top: 0;">Hostname: {{ execution_review.esxi_install_review.hostname or 'Not set' }}</div>
+                <div class="result" style="margin-top: 0;">Management IP: {{ execution_review.esxi_install_review.management_ip or 'Not set' }}</div>
+                <div class="result" style="margin-top: 0;">Subnet mask: {{ execution_review.esxi_install_review.subnet_mask or 'Not set' }}</div>
+                <div class="result" style="margin-top: 0;">Gateway: {{ execution_review.esxi_install_review.gateway or 'Not set' }}</div>
+                <div class="result" style="margin-top: 0;">DNS servers: {{ ', '.join(execution_review.esxi_install_review.dns_servers) or 'Not set' }}</div>
+                <div class="result" style="margin-top: 0;">Root password: {{ 'Saved' if execution_review.esxi_install_review.root_password_saved else 'Missing' }}</div>
+                <div class="result" style="margin-top: 0;">VLAN ID: {{ execution_review.esxi_install_review.vlan_id or 'Not set' }}</div>
+                <div class="result" style="margin-top: 0;">NTP server: {{ execution_review.esxi_install_review.ntp_server or 'Not set' }}</div>
+                <div class="result" style="margin-top: 0;">Enable SSH: {{ 'Yes' if execution_review.esxi_install_review.enable_ssh else 'No' }}</div>
+                <div class="result" style="margin-top: 0;">Disable IPv6: {{ 'Yes' if execution_review.esxi_install_review.disable_ipv6 else 'No' }}</div>
+                <div class="result md:col-span-2" style="margin-top: 0;">Base ISO path: {{ execution_review.esxi_install_review.base_iso_path }}</div>
+                <div class="result md:col-span-2" style="margin-top: 0;">Built ISO path: {{ execution_review.esxi_install_review.output_iso_path }}</div>
+                <div class="result md:col-span-2" style="margin-top: 0;">Virtual media URL: {{ execution_review.esxi_install_review.virtual_media_url }}</div>
+                <div class="result md:col-span-2" style="margin-top: 0;">Manual test defaults: {{ execution_review.esxi_install_review.manual_defaults_label }}</div>
+                {% if execution_review.esxi_install_review.missing_fields %}
+                <div class="result md:col-span-2" style="margin-top: 0;">Missing required values: {{ ', '.join(execution_review.esxi_install_review.missing_fields) }}</div>
+                {% endif %}
+            </div>
+        </div>
+        {% endif %}
+
+        {% if execution_review.storage_run_review %}
+        <div class="card card-compact">
+            <div class="flex items-center justify-between gap-3 mb-3">
+                <div>
+                    <div class="text-sm font-bold text-slate-300">Storage run values</div>
+                    <div class="text-xs text-slate-400">These are the exact approved storage artifacts and layout details that Run Center will use for the real storage run.</div>
+                </div>
+                <span class="status ready">approved plan</span>
+            </div>
+            <div class="grid grid-cols-1 md:grid-cols-2 gap-2 text-sm">
+                <div class="result" style="margin-top: 0;">Apply mode: {{ execution_review.storage_run_review.apply_mode_label or 'Not set' }}</div>
+                <div class="result" style="margin-top: 0;">Approved host: {{ execution_review.storage_run_review.approved_host or 'Not set' }}</div>
+                <div class="result" style="margin-top: 0;">Controller: {{ execution_review.storage_run_review.controller or 'Not set' }}</div>
+                <div class="result" style="margin-top: 0;">Restart expected: {{ 'Yes' if execution_review.storage_run_review.reboot_expected else 'No' }}</div>
+                <div class="result" style="margin-top: 0;">OS RAID 1 bays: {{ execution_review.storage_run_review.os_bays or 'Not selected' }}</div>
+                <div class="result" style="margin-top: 0;">Data RAID bays: {{ execution_review.storage_run_review.data_bays or 'Not selected' }}</div>
+                <div class="result" style="margin-top: 0;">Hot spare bay: {{ execution_review.storage_run_review.spare_bay or 'Not reserved' }}</div>
+                <div class="result md:col-span-2" style="margin-top: 0;">Approved plan path: {{ execution_review.storage_run_review.plan_path or 'Not set' }}</div>
+                <div class="result md:col-span-2" style="margin-top: 0;">Approved discovery path: {{ execution_review.storage_run_review.discovery_raw_path or 'Not set' }}</div>
+            </div>
+        </div>
+        {% endif %}
 
         <div>
             <div class="text-sm font-bold text-slate-300 mb-2">Stages that will run</div>
@@ -147,6 +207,9 @@
             >
                 <input type="hidden" name="scope" value="{{ execution_review.launch_options.preview.scope }}">
                 <input type="hidden" name="return_page" value="execution">
+                {% for item in execution_review.selected_scopes_for_form %}
+                <input type="hidden" name="selected_scopes" value="{{ item }}">
+                {% endfor %}
                 <div class="font-semibold mb-2">Preview only</div>
                 <div class="text-sm text-slate-400 mb-4">{{ execution_review.launch_options.preview.summary }}</div>
                 <button class="btn btn-primary action-button" type="submit">Start preview run</button>
@@ -162,6 +225,9 @@
             >
                 <input type="hidden" name="scope" value="{{ execution_review.launch_options.real.scope if execution_review.launch_options.real else confirm_scope }}">
                 <input type="hidden" name="return_page" value="execution">
+                {% if execution_review.esxi_install_review and execution_review.esxi_install_review.run_stamp %}
+                <input type="hidden" name="esxi_run_stamp" value="{{ execution_review.esxi_install_review.run_stamp }}">
+                {% endif %}
                 <div class="font-semibold mb-2">Run for real</div>
                 <div class="text-sm text-slate-400 mb-3">
                     {% if execution_review.launch_options.real %}

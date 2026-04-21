@@ -127,6 +127,8 @@ class FakeILOClient:
                             "name": "OS Volume",
                             "raid_type": "RAID1",
                             "capacity_gib": 480,
+                            "drive_bays": ["1"],
+                            "spare_bays": ["2"],
                             "status": "OK / Enabled",
                         }
                     ],
@@ -138,6 +140,18 @@ class FakeILOClient:
                             "name": "Drive 1",
                             "model": "HPE SSD",
                             "serial_number": "DRIVE123",
+                            "size_gib": 480,
+                            "media_type": "SSD",
+                            "protocol": "SAS",
+                            "status": "OK / Enabled",
+                        },
+                        {
+                            "path": "/redfish/v1/Systems/1/Storage/1/Drives/2",
+                            "id": "2",
+                            "bay": "2",
+                            "name": "Drive 2",
+                            "model": "HPE SSD",
+                            "serial_number": "SPARE123",
                             "size_gib": 480,
                             "media_type": "SSD",
                             "protocol": "SAS",
@@ -927,6 +941,38 @@ def test_save_ilo_settings_updates_only_ilo_page_fields(client):
     assert cfg["included"]["ilo"] is True
 
 
+def test_save_ilo_settings_returns_validation_error_for_duplicate_ip(client):
+    cfg = main.default_config()
+    cfg["site"]["name"] = "Ilo Duplicate Kit"
+    cfg["ip_plan"]["gateway"] = "10.10.8.1"
+    cfg["ip_plan"]["esxi"] = "10.10.8.15"
+    cfg["ip_plan"]["ilo"] = "10.10.8.11"
+    main.save_kit_config(cfg)
+
+    response = client.post(
+        "/save-ilo-settings",
+        data={
+            "return_page": "ilo",
+            "ilo_current_ip": "10.10.8.50",
+            "ilo_target_ip": "10.10.8.15",
+            "ilo_gateway": "",
+            "ilo_hostname": "ilo-duplicate",
+            "ilo_username": "Administrator",
+            "ilo_password": "secret",
+        },
+    )
+
+    assert response.status_code == 200
+    assert "global-warning-popup" in response.text
+    assert "Warning: something needs attention" in response.text
+    assert "Could not save iLO setup" in response.text
+    assert "Each device IP must be unique within the kit" in response.text
+    assert "10.10.8.15" in response.text
+    assert "esxi, ilo" in response.text
+    saved = main.load_kit_config("Ilo-Duplicate-Kit")
+    assert saved["ip_plan"]["ilo"] == "10.10.8.11"
+
+
 def test_save_ilo_settings_persists_additional_users(client):
     cfg = main.default_config()
     cfg["site"]["name"] = "Ilo User Kit"
@@ -1199,6 +1245,11 @@ def test_read_current_storage_saves_discovery_export_and_renders_summary(client,
     assert "Current storage setup" in response.text
     assert "Current storage setup loaded" in response.text
     assert "The current storage layout is now ready to review." in response.text
+    assert "MR416i-o" in response.text
+    assert "1.98" in response.text
+    assert "OS Volume / RAID RAID1" in response.text
+    assert "Spare for OS Volume / RAID RAID1" in response.text
+    assert "storage-discovery-details" in response.text
     assert "Storage setup uses the final iLO address from the iLO page by default." in response.text
     assert "Deep Smart Storage Scan" not in response.text
     assert "Build storage plan" in response.text
@@ -1215,6 +1266,26 @@ def test_read_current_storage_saves_discovery_export_and_renders_summary(client,
     assert "standard_redfish_storage: true" in summary_text
     raw_text = raw_path.read_text(encoding="utf-8")
     assert '"deep_scan_requested": true' in raw_text
+
+
+def test_storage_page_requires_manual_current_storage_read(client):
+    cfg = main.default_config()
+    cfg["site"]["name"] = "Storage Manual Read Kit"
+    cfg["ilo"]["current_ip"] = "10.10.8.60"
+    cfg["ilo"]["host"] = "10.10.8.60"
+    cfg["ilo"]["target_ip"] = "10.10.8.61"
+    cfg["ilo"]["username"] = "Administrator"
+    cfg["ilo"]["password"] = "kit-password"
+    main.save_kit_config(cfg)
+
+    response = client.get("/storage")
+
+    assert response.status_code == 200
+    assert "Display current storage setup" in response.text
+    assert "No storage read has been run on this page yet." in response.text
+    assert 'hx-post="/read-current-storage"' in response.text
+    assert 'hx-trigger="load"' not in response.text
+    assert "storage-autoload-form" not in response.text
 
 
 def test_read_current_storage_warns_when_smart_storage_controller_has_no_children(client, monkeypatch):
@@ -1898,7 +1969,6 @@ def test_prepare_execute_marks_included_scope_as_preview_only(client):
     )
 
     assert response.status_code == 200
-    assert "Preview / safety mode" in response.text
     assert "Preview only" in response.text
     assert "Mode" in response.text
     assert "What this does" in response.text
@@ -2368,6 +2438,141 @@ def test_prepare_execute_accepts_multiple_selected_runs(client):
     assert "A real run is not available for this review yet." in response.text
 
 
+def test_prepare_execute_whole_run_launches_supported_included_stages(client):
+    cfg = main.default_config()
+    cfg["site"]["name"] = "Whole Real Multi Kit"
+    cfg["ilo"]["current_ip"] = "10.10.8.90"
+    cfg["ilo"]["target_ip"] = "10.10.8.90"
+    cfg["ilo"]["host"] = "10.10.8.90"
+    cfg["ilo"]["username"] = "Administrator"
+    cfg["ilo"]["password"] = "secret"
+    cfg["esxi"]["hostname"] = "esxi-lab"
+    cfg["esxi"]["management_ip"] = "10.10.8.20"
+    cfg["esxi"]["subnet_mask"] = "255.255.255.0"
+    cfg["esxi"]["gateway"] = "10.10.8.1"
+    cfg["esxi"]["root_password"] = "esxisecret"
+    cfg["included"]["ilo"] = True
+    cfg["included"]["storage"] = True
+    cfg["included"]["esxi"] = True
+    cfg["included"]["windows"] = False
+    discovery = planner_gen10_apply_discovery(existing_volumes=True)
+    export_paths = main.export_storage_discovery_snapshot(cfg, discovery, host="10.10.8.90")
+    plan = main.build_raid_plan(discovery, export_paths)
+    plan_paths = main.export_raid_plan_snapshot(cfg, plan, export_paths)
+    main.approve_storage_plan_for_cfg(cfg, discovery, export_paths, plan, plan_paths, include_in_ilo_run=True)
+    main.save_kit_config(cfg)
+    main.set_current_kit_name(cfg["site"]["name"])
+
+    response = client.post(
+        "/prepare-execute",
+        data={"selected_scopes": ["included"], "return_page": "execution"},
+    )
+
+    assert response.status_code == 200
+    assert 'name="scope" value="multi__ilo__storage__esxi"' in response.text
+    assert "Runs the included iLO, storage, and ESXi stages in order." in response.text
+    assert "ESXi installer values" in response.text
+
+
+def test_execute_whole_run_starts_multi_stage_path(client, monkeypatch):
+    cfg = main.default_config()
+    cfg["site"]["name"] = "Whole Execute Multi Kit"
+    cfg["ilo"]["current_ip"] = "10.10.8.90"
+    cfg["ilo"]["target_ip"] = "10.10.8.90"
+    cfg["ilo"]["host"] = "10.10.8.90"
+    cfg["ilo"]["username"] = "Administrator"
+    cfg["ilo"]["password"] = "secret"
+    cfg["esxi"]["hostname"] = "esxi-lab"
+    cfg["esxi"]["management_ip"] = "10.10.8.20"
+    cfg["esxi"]["subnet_mask"] = "255.255.255.0"
+    cfg["esxi"]["gateway"] = "10.10.8.1"
+    cfg["esxi"]["root_password"] = "esxisecret"
+    cfg["included"]["ilo"] = True
+    cfg["included"]["storage"] = True
+    cfg["included"]["esxi"] = True
+    cfg["included"]["windows"] = False
+    discovery = planner_gen10_apply_discovery(existing_volumes=True)
+    export_paths = main.export_storage_discovery_snapshot(cfg, discovery, host="10.10.8.90")
+    plan = main.build_raid_plan(discovery, export_paths)
+    plan_paths = main.export_raid_plan_snapshot(cfg, plan, export_paths)
+    main.approve_storage_plan_for_cfg(cfg, discovery, export_paths, plan, plan_paths, include_in_ilo_run=True)
+    main.save_kit_config(cfg)
+    main.set_current_kit_name(cfg["site"]["name"])
+
+    started: dict[str, object] = {}
+
+    class FakeThread:
+        def __init__(self, target=None, args=(), daemon=None):
+            started["target"] = target
+            started["args"] = args
+            started["daemon"] = daemon
+
+        def start(self):
+            started["started"] = True
+
+    monkeypatch.setattr(main.threading, "Thread", FakeThread)
+
+    response = client.post(
+        "/execute",
+        data={
+            "scope": "included",
+            "confirm_checkbox": "on",
+            "confirm_phrase": "EXECUTE",
+            "return_page": "execution",
+        },
+    )
+
+    assert response.status_code == 200
+    assert "Real selected-stage automation started in the background. Check Job Monitor for live progress and logs." in response.text
+    assert started["target"] is main.execute_real_job_in_background
+    assert started["args"][1] == "multi__ilo__storage__esxi"
+    assert started["daemon"] is True
+    assert started["started"] is True
+
+
+def test_multi_real_run_promotes_final_ilo_ip_before_esxi(client, monkeypatch):
+    cfg = main.default_config()
+    cfg["site"]["name"] = "Multi Real Endpoint Kit"
+    cfg["ilo"]["current_ip"] = "10.10.8.90"
+    cfg["ilo"]["host"] = "10.10.8.90"
+    cfg["ilo"]["target_ip"] = "10.10.8.91"
+    cfg["ip_plan"]["ilo"] = "10.10.8.91"
+    cfg["ilo"]["username"] = "Administrator"
+    cfg["ilo"]["password"] = "secret"
+    cfg["esxi"]["hostname"] = "esxi-lab"
+    cfg["esxi"]["root_password"] = "esxisecret"
+    main.save_kit_config(cfg)
+
+    calls = []
+
+    def fake_run_ilo_real(run_cfg):
+        calls.append(("ilo", run_cfg["ilo"]["current_ip"], run_cfg["ilo"]["target_ip"]))
+        main.promote_final_ilo_endpoint(run_cfg, run_cfg["ilo"]["target_ip"])
+        main.save_kit_config(run_cfg)
+        main.save_job(
+            run_cfg["site"]["name"],
+            {
+                "status": "Completed",
+                "scope": "ilo",
+                "logs": ["[OK] iLO finished"],
+                "storage_run_directory": "",
+            },
+        )
+
+    def fake_run_esxi_real(run_cfg, run_stamp=None):
+        calls.append(("esxi", run_cfg["ilo"]["current_ip"], run_cfg["ilo"]["host"], run_stamp))
+
+    monkeypatch.setattr(main, "run_ilo_real", fake_run_ilo_real)
+    monkeypatch.setattr(main, "run_esxi_real", fake_run_esxi_real)
+
+    main.execute_real_job_in_background(cfg, "multi__ilo__esxi")
+
+    assert calls == [
+        ("ilo", "10.10.8.90", "10.10.8.91"),
+        ("esxi", "10.10.8.91", "10.10.8.91", None),
+    ]
+
+
 def test_execute_real_scope_blocks_with_exact_missing_esxi_fields(client, monkeypatch):
     cfg = main.default_config()
     cfg["site"]["name"] = "ESXi Execute Block Kit"
@@ -2412,6 +2617,7 @@ def test_run_esxi_real_builds_iso_and_starts_virtual_media_boot(monkeypatch, tmp
     cfg["site"]["name"] = "Real ESXi Run Kit"
     cfg["ilo"]["current_ip"] = "10.10.8.90"
     cfg["ilo"]["host"] = "10.10.8.90"
+    cfg["ilo"]["target_ip"] = "10.10.8.91"
     cfg["ilo"]["username"] = "Administrator"
     cfg["ilo"]["password"] = "secret"
     cfg["esxi"]["hostname"] = "esxi-lab"
@@ -2589,6 +2795,8 @@ def test_run_esxi_real_builds_iso_and_starts_virtual_media_boot(monkeypatch, tmp
     client = created_clients[-1]
     spec = built["spec"]
 
+    assert created_clients
+    assert all(item.cfg.host == "10.10.8.91" for item in created_clients)
     assert "[RUNNING] Building custom ESXi ISO" in joined_logs
     assert "[RUNNING] Generating KS.CFG" in joined_logs
     assert "[OK] KS.CFG generated" in joined_logs
@@ -3334,6 +3542,10 @@ def test_build_kickstart_uses_explicit_management_network_fields():
     assert "--hostname=esxi-lab" in kickstart
     assert "--addvmportgroup=0" in kickstart
     assert "--vlanid=123" in kickstart
+    assert "Lab Builder first boot network check" in kickstart
+    assert "UPLINK=$(esxcli network nic list | awk 'NR>2 && $5 == \"Up\" {print $1; exit}')" in kickstart
+    assert "esxcli network vswitch standard uplink add --uplink-name=\"$UPLINK\" --vswitch-name=vSwitch0" in kickstart
+    assert "esxcli network ip interface ipv4 set --interface-name=vmk0 --ipv4=10.10.8.10 --netmask=255.255.255.0 --type=static" in kickstart
 
 
 def test_run_ilo_real_executes_storage_when_included(monkeypatch):
