@@ -241,6 +241,65 @@ class FakeSmartStorageWarningClient(FakeILOClient):
         return discovery
 
 
+def test_standard_redfish_storage_falls_back_to_storage_member_as_controller():
+    client = ILOClient(ILOConfig(host="ilo-gen11.example.test", username="Administrator", password="secret"))
+    storage_subsystems = [
+        {
+            "@odata.id": "/redfish/v1/Systems/1/Storage/DE00C000",
+            "Id": "DE00C000",
+            "Name": "DE00C000 Controller",
+            "Model": "MR408i-o Gen11",
+            "FirmwareVersion": "5.10",
+            "Manufacturer": "HPE",
+            "Status": {"Health": "OK", "State": "Enabled"},
+            "StorageControllers": [],
+            "VolumesExpanded": [
+                {
+                    "@odata.id": "/redfish/v1/Systems/1/Storage/DE00C000/Volumes/1",
+                    "Id": "1",
+                    "Name": "OS Volume",
+                    "RAIDType": "RAID1",
+                    "CapacityBytes": 480 * 1024 * 1024 * 1024,
+                    "Status": {"Health": "OK", "State": "Enabled"},
+                }
+            ],
+            "DrivesExpanded": [
+                {
+                    "@odata.id": "/redfish/v1/Systems/1/Storage/DE00C000/Drives/1",
+                    "Id": "1",
+                    "Name": "Drive 1",
+                    "Model": "HPE SSD",
+                    "SerialNumber": "DRIVE123",
+                    "CapacityBytes": 480 * 1024 * 1024 * 1024,
+                    "MediaType": "SSD",
+                    "Protocol": "SAS",
+                    "PhysicalLocation": {"PartLocation": {"LocationOrdinalValue": 1}},
+                    "Status": {"Health": "OK", "State": "Enabled"},
+                }
+            ],
+        }
+    ]
+
+    normalized = client._normalize_standard_storage(storage_subsystems)
+    summary = client._build_storage_summary(storage_subsystems)
+
+    assert normalized["controllers"] == [
+        {
+            "path": "/redfish/v1/Systems/1/Storage/DE00C000",
+            "name": "DE00C000 Controller",
+            "model": "MR408i-o Gen11",
+            "firmware_version": "5.10",
+            "manufacturer": "HPE",
+            "serial_number": "",
+            "speed_gbps": None,
+            "status": "OK / Enabled",
+        }
+    ]
+    assert summary["controllers"][0]["name"] == "DE00C000 Controller"
+    assert summary["controllers"][0]["model"] == "MR408i-o Gen11"
+    assert summary["controllers"][0]["firmware_version"] == "5.10"
+
+
 class FakeGen10SmartStorageILOClient(ILOClient):
     def __init__(self):
         super().__init__(ILOConfig(host="ilo-gen10.example.test", username="Administrator", password="secret"))
@@ -939,6 +998,31 @@ def test_save_ilo_settings_updates_only_ilo_page_fields(client):
     assert cfg["ilo"]["gateway"] == "10.10.8.1"
     assert cfg["ilo"]["hostname"] == "ilo-focused"
     assert cfg["included"]["ilo"] is True
+
+
+def test_save_ilo_settings_normalizes_invalid_hostname(client):
+    cfg = main.default_config()
+    cfg["site"]["name"] = "Ilo Hostname Kit"
+    cfg["ip_plan"]["gateway"] = "10.10.8.1"
+    main.save_kit_config(cfg)
+
+    response = client.post(
+        "/save-ilo-settings",
+        data={
+            "return_page": "ilo",
+            "ilo_current_ip": "10.10.8.50",
+            "ilo_target_ip": "10.10.8.11",
+            "ilo_gateway": "",
+            "ilo_hostname": "GEN 11 TEST",
+            "ilo_username": "Administrator",
+            "ilo_password": "secret",
+        },
+    )
+
+    assert response.status_code == 200
+    assert 'name="ilo_hostname" value="GEN-11-TEST"' in response.text
+    cfg = main.load_kit_config("Ilo-Hostname-Kit")
+    assert cfg["ilo"]["hostname"] == "GEN-11-TEST"
 
 
 def test_save_ilo_settings_returns_validation_error_for_duplicate_ip(client):
@@ -1846,10 +1930,12 @@ def test_prepare_execute_shows_combined_storage_review_using_exact_approved_arti
     assert response.status_code == 200
     assert "Run summary" in response.text
     assert "Stages that will run" in response.text
-    assert "View details" in response.text
+    assert "Technical details" in response.text
+    assert "Settings that will be used" in response.text
+    assert "Storage run values" in response.text
+    assert "Approved plan path:" in response.text
     assert "Open summary" in response.text
     assert "Open reports & technical details" in response.text
-    assert "Storage will be applied during the real run" in response.text
 
 
 def test_execution_page_warns_when_storage_is_not_approved(client):
@@ -5637,6 +5723,20 @@ def test_dashboard_job_status_lists_passed_and_failed_with_dates(client):
     assert "2026-04-17 10:30:00" in response.text
 
 
+def test_dashboard_uses_simplified_primary_navigation(client):
+    response = client.get("/dashboard")
+
+    assert response.status_code == 200
+    assert "iLO Setup" in response.text
+    assert "Storage setup" in response.text
+    assert "ESXi Setup" in response.text
+    assert "Reports & technical details" in response.text
+    assert 'href="/execution">Run Center</a>' in response.text
+    assert ".sidebar .nav-group:last-of-type" not in response.text
+    assert "Run History" not in response.text
+    assert "Reset dashboard layout" not in response.text
+
+
 def test_create_new_kit_updates_active_kit_on_dashboard(client):
     response = client.post(
         "/new-kit",
@@ -5660,6 +5760,15 @@ def test_reports_page_hides_live_jobs_and_config_capture_blocks(client):
     assert "Live job and logs" not in response.text
     assert "Capture current iLO" not in response.text
     assert "Saved intended config" not in response.text
+
+
+def test_esxi_page_removes_duplicate_include_and_global_settings_prompt(client):
+    response = client.get("/esxi")
+
+    assert response.status_code == 200
+    assert "Save the ESXi host name and root password here." in response.text
+    assert "Include ESXi setup in this kit" not in response.text
+    assert "Open global settings" not in response.text
 
 
 def test_report_center_lists_storage_reports_and_view_report(client):
