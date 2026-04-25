@@ -1,104 +1,259 @@
 <section class="panel space-y-6">
-    <section class="card">
-        <div class="text-lg font-semibold mb-2">Active kit</div>
-        <div class="text-sm text-slate-400 mb-4">This is the kit the app is using right now.</div>
-        <div class="grid grid-cols-1 lg:grid-cols-[minmax(0,1fr)_auto] gap-4 items-start">
+    {% set included_flags = [
+        cfg.get('included', {}).get('ilo'),
+        cfg.get('included', {}).get('storage'),
+        cfg.get('included', {}).get('esxi'),
+        cfg.get('included', {}).get('windows'),
+        cfg.get('included', {}).get('qnap'),
+        cfg.get('included', {}).get('iosafe'),
+        cfg.get('included', {}).get('cisco_switch')
+    ] %}
+    {% set included_count = included_flags | select | list | length %}
+    {% set completed_count = (dashboard_job_status.passed | length) + (dashboard_job_status.failed | length) %}
+
+    <section class="card dashboard-hero-card">
+        <div class="dashboard-hero-header">
             <div>
-                <div class="text-xl font-semibold">{{ current_kit }}</div>
-                <div class="text-sm text-slate-400 mt-2">{{ recommended_next_step.summary }}</div>
-            </div>
-            <div class="actions">
-                <form hx-post="/view-current-kit-config" hx-target="#main-content" hx-swap="outerHTML">
-                    <input type="hidden" name="return_page" value="dashboard">
-                    <button class="btn" type="submit">Open current config</button>
-                </form>
-                <form action="/download-current-kit-config" method="post">
-                    <button class="btn btn-primary" type="submit">Download current config</button>
-                </form>
+                <div class="text-lg font-semibold mb-2">Active kit</div>
+                <div class="text-sm text-slate-400">This is the kit the app is using right now.</div>
             </div>
         </div>
-    </section>
-
-    <section class="card">
-        <div class="text-lg font-semibold mb-2">Choose a kit</div>
-        <div class="text-sm text-slate-400 mb-4">Create a new kit or switch to an existing one.</div>
-        <div class="grid grid-cols-1 xl:grid-cols-2 gap-4">
-            <form hx-post="/new-kit" hx-target="#main-content" hx-swap="outerHTML" class="space-y-3">
-                <input type="hidden" name="return_page" value="dashboard">
-                <label>
-                    <div class="text-sm text-slate-300 mb-1">Create a new kit</div>
-                    <input class="input" type="text" name="new_kit_name" placeholder="New kit name" required>
-                </label>
-                <button class="btn btn-primary" type="submit">Create new kit</button>
-            </form>
-            <form hx-post="/load-kit" hx-target="#main-content" hx-swap="outerHTML" class="space-y-3">
-                <input type="hidden" name="return_page" value="dashboard">
-                <label>
-                    <div class="text-sm text-slate-300 mb-1">Use an existing kit</div>
-                    <select class="input" name="selected_kit" required>
-                        {% set other_kits = kits | reject('equalto', current_kit) | list %}
-                        {% if other_kits %}
-                        {% for kit in kits %}
-                        {% if kit != current_kit %}
-                        <option value="{{ kit }}">{{ kit }}</option>
-                        {% endif %}
-                        {% endfor %}
-                        {% else %}
-                        <option value="" disabled selected>No other saved kits found</option>
-                        {% endif %}
-                    </select>
-                </label>
-                <button class="btn" type="submit" {% if not other_kits %}disabled{% endif %}>Load existing kit</button>
-            </form>
+        <div class="dashboard-hero-grid">
+            <div class="space-y-4">
+                <div>
+                    <div class="dashboard-active-kit-name">{{ current_kit }}</div>
+                </div>
+                <div class="dashboard-next-step">
+                    <div class="dashboard-kicker">Recommended next step</div>
+                    <div class="font-semibold">Keep the setup moving forward.</div>
+                    <div class="text-sm text-slate-400 mt-1">{{ recommended_next_step.summary }}</div>
+                    <div class="actions mt-4">
+                        <a class="btn btn-primary" href="{{ recommended_next_step.href }}">Open next step</a>
+                        <form hx-post="/view-current-kit-config" hx-target="#main-content" hx-swap="outerHTML">
+                            <input type="hidden" name="return_page" value="dashboard">
+                            <button class="btn" type="submit">Open current config</button>
+                        </form>
+                        <form action="/download-current-kit-config" method="post">
+                            <button class="btn" type="submit">Download current config</button>
+                        </form>
+                    </div>
+                </div>
+            </div>
+            <div class="space-y-4">
+                <div class="dashboard-form-card space-y-4">
+                    <div>
+                        <div class="text-lg font-semibold mb-1">Choose a kit</div>
+                        <div class="text-sm text-slate-400">Create a new kit or switch to an existing one.</div>
+                    </div>
+                    <form hx-post="/new-kit" hx-target="#main-content" hx-swap="outerHTML" class="space-y-3">
+                        <input type="hidden" name="return_page" value="dashboard">
+                        <label>
+                            <div class="dashboard-kicker">Create a new kit</div>
+                            <input class="input" type="text" name="new_kit_name" placeholder="New kit name" required>
+                        </label>
+                        <button class="btn btn-primary" type="submit">Create new kit</button>
+                    </form>
+                    <form hx-post="/load-kit" hx-target="#main-content" hx-swap="outerHTML" class="space-y-3">
+                        <input type="hidden" name="return_page" value="dashboard">
+                        <label>
+                            <div class="dashboard-kicker">Use an existing kit</div>
+                            <select class="input" name="selected_kit" required>
+                                {% set other_kits = kits | reject('equalto', current_kit) | list %}
+                                {% if other_kits %}
+                                {% for kit in kits %}
+                                {% if kit != current_kit %}
+                                <option value="{{ kit }}">{{ kit }}</option>
+                                {% endif %}
+                                {% endfor %}
+                                {% else %}
+                                <option value="" disabled selected>No other saved kits found</option>
+                                {% endif %}
+                            </select>
+                        </label>
+                        <button class="btn" type="submit" {% if not other_kits %}disabled{% endif %}>Load existing kit</button>
+                    </form>
+                </div>
+            </div>
         </div>
     </section>
 
     <section class="card">
         <div class="text-lg font-semibold mb-2">Job status</div>
         <div class="text-sm text-slate-400 mb-4">See the latest completed runs for this kit.</div>
+        <div class="dashboard-metric-grid mb-4">
+            <div class="dashboard-metric">
+                <div class="dashboard-kicker">Included stages</div>
+                <div class="dashboard-metric-value">{{ included_count }}</div>
+                <div class="text-sm text-slate-400">Enabled for this kit</div>
+            </div>
+            <div class="dashboard-metric">
+                <div class="dashboard-kicker">Recent results</div>
+                <div class="dashboard-metric-value">{{ completed_count }}</div>
+                <div class="text-sm text-slate-400">Completed runs found</div>
+            </div>
+        </div>
         {% set has_job_results = dashboard_job_status.passed or dashboard_job_status.failed %}
         {% if has_job_results %}
-        <div class="space-y-2">
+        <div class="dashboard-status-list">
             {% for item in dashboard_job_status.passed %}
-            <div class="result" style="margin-top: 0;">
-                <div class="font-semibold">{{ item.name }} run passed</div>
-                <div class="text-sm">{{ item.time }}</div>
+            <div class="dashboard-status-item dashboard-status-item-good">
+                <div>
+                    <div class="font-semibold">{{ item.name }} run passed</div>
+                    <div class="text-sm text-slate-500">{{ item.time }}</div>
+                </div>
+                <div class="dashboard-status-actions">
+                    <span class="status ready">Passed</span>
+                    {% if item.run_summary_path %}
+                    <form hx-post="/view-run-summary" hx-target="#main-content" hx-swap="outerHTML">
+                        <input type="hidden" name="report_path" value="{{ item.run_summary_path }}">
+                        <button class="btn" type="submit">Open log</button>
+                    </form>
+                    {% endif %}
+                </div>
             </div>
             {% endfor %}
             {% for item in dashboard_job_status.failed %}
-            <div class="result result-warning" style="margin-top: 0;">
-                <div class="font-semibold">{{ item.name }} run failed</div>
-                <div class="text-sm">{{ item.time }}</div>
+            <div class="dashboard-status-item dashboard-status-item-warn">
+                <div>
+                    <div class="font-semibold">{{ item.name }} run failed</div>
+                    <div class="text-sm text-slate-500">{{ item.time }}</div>
+                </div>
+                <div class="dashboard-status-actions">
+                    <span class="status pending">Failed</span>
+                    {% if item.run_summary_path %}
+                    <form hx-post="/view-run-summary" hx-target="#main-content" hx-swap="outerHTML">
+                        <input type="hidden" name="report_path" value="{{ item.run_summary_path }}">
+                        <button class="btn" type="submit">Open log</button>
+                    </form>
+                    {% endif %}
+                </div>
             </div>
             {% endfor %}
         </div>
         {% else %}
-        <div class="text-sm text-slate-400">No runs have completed for this kit yet.</div>
+        <div class="dashboard-empty-state">
+            <div class="font-semibold">No runs have completed for this kit yet.</div>
+            <div class="text-sm text-slate-400 mt-1">When a run finishes, the latest result for each stage will show up here.</div>
+        </div>
         {% endif %}
-        <div class="actions mt-4">
-            <a class="btn" href="/history">Open run history</a>
-            <a class="btn" href="/configs">Open reports & technical details</a>
+    </section>
+
+    <section class="card">
+        <div class="text-lg font-semibold mb-2">Hardware identity</div>
+        <div class="text-sm text-slate-400 mb-4">This gives the build a real hardware anchor so you can tell which server the kit is pointing at.</div>
+        <div class="dashboard-identity-banner">
+            <div>
+                <div class="dashboard-kicker">Active hardware</div>
+                <div class="dashboard-identity-title">{{ dashboard_hardware_identity.title }}</div>
+                <div class="text-sm text-slate-400 mt-2">{{ dashboard_hardware_identity.subtitle }}</div>
+            </div>
+            <span class="status {{ 'ready' if dashboard_hardware_identity.discovered else 'pending' }}">
+                {{ 'Captured' if dashboard_hardware_identity.discovered else 'Waiting for live read' }}
+            </span>
+        </div>
+        <div class="dashboard-identity-grid">
+            {% for field in dashboard_hardware_identity.fields %}
+            <div class="dashboard-identity-item">
+                <div class="dashboard-kicker">{{ field.label }}</div>
+                <div class="font-semibold">{{ field.value }}</div>
+            </div>
+            {% endfor %}
+        </div>
+    </section>
+
+    <section class="card">
+        <div class="text-lg font-semibold mb-2">Latest build receipt</div>
+        <div class="text-sm text-slate-400 mb-4">This is the quick human summary of the most recent run, with the whole story still one click away.</div>
+        {% if dashboard_latest_receipt %}
+        <div class="dashboard-receipt-card">
+            <div class="flex items-start justify-between gap-3 flex-wrap">
+                <div>
+                    <div class="dashboard-kicker">{{ dashboard_latest_receipt.name }}</div>
+                    <div class="font-semibold text-lg">{{ dashboard_latest_receipt.human_summary }}</div>
+                    <div class="text-sm text-slate-400 mt-1">{{ dashboard_latest_receipt.time }}{% if dashboard_latest_receipt.target %} | {{ dashboard_latest_receipt.target }}{% endif %}</div>
+                </div>
+                <span class="status {{ dashboard_latest_receipt.tone }}">{{ dashboard_latest_receipt.result }}</span>
+            </div>
+            {% if dashboard_latest_receipt.highlights %}
+            <div class="dashboard-receipt-grid">
+                {% for item in dashboard_latest_receipt.highlights %}
+                <div class="result" style="margin-top: 0;">{{ item }}</div>
+                {% endfor %}
+            </div>
+            {% endif %}
+            <div class="actions mt-4">
+                {% if dashboard_latest_receipt.run_summary_path %}
+                <form hx-post="/view-run-summary" hx-target="#main-content" hx-swap="outerHTML">
+                    <input type="hidden" name="report_path" value="{{ dashboard_latest_receipt.run_summary_path }}">
+                    <button class="btn btn-primary" type="submit">Open log</button>
+                </form>
+                {% endif %}
+                <a class="btn" href="/configs?report_query={{ dashboard_latest_receipt.related_reports_query | urlencode }}">Related reports</a>
+            </div>
+        </div>
+        {% else %}
+        <div class="dashboard-empty-state">
+            <div class="font-semibold">No build receipt yet.</div>
+            <div class="text-sm text-slate-400 mt-1">Run a stage once and the app will summarize what changed and what was verified here.</div>
+        </div>
+        {% endif %}
+    </section>
+
+    <section class="card">
+        <div class="text-lg font-semibold mb-2">Build timeline</div>
+        <div class="text-sm text-slate-400 mb-4">This turns the kit into a tracked build instead of a loose set of forms.</div>
+        <div class="dashboard-timeline">
+            {% for item in dashboard_timeline %}
+            <div class="dashboard-timeline-item">
+                <div class="dashboard-timeline-marker dashboard-timeline-marker-{{ item.tone }}"></div>
+                <div class="dashboard-timeline-body">
+                    <div class="dashboard-timeline-header">
+                        <div class="font-semibold">{{ item.label }}</div>
+                        <span class="status {{ item.tone }}">{{ item.status }}</span>
+                    </div>
+                    <div class="text-sm text-slate-400 mt-1">{{ item.summary }}</div>
+                    <div class="dashboard-timeline-meta">
+                        {% if item.time %}
+                        <span>{{ item.time }}</span>
+                        {% endif %}
+                        {% if item.href %}
+                        <a href="{{ item.href }}">Open step</a>
+                        {% endif %}
+                    </div>
+                </div>
+            </div>
+            {% endfor %}
         </div>
     </section>
 
     <section class="card">
         <div class="text-lg font-semibold mb-3">Start with one step</div>
-        <div class="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-3">
-            {% for key in ["global_settings", "ilo", "storage", "execution"] %}
+        <div class="text-sm text-slate-400 mb-4">Use these pages in order when you want the cleanest setup flow.</div>
+        <div class="dashboard-step-grid">
+            {% for key in ["global_settings", "ilo", "storage", "esxi", "execution"] %}
             {% set item = workflow_contexts.get(key.replace('global_settings', 'ilo'), {}) if key == 'global_settings' else workflow_contexts.get(key, {}) %}
-            <a class="card block" href="{% if key == 'global_settings' %}/global-settings{% elif key == 'execution' %}/execution{% else %}{{ item.review_href }}{% endif %}">
-                <div class="font-semibold mb-1">
+            <a class="card block dashboard-step-card" href="{% if key == 'global_settings' %}/global-settings{% elif key == 'execution' %}/execution{% else %}{{ item.review_href }}{% endif %}">
+                <div class="dashboard-step-header">
+                    <span class="dashboard-step-number">{{ loop.index }}</span>
+                    <span class="status {% if key == 'global_settings' %}progress{% elif key == 'execution' %}progress{% else %}{{ item.tone }}{% endif %}">
+                        {% if key == 'global_settings' %}Shared defaults{% elif key == 'execution' %}Final review{% else %}{{ item.state_label }}{% endif %}
+                    </span>
+                </div>
+                <div class="font-semibold mb-1 mt-4">
                     {% if key == 'global_settings' %}Global settings{% elif key == 'execution' %}Run Center{% else %}{{ item.name }}{% endif %}
                 </div>
                 <div class="text-sm text-slate-400">
                     {% if key == 'global_settings' %}
                     Save the shared defaults first.
+                    {% elif key == 'esxi' %}
+                    {{ item.state_label }}. Save the ESXi name and root password before the run.
                     {% elif key == 'execution' %}
                     Do the final check and start the run.
                     {% else %}
                     {{ item.state_label }}. {{ item.planned_summary }}
                     {% endif %}
                 </div>
+                <div class="dashboard-step-link">Open page</div>
             </a>
             {% endfor %}
         </div>

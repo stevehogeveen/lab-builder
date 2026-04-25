@@ -33,11 +33,27 @@
         <div class="progress-shell mb-4">
             <div class="progress-bar" id="execution-live-bar" style="width: {{ job.get('progress_percent', 0) }}%;"></div>
         </div>
+        <div class="execution-story-grid">
+            <div class="execution-story-card">
+                <div class="dashboard-kicker">Current focus</div>
+                <div class="font-semibold">{{ live_job_story.headline }}</div>
+                <div class="text-sm text-slate-400 mt-1">{{ live_job_story.summary }}</div>
+            </div>
+            <div class="execution-story-card">
+                <div class="dashboard-kicker">Last confirmed</div>
+                <div class="text-sm font-semibold">{{ live_job_story.last_confirmed }}</div>
+            </div>
+            <div class="execution-story-card">
+                <div class="dashboard-kicker">Still waiting on</div>
+                <div class="text-sm font-semibold">{{ live_job_story.waiting_on }}</div>
+            </div>
+        </div>
         <details class="execution-live-log" {% if job.get('status') not in ['Idle', 'Complete', 'Preview complete', 'Completed'] or job.get('logs') %}open{% endif %}>
             <summary class="summary-row">
                 <span class="text-sm font-bold text-slate-300">Live log</span>
                 <span class="status progress">live</span>
             </summary>
+            <div class="text-xs text-slate-400 mt-3">Detailed execution logs are saved with the run bundle and can also be reopened later from Reports.</div>
             <div class="codeblock max-h-96 overflow-y-auto mt-3" id="execution-live-logs">{% if job.get('logs') %}{% for line in job.get('logs', []) %}{{ line }}
 {% endfor %}{% else %}Nothing is running right now. Start a preview or a real run to see live updates here.{% endif %}</div>
         </details>
@@ -84,7 +100,7 @@
         <div class="flex items-center justify-between gap-3">
             <div>
                 <div class="text-lg font-semibold">Run summary</div>
-                <div class="text-sm text-slate-400">Quick answer first. Open the details only if you need them.</div>
+                <div class="text-sm text-slate-400">Quick answer first. Expand the lower sections only when you need exact values or troubleshooting detail.</div>
             </div>
             <span class="status {{ 'ready' if execution_review.execution_mode.key == 'real' else 'progress' }}">{{ execution_review.execution_mode.badge }}</span>
         </div>
@@ -98,63 +114,87 @@
             {% endfor %}
         </div>
 
-        {% if execution_review.esxi_install_review %}
-        <div class="card card-compact">
-            <div class="flex items-center justify-between gap-3 mb-3">
+        <div class="execution-confidence-card">
+            <div class="flex items-start justify-between gap-3 flex-wrap">
                 <div>
-                    <div class="text-sm font-bold text-slate-300">ESXi installer values</div>
-                    <div class="text-xs text-slate-400">These are the exact saved values that Run Center will bake into the installer ISO for this real run.</div>
+                    <div class="text-sm font-bold text-slate-300 mb-1">Run confidence</div>
+                    <div class="text-lg font-semibold">{{ execution_review.confidence.summary }}</div>
+                    <div class="text-sm text-slate-400 mt-1">{{ execution_review.confidence.ready_checks }} of {{ execution_review.confidence.total_checks }} checks are currently ready.</div>
                 </div>
-                <span class="status ready">saved kit values</span>
+                <span class="status {{ execution_review.confidence.tone }}">{{ execution_review.confidence.label }}</span>
             </div>
-            <div class="grid grid-cols-1 md:grid-cols-2 gap-2 text-sm">
-                <div class="result" style="margin-top: 0;">Hostname: {{ execution_review.esxi_install_review.hostname or 'Not set' }}</div>
-                <div class="result" style="margin-top: 0;">Management IP: {{ execution_review.esxi_install_review.management_ip or 'Not set' }}</div>
-                <div class="result" style="margin-top: 0;">Subnet mask: {{ execution_review.esxi_install_review.subnet_mask or 'Not set' }}</div>
-                <div class="result" style="margin-top: 0;">Gateway: {{ execution_review.esxi_install_review.gateway or 'Not set' }}</div>
-                <div class="result" style="margin-top: 0;">DNS servers: {{ ', '.join(execution_review.esxi_install_review.dns_servers) or 'Not set' }}</div>
-                <div class="result" style="margin-top: 0;">Root password: {{ 'Saved' if execution_review.esxi_install_review.root_password_saved else 'Missing' }}</div>
-                <div class="result" style="margin-top: 0;">VLAN ID: {{ execution_review.esxi_install_review.vlan_id or 'Not set' }}</div>
-                <div class="result" style="margin-top: 0;">NTP server: {{ execution_review.esxi_install_review.ntp_server or 'Not set' }}</div>
-                <div class="result" style="margin-top: 0;">Enable SSH: {{ 'Yes' if execution_review.esxi_install_review.enable_ssh else 'No' }}</div>
-                <div class="result" style="margin-top: 0;">Disable IPv6: {{ 'Yes' if execution_review.esxi_install_review.disable_ipv6 else 'No' }}</div>
-                <div class="result md:col-span-2" style="margin-top: 0;">Base ISO path: {{ execution_review.esxi_install_review.base_iso_path }}</div>
-                <div class="result md:col-span-2" style="margin-top: 0;">Built ISO path: {{ execution_review.esxi_install_review.output_iso_path }}</div>
-                <div class="result md:col-span-2" style="margin-top: 0;">Virtual media URL: {{ execution_review.esxi_install_review.virtual_media_url }}</div>
-                <div class="result md:col-span-2" style="margin-top: 0;">Manual test defaults: {{ execution_review.esxi_install_review.manual_defaults_label }}</div>
-                {% if execution_review.esxi_install_review.missing_fields %}
-                <div class="result md:col-span-2" style="margin-top: 0;">Missing required values: {{ ', '.join(execution_review.esxi_install_review.missing_fields) }}</div>
-                {% endif %}
+            <div class="progress-shell mt-4">
+                <div class="progress-bar" style="width: {{ execution_review.confidence.score }}%;"></div>
             </div>
+            <div class="grid grid-cols-1 md:grid-cols-3 gap-3 mt-4">
+                <div class="execution-story-card">
+                    <div class="dashboard-kicker">Confidence</div>
+                    <div class="font-semibold">{{ execution_review.confidence.score }}%</div>
+                </div>
+                <div class="execution-story-card">
+                    <div class="dashboard-kicker">Blocked checks</div>
+                    <div class="font-semibold">{{ execution_review.confidence.blocked_checks|length }}</div>
+                </div>
+                <div class="execution-story-card">
+                    <div class="dashboard-kicker">Needs fresh review</div>
+                    <div class="font-semibold">{{ execution_review.confidence.review_checks|length }}</div>
+                </div>
+            </div>
+            {% if execution_review.confidence.blocked_checks %}
+            <div class="space-y-2 mt-4">
+                {% for item in execution_review.confidence.blocked_checks %}
+                <div class="result" style="margin-top: 0; border-color: color-mix(in srgb, var(--warn) 45%, var(--border)); background: color-mix(in srgb, var(--warn) 10%, transparent);">
+                    <div><strong>{{ item.label }}:</strong> {{ item.details }}</div>
+                    {% if item.why %}
+                    <div class="text-slate-400 mt-1">{{ item.why }}</div>
+                    {% endif %}
+                    {% if item.fix %}
+                    <div class="mt-1">{{ item.fix }}</div>
+                    {% endif %}
+                    {% if item.href %}
+                    <div class="actions mt-3">
+                        <a class="btn" href="{{ item.href }}">Open setup page</a>
+                    </div>
+                    {% endif %}
+                </div>
+                {% endfor %}
+            </div>
+            {% endif %}
         </div>
-        {% endif %}
 
-        {% if execution_review.storage_run_review %}
-        <div class="card card-compact">
-            <div class="flex items-center justify-between gap-3 mb-3">
-                <div>
-                    <div class="text-sm font-bold text-slate-300">Storage run values</div>
-                    <div class="text-xs text-slate-400">These are the exact approved storage artifacts and layout details that Run Center will use for the real storage run.</div>
+        {% if execution_review.change_summary %}
+        <div>
+            <div class="text-sm font-bold text-slate-300 mb-2">Before and after this run</div>
+            <div class="grid grid-cols-1 xl:grid-cols-2 gap-3">
+                {% for item in execution_review.change_summary %}
+                <div class="card card-compact execution-change-card">
+                    <div class="flex items-center justify-between gap-3 mb-3">
+                        <div class="font-semibold">{{ item.name }}</div>
+                        <span class="status progress">planned</span>
+                    </div>
+                    <div class="space-y-3 text-sm">
+                        <div>
+                            <div class="dashboard-kicker">Before</div>
+                            <div>{{ item.before }}</div>
+                        </div>
+                        <div>
+                            <div class="dashboard-kicker">After</div>
+                            <div>{{ item.after }}</div>
+                        </div>
+                        <div>
+                            <div class="dashboard-kicker">How the app will confirm it</div>
+                            <div>{{ item.verify }}</div>
+                        </div>
+                    </div>
                 </div>
-                <span class="status ready">approved plan</span>
-            </div>
-            <div class="grid grid-cols-1 md:grid-cols-2 gap-2 text-sm">
-                <div class="result" style="margin-top: 0;">Apply mode: {{ execution_review.storage_run_review.apply_mode_label or 'Not set' }}</div>
-                <div class="result" style="margin-top: 0;">Approved host: {{ execution_review.storage_run_review.approved_host or 'Not set' }}</div>
-                <div class="result" style="margin-top: 0;">Controller: {{ execution_review.storage_run_review.controller or 'Not set' }}</div>
-                <div class="result" style="margin-top: 0;">Restart expected: {{ 'Yes' if execution_review.storage_run_review.reboot_expected else 'No' }}</div>
-                <div class="result" style="margin-top: 0;">OS RAID 1 bays: {{ execution_review.storage_run_review.os_bays or 'Not selected' }}</div>
-                <div class="result" style="margin-top: 0;">Data RAID bays: {{ execution_review.storage_run_review.data_bays or 'Not selected' }}</div>
-                <div class="result" style="margin-top: 0;">Hot spare bay: {{ execution_review.storage_run_review.spare_bay or 'Not reserved' }}</div>
-                <div class="result md:col-span-2" style="margin-top: 0;">Approved plan path: {{ execution_review.storage_run_review.plan_path or 'Not set' }}</div>
-                <div class="result md:col-span-2" style="margin-top: 0;">Approved discovery path: {{ execution_review.storage_run_review.discovery_raw_path or 'Not set' }}</div>
+                {% endfor %}
             </div>
         </div>
         {% endif %}
 
         <div>
             <div class="text-sm font-bold text-slate-300 mb-2">Stages that will run</div>
-            <div class="space-y-3">
+            <div class="grid grid-cols-1 md:grid-cols-2 gap-3">
                 {% for stage in execution_review.stages %}
                 <div class="card card-compact">
                     <div class="flex items-center justify-between gap-3 mb-2">
@@ -163,19 +203,13 @@
                     </div>
                     <div class="text-sm">{{ stage.summary }}</div>
                     <div class="text-xs text-slate-400 mt-1">{{ stage.target }}</div>
-                    {% if stage.settings %}
-                    <div class="grid grid-cols-1 md:grid-cols-2 gap-2 mt-3 text-sm">
-                        {% for item in stage.settings %}
-                        <div class="result" style="margin-top: 0;">{{ item }}</div>
-                        {% endfor %}
-                    </div>
-                    {% endif %}
                     {% if stage.blocked_reason and stage.status_label in ['Blocked', 'Needs review'] %}
                     <div class="result mt-3" style="border-color: color-mix(in srgb, var(--warn) 45%, var(--border)); background: color-mix(in srgb, var(--warn) 10%, transparent);">
                         <div><strong>Needs attention:</strong> {{ stage.blocked_reason }}</div>
                         <div class="text-slate-400 mt-1">{{ stage.corrective_action }}</div>
                     </div>
                     {% endif %}
+                    {% if stage.review_href or (stage.blocked_reason and stage.fix_href) %}
                     <div class="actions mt-3">
                         {% if stage.review_href %}
                         <a class="btn" href="{{ stage.review_href }}">Open setup page</a>
@@ -184,73 +218,143 @@
                         <a class="btn btn-primary action-button" href="{{ stage.fix_href }}">{{ stage.fix_label }}</a>
                         {% endif %}
                     </div>
+                    {% endif %}
                 </div>
                 {% endfor %}
             </div>
         </div>
 
-        <div class="result" style="border-color: color-mix(in srgb, var(--warn) 45%, var(--border)); background: color-mix(in srgb, var(--warn) 10%, transparent);">
-            <div class="font-semibold mb-1">{{ execution_review.warning_title }}</div>
-            {% for point in execution_review.warning_points %}
-            <div class="text-sm">{{ point }}</div>
-            {% endfor %}
+        <div class="card card-compact">
+            <div class="text-sm font-bold text-slate-300 mb-3">{{ execution_review.warning_title }}</div>
+            <div class="space-y-2 text-sm">
+                {% for point in execution_review.warning_points %}
+                <div class="result" style="margin-top: 0; border-color: color-mix(in srgb, var(--warn) 45%, var(--border)); background: color-mix(in srgb, var(--warn) 10%, transparent);">{{ point }}</div>
+                {% endfor %}
+            </div>
         </div>
 
-        <div class="grid grid-cols-1 xl:grid-cols-2 gap-4">
-            <form
-                hx-post="/execute-preview"
-                hx-target="#main-content"
-                hx-swap="outerHTML"
-                class="card card-compact"
-                data-action-title="Starting preview run"
-                data-action-start="Starting a preview-only run."
-            >
-                <input type="hidden" name="scope" value="{{ execution_review.launch_options.preview.scope }}">
-                <input type="hidden" name="return_page" value="execution">
-                {% for item in execution_review.selected_scopes_for_form %}
-                <input type="hidden" name="selected_scopes" value="{{ item }}">
-                {% endfor %}
-                <div class="font-semibold mb-2">Preview only</div>
-                <div class="text-sm text-slate-400 mb-4">{{ execution_review.launch_options.preview.summary }}</div>
-                <button class="btn btn-primary action-button" type="submit">Start preview run</button>
-            </form>
-
-            <form
-                hx-post="/execute"
-                hx-target="#main-content"
-                hx-swap="outerHTML"
-                class="card card-compact execute-confirm"
-                data-action-title="Starting real run"
-                data-action-start="Starting the real run."
-            >
-                <input type="hidden" name="scope" value="{{ execution_review.launch_options.real.scope if execution_review.launch_options.real else confirm_scope }}">
-                <input type="hidden" name="return_page" value="execution">
-                {% if execution_review.esxi_install_review and execution_review.esxi_install_review.run_stamp %}
-                <input type="hidden" name="esxi_run_stamp" value="{{ execution_review.esxi_install_review.run_stamp }}">
+        {% if execution_review.esxi_install_review or execution_review.storage_run_review %}
+        <details class="card card-compact">
+            <summary class="summary-row">
+                <span class="text-sm font-bold text-slate-300">Settings that will be used</span>
+                <span class="status progress">details</span>
+            </summary>
+            <div class="mt-4 space-y-4">
+                {% if execution_review.esxi_install_review %}
+                <div class="card card-compact">
+                    <div class="flex items-center justify-between gap-3 mb-3">
+                        <div>
+                            <div class="text-sm font-bold text-slate-300">ESXi installer values</div>
+                            <div class="text-xs text-slate-400">These are the exact saved values that Run Center will bake into the installer ISO for this real run.</div>
+                        </div>
+                        <span class="status ready">saved kit values</span>
+                    </div>
+                    <div class="grid grid-cols-1 md:grid-cols-2 gap-2 text-sm">
+                        <div class="result" style="margin-top: 0;">Hostname: {{ execution_review.esxi_install_review.hostname or 'Not set' }}</div>
+                        <div class="result" style="margin-top: 0;">Management IP: {{ execution_review.esxi_install_review.management_ip or 'Not set' }}</div>
+                        <div class="result" style="margin-top: 0;">Subnet mask: {{ execution_review.esxi_install_review.subnet_mask or 'Not set' }}</div>
+                        <div class="result" style="margin-top: 0;">Gateway: {{ execution_review.esxi_install_review.gateway or 'Not set' }}</div>
+                        <div class="result" style="margin-top: 0;">DNS servers: {{ ', '.join(execution_review.esxi_install_review.dns_servers) or 'Not set' }}</div>
+                        <div class="result" style="margin-top: 0;">Root password: {{ 'Saved' if execution_review.esxi_install_review.root_password_saved else 'Missing' }}</div>
+                        <div class="result" style="margin-top: 0;">VLAN ID: {{ execution_review.esxi_install_review.vlan_id or 'Not set' }}</div>
+                        <div class="result" style="margin-top: 0;">NTP server: {{ execution_review.esxi_install_review.ntp_server or 'Not set' }}</div>
+                        <div class="result" style="margin-top: 0;">Enable SSH: {{ 'Yes' if execution_review.esxi_install_review.enable_ssh else 'No' }}</div>
+                        <div class="result" style="margin-top: 0;">Disable IPv6: {{ 'Yes' if execution_review.esxi_install_review.disable_ipv6 else 'No' }}</div>
+                        <div class="result md:col-span-2" style="margin-top: 0;">Base ISO path: {{ execution_review.esxi_install_review.base_iso_path }}</div>
+                        <div class="result md:col-span-2" style="margin-top: 0;">Built ISO path: {{ execution_review.esxi_install_review.output_iso_path }}</div>
+                        <div class="result md:col-span-2" style="margin-top: 0;">Virtual media URL: {{ execution_review.esxi_install_review.virtual_media_url }}</div>
+                        <div class="result md:col-span-2" style="margin-top: 0;">Manual test defaults: {{ execution_review.esxi_install_review.manual_defaults_label }}</div>
+                        {% if execution_review.esxi_install_review.missing_fields %}
+                        <div class="result md:col-span-2" style="margin-top: 0;">Missing required values: {{ ', '.join(execution_review.esxi_install_review.missing_fields) }}</div>
+                        {% endif %}
+                    </div>
+                </div>
                 {% endif %}
-                <div class="font-semibold mb-2">Run for real</div>
-                <div class="text-sm text-slate-400 mb-3">
-                    {% if execution_review.launch_options.real %}
-                    {{ execution_review.launch_options.real.summary }}
-                    {% else %}
-                    A real run is not available for this review yet.
+
+                {% if execution_review.storage_run_review %}
+                <div class="card card-compact">
+                    <div class="flex items-center justify-between gap-3 mb-3">
+                        <div>
+                            <div class="text-sm font-bold text-slate-300">Storage run values</div>
+                            <div class="text-xs text-slate-400">These are the exact approved storage artifacts and layout details that Run Center will use for the real storage run.</div>
+                        </div>
+                        <span class="status ready">approved plan</span>
+                    </div>
+                    <div class="grid grid-cols-1 md:grid-cols-2 gap-2 text-sm">
+                        <div class="result" style="margin-top: 0;">Apply mode: {{ execution_review.storage_run_review.apply_mode_label or 'Not set' }}</div>
+                        <div class="result" style="margin-top: 0;">Approved host: {{ execution_review.storage_run_review.approved_host or 'Not set' }}</div>
+                        <div class="result" style="margin-top: 0;">Controller: {{ execution_review.storage_run_review.controller or 'Not set' }}</div>
+                        <div class="result" style="margin-top: 0;">Restart expected: {{ 'Yes' if execution_review.storage_run_review.reboot_expected else 'No' }}</div>
+                        <div class="result" style="margin-top: 0;">OS RAID 1 bays: {{ execution_review.storage_run_review.os_bays or 'Not selected' }}</div>
+                        <div class="result" style="margin-top: 0;">Data RAID bays: {{ execution_review.storage_run_review.data_bays or 'Not selected' }}</div>
+                        <div class="result" style="margin-top: 0;">Hot spare bay: {{ execution_review.storage_run_review.spare_bay or 'Not reserved' }}</div>
+                        <div class="result md:col-span-2" style="margin-top: 0;">Approved plan path: {{ execution_review.storage_run_review.plan_path or 'Not set' }}</div>
+                        <div class="result md:col-span-2" style="margin-top: 0;">Approved discovery path: {{ execution_review.storage_run_review.discovery_raw_path or 'Not set' }}</div>
+                    </div>
+                </div>
+                {% endif %}
+            </div>
+        </details>
+        {% endif %}
+
+        <div class="card card-compact">
+            <div class="text-sm font-bold text-slate-300 mb-3">Start the run</div>
+            <div class="grid grid-cols-1 xl:grid-cols-2 gap-4">
+                <form
+                    hx-post="/execute-preview"
+                    hx-target="#main-content"
+                    hx-swap="outerHTML"
+                    class="card card-compact"
+                    data-action-title="Starting preview run"
+                    data-action-start="Starting a preview-only run."
+                >
+                    <input type="hidden" name="scope" value="{{ execution_review.launch_options.preview.scope }}">
+                    <input type="hidden" name="return_page" value="execution">
+                    {% for item in execution_review.selected_scopes_for_form %}
+                    <input type="hidden" name="selected_scopes" value="{{ item }}">
+                    {% endfor %}
+                    <div class="font-semibold mb-2">Preview only</div>
+                    <div class="text-sm text-slate-400 mb-4">{{ execution_review.launch_options.preview.summary }}</div>
+                    <button class="btn btn-primary action-button" type="submit">Start preview run</button>
+                </form>
+
+                <form
+                    hx-post="/execute"
+                    hx-target="#main-content"
+                    hx-swap="outerHTML"
+                    class="card card-compact execute-confirm"
+                    data-action-title="Starting real run"
+                    data-action-start="Starting the real run."
+                >
+                    <input type="hidden" name="scope" value="{{ execution_review.launch_options.real.scope if execution_review.launch_options.real else confirm_scope }}">
+                    <input type="hidden" name="return_page" value="execution">
+                    {% if execution_review.esxi_install_review and execution_review.esxi_install_review.run_stamp %}
+                    <input type="hidden" name="esxi_run_stamp" value="{{ execution_review.esxi_install_review.run_stamp }}">
                     {% endif %}
-                </div>
-                <label class="check mb-3">
-                    <input type="checkbox" name="confirm_checkbox" {% if not execution_review.launch_options.real %}disabled{% endif %}>
-                    <span>I understand this may restart systems and make real changes.</span>
-                </label>
-                <div class="max-w-sm mb-4">
-                    <label class="block text-sm font-bold text-slate-300 mb-2">Type EXECUTE to continue</label>
-                    <input type="text" name="confirm_phrase" placeholder="EXECUTE" class="input" {% if not execution_review.launch_options.real %}disabled{% endif %}>
-                </div>
-                <button class="btn btn-danger action-button" type="submit" {% if not execution_review.launch_options.real %}disabled{% endif %}>Run for real</button>
-            </form>
+                    <div class="font-semibold mb-2">Run for real</div>
+                    <div class="text-sm text-slate-400 mb-3">
+                        {% if execution_review.launch_options.real %}
+                        {{ execution_review.launch_options.real.summary }}
+                        {% else %}
+                        A real run is not available for this review yet.
+                        {% endif %}
+                    </div>
+                    <label class="check mb-3">
+                        <input type="checkbox" name="confirm_checkbox" {% if not execution_review.launch_options.real %}disabled{% endif %}>
+                        <span>I understand this may restart systems and make real changes.</span>
+                    </label>
+                    <div class="max-w-sm mb-4">
+                        <label class="block text-sm font-bold text-slate-300 mb-2">Type EXECUTE to continue</label>
+                        <input type="text" name="confirm_phrase" placeholder="EXECUTE" class="input" {% if not execution_review.launch_options.real %}disabled{% endif %}>
+                    </div>
+                    <button class="btn btn-danger action-button" type="submit" {% if not execution_review.launch_options.real %}disabled{% endif %}>Run for real</button>
+                </form>
+            </div>
         </div>
 
         <details class="card card-compact">
             <summary class="summary-row">
-                <span class="text-sm font-bold text-slate-300">View details</span>
+                <span class="text-sm font-bold text-slate-300">Technical details</span>
                 <span class="status progress">details</span>
             </summary>
             <div class="mt-4 space-y-4">
@@ -265,6 +369,29 @@
                         <div class="text-sm text-slate-400 mt-1">{{ item.action }}</div>
                     </div>
                     {% endfor %}
+                </div>
+
+                <div class="card card-compact">
+                    <div class="text-sm font-bold text-slate-300 mb-3">Stage details</div>
+                    <div class="space-y-3">
+                        {% for stage in execution_review.stages %}
+                        <div class="result" style="margin-top: 0;">
+                            <div class="flex items-center justify-between gap-3">
+                                <div class="font-semibold">{{ stage.name }}</div>
+                                <span class="status {{ stage.status_tone }}">{{ stage.status_label }}</span>
+                            </div>
+                            {% if stage.settings %}
+                            <div class="grid grid-cols-1 md:grid-cols-2 gap-2 mt-3 text-sm">
+                                {% for item in stage.settings %}
+                                <div>{{ item }}</div>
+                                {% endfor %}
+                            </div>
+                            {% else %}
+                            <div class="text-sm mt-2">{{ stage.summary }}</div>
+                            {% endif %}
+                        </div>
+                        {% endfor %}
+                    </div>
                 </div>
 
                 <div class="card card-compact">

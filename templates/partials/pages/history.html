@@ -100,18 +100,28 @@
     </section>
 
     <section class="panel">
-        <div class="text-lg font-semibold mb-4">Detailed run log</div>
-        {% if history %}
+        <div class="text-lg font-semibold mb-4">Recent runs</div>
+        {% if history_display %}
         <div class="space-y-3">
-            {% for item in history %}
+            {% for item in history_display %}
             <details class="card">
                 <summary class="summary-row">
-                    <span class="font-semibold">{{ item.get('time', '') }} | {{ item.get('scope', '') }}</span>
-                    <span class="text-sm text-slate-400">{{ item.get('status', '') }}{% if item.get('progress_percent') %} | {{ item.get('progress_percent', 0) }}%{% endif %}</span>
+                    <span class="font-semibold">{{ item.get('display_title', item.get('scope', 'Run')) }}</span>
+                    <span class="status {{ item.get('display_tone', 'progress') }}">{{ item.get('display_status', item.get('status', 'Recorded')) }}</span>
                 </summary>
                 <div class="mt-4 text-sm text-slate-300 space-y-3">
-                    {% if item.get('summary') %}
-                    <div class="result" style="margin-top: 0;">{{ item.get('summary') }}</div>
+                    <div class="result" style="margin-top: 0;">{{ item.get('display_summary') or item.get('summary') or 'Run recorded.' }}</div>
+                    <div class="grid grid-cols-1 md:grid-cols-3 gap-3 text-sm">
+                        <div><span class="text-slate-400">When:</span> {{ item.get('time', '') or 'Not recorded' }}</div>
+                        <div><span class="text-slate-400">Target:</span> {{ item.get('display_target', '') or 'Not set' }}</div>
+                        <div><span class="text-slate-400">Progress:</span> {% if item.get('progress_percent') %}{{ item.get('progress_percent', 0) }}%{% else %}Not recorded{% endif %}</div>
+                    </div>
+                    {% if item.get('display_highlights') %}
+                    <div class="grid grid-cols-1 md:grid-cols-2 gap-2 text-sm">
+                        {% for detail in item.get('display_highlights', []) %}
+                        <div class="result" style="margin-top: 0;">{{ detail }}</div>
+                        {% endfor %}
+                    </div>
                     {% endif %}
                     <div class="actions">
                         {% if item.get('run_summary_path') %}
@@ -130,52 +140,62 @@
                         </form>
                         {% endif %}
                     </div>
-                    <div><span class="text-slate-400">Final stage:</span> {{ item.get('current_stage', '') or item.get('event', '') or 'Not recorded' }}</div>
+                    <div><span class="text-slate-400">Full story:</span> {{ item.get('current_stage', '') or item.get('event', '') or 'Not recorded' }}</div>
                     <div><span class="text-slate-400">Completed:</span> {{ item.get('completed_steps', 0) }} / {{ item.get('total_steps', 0) }}</div>
                     {% if item.get('config_summary') %}
-                    <div class="card">
-                        <div class="font-semibold mb-2">Config used</div>
-                        <div class="space-y-1">
-                            {% for key, value in item.get('config_summary', {}).items() %}
-                            {% if value is sameas false or value %}
-                            <div>
-                                <span class="text-slate-400">{{ key.replace('_', ' ').title() }}:</span>
-                                {% if value is sameas true %}
-                                Yes
-                                {% elif value is sameas false %}
-                                No
-                                {% elif value is string %}
-                                {{ value }}
-                                {% elif value is sequence %}
-                                {{ value|join(', ') }}
-                                {% else %}
-                                {{ value }}
+                    <details>
+                        <summary class="summary-row">
+                            <span class="text-sm font-bold text-slate-300">Config used</span>
+                            <span class="status progress">details</span>
+                        </summary>
+                        <div class="card mt-3">
+                            <div class="space-y-1">
+                                {% for key, value in item.get('config_summary', {}).items() %}
+                                {% if value is sameas false or value %}
+                                <div>
+                                    <span class="text-slate-400">{{ key.replace('_', ' ').title() }}:</span>
+                                    {% if value is sameas true %}
+                                    Yes
+                                    {% elif value is sameas false %}
+                                    No
+                                    {% elif value is string %}
+                                    {{ value }}
+                                    {% elif value is sequence %}
+                                    {{ value|join(', ') }}
+                                    {% else %}
+                                    {{ value }}
+                                    {% endif %}
+                                </div>
                                 {% endif %}
+                                {% endfor %}
                             </div>
-                            {% endif %}
-                            {% endfor %}
                         </div>
-                    </div>
+                    </details>
                     {% endif %}
                     {% set cfgsum = item.get('config_summary', {}) %}
                     {% if cfgsum.get('dns_apply_status') or cfgsum.get('snmp_apply_status') or cfgsum.get('ilo_reset_status') or cfgsum.get('storage_server_reboot_status') %}
-                    <div class="card">
-                        <div class="font-semibold mb-2">Applied results</div>
-                        <div class="space-y-1">
-                            {% if cfgsum.get('dns_apply_status') %}
-                            <div><span class="text-slate-400">DNS:</span> {{ cfgsum.get('dns_apply_status') }}{% if cfgsum.get('dns_applied_values') %} | {{ cfgsum.get('dns_applied_values')|join(', ') }}{% endif %}</div>
-                            {% endif %}
-                            {% if cfgsum.get('snmp_apply_status') %}
-                            <div><span class="text-slate-400">SNMP:</span> {{ cfgsum.get('snmp_apply_status') }} | {{ cfgsum.get('snmp_username') or cfgsum.get('snmp_v3_username') or 'Not set' }} | {{ cfgsum.get('snmp_auth_protocol') or cfgsum.get('snmp_v3_auth_protocol') or 'Unknown' }}/{{ cfgsum.get('snmp_priv_protocol') or cfgsum.get('snmp_v3_priv_protocol') or 'Unknown' }} | auth secret {{ 'Yes' if (cfgsum.get('snmp_auth_secret_present') or cfgsum.get('snmp_v3_auth_secret_present')) else 'No' }} | privacy secret {{ 'Yes' if (cfgsum.get('snmp_priv_secret_present') or cfgsum.get('snmp_v3_priv_secret_present')) else 'No' }}</div>
-                            {% endif %}
-                            {% if cfgsum.get('storage_server_reboot_status') %}
-                            <div><span class="text-slate-400">Storage server reboot:</span> {{ cfgsum.get('storage_server_reboot_status') }}</div>
-                            {% endif %}
-                            {% if cfgsum.get('ilo_reset_status') %}
-                            <div><span class="text-slate-400">iLO reset:</span> {{ cfgsum.get('ilo_reset_status') }}</div>
-                            {% endif %}
+                    <details>
+                        <summary class="summary-row">
+                            <span class="text-sm font-bold text-slate-300">Applied results</span>
+                            <span class="status progress">details</span>
+                        </summary>
+                        <div class="card mt-3">
+                            <div class="space-y-1">
+                                {% if cfgsum.get('dns_apply_status') %}
+                                <div><span class="text-slate-400">DNS:</span> {{ cfgsum.get('dns_apply_status') }}{% if cfgsum.get('dns_applied_values') %} | {{ cfgsum.get('dns_applied_values')|join(', ') }}{% endif %}</div>
+                                {% endif %}
+                                {% if cfgsum.get('snmp_apply_status') %}
+                                <div><span class="text-slate-400">SNMP:</span> {{ cfgsum.get('snmp_apply_status') }} | {{ cfgsum.get('snmp_username') or cfgsum.get('snmp_v3_username') or 'Not set' }} | {{ cfgsum.get('snmp_auth_protocol') or cfgsum.get('snmp_v3_auth_protocol') or 'Unknown' }}/{{ cfgsum.get('snmp_priv_protocol') or cfgsum.get('snmp_v3_priv_protocol') or 'Unknown' }} | auth secret {{ 'Yes' if (cfgsum.get('snmp_auth_secret_present') or cfgsum.get('snmp_v3_auth_secret_present')) else 'No' }} | privacy secret {{ 'Yes' if (cfgsum.get('snmp_priv_secret_present') or cfgsum.get('snmp_v3_priv_secret_present')) else 'No' }}</div>
+                                {% endif %}
+                                {% if cfgsum.get('storage_server_reboot_status') %}
+                                <div><span class="text-slate-400">Storage server reboot:</span> {{ cfgsum.get('storage_server_reboot_status') }}</div>
+                                {% endif %}
+                                {% if cfgsum.get('ilo_reset_status') %}
+                                <div><span class="text-slate-400">iLO reset:</span> {{ cfgsum.get('ilo_reset_status') }}</div>
+                                {% endif %}
+                            </div>
                         </div>
-                    </div>
+                    </details>
                     {% endif %}
                     {% if item.get('issues') %}
                     <details>

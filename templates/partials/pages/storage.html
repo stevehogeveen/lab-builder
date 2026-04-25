@@ -6,6 +6,111 @@
         {% set storage_target = storage_target or {} %}
         {% set storage_credentials = storage_credentials or {} %}
         {% set storage_plan_defaults = storage_plan_defaults or storage_plan or {} %}
+        <div class="card">
+            <div class="text-lg font-semibold mb-2">Readiness at a glance</div>
+            <div class="text-sm text-slate-400 mb-4">This is the fast check for whether storage is ready to read, approve, and hand off to the real run.</div>
+            <div class="execution-story-grid">
+                {% for item in storage_page_readiness %}
+                <div class="execution-story-card">
+                    <div class="flex items-center justify-between gap-3 mb-2">
+                        <div class="dashboard-kicker">{{ item.label }}</div>
+                        <span class="status {{ item.tone }}">{{ item.status }}</span>
+                    </div>
+                    <div class="text-sm font-semibold">{{ item.summary }}</div>
+                </div>
+                {% endfor %}
+            </div>
+        </div>
+
+        <div class="card">
+            <div class="text-lg font-semibold mb-2">Hardware identity</div>
+            <div class="text-sm text-slate-400 mb-4">Use this to confirm the storage plan is still pointed at the right machine and controller.</div>
+            <div class="dashboard-identity-banner">
+                <div>
+                    <div class="dashboard-kicker">Active hardware</div>
+                    <div class="dashboard-identity-title">{{ dashboard_hardware_identity.title }}</div>
+                    <div class="text-sm text-slate-400 mt-2">{{ dashboard_hardware_identity.subtitle }}</div>
+                </div>
+                <span class="status {{ 'ready' if dashboard_hardware_identity.discovered else 'pending' }}">
+                    {{ 'Captured' if dashboard_hardware_identity.discovered else 'Waiting for live read' }}
+                </span>
+            </div>
+            <div class="dashboard-identity-grid">
+                {% for field in dashboard_hardware_identity.fields %}
+                {% if field.label in ["Server", "Serial", "Generation", "Current iLO IP", "Final iLO IP", "Controller", "Controller firmware"] %}
+                <div class="dashboard-identity-item">
+                    <div class="dashboard-kicker">{{ field.label }}</div>
+                    <div class="font-semibold">{{ field.value }}</div>
+                </div>
+                {% endif %}
+                {% endfor %}
+            </div>
+        </div>
+
+        <div class="card">
+            <div class="text-lg font-semibold mb-2">Before and after storage</div>
+            <div class="text-sm text-slate-400 mb-4">This keeps the current server view, the planned layout, and the verification path visible before you approve anything destructive.</div>
+            <div class="grid grid-cols-1 xl:grid-cols-3 gap-3">
+                {% for item in storage_change_summary %}
+                <div class="card card-compact execution-change-card">
+                    <div class="font-semibold mb-3">{{ item.name }}</div>
+                    <div class="space-y-3 text-sm">
+                        <div>
+                            <div class="dashboard-kicker">Now</div>
+                            <div>{{ item.before }}</div>
+                        </div>
+                        <div>
+                            <div class="dashboard-kicker">After run</div>
+                            <div>{{ item.after }}</div>
+                        </div>
+                        <div>
+                            <div class="dashboard-kicker">App confirms</div>
+                            <div>{{ item.verify }}</div>
+                        </div>
+                    </div>
+                </div>
+                {% endfor %}
+            </div>
+        </div>
+
+        <div class="card">
+            <div class="text-lg font-semibold mb-2">Latest verified storage result</div>
+            <div class="text-sm text-slate-400 mb-4">The latest storage receipt stays here so you can quickly reopen the real outcome and verification trail.</div>
+            {% if storage_latest_receipt %}
+            <div class="dashboard-receipt-card">
+                <div class="flex items-start justify-between gap-3 flex-wrap">
+                    <div>
+                        <div class="dashboard-kicker">{{ storage_latest_receipt.name }}</div>
+                        <div class="font-semibold text-lg">{{ storage_latest_receipt.human_summary }}</div>
+                        <div class="text-sm text-slate-400 mt-1">{{ storage_latest_receipt.time }}{% if storage_latest_receipt.target %} | {{ storage_latest_receipt.target }}{% endif %}</div>
+                    </div>
+                    <span class="status {{ storage_latest_receipt.tone }}">{{ storage_latest_receipt.result }}</span>
+                </div>
+                {% if storage_latest_receipt.highlights %}
+                <div class="dashboard-receipt-grid">
+                    {% for item in storage_latest_receipt.highlights %}
+                    <div class="result" style="margin-top: 0;">{{ item }}</div>
+                    {% endfor %}
+                </div>
+                {% endif %}
+                <div class="actions mt-4">
+                    {% if storage_latest_receipt.run_summary_path %}
+                    <form hx-post="/view-run-summary" hx-target="#main-content" hx-swap="outerHTML">
+                        <input type="hidden" name="report_path" value="{{ storage_latest_receipt.run_summary_path }}">
+                        <button class="btn btn-primary" type="submit">Open log</button>
+                    </form>
+                    {% endif %}
+                    <a class="btn" href="/configs?report_query={{ storage_latest_receipt.related_reports_query | urlencode }}">Related reports</a>
+                </div>
+            </div>
+            {% else %}
+            <div class="dashboard-empty-state">
+                <div class="font-semibold">No verified storage result yet.</div>
+                <div class="text-sm text-slate-400 mt-1">Approve and run storage once, and the verified receipt will show up here.</div>
+            </div>
+            {% endif %}
+        </div>
+
         <div class="card" id="storage-review-start">
             <div class="text-lg font-semibold mb-2">Target server</div>
             <div class="text-sm text-slate-400 mb-3">Storage setup uses the final iLO address from the iLO page by default. You can temporarily replace it here if needed.</div>
@@ -63,7 +168,7 @@
                 </div>
             </div>
         </div>
-        <details class="card" id="storage-progress-card"
+        <details class="card" id="storage-progress-card" {% if workflow.get('workflow_state') not in ['', 'idle', None] or job.get('status') not in ['Idle', 'Completed'] %}open{% endif %}
                  data-kit-name="{{ current_kit }}"
                  data-job-scope="{{ job.get('scope', '') }}"
                  data-apply-path="{{ workflow.get('apply_path', '') }}"
@@ -71,7 +176,7 @@
                  data-workflow-state="{{ workflow.get('workflow_state', '') }}"
                  data-reboot-status="{{ workflow.get('reboot_status', '') }}">
             <summary class="summary-row">
-                <span class="text-lg font-semibold">View run details</span>
+                <span class="text-lg font-semibold">Current storage run</span>
                 <span class="status progress" id="storage-progress-status">{{ workflow.get('workflow_label', job.get('status', 'Idle')) }}</span>
             </summary>
             <div class="mt-4">
@@ -321,26 +426,17 @@
             </div>
             <div class="actions">
                 <a class="btn btn-primary action-button" href="/execution">Run for real</a>
-                {% if storage_plan_paths %}
-                <form hx-post="/view-storage-artifact" hx-target="#main-content" hx-swap="outerHTML">
-                    <input type="hidden" name="return_page" value="storage">
-                    <input type="hidden" name="discovery_raw_path" value="{{ storage_export_paths.raw }}">
-                    <input type="hidden" name="raid_plan_path" value="{{ storage_plan_paths.plan }}">
-                    <input type="hidden" name="artifact_kind" value="raid_plan">
-                    <button class="btn" type="submit">View details</button>
-                </form>
-                {% endif %}
-                <a class="btn" href="/configs">Open reports</a>
-                <a class="btn" href="/configs">Open build files</a>
+                <a class="btn" href="#storage-technical-details">Open advanced details</a>
             </div>
         </div>
 
         <details class="card" id="storage-technical-details">
             <summary class="summary-row">
-                <span class="text-lg font-semibold">View details</span>
+                <span class="text-lg font-semibold">Advanced details and files</span>
                 <span class="status progress">details</span>
             </summary>
             <div class="mt-4">
+            <div class="result mb-4">The main storage workflow stays above. Open the sections below only when you need deeper technical detail, raw files, or apply artifacts.</div>
             {% if storage_apply_paths %}
             <details class="mb-4">
                 <summary class="summary-row">
@@ -647,6 +743,15 @@
                     {% if storage_plan_paths %}<br>Plan file: {{ storage_plan_paths.plan }}{% endif %}
                 </div>
                 <div class="actions">
+                    {% if storage_plan_paths %}
+                    <form hx-post="/view-storage-artifact" hx-target="#main-content" hx-swap="outerHTML">
+                        <input type="hidden" name="return_page" value="storage">
+                        <input type="hidden" name="discovery_raw_path" value="{{ storage_export_paths.raw }}">
+                        <input type="hidden" name="raid_plan_path" value="{{ storage_plan_paths.plan }}">
+                        <input type="hidden" name="artifact_kind" value="raid_plan">
+                        <button class="btn" type="submit">View details</button>
+                    </form>
+                    {% endif %}
                     <form hx-post="/view-storage-artifact" hx-target="#main-content" hx-swap="outerHTML">
                         <input type="hidden" name="return_page" value="storage">
                         <input type="hidden" name="discovery_raw_path" value="{{ storage_export_paths.raw }}">
@@ -661,15 +766,8 @@
                         <input type="hidden" name="artifact_kind" value="discovery_raw">
                         <button class="btn" type="submit">View raw discovery</button>
                     </form>
-                    {% if storage_plan_paths %}
-                    <form hx-post="/view-storage-artifact" hx-target="#main-content" hx-swap="outerHTML">
-                        <input type="hidden" name="return_page" value="storage">
-                        <input type="hidden" name="discovery_raw_path" value="{{ storage_export_paths.raw }}">
-                        <input type="hidden" name="raid_plan_path" value="{{ storage_plan_paths.plan }}">
-                        <input type="hidden" name="artifact_kind" value="raid_plan">
-                        <button class="btn" type="submit">View storage plan</button>
-                    </form>
-                    {% endif %}
+                    <a class="btn" href="/configs">Open reports</a>
+                    <a class="btn" href="/configs">Open build files</a>
                 </div>
             </div>
         </details>

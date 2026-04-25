@@ -2,7 +2,7 @@
     <div class="brand-block">
         <div class="eyebrow">Offline Provisioning</div>
         <div class="brand">Lab Builder</div>
-        <div class="muted">Dedicated workspaces fed by one shared Global Settings page.</div>
+        <div class="muted">Work through one kit at a time using the setup pages below.</div>
     </div>
 
     <div class="nav-group">
@@ -12,24 +12,27 @@
     </div>
 
     <div class="nav-group">
-        <div class="nav-label">Workflows</div>
-        <a class="nav-link{% if active_page == 'ilo' %} nav-link-active{% endif %}" href="/ilo">iLO</a>
+        <div class="nav-label">Setup</div>
+        <a class="nav-link{% if active_page == 'ilo' %} nav-link-active{% endif %}" href="/ilo">iLO Setup</a>
         <a class="nav-link{% if active_page == 'storage' %} nav-link-active{% endif %}" href="/storage">Storage setup</a>
-        <a class="nav-link{% if active_page == 'esxi' %} nav-link-active{% endif %}" href="/esxi">ESXi</a>
-        <a class="nav-link{% if active_page == 'windows' %} nav-link-active{% endif %}" href="/windows">Windows</a>
-        <a class="nav-link{% if active_page == 'qnap' %} nav-link-active{% endif %}" href="/qnap">QNAP</a>
+        <a class="nav-link{% if active_page == 'esxi' %} nav-link-active{% endif %}" href="/esxi">ESXi Setup</a>
     </div>
 
     <div class="nav-group">
-        <div class="nav-label">Tools</div>
+        <div class="nav-label">Run</div>
         <a class="nav-link{% if active_page == 'execution' %} nav-link-active{% endif %}" href="/execution">Run Center</a>
         <a class="nav-link{% if active_page == 'configs' %} nav-link-active{% endif %}" href="/configs">Reports & technical details</a>
-        <a class="nav-link{% if active_page == 'history' %} nav-link-active{% endif %}" href="/history">Run History</a>
-        <a class="nav-link{% if active_page == 'kits' %} nav-link-active{% endif %}" href="/kits">Kits</a>
     </div>
 
+    {% if cfg.get('included', {}).get('windows') or cfg.get('included', {}).get('qnap') %}
     <div class="nav-group">
-        <div class="nav-label">Layout</div>
-        <button class="btn w-full mb-2" onclick="resetDashboardLayout()">Reset dashboard layout</button>
+        <div class="nav-label">More Setup</div>
+        {% if cfg.get('included', {}).get('windows') %}
+        <a class="nav-link{% if active_page == 'windows' %} nav-link-active{% endif %}" href="/windows">Windows Setup</a>
+        {% endif %}
+        {% if cfg.get('included', {}).get('qnap') %}
+        <a class="nav-link{% if active_page == 'qnap' %} nav-link-active{% endif %}" href="/qnap">QNAP Setup</a>
+        {% endif %}
     </div>
+    {% endif %}
 </aside>

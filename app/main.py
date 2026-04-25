@@ -139,6 +139,15 @@ def sanitize_kit_name(name: str) -> str:
     return name or "Kit-01"
 
 
+def normalize_ilo_hostname(value: str) -> str:
+    hostname = str(value or "").strip()
+    if not hostname:
+        return ""
+    hostname = re.sub(r"[^A-Za-z0-9\-]+", "-", hostname)
+    hostname = re.sub(r"-{2,}", "-", hostname).strip("-")
+    return hostname[:63]
+
+
 def normalize_page_name(name: str | None) -> str:
     page = (name or "dashboard").strip().lower()
     return page if page in PAGE_META else "dashboard"
@@ -1160,9 +1169,9 @@ def resolve_storage_target_host(cfg: dict[str, Any]) -> dict[str, Any]:
 
     candidates = [
         ("explicit storage target override", str(storage_cfg.get("target_host_override") or "").strip()),
-        ("planned iLO target IP", str(ilo_cfg.get("target_ip") or cfg.get("ip_plan", {}).get("ilo") or "").strip()),
         ("current kit iLO IP", str(ilo_cfg.get("current_ip") or "").strip()),
         ("current kit iLO host", str(ilo_cfg.get("host") or "").strip()),
+        ("planned iLO target IP", str(ilo_cfg.get("target_ip") or cfg.get("ip_plan", {}).get("ilo") or "").strip()),
         ("latest discovery artifact", str(storage_cfg.get("latest_host") or "").strip()),
         ("approved storage artifact", str(approval.get("host") or "").strip()),
     ]
@@ -1251,7 +1260,7 @@ def build_storage_execution_status(cfg: dict[str, Any]) -> dict[str, Any]:
     return {
         "tone": "warning",
         "badge": "Storage not approved",
-        "summary": "RAID/storage will not be configured during the iLO run unless you go to the Storage / RAID page, read current storage, plan the layout, and approve it.",
+        "summary": "Storage will stay out of the run until it is reviewed and approved. Go to Storage setup, display current storage, build the layout, and approve it.",
     }
 
 
@@ -1431,6 +1440,44 @@ def build_activity_feed(history: list[dict[str, Any]], limit: int = 8) -> list[d
     return feed
 
 
+def build_history_display_entries(history: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    display_entries: list[dict[str, Any]] = []
+    for item in history:
+        if item.get("kind") == "event":
+            state = str(item.get("state") or "complete")
+            ui = workflow_state_ui(state)
+            display_entries.append(
+                {
+                    **item,
+                    "display_title": str(item.get("event") or item.get("scope") or "Event").replace("_", " ").title(),
+                    "display_target": str(item.get("target") or "").strip(),
+                    "display_status": ui["label"],
+                    "display_tone": ui["tone"],
+                    "display_summary": str(item.get("summary") or "Recorded event."),
+                    "display_highlights": list(item.get("details") or [])[:4],
+                }
+            )
+            continue
+
+        scope = str(item.get("scope") or "")
+        status = str(item.get("status") or "Recorded")
+        current_stage = str(item.get("current_stage") or item.get("summary") or "Run recorded")
+        config_summary = item.get("config_summary", {}) or {}
+        tone = "ready" if "complete" in status.lower() else "pending" if "fail" in status.lower() or "block" in status.lower() else "progress"
+        display_entries.append(
+            {
+                **item,
+                "display_title": f"{scope.replace('_', ' ').title()} run",
+                "display_target": build_bundle_target_summary(config_summary),
+                "display_status": status,
+                "display_tone": tone,
+                "display_summary": build_bundle_human_summary(scope, status, current_stage, config_summary),
+                "display_highlights": build_bundle_highlights(scope, status, current_stage, config_summary),
+            }
+        )
+    return display_entries
+
+
 def build_dashboard_job_status(history: list[dict[str, Any]]) -> dict[str, Any]:
     workflow_defs = [
         ("ilo", "iLO", ["ilo"]),
@@ -1450,6 +1497,7 @@ def build_dashboard_job_status(history: list[dict[str, Any]]) -> dict[str, Any]:
             "name": label,
             "status": status or "Run recorded",
             "time": str(latest.get("time") or ""),
+            "run_summary_path": str(latest.get("run_summary_path") or ""),
         }
         lowered = status.lower()
         if "fail" in lowered:
@@ -1460,6 +1508,641 @@ def build_dashboard_job_status(history: list[dict[str, Any]]) -> dict[str, Any]:
         "passed": passed,
         "failed": failed,
     }
+
+
+def latest_storage_discovery_export(cfg: dict[str, Any]) -> dict[str, Path] | None:
+    storage_cfg = cfg.get("storage", {}) or {}
+    latest_raw = str(storage_cfg.get("latest_discovery_raw_path") or "").strip()
+    if latest_raw:
+        raw_path = Path(latest_raw).expanduser().resolve()
+        if raw_path.exists():
+            return {
+                "directory": raw_path.parent,
+                "summary": raw_path.with_name("summary.yml"),
+                "raw": raw_path,
+            }
+
+    latest_raw_path = None
+    latest_mtime = -1.0
+    for raw_path in STORAGE_RAID_EXPORT_DIR.glob("*/*/raw.json"):
+        if not raw_path.is_file():
+            continue
+        try:
+            mtime = raw_path.stat().st_mtime
+        except OSError:
+            continue
+        if mtime > latest_mtime:
+            latest_mtime = mtime
+            latest_raw_path = raw_path
+
+    if not latest_raw_path:
+        return None
+
+    return {
+        "directory": latest_raw_path.parent,
+        "summary": latest_raw_path.with_name("summary.yml"),
+        "raw": latest_raw_path,
+    }
+
+
+def load_latest_live_inventory_snapshot() -> dict[str, Any]:
+    export_paths = latest_live_inventory_export()
+    if not export_paths:
+        return {}
+
+    snapshot: dict[str, Any] = {"paths": export_paths}
+    try:
+        snapshot["summary"] = yaml.safe_load(export_paths["summary"].read_text(encoding="utf-8")) or {}
+    except Exception:
+        snapshot["summary"] = {}
+    try:
+        snapshot["raw"] = json.loads(export_paths["raw"].read_text(encoding="utf-8"))
+    except Exception:
+        snapshot["raw"] = {}
+    return snapshot
+
+
+def load_latest_storage_discovery_snapshot(cfg: dict[str, Any]) -> dict[str, Any]:
+    export_paths = latest_storage_discovery_export(cfg)
+    if not export_paths:
+        return {}
+
+    snapshot: dict[str, Any] = {"paths": export_paths}
+    try:
+        snapshot["summary"] = yaml.safe_load(export_paths["summary"].read_text(encoding="utf-8")) or {}
+    except Exception:
+        snapshot["summary"] = {}
+    try:
+        snapshot["raw"] = json.loads(export_paths["raw"].read_text(encoding="utf-8"))
+    except Exception:
+        snapshot["raw"] = {}
+    return snapshot
+
+
+def _first_non_empty(*values: object) -> str:
+    for value in values:
+        text = str(value or "").strip()
+        if text:
+            return text
+    return ""
+
+
+def build_dashboard_hardware_identity(cfg: dict[str, Any]) -> dict[str, Any]:
+    live_snapshot = load_latest_live_inventory_snapshot()
+    storage_snapshot = load_latest_storage_discovery_snapshot(cfg)
+
+    live_summary = live_snapshot.get("summary", {}) or {}
+    live_raw_summary = (((live_snapshot.get("raw", {}) or {}).get("inventory", {}) or {}).get("summary", {}) or {})
+    storage_summary = storage_snapshot.get("summary", {}) or {}
+    storage_server = (storage_summary.get("server", {}) or {})
+    storage_ilo = (storage_summary.get("ilo", {}) or {})
+
+    live_storage = live_summary.get("storage", {}) or {}
+    standard_storage = storage_summary.get("standard_redfish_storage", {}) or {}
+    hpe_storage = storage_summary.get("hpe_smart_storage", {}) or {}
+    controllers = (
+        standard_storage.get("controllers")
+        or hpe_storage.get("controllers")
+        or live_storage.get("controllers")
+        or []
+    )
+    controller = controllers[0] if controllers else {}
+
+    server_model = _first_non_empty(live_summary.get("server_model"), storage_server.get("model"))
+    product_name = _first_non_empty(live_summary.get("product_name"), storage_server.get("product_name"))
+    server_label = _first_non_empty(server_model, product_name)
+    generation = _first_non_empty(storage_server.get("generation"))
+    serial_number = _first_non_empty(live_summary.get("serial_number"), storage_server.get("serial_number"))
+    manager_model = _first_non_empty(
+        (live_raw_summary.get("manager", {}) or {}).get("model"),
+        storage_ilo.get("version"),
+        storage_ilo.get("model"),
+    )
+    ilo_firmware = _first_non_empty(live_summary.get("ilo_firmware_version"), storage_ilo.get("firmware"))
+    current_ilo_ip = _first_non_empty(
+        live_summary.get("current_ilo_ip"),
+        cfg.get("ilo", {}).get("current_ip"),
+        cfg.get("ilo", {}).get("host"),
+    )
+    target_ilo_ip = _first_non_empty(
+        live_summary.get("target_ilo_ip"),
+        cfg.get("ilo", {}).get("target_ip"),
+        cfg.get("ip_plan", {}).get("ilo"),
+    )
+    controller_name = " / ".join(
+        [
+            value
+            for value in [
+                str(controller.get("name") or "").strip(),
+                str(controller.get("model") or "").strip(),
+            ]
+            if value
+        ]
+    )
+    controller_fw = storage_firmware_display(controller.get("firmware_version"))
+
+    sources: list[str] = []
+    if live_summary:
+        sources.append("Latest live iLO inventory")
+    if storage_summary:
+        sources.append("Latest storage discovery")
+    if not sources:
+        sources.append("Saved kit values")
+
+    discovered = bool(server_label or serial_number or manager_model or controller_name)
+    fields = [
+        {"label": "Server", "value": server_label or "Not identified yet"},
+        {"label": "Serial", "value": serial_number or "Not identified yet"},
+        {"label": "Generation", "value": generation or "Not identified yet"},
+        {"label": "iLO", "value": manager_model or "Not identified yet"},
+        {"label": "iLO firmware", "value": ilo_firmware or "Not identified yet"},
+        {"label": "Current iLO IP", "value": current_ilo_ip or "Not set"},
+        {"label": "Final iLO IP", "value": target_ilo_ip or "Not set"},
+        {"label": "Controller", "value": controller_name or "Not identified yet"},
+        {"label": "Controller firmware", "value": controller_fw or "Not identified yet"},
+        {"label": "Source", "value": " + ".join(sources)},
+    ]
+    return {
+        "discovered": discovered,
+        "title": server_label or "Hardware identity not captured yet",
+        "subtitle": (
+            f"Serial {serial_number}"
+            if serial_number
+            else "Read current iLO or current storage to capture the live server identity."
+        ),
+        "fields": fields,
+    }
+
+
+def build_dashboard_timeline(
+    cfg: dict[str, Any],
+    workflow_contexts: dict[str, dict[str, Any]],
+    history: list[dict[str, Any]],
+    job: dict[str, Any],
+    hardware_identity: dict[str, Any],
+    latest_receipt: dict[str, Any] | None,
+) -> list[dict[str, str]]:
+    shared_subnet = str((cfg.get("shared_network", {}) or {}).get("subnet") or "").strip()
+    shared_gateway = str((cfg.get("ip_plan", {}) or {}).get("gateway") or "").strip()
+    ilo_cfg = cfg.get("ilo", {}) or {}
+    latest_real_run = next((item for item in history if item.get("kind") != "event"), None) or {}
+
+    items: list[dict[str, str]] = [
+        {
+            "label": "Kit selected",
+            "status": "Active",
+            "tone": "ready",
+            "summary": f"Using kit {cfg.get('site', {}).get('name', '') or 'Kit-01'}.",
+            "href": "/dashboard",
+            "time": "",
+        },
+        {
+            "label": "Shared defaults",
+            "status": "Saved" if (shared_subnet and shared_gateway) else "Needs setup",
+            "tone": "ready" if (shared_subnet and shared_gateway) else "pending",
+            "summary": (
+                f"Subnet {shared_subnet} and gateway {shared_gateway} are ready."
+                if (shared_subnet and shared_gateway)
+                else "Save the shared subnet and gateway before moving deeper into the build."
+            ),
+            "href": "/global-settings",
+            "time": "",
+        },
+        {
+            "label": "iLO setup",
+            "status": workflow_contexts["ilo"]["state_label"],
+            "tone": workflow_contexts["ilo"]["tone"],
+            "summary": workflow_contexts["ilo"]["planned_summary"],
+            "href": "/ilo",
+            "time": str((latest_history_entry_for_scope(history, ["ilo"]) or {}).get("time") or ""),
+        },
+        {
+            "label": "Hardware identified",
+            "status": "Verified" if hardware_identity.get("discovered") else "Waiting",
+            "tone": "ready" if hardware_identity.get("discovered") else "pending",
+            "summary": hardware_identity.get("subtitle") or "No live identity has been captured yet.",
+            "href": "/ilo",
+            "time": "",
+        },
+    ]
+
+    if cfg.get("included", {}).get("storage"):
+        items.append(
+            {
+                "label": "Storage plan",
+                "status": workflow_contexts["storage"]["state_label"],
+                "tone": workflow_contexts["storage"]["tone"],
+                "summary": workflow_contexts["storage"]["approved_summary"] if workflow_contexts["storage"].get("approved") else workflow_contexts["storage"]["current_summary"],
+                "href": "/storage",
+                "time": str((latest_history_entry_for_scope(history, ["storage-apply", "storage-reboot"]) or {}).get("time") or ""),
+            }
+        )
+
+    if cfg.get("included", {}).get("esxi"):
+        items.append(
+            {
+                "label": "ESXi setup",
+                "status": workflow_contexts["esxi"]["state_label"],
+                "tone": workflow_contexts["esxi"]["tone"],
+                "summary": workflow_contexts["esxi"]["planned_summary"],
+                "href": "/esxi",
+                "time": str((latest_history_entry_for_scope(history, ["esxi"]) or {}).get("time") or ""),
+            }
+        )
+
+    job_status = str(job.get("status") or "")
+    if job_status not in {"", "Idle"}:
+        items.append(
+            {
+                "label": "Live run",
+                "status": job_status,
+                "tone": "progress" if job_status not in {"Completed", "Complete", "Preview complete"} else "ready",
+                "summary": str(job.get("current_stage") or "The app is working through the active run."),
+                "href": "/execution",
+                "time": "",
+            }
+        )
+    else:
+        items.append(
+            {
+                "label": "Latest run",
+                "status": str((latest_receipt or {}).get("result") or "Not run yet"),
+                "tone": str((latest_receipt or {}).get("tone") or "pending"),
+                "summary": str((latest_receipt or {}).get("human_summary") or "No completed run has been recorded yet."),
+                "href": "/execution",
+                "time": str(latest_real_run.get("time") or ""),
+            }
+        )
+
+    return items
+
+
+def build_dashboard_latest_receipt(cfg: dict[str, Any], history: list[dict[str, Any]]) -> dict[str, Any] | None:
+    bundles = build_run_bundles(cfg, history)
+    if not bundles:
+        return None
+    bundle = bundles[0]
+    return {
+        **bundle,
+        "cta_label": "Open log" if bundle.get("run_summary_path") else "",
+    }
+
+
+def build_live_job_story(job: dict[str, Any]) -> dict[str, str]:
+    status = str(job.get("status") or "Idle")
+    current_step = str(job.get("current_stage") or "").strip()
+    logs = [str(line).strip() for line in (job.get("logs") or []) if str(line).strip()]
+    completed_steps = int(job.get("completed_steps") or 0)
+    total_steps = int(job.get("total_steps") or 0)
+    last_confirmed = logs[-1] if logs else ""
+
+    if status in {"Idle", ""}:
+        return {
+            "headline": "Nothing is running right now.",
+            "summary": "Pick a run below and review it before you start.",
+            "last_confirmed": "No live job has started yet.",
+            "waiting_on": "The app is waiting for you to start a preview or a real run.",
+        }
+
+    if status in {"Complete", "Completed", "Preview complete"}:
+        return {
+            "headline": current_step or "Run finished.",
+            "summary": "The run reached its terminal state. Use the live log and bundle to confirm the final verification details.",
+            "last_confirmed": last_confirmed or "The final log lines were recorded.",
+            "waiting_on": "Nothing else is running. Open the run summary if you need the full trace.",
+        }
+
+    if total_steps > 0 and completed_steps >= total_steps:
+        waiting_on = "The app is waiting for the final verification and wrap-up before it can mark the run complete."
+    elif total_steps > 0:
+        waiting_on = f"The app is working toward step {completed_steps + 1} of {total_steps}."
+    else:
+        waiting_on = "The app is still working through the live run."
+
+    return {
+        "headline": current_step or "Run in progress",
+        "summary": "The live log below is the source of truth while the run is active.",
+        "last_confirmed": last_confirmed or "No confirmed log line has been written yet.",
+        "waiting_on": waiting_on,
+    }
+
+
+def latest_scope_receipt(cfg: dict[str, Any], history: list[dict[str, Any]], scopes: list[str]) -> dict[str, Any] | None:
+    scope_set = set(scopes)
+    for bundle in build_run_bundles(cfg, history):
+        if str(bundle.get("scope") or "") in scope_set:
+            return {
+                **bundle,
+                "cta_label": "Open log" if bundle.get("run_summary_path") else "",
+            }
+    return None
+
+
+def build_ilo_page_readiness(
+    cfg: dict[str, Any],
+    latest_ilo_receipt: dict[str, Any] | None,
+    storage_execution_status: dict[str, Any],
+) -> list[dict[str, str]]:
+    ilo_cfg = cfg.get("ilo", {}) or {}
+    current_ip = str(ilo_cfg.get("current_ip") or ilo_cfg.get("host") or "").strip()
+    username = str(ilo_cfg.get("username") or "").strip()
+    password = str(ilo_cfg.get("password") or "")
+    shared_subnet = str((cfg.get("shared_network", {}) or {}).get("subnet") or "").strip()
+    shared_gateway = str((cfg.get("ip_plan", {}) or {}).get("gateway") or "").strip()
+    latest_summary = str((latest_ilo_receipt or {}).get("human_summary") or "")
+    items = [
+        {
+            "label": "Current endpoint",
+            "status": "Saved" if current_ip else "Needs setup",
+            "tone": "ready" if current_ip else "pending",
+            "summary": current_ip or "Save the iLO address the server is using right now.",
+        },
+        {
+            "label": "Sign-in",
+            "status": "Ready" if (username and password) else "Needs setup",
+            "tone": "ready" if (username and password) else "pending",
+            "summary": username if (username and password) else "Save the iLO username and password before you run.",
+        },
+        {
+            "label": "Shared network defaults",
+            "status": "Ready" if (shared_subnet and shared_gateway) else "Needs setup",
+            "tone": "ready" if (shared_subnet and shared_gateway) else "pending",
+            "summary": (
+                f"{shared_subnet} | gateway {shared_gateway}"
+                if (shared_subnet and shared_gateway)
+                else "Save the shared subnet and gateway in Global Settings."
+            ),
+        },
+        {
+            "label": "Last verified iLO run",
+            "status": str((latest_ilo_receipt or {}).get("result") or "Not run yet"),
+            "tone": str((latest_ilo_receipt or {}).get("tone") or "pending"),
+            "summary": latest_summary or "No iLO run has been recorded yet.",
+        },
+        {
+            "label": "Storage handoff",
+            "status": str(storage_execution_status.get("badge") or "Not ready"),
+            "tone": str(storage_execution_status.get("tone") or "pending"),
+            "summary": str(storage_execution_status.get("summary") or ""),
+        },
+    ]
+    return items
+
+
+def build_ilo_change_summary(cfg: dict[str, Any]) -> list[dict[str, str]]:
+    ilo_cfg = cfg.get("ilo", {}) or {}
+    dns_values = [x for x in cfg.get("shared_network", {}).get("dns_servers", []) if x and str(x).strip()]
+    additional_users = ilo_cfg.get("additional_users", []) or []
+    shared_snmp = cfg.get("shared_snmp", {}) or {}
+    return [
+        {
+            "name": "Endpoint",
+            "before": f"Current iLO IP {ilo_cfg.get('current_ip') or ilo_cfg.get('host') or 'Not set'}",
+            "after": f"Final iLO IP {ilo_cfg.get('target_ip') or cfg.get('ip_plan', {}).get('ilo') or 'Not set'}",
+            "verify": "Reconnect to the final iLO endpoint after any required reset.",
+        },
+        {
+            "name": "Network settings",
+            "before": f"Using shared gateway {cfg.get('ip_plan', {}).get('gateway') or 'Not set'}",
+            "after": (
+                f"Gateway {ilo_cfg.get('gateway') or cfg.get('ip_plan', {}).get('gateway') or 'Not set'}"
+                f" | hostname {ilo_cfg.get('hostname') or 'Unchanged'}"
+                f" | DNS {', '.join(dns_values) or 'Not set'}"
+            ),
+            "verify": "Read back hostname, gateway, and DNS after the iLO stage finishes.",
+        },
+        {
+            "name": "Security and users",
+            "before": f"Primary user {ilo_cfg.get('username') or 'Not set'}",
+            "after": (
+                f"SNMPv3 user {shared_snmp.get('v3_username') or 'Not set'}"
+                f" | auth {shared_snmp.get('v3_auth_protocol', 'SHA')}"
+                f" | privacy {shared_snmp.get('v3_priv_protocol', 'AES')}"
+                f" | extra iLO users {len(additional_users)}"
+            ),
+            "verify": "Verify SNMP and user changes without exposing the saved secrets.",
+        },
+    ]
+
+
+def build_storage_page_readiness(
+    storage_review: dict[str, Any],
+    storage_target: dict[str, Any],
+    storage_credentials: dict[str, Any],
+    storage_execution_status: dict[str, Any],
+    storage_export_paths: dict[str, Path] | None,
+) -> list[dict[str, str]]:
+    items = [
+        {
+            "label": "Target server",
+            "status": "Ready" if storage_target.get("valid") else "Needs setup",
+            "tone": "ready" if storage_target.get("valid") else "pending",
+            "summary": str(storage_target.get("resolved") or storage_target.get("error") or "No target server is resolved yet."),
+        },
+        {
+            "label": "Sign-in",
+            "status": "Ready" if storage_credentials.get("valid") else "Needs setup",
+            "tone": "ready" if storage_credentials.get("valid") else "pending",
+            "summary": str(storage_credentials.get("username") or storage_credentials.get("error") or "No sign-in details are ready yet."),
+        },
+        {
+            "label": "Current storage read",
+            "status": "Captured" if storage_export_paths else "Not read yet",
+            "tone": "ready" if storage_export_paths else "pending",
+            "summary": (
+                str(storage_review.get("status_reason") or "The latest storage view is on this page.")
+                if storage_export_paths
+                else "Read the current storage before building a plan."
+            ),
+        },
+        {
+            "label": "Approved plan",
+            "status": "Approved" if storage_review.get("approved") else "Needs review again" if storage_review.get("stale") else "Not approved",
+            "tone": "ready" if storage_review.get("approved") else "pending",
+            "summary": str(storage_review.get("approval", {}).get("plan_summary", {}).get("mode") or storage_review.get("status_reason") or "No approved storage plan yet."),
+        },
+        {
+            "label": "Real-run handoff",
+            "status": str(storage_execution_status.get("badge") or "Not ready"),
+            "tone": str(storage_execution_status.get("tone") or "pending"),
+            "summary": str(storage_execution_status.get("summary") or ""),
+        },
+    ]
+    return items
+
+
+def build_storage_change_summary(storage_review: dict[str, Any], storage_plan: dict[str, Any] | None) -> list[dict[str, str]]:
+    approval = storage_review.get("approval", {}) or {}
+    plan_summary = (
+        (storage_plan or {}).get("planned_layout", {})
+        or approval.get("plan_summary", {})
+        or {}
+    )
+    if "os_raid1" in plan_summary:
+        os_bays = str((plan_summary.get("os_raid1", {}) or {}).get("bays") or "Not selected")
+        data_bays = str((plan_summary.get("data_raid6", {}) or {}).get("bays") or "Not selected")
+        spare_bay = str((plan_summary.get("hot_spare", {}) or {}).get("bay") or "Not reserved")
+    else:
+        os_bays = str(plan_summary.get("os_bays") or "Not selected")
+        data_bays = str(plan_summary.get("data_bays") or "Not selected")
+        spare_bay = str(plan_summary.get("spare_bay") or "Not reserved")
+    controller = str(plan_summary.get("controller") or "Not set")
+    reboot_expected = bool(approval.get("reboot_expected"))
+    approved_host = str(approval.get("host") or "Not set")
+    return [
+        {
+            "name": "Current hardware view",
+            "before": storage_review.get("status_reason") or "Read the current storage to capture the controller, drives, and existing volumes.",
+            "after": f"Use host {approved_host} with controller {controller}.",
+            "verify": "Make sure the approved plan still matches the same server and latest storage read.",
+        },
+        {
+            "name": "Planned layout",
+            "before": "Current volumes and drives stay untouched until the real run starts.",
+            "after": f"OS RAID 1 bays {os_bays} | Data RAID bays {data_bays} | Hot spare {spare_bay}",
+            "verify": "Use the exact approved plan artifact during the real run.",
+        },
+        {
+            "name": "Apply confirmation",
+            "before": "No destructive changes have been made yet on this page.",
+            "after": f"Restart expected: {'Yes' if reboot_expected else 'No'} | Included in iLO run: {'Yes' if storage_review.get('include_in_ilo_run') else 'No'}",
+            "verify": "Capture post-change storage discovery and validate the result after any required restart.",
+        },
+    ]
+
+
+def build_esxi_page_review(cfg: dict[str, Any]) -> dict[str, Any]:
+    kit_name = sanitize_kit_name(cfg.get("site", {}).get("name", "Kit-01"))
+    login_ip = resolve_ilo_control_host(cfg)
+    stamp = time.strftime("%Y%m%d-%H%M%S")
+    output_name = f"esxi-{stamp}"
+    output_iso = EXPORTS_DIR / "esxi-isos" / kit_name / output_name / f"{output_name}.iso"
+    values = get_esxi_effective_values(cfg)
+    review = {
+        "run_stamp": stamp,
+        "source_label": "Saved kit values from the ESXi Setup page and shared defaults",
+        "manual_defaults_label": "Manual test script defaults are not used by Run Center",
+        "base_iso_path": "",
+        "base_iso_ready": False,
+        "base_iso_error": "",
+        "output_iso_path": str(output_iso),
+        "virtual_media_url": build_esxi_iso_url(cfg, output_iso, login_ip),
+        "hostname": values["hostname"],
+        "management_ip": values["management_ip"],
+        "subnet_mask": values["subnet_mask"],
+        "gateway": values["gateway"],
+        "dns_servers": values["dns_servers"],
+        "root_password_saved": bool(values["root_password"]),
+        "root_password_policy_valid": esxi_password_policy_valid(values["root_password"]) if values["root_password"] else False,
+        "vlan_id": values["vlan_id"],
+        "ntp_server": values["ntp_server"],
+        "enable_ssh": values["enable_ssh"],
+        "disable_ipv6": values["disable_ipv6"],
+        "missing_fields": list(values["missing_fields"]),
+    }
+    try:
+        review["base_iso_path"] = str(resolve_esxi_base_iso_path(cfg))
+        review["base_iso_ready"] = True
+    except Exception as e:
+        review["base_iso_error"] = str(e).splitlines()[0]
+    return review
+
+
+def build_esxi_page_readiness(
+    cfg: dict[str, Any],
+    esxi_review: dict[str, Any],
+    latest_esxi_receipt: dict[str, Any] | None,
+) -> list[dict[str, str]]:
+    shared_subnet = str((cfg.get("shared_network", {}) or {}).get("subnet") or "").strip()
+    dns_values = [str(item).strip() for item in (esxi_review.get("dns_servers") or []) if str(item).strip()]
+    password_saved = bool(esxi_review.get("root_password_saved"))
+    policy_valid = bool(esxi_review.get("root_password_policy_valid"))
+    return [
+        {
+            "label": "Install target",
+            "status": "Ready" if (esxi_review.get("hostname") and esxi_review.get("management_ip")) else "Needs setup",
+            "tone": "ready" if (esxi_review.get("hostname") and esxi_review.get("management_ip")) else "pending",
+            "summary": (
+                f"{esxi_review.get('hostname')} | {esxi_review.get('management_ip')}"
+                if (esxi_review.get("hostname") and esxi_review.get("management_ip"))
+                else "Save the ESXi host name and final management IP."
+            ),
+        },
+        {
+            "label": "Shared network defaults",
+            "status": "Ready" if (shared_subnet and esxi_review.get("gateway")) else "Needs setup",
+            "tone": "ready" if (shared_subnet and esxi_review.get("gateway")) else "pending",
+            "summary": (
+                f"{shared_subnet} | gateway {esxi_review.get('gateway')} | DNS {', '.join(dns_values) or 'Not set'}"
+                if (shared_subnet and esxi_review.get("gateway"))
+                else "Save the shared subnet, gateway, and DNS in Global Settings."
+            ),
+        },
+        {
+            "label": "Installer source",
+            "status": "Ready" if esxi_review.get("base_iso_ready") else "Needs setup",
+            "tone": "ready" if esxi_review.get("base_iso_ready") else "pending",
+            "summary": str(esxi_review.get("base_iso_path") or esxi_review.get("base_iso_error") or "No base installer ISO is available yet."),
+        },
+        {
+            "label": "Install secret",
+            "status": "Ready" if (password_saved and policy_valid) else "Needs review" if password_saved else "Needs setup",
+            "tone": "ready" if (password_saved and policy_valid) else "pending",
+            "summary": (
+                f"Root password saved | policy-valid={'yes' if policy_valid else 'no'}"
+                if password_saved
+                else "Save the ESXi root password before the real run."
+            ),
+        },
+        {
+            "label": "Last verified ESXi run",
+            "status": str((latest_esxi_receipt or {}).get("result") or "Not run yet"),
+            "tone": str((latest_esxi_receipt or {}).get("tone") or "pending"),
+            "summary": str((latest_esxi_receipt or {}).get("human_summary") or "No ESXi run has been recorded yet."),
+        },
+    ]
+
+
+def build_esxi_change_summary(esxi_review: dict[str, Any]) -> list[dict[str, str]]:
+    dns_values = ", ".join(esxi_review.get("dns_servers") or []) or "Not set"
+    return [
+        {
+            "name": "Install network",
+            "before": (
+                f"Saved hostname {esxi_review.get('hostname') or 'Not set'}"
+                f" | target IP {esxi_review.get('management_ip') or 'Not set'}"
+            ),
+            "after": (
+                f"Subnet {esxi_review.get('subnet_mask') or 'Not set'}"
+                f" | gateway {esxi_review.get('gateway') or 'Not set'}"
+                f" | DNS {dns_values}"
+            ),
+            "verify": "Build the installer from these saved values and wait for ESXi to answer on the target IP.",
+        },
+        {
+            "name": "Installer media",
+            "before": esxi_review.get("base_iso_path") or esxi_review.get("base_iso_error") or "Base installer source not ready yet.",
+            "after": (
+                f"Built ISO {esxi_review.get('output_iso_path') or 'Pending'}"
+                f" | URL {esxi_review.get('virtual_media_url') or 'Pending'}"
+            ),
+            "verify": "Build the custom installer ISO and log the exact ISO path and virtual media URL used.",
+        },
+        {
+            "name": "Access and services",
+            "before": (
+                f"Root password {'saved' if esxi_review.get('root_password_saved') else 'missing'}"
+                f" | policy-valid={'yes' if esxi_review.get('root_password_policy_valid') else 'no'}"
+            ),
+            "after": (
+                f"SSH {'enabled' if esxi_review.get('enable_ssh') else 'disabled'}"
+                f" | IPv6 {'disabled' if esxi_review.get('disable_ipv6') else 'enabled'}"
+                f" | VLAN {esxi_review.get('vlan_id') or 'None'}"
+                f" | NTP {esxi_review.get('ntp_server') or 'Not set'}"
+            ),
+            "verify": "Run Center uses the saved kit values only. Manual test defaults are not part of the real ESXi run.",
+        },
+    ]
 
 
 def validation_check(
@@ -2103,6 +2786,99 @@ def related_reports_query_for_history_item(item: dict[str, Any]) -> str:
     return scope
 
 
+def build_bundle_target_summary(config_summary: dict[str, Any]) -> str:
+    login_ip = str(config_summary.get("login_ip") or "").strip()
+    target_ip = str(config_summary.get("target_ip") or "").strip()
+    if login_ip and target_ip and login_ip != target_ip:
+        return f"{login_ip} -> {target_ip}"
+    return target_ip or login_ip or "Not set"
+
+
+def build_bundle_highlights(scope: str, result: str, current_stage: str, config_summary: dict[str, Any]) -> list[str]:
+    highlights: list[str] = []
+
+    if scope == "ilo":
+        login_ip = str(config_summary.get("login_ip") or "").strip()
+        target_ip = str(config_summary.get("target_ip") or "").strip()
+        if login_ip and target_ip and login_ip != target_ip:
+            highlights.append(f"iLO IP {login_ip} -> {target_ip}")
+        elif target_ip or login_ip:
+            highlights.append(f"iLO target {target_ip or login_ip}")
+        if config_summary.get("dns_apply_status"):
+            highlights.append(f"DNS {config_summary.get('dns_apply_status')}")
+        if config_summary.get("snmp_apply_status"):
+            highlights.append(f"SNMP {config_summary.get('snmp_apply_status')}")
+        if config_summary.get("ilo_reset_status"):
+            highlights.append(f"iLO reset {config_summary.get('ilo_reset_status')}")
+        if config_summary.get("storage_server_reboot_status"):
+            highlights.append(f"Server reboot {config_summary.get('storage_server_reboot_status')}")
+        if config_summary.get("ilo_final_ip_verified"):
+            highlights.append("Final iLO IP verified")
+    elif scope in {"storage", "storage-apply", "storage-reboot"}:
+        if config_summary.get("storage_plan_path"):
+            highlights.append("Approved storage plan used")
+        if config_summary.get("storage_server_reboot_status"):
+            highlights.append(f"Server reboot {config_summary.get('storage_server_reboot_status')}")
+        if config_summary.get("reboot_required"):
+            highlights.append("Restart was required")
+    elif scope == "esxi":
+        target_ip = str(config_summary.get("target_ip") or "").strip()
+        if target_ip:
+            highlights.append(f"Target IP {target_ip}")
+        gateway = str(config_summary.get("gateway") or "").strip()
+        if gateway:
+            highlights.append(f"Gateway {gateway}")
+        dns_servers = config_summary.get("dns_servers") or []
+        if dns_servers:
+            highlights.append(f"DNS {', '.join(dns_servers[:2])}")
+    else:
+        target_ip = str(config_summary.get("target_ip") or "").strip()
+        if target_ip:
+            highlights.append(f"Target IP {target_ip}")
+
+    if current_stage and current_stage not in {"Finished", "Installed"}:
+        highlights.append(f"Last step {current_stage}")
+    elif result and result not in {"Recorded"}:
+        highlights.append(f"Result {result}")
+
+    deduped: list[str] = []
+    seen: set[str] = set()
+    for item in highlights:
+        if item in seen:
+            continue
+        seen.add(item)
+        deduped.append(item)
+    return deduped[:5]
+
+
+def build_bundle_human_summary(scope: str, result: str, current_stage: str, config_summary: dict[str, Any]) -> str:
+    if scope == "ilo":
+        parts: list[str] = []
+        if config_summary.get("dns_apply_status"):
+            parts.append(f"DNS {str(config_summary.get('dns_apply_status')).lower()}")
+        if config_summary.get("snmp_apply_status"):
+            parts.append(f"SNMP {str(config_summary.get('snmp_apply_status')).lower()}")
+        if config_summary.get("ilo_reset_status"):
+            parts.append(f"iLO reset {str(config_summary.get('ilo_reset_status')).lower()}")
+        if config_summary.get("storage_server_reboot_status"):
+            parts.append(f"server reboot {str(config_summary.get('storage_server_reboot_status')).lower()}")
+        if config_summary.get("ilo_final_ip_verified"):
+            parts.append("final iLO IP verified")
+        if parts:
+            return "This run handled " + ", ".join(parts) + "."
+    if scope in {"storage", "storage-apply", "storage-reboot"} and config_summary.get("storage_plan_path"):
+        return "This run used the approved storage plan and kept the full apply details in the bundle."
+    if scope == "esxi":
+        target_ip = str(config_summary.get("target_ip") or "").strip()
+        if target_ip:
+            return f"This run targeted the ESXi host at {target_ip}."
+    if current_stage:
+        return f"This run ended at: {current_stage}."
+    if result:
+        return f"This run finished with status: {result}."
+    return "Open the bundle for the full technical detail."
+
+
 def build_run_bundles(cfg: dict[str, Any], history: list[dict[str, Any]]) -> list[dict[str, Any]]:
     bundles: list[dict[str, Any]] = []
     for item in history:
@@ -2110,7 +2886,8 @@ def build_run_bundles(cfg: dict[str, Any], history: list[dict[str, Any]]) -> lis
             continue
         scope = str(item.get("scope") or "")
         config_summary = item.get("config_summary", {}) or {}
-        target = str(config_summary.get("target_ip") or config_summary.get("login_ip") or "") or "Not set"
+        current_stage = str(item.get("current_stage") or item.get("summary") or "Run recorded")
+        target = build_bundle_target_summary(config_summary)
         result = str(item.get("status") or "Recorded")
         run_summary_path = str(item.get("run_summary_path") or "")
         related_reports_query = related_reports_query_for_history_item(item)
@@ -2127,23 +2904,56 @@ def build_run_bundles(cfg: dict[str, Any], history: list[dict[str, Any]]) -> lis
                 "time": item.get("time", ""),
                 "result": result,
                 "tone": "ready" if "Complete" in result else "pending" if ("Fail" in result or "Blocked" in result) else "progress",
-                "summary": item.get("current_stage") or item.get("summary") or "Run recorded",
+                "summary": current_stage,
+                "human_summary": build_bundle_human_summary(scope, result, current_stage, config_summary),
+                "highlights": build_bundle_highlights(scope, result, current_stage, config_summary),
                 "run_summary_path": run_summary_path,
                 "related_reports_query": related_reports_query,
                 "related_reports": related_reports,
                 "config_summary": config_summary,
             }
         )
-    return bundles[:12]
+    return bundles[:25]
+
+
+def split_report_bundles_for_summary(bundles: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    latest_by_scope: list[dict[str, Any]] = []
+    older_runs: list[dict[str, Any]] = []
+    seen_keys: set[str] = set()
+
+    for bundle in bundles:
+        key = str(bundle.get("name") or bundle.get("scope") or "run")
+        if key in seen_keys:
+            older_runs.append(bundle)
+            continue
+        seen_keys.add(key)
+        latest_by_scope.append(bundle)
+
+    return latest_by_scope, older_runs
 
 
 def build_report_center(cfg: dict[str, Any], query: str = "", report_type: str = "all") -> dict[str, Any]:
     history = load_history(cfg.get("site", {}).get("name", ""))
+    entries = collect_report_entries(cfg, query=query, report_type=report_type)
+    bundles = build_run_bundles(cfg, history)
+    latest_bundles, older_bundles = split_report_bundles_for_summary(bundles)
+    entry_counts: dict[str, int] = {}
+    for item in entries:
+        kind = str(item.get("kind") or "other")
+        entry_counts[kind] = entry_counts.get(kind, 0) + 1
+    preview_limit = 12
     return {
         "query": query,
         "report_type": report_type,
-        "entries": collect_report_entries(cfg, query=query, report_type=report_type),
-        "bundles": build_run_bundles(cfg, history),
+        "entries": entries,
+        "entries_preview": entries[:preview_limit],
+        "entries_total": len(entries),
+        "entries_has_more": len(entries) > preview_limit,
+        "entries_preview_limit": preview_limit,
+        "entry_counts": entry_counts,
+        "bundles": bundles,
+        "latest_bundles": latest_bundles,
+        "older_bundles": older_bundles,
     }
 
 
@@ -2269,12 +3079,16 @@ def build_execution_launch_options(cfg: dict[str, Any], scope: str) -> dict[str,
             return {"preview": preview_option, "real": None}
         if len(supported_real) > 1:
             real_scope = "multi__" + "__".join(supported_real)
+            multi_stage_summary = "Runs the included iLO, storage, and ESXi stages in order."
+            if "storage" in supported_real:
+                multi_stage_summary += " The approved storage plan will also be applied."
+            multi_stage_summary += " Later stages use the final iLO IP after the iLO stage finishes."
             return {
                 "preview": preview_option,
                 "real": {
                     "scope": real_scope,
                     "label": "Run whole kit for real",
-                    "summary": "Runs the included iLO, storage, and ESXi stages in order. Later stages use the final iLO IP after the iLO stage finishes.",
+                    "summary": multi_stage_summary,
                 },
             }
         if supported_real == ["ilo"]:
@@ -3010,9 +3824,10 @@ def build_raid_plan(discovery: dict, discovery_paths: dict[str, Path], overrides
     if hot_spare:
         excluded_drives.append({**hot_spare, "exclude_reason": "Reserved as the data-side hot spare."})
         excluded_drives.extend(raid6_excluded)
-    elif len(default_os_pair) < 2:
-        blockers.append("Could not choose two suitable drives for the OS RAID 1 pair.")
+    else:
         blockers.extend(default_raid6_blockers)
+    if len(default_os_pair) < 2:
+        blockers.append("Could not choose two suitable drives for the OS RAID 1 pair.")
 
     apply_readiness = {
         "next_action": "wipe and rebuild" if existing_volumes else "create only",
@@ -5528,6 +6343,62 @@ def build_execution_review(cfg: dict, scope: str):
             return "Fix on iLO"
         return f"Fix on {components[key]['name']}"
 
+    def stage_change_summary(key: str) -> dict[str, str]:
+        if key == "ilo":
+            current_ip = cfg["ilo"].get("current_ip") or cfg["ilo"].get("host") or "Not set"
+            target_ip = cfg["ilo"].get("target_ip") or current_ip
+            gateway = cfg["ilo"].get("gateway") or cfg.get("ip_plan", {}).get("gateway") or "Not set"
+            hostname = cfg["ilo"].get("hostname") or "Unchanged"
+            dns_values = [x for x in cfg.get("shared_network", {}).get("dns_servers", []) if x and str(x).strip()]
+            verify_suffix = f" ({', '.join(dns_values[:2])})" if dns_values else ""
+            return {
+                "name": "iLO",
+                "before": f"Current iLO IP {current_ip}",
+                "after": f"Final iLO IP {target_ip} | gateway {gateway} | hostname {hostname}",
+                "verify": f"Read back DNS, SNMP, and final iLO endpoint{verify_suffix}.",
+            }
+        if key == "storage":
+            review = build_storage_run_review()
+            return {
+                "name": "Storage",
+                "before": storage_review.get("current_summary") or "Current storage will be read from the latest approved discovery.",
+                "after": (
+                    f"{review.get('apply_mode_label') or 'Approved layout'} | controller {review.get('controller') or 'Not set'} | "
+                    f"OS {review.get('os_bays') or 'Not selected'} | data {review.get('data_bays') or 'Not selected'} | spare {review.get('spare_bay') or 'Not reserved'}"
+                ),
+                "verify": "Use the approved artifact, apply the layout, and validate the server again after any required reboot.",
+            }
+        if key == "esxi":
+            return {
+                "name": "ESXi",
+                "before": f"Installer target {esxi_install_review.get('management_ip') or 'Not set'}",
+                "after": (
+                    f"Boot custom ISO for {esxi_install_review.get('hostname') or 'Not set'}"
+                    f" | built ISO {esxi_install_review.get('output_iso_path') or 'Not set'}"
+                ),
+                "verify": f"Confirm virtual media mount, boot progression, and ESXi reachability on {esxi_install_review.get('management_ip') or 'the target IP'}.",
+            }
+        if key == "windows":
+            return {
+                "name": "Windows",
+                "before": f"Current target {cfg['windows'].get('ip_address') or cfg.get('ip_plan', {}).get('windows') or 'Not set'}",
+                "after": f"Apply the saved VM plan for {cfg['windows'].get('vm_name') or 'the selected Windows VM'}",
+                "verify": "Use the saved network and administrator settings during the run.",
+            }
+        if key == "qnap":
+            return {
+                "name": "QNAP",
+                "before": f"Current target {cfg['qnap'].get('ip') or cfg.get('ip_plan', {}).get('qnap') or 'Not set'}",
+                "after": f"Apply the saved QNAP host details for {cfg['qnap'].get('hostname') or 'the selected NAS'}",
+                "verify": "Use the saved hostname and sign-in details during the run.",
+            }
+        return {
+            "name": components[key]["name"],
+            "before": f"Current target {components[key]['target']}",
+            "after": components[key]["summary"],
+            "verify": "Use the saved stage settings during the run.",
+        }
+
     def stage_entry(key: str, included: bool) -> dict:
         meta = components[key]
         summary = meta["summary"]
@@ -5677,6 +6548,24 @@ def build_execution_review(cfg: dict, scope: str):
         warning_points.append("Approved storage will be applied during the real run using the exact approved artifact.")
     validation_checks = build_execution_validation_overview(cfg, scope, included_stages)
     recoverability = build_recoverability_notes(cfg, scope, included_stages)
+    ready_checks = sum(1 for item in validation_checks if item.get("ok"))
+    total_checks = len(validation_checks)
+    blocked_checks = [item for item in validation_checks if not item.get("ok")]
+    review_checks = [item for item in readiness_matrix if item.get("label") == "Needs review"]
+    confidence_score = int(round(((ready_checks + (0.5 * len(review_checks))) / max(total_checks or len(readiness_matrix), 1)) * 100))
+    if blocked_checks:
+        confidence_label = "Needs attention"
+        confidence_tone = "pending"
+        confidence_summary = "One or more required checks are still blocking a safe real run."
+    elif review_checks:
+        confidence_label = "Review again"
+        confidence_tone = "progress"
+        confidence_summary = "The run is close, but at least one stage still needs a fresh review."
+    else:
+        confidence_label = "Ready for review"
+        confidence_tone = "ready"
+        confidence_summary = "The selected stages have the required saved values and look ready for a final review."
+    change_summary = [stage_change_summary(stage["key"]) for stage in included_stages if stage.get("included")]
     final_summary = {
         "will_run": will_run or ["Nothing yet"],
         "will_not_run": will_not_run or ["Everything selected is in scope"],
@@ -5706,6 +6595,17 @@ def build_execution_review(cfg: dict, scope: str):
         "warning_title": "Review before you start",
         "warning_points": warning_points,
         "validation_checks": validation_checks,
+        "confidence": {
+            "score": confidence_score,
+            "label": confidence_label,
+            "tone": confidence_tone,
+            "summary": confidence_summary,
+            "ready_checks": ready_checks,
+            "total_checks": total_checks,
+            "blocked_checks": blocked_checks,
+            "review_checks": review_checks,
+        },
+        "change_summary": change_summary,
         "recoverability": recoverability,
         "restart_expected": any("Restart expected" in item.get("label", "") and item.get("value") == "Yes" for item in summary_items),
         "detail_text": "\n".join(lines),
@@ -7119,7 +8019,8 @@ def run_ilo_real(cfg: dict):
     login_ip = (ilo_cfg.get("current_ip") or ilo_cfg.get("host") or "").strip()
     username = ilo_cfg.get("username", "").strip()
     password = ilo_cfg.get("password", "")
-    desired_hostname = ilo_cfg.get("hostname", "").strip()
+    desired_hostname_raw = str(ilo_cfg.get("hostname", "") or "").strip()
+    desired_hostname = normalize_ilo_hostname(desired_hostname_raw)
     target_ip = (ilo_cfg.get("target_ip") or "").strip()
     desired_gateway = (ilo_cfg.get("gateway") or "").strip()
     desired_subnet_mask = (ilo_cfg.get("subnet_mask") or "").strip()
@@ -7748,6 +8649,19 @@ def run_ilo_real(cfg: dict):
                 6,
                 total,
                 "[SKIP] Missing target IP, subnet mask, or gateway for static IPv4 update."
+            )
+
+        if desired_hostname_raw and desired_hostname_raw != desired_hostname:
+            cfg.setdefault("ilo", {})["hostname"] = desired_hostname
+            save_kit_config(cfg)
+            update_job(
+                kit_name,
+                job,
+                "Running",
+                "Apply iLO hostname",
+                7,
+                total,
+                f"[INFO] Normalized invalid iLO hostname '{desired_hostname_raw}' to '{desired_hostname}' before apply.",
             )
 
         if desired_hostname:
@@ -8554,7 +9468,22 @@ def render_page(
     page_comparisons = build_page_comparisons(cfg, workflow_contexts, history)
     recommended_next_step = build_recommended_next_step(cfg, workflow_contexts)
     activity_feed = build_activity_feed(history)
+    history_display = build_history_display_entries(history)
     dashboard_job_status = build_dashboard_job_status(history)
+    dashboard_hardware_identity = build_dashboard_hardware_identity(cfg)
+    dashboard_latest_receipt = build_dashboard_latest_receipt(cfg, history)
+    dashboard_timeline = build_dashboard_timeline(cfg, workflow_contexts, history, job, dashboard_hardware_identity, dashboard_latest_receipt)
+    ilo_latest_receipt = latest_scope_receipt(cfg, history, ["ilo"])
+    storage_latest_receipt = latest_scope_receipt(cfg, history, ["storage-apply", "storage-reboot"])
+    esxi_latest_receipt = latest_scope_receipt(cfg, history, ["esxi"])
+    ilo_page_readiness = build_ilo_page_readiness(cfg, ilo_latest_receipt, storage_execution_status)
+    ilo_change_summary = build_ilo_change_summary(cfg)
+    storage_page_readiness = build_storage_page_readiness(storage_review, storage_target, storage_credentials, storage_execution_status, storage_export_paths)
+    storage_change_summary = build_storage_change_summary(storage_review, storage_plan)
+    esxi_page_review = build_esxi_page_review(cfg)
+    esxi_page_readiness = build_esxi_page_readiness(cfg, esxi_page_review, esxi_latest_receipt)
+    esxi_change_summary = build_esxi_change_summary(esxi_page_review)
+    live_job_story = build_live_job_story(job)
     report_center = build_report_center(
         cfg,
         query=str(request.query_params.get("report_query", "") or ""),
@@ -8620,7 +9549,22 @@ def render_page(
         "page_comparisons": page_comparisons,
         "recommended_next_step": recommended_next_step,
         "activity_feed": activity_feed,
+        "history_display": history_display,
         "dashboard_job_status": dashboard_job_status,
+        "dashboard_hardware_identity": dashboard_hardware_identity,
+        "dashboard_latest_receipt": dashboard_latest_receipt,
+        "dashboard_timeline": dashboard_timeline,
+        "ilo_latest_receipt": ilo_latest_receipt,
+        "storage_latest_receipt": storage_latest_receipt,
+        "esxi_latest_receipt": esxi_latest_receipt,
+        "ilo_page_readiness": ilo_page_readiness,
+        "ilo_change_summary": ilo_change_summary,
+        "storage_page_readiness": storage_page_readiness,
+        "storage_change_summary": storage_change_summary,
+        "esxi_page_review": esxi_page_review,
+        "esxi_page_readiness": esxi_page_readiness,
+        "esxi_change_summary": esxi_change_summary,
+        "live_job_story": live_job_story,
         "report_center": report_center,
         "page_briefing": page_briefing,
         "page_runbook": page_runbook,
@@ -8713,7 +9657,7 @@ async def websocket_job_stream(websocket: WebSocket, kit_name: str):
                 await websocket.send_text(payload)
                 last_payload = payload
             await asyncio.sleep(1.0)
-    except WebSocketDisconnect:
+    except (WebSocketDisconnect, asyncio.CancelledError):
         return
 
 
@@ -9005,7 +9949,7 @@ async def save_config_route(
             "subnet_mask": ilo_subnet_mask,
             "gateway": ilo_gateway,
             "dns_servers": [ilo_dns1, ilo_dns2, ilo_dns3, ilo_dns4],
-            "hostname": ilo_hostname,
+            "hostname": normalize_ilo_hostname(ilo_hostname),
             "username": ilo_username,
             "password": ilo_password,
             "additional_users": extract_ilo_additional_users_from_form(form),
@@ -9185,7 +10129,8 @@ async def save_ilo_settings_route(
         cfg["ilo"]["target_ip"] = ilo_target_ip.strip()
         cfg["ip_plan"]["ilo"] = ilo_target_ip.strip()
     cfg["ilo"]["gateway"] = (ilo_gateway.strip() or cfg.get("ip_plan", {}).get("gateway", "") or "").strip()
-    cfg["ilo"]["hostname"] = ilo_hostname
+    normalized_hostname = normalize_ilo_hostname(ilo_hostname)
+    cfg["ilo"]["hostname"] = normalized_hostname
     cfg["ilo"]["username"] = ilo_username
     cfg["ilo"]["password"] = ilo_password
     cfg["ilo"]["additional_users"] = extract_ilo_additional_users_from_form(form)
@@ -9204,12 +10149,14 @@ async def save_ilo_settings_route(
         details=[
             f"Planned final IP: {cfg['ilo'].get('target_ip') or 'Unchanged'}",
             f"Gateway: {cfg['ilo'].get('gateway') or 'Not set'}",
+            f"Hostname: {normalized_hostname or 'Not set'}",
         ],
     )
     return render_page(
         request,
         cfg,
         active_page=return_page,
+        message=(f"Normalized iLO hostname to: {normalized_hostname}" if ilo_hostname.strip() and ilo_hostname.strip() != normalized_hostname else None),
         action_feedback=build_action_feedback(
             "iLO setup saved",
             "Updated the saved iLO target and local sign-in settings for this kit.",
@@ -9235,9 +10182,11 @@ async def save_esxi_settings_route(
     cfg = load_kit_config()
     cfg["esxi"]["hostname"] = esxi_hostname
     cfg["esxi"]["root_password"] = esxi_root_password
-    cfg["included"]["esxi"] = included_esxi == "on"
+    if included_esxi is not None:
+        cfg["included"]["esxi"] = included_esxi == "on"
     cfg = apply_ip_plan(cfg)
     save_kit_config(cfg)
+    effective_values = get_esxi_effective_values(cfg)
     append_activity_event(
         cfg["site"]["name"],
         "esxi_settings_saved",
@@ -9256,6 +10205,9 @@ async def save_esxi_settings_route(
             outcomes=[
                 f"Hostname: {cfg['esxi'].get('hostname', '') or 'Not set'}",
                 f"Target: {cfg['esxi'].get('management_ip', '') or cfg.get('ip_plan', {}).get('esxi', '') or 'Not set'}",
+                f"Gateway: {effective_values.get('gateway') or 'Not set'}",
+                f"DNS: {', '.join(effective_values.get('dns_servers') or []) or 'Not set'}",
+                f"Root password saved: {'Yes' if effective_values.get('root_password') else 'No'}",
             ],
         ),
     )
@@ -9895,6 +10847,11 @@ async def reboot_storage_now(
     cfg = load_kit_config()
     storage_target = resolve_storage_target_host(cfg)
     host = storage_target.get("resolved", "")
+    discovery = None
+    discovery_paths = None
+    plan = None
+    plan_paths = None
+    apply_paths = None
 
     try:
         if not host:
@@ -9943,6 +10900,11 @@ async def reboot_storage_now(
             cfg,
             active_page=return_page,
             error_message=f"Storage reboot failed: {str(e).splitlines()[0]}",
+            storage_discovery=discovery.get("summary", {}) if discovery else None,
+            storage_export_paths=discovery_paths,
+            storage_plan=plan,
+            storage_plan_paths=plan_paths,
+            storage_apply_paths=apply_paths,
         )
 
 

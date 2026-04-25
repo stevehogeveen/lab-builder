@@ -6,7 +6,7 @@
                 <div class="text-sm text-slate-400">This is the place for logs, saved files, raw output, recent history, and troubleshooting details.</div>
             </div>
             <div class="actions">
-                <a class="btn btn-primary" href="/history">Open full run history</a>
+                <a class="btn" href="/history">Open detailed history</a>
             </div>
         </div>
 
@@ -30,7 +30,6 @@
                     <div class="text-lg font-semibold">Recent history</div>
                     <div class="text-sm text-slate-400">Recent events first. Open the full history page only when you need everything.</div>
                 </div>
-                <a class="btn" href="/history">Open full history</a>
             </div>
             {% if activity_feed %}
             <div class="space-y-3">
@@ -80,14 +79,14 @@
     <section class="panel">
         <div class="flex items-center justify-between gap-3 mb-4">
             <div>
-                <div class="text-lg font-semibold">Run bundles</div>
-                <div class="text-sm text-slate-400">Open a run as one handoff bundle first, then drop into raw files only if you need them.</div>
+                <div class="text-lg font-semibold">Latest run bundles</div>
+                <div class="text-sm text-slate-400">Start with the newest useful run for each stage. Older runs stay collapsed until you need them.</div>
             </div>
-            <span class="status progress">{{ report_center.bundles|length }} bundles</span>
+            <span class="status progress">{{ report_center.latest_bundles|length }} shown</span>
         </div>
-        {% if report_center.bundles %}
+        {% if report_center.latest_bundles %}
         <div class="space-y-3">
-            {% for bundle in report_center.bundles %}
+            {% for bundle in report_center.latest_bundles %}
             <div class="card">
                 <div class="grid grid-cols-1 xl:grid-cols-[minmax(0,1.3fr)_minmax(0,0.9fr)_auto] gap-3 items-start">
                     <div>
@@ -96,12 +95,20 @@
                             <span class="status {{ bundle.tone }}">{{ bundle.result }}</span>
                         </div>
                         <div class="text-sm text-slate-400 mt-1">{{ bundle.time }}{% if bundle.target %} | {{ bundle.target }}{% endif %}</div>
-                        <div class="text-sm mt-2">{{ bundle.summary }}</div>
+                        <div class="text-sm mt-2">{{ bundle.human_summary }}</div>
+                        {% if bundle.highlights %}
+                        <div class="grid grid-cols-1 md:grid-cols-2 gap-2 mt-3 text-sm">
+                            {% for item in bundle.highlights %}
+                            <div class="result" style="margin-top: 0;">{{ item }}</div>
+                            {% endfor %}
+                        </div>
+                        {% endif %}
                     </div>
                     <div class="text-sm space-y-1">
                         <div><strong>Workflow:</strong> {{ bundle.scope }}</div>
                         <div><strong>Target:</strong> {{ bundle.target }}</div>
                         <div><strong>Kit:</strong> {{ current_kit }}</div>
+                        <div><strong>Full story:</strong> {{ bundle.summary }}</div>
                     </div>
                     <div class="actions justify-end">
                         {% if bundle.run_summary_path %}
@@ -117,13 +124,58 @@
             </div>
             {% endfor %}
         </div>
+        {% if report_center.older_bundles %}
+        <details class="card mt-4">
+            <summary class="summary-row">
+                <span class="font-semibold">Older runs</span>
+                <span class="status progress">{{ report_center.older_bundles|length }}</span>
+            </summary>
+            <div class="mt-4 space-y-3">
+                {% for bundle in report_center.older_bundles %}
+                <div class="card card-compact">
+                    <div class="grid grid-cols-1 xl:grid-cols-[minmax(0,1.3fr)_minmax(0,0.9fr)_auto] gap-3 items-start">
+                        <div>
+                            <div class="flex items-center gap-3 flex-wrap">
+                                <div class="font-semibold">{{ bundle.name }}</div>
+                                <span class="status {{ bundle.tone }}">{{ bundle.result }}</span>
+                            </div>
+                            <div class="text-sm text-slate-400 mt-1">{{ bundle.time }}{% if bundle.target %} | {{ bundle.target }}{% endif %}</div>
+                            <div class="text-sm mt-2">{{ bundle.human_summary }}</div>
+                        </div>
+                        <div class="text-sm space-y-1">
+                            <div><strong>Workflow:</strong> {{ bundle.scope }}</div>
+                            <div><strong>Target:</strong> {{ bundle.target }}</div>
+                            <div><strong>Full story:</strong> {{ bundle.summary }}</div>
+                        </div>
+                        <div class="actions justify-end">
+                            {% if bundle.run_summary_path %}
+                            <form hx-post="/view-report" hx-target="#main-content" hx-swap="outerHTML">
+                                <input type="hidden" name="return_page" value="configs">
+                                <input type="hidden" name="report_path" value="{{ bundle.run_summary_path }}">
+                                <button class="btn" type="submit">Open bundle</button>
+                            </form>
+                            {% endif %}
+                            <a class="btn" href="/configs?report_query={{ bundle.related_reports_query | urlencode }}">Related reports</a>
+                        </div>
+                    </div>
+                </div>
+                {% endfor %}
+            </div>
+        </details>
+        {% endif %}
         {% else %}
         <div class="result">No run bundles have been recorded for this kit yet.</div>
         {% endif %}
     </section>
 
     <section class="panel">
-        <div class="text-lg font-semibold mb-3">Search reports</div>
+        <div class="flex items-center justify-between gap-3 mb-4">
+            <div>
+                <div class="text-lg font-semibold">Find saved files</div>
+                <div class="text-sm text-slate-400">Filter the archive when you need something specific. The raw file list stays collapsed by default.</div>
+            </div>
+            <span class="status progress">{{ report_center.entries_total }} matching files</span>
+        </div>
         <form action="/configs" method="get" class="grid grid-cols-1 md:grid-cols-3 gap-3">
             <label>
                 <div class="text-sm text-slate-300 mb-1">Search by name or folder</div>
@@ -143,19 +195,29 @@
                 <button class="btn btn-primary w-full" type="submit">Search reports</button>
             </div>
         </form>
+        {% if report_center.entry_counts %}
+        <div class="grid grid-cols-2 md:grid-cols-4 gap-3 mt-4 text-sm">
+            {% for kind, count in report_center.entry_counts.items() %}
+            <div class="card card-compact">
+                <div class="text-xs font-bold uppercase text-slate-400 mb-1">{{ kind.replace('-', ' ') }}</div>
+                <div class="text-sm font-semibold">{{ count }}</div>
+            </div>
+            {% endfor %}
+        </div>
+        {% endif %}
     </section>
 
     <section class="panel">
         <div class="flex items-center justify-between gap-3 mb-4">
             <div>
-                <div class="text-lg font-semibold">Report browser</div>
-                <div class="text-sm text-slate-400">Raw files are still here when you need them.</div>
+                <div class="text-lg font-semibold">Recent matching files</div>
+                <div class="text-sm text-slate-400">Start with the newest files first instead of scanning the whole archive.</div>
             </div>
-            <span class="status progress">{{ report_center.entries|length }} found</span>
+            <span class="status progress">{{ report_center.entries_preview|length }} shown</span>
         </div>
-        {% if report_center.entries %}
+        {% if report_center.entries_preview %}
         <div class="space-y-3">
-            {% for entry in report_center.entries %}
+            {% for entry in report_center.entries_preview %}
             <div class="card">
                 <div class="grid grid-cols-1 xl:grid-cols-5 gap-3 items-start">
                     <div class="xl:col-span-2">
@@ -187,6 +249,47 @@
         </div>
         {% else %}
         <div class="result">No reports matched the current filter yet.</div>
+        {% endif %}
+
+        {% if report_center.entries_has_more %}
+        <details class="card mt-4">
+            <summary class="summary-row">
+                <span class="font-semibold">Browse all matching files</span>
+                <span class="status progress">{{ report_center.entries_total }} total</span>
+            </summary>
+            <div class="mt-4 space-y-3">
+                <div class="text-sm text-slate-400">Showing the full matching archive only when you ask for it.</div>
+                {% for entry in report_center.entries %}
+                <div class="card card-compact">
+                    <div class="grid grid-cols-1 xl:grid-cols-5 gap-3 items-start">
+                        <div class="xl:col-span-2">
+                            <div class="font-semibold">{{ entry.label }}</div>
+                            <div class="text-sm text-slate-400 mt-1">{{ entry.parent }}</div>
+                        </div>
+                        <div class="text-sm">
+                            <div><strong>Type:</strong> {{ entry.kind }}</div>
+                            <div><strong>Server:</strong> {{ entry.server or 'Unknown' }}</div>
+                        </div>
+                        <div class="text-sm">
+                            <div><strong>Saved:</strong> {{ entry.mtime }}</div>
+                            <div><strong>Current kit match:</strong> {{ entry.kit_match or 'No' }}</div>
+                        </div>
+                        <div class="actions justify-end">
+                            <form hx-post="/view-report" hx-target="#main-content" hx-swap="outerHTML">
+                                <input type="hidden" name="return_page" value="configs">
+                                <input type="hidden" name="report_path" value="{{ entry.path }}">
+                                <button class="btn" type="submit">View</button>
+                            </form>
+                            <form action="/download-report" method="post">
+                                <input type="hidden" name="report_path" value="{{ entry.path }}">
+                                <button class="btn" type="submit">Download</button>
+                            </form>
+                        </div>
+                    </div>
+                </div>
+                {% endfor %}
+            </div>
+        </details>
         {% endif %}
     </section>
 

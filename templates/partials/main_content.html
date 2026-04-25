@@ -16,14 +16,15 @@
     </section>
     {% endif %}
     {% if action_feedback %}
-    <section class="card">
+    <section class="card receipt-banner">
         <div class="flex items-center justify-between gap-3 mb-3">
             <div class="text-lg font-semibold">{{ action_feedback.title }}</div>
             <span class="status {{ action_feedback.tone }}">{{ action_feedback.status_label }}</span>
         </div>
         <div class="text-sm">{{ action_feedback.summary }}</div>
         {% if action_feedback.outcomes %}
-        <div class="grid grid-cols-1 md:grid-cols-2 gap-3 mt-4">
+        <div class="dashboard-kicker mt-4">What changed</div>
+        <div class="receipt-grid">
             {% for outcome in action_feedback.outcomes %}
             <div class="result" style="margin-top: 0;">{{ outcome }}</div>
             {% endfor %}
@@ -39,7 +40,7 @@
         {% if action_feedback.details %}
         <details class="mt-4">
             <summary class="summary-row">
-                <span class="text-sm font-bold text-slate-300">View details</span>
+                <span class="text-sm font-bold text-slate-300">Technical trace</span>
                 <span class="status progress">details</span>
             </summary>
             <div class="mt-4 space-y-2 text-sm text-slate-300">
@@ -78,8 +79,12 @@
     </section>
     {% elif config_view_title and config_view_content and active_page in setup_pages %}
     <section class="card">
-        <div class="text-lg font-semibold mb-2">Technical details were saved</div>
-        <div class="text-sm text-slate-300">Detailed files and raw output stay on the reports page so this setup page stays easy to read.</div>
+        <div class="flex items-center justify-between gap-3 mb-3">
+            <div class="text-lg font-semibold">{{ config_view_title }}</div>
+            <span class="status ready">Technical view</span>
+        </div>
+        <div class="text-sm text-slate-300">You asked to open a specific artifact or summary, so the full content is shown here. Reports still keeps the archive copy.</div>
+        <div class="codeblock mt-4">{{ config_view_content }}</div>
         <div class="actions mt-4">
             <a class="btn" href="/configs">Open reports & technical details</a>
         </div>

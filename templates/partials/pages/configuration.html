@@ -9,6 +9,7 @@
 
         <section class="card">
             <div class="text-lg font-semibold mb-3">Shared basics</div>
+            <div class="text-sm text-slate-400 mb-3">Set the kit name and the main network once. The setup pages reuse these values automatically.</div>
             <div class="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
                 <div>
                     <label class="block text-sm font-bold text-slate-300 mb-2">Kit name</label>
@@ -58,6 +59,7 @@
 
         <section class="card">
             <div class="text-lg font-semibold mb-3">Shared DNS and alerts</div>
+            <div class="text-sm text-slate-400 mb-3">These defaults are reused when iLO and the other setup pages need DNS or SNMP details.</div>
             <div class="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
                 <div>
                     <label class="block text-sm font-bold text-slate-300 mb-2">DNS 1</label>
@@ -102,12 +104,14 @@
                     <input type="password" name="snmp_v3_priv_password" value="{{ cfg.get('shared_snmp', {}).get('v3_priv_password', '') }}" class="input">
                 </div>
             </div>
+        </section>
+
+        <details class="card">
+            <summary class="cursor-pointer text-lg font-semibold">Advanced SNMPv3 users</summary>
+            <div class="text-sm text-slate-400 mt-3">The current iLO Redfish path can apply one SNMPv3 profile directly. Extra profiles are saved here for later use.</div>
             <div class="space-y-3 mt-4">
                 <div class="flex items-center justify-between gap-3">
-                    <div>
-                        <div class="text-sm font-bold text-slate-300">Additional SNMPv3 users</div>
-                        <div class="text-xs text-slate-400">The current iLO Redfish path can apply one SNMPv3 profile directly. Extra profiles are saved here for later use.</div>
-                    </div>
+                    <div class="text-sm font-bold text-slate-300">Additional SNMPv3 users</div>
                     <button class="btn" type="button" @click="snmpUsers.push({username: '', auth_protocol: 'SHA', auth_password: '', priv_protocol: 'AES', priv_password: ''})">+ Add user</button>
                 </div>
                 <template x-for="(user, index) in snmpUsers" :key="index">
@@ -146,25 +150,25 @@
                     </div>
                 </template>
             </div>
-        </section>
+        </details>
 
-        <section class="card">
-            <div class="text-lg font-semibold mb-3">Turn pages on for this kit</div>
-            <div class="checks space-y-2">
+        <details class="card">
+            <summary class="cursor-pointer text-lg font-semibold">Advanced kit pages</summary>
+            <div class="text-sm text-slate-400 mt-3">Turn optional setup pages on or off for this kit.</div>
+            <div class="checks space-y-2 mt-4">
                 <label class="check"><input type="checkbox" name="included_ilo" {% if cfg.get('included', {}).get('ilo') %}checked{% endif %}> iLO setup</label>
+                <label class="check"><input type="checkbox" name="included_storage" {% if cfg.get('included', {}).get('storage') %}checked{% endif %}> Storage setup</label>
                 <label class="check"><input type="checkbox" name="included_esxi" {% if cfg.get('included', {}).get('esxi') %}checked{% endif %}> ESXi setup</label>
                 <label class="check"><input type="checkbox" name="included_windows" {% if cfg.get('included', {}).get('windows') %}checked{% endif %}> Windows setup</label>
                 <label class="check"><input type="checkbox" name="included_qnap" {% if cfg.get('included', {}).get('qnap') %}checked{% endif %}> QNAP setup</label>
                 <label class="check"><input type="checkbox" name="included_iosafe" {% if cfg.get('included', {}).get('iosafe') %}checked{% endif %}> ioSafe setup</label>
                 <label class="check"><input type="checkbox" name="included_cisco_switch" {% if cfg.get('included', {}).get('cisco_switch') %}checked{% endif %}> Cisco switch setup</label>
-                <label class="check"><input type="checkbox" name="included_storage" {% if cfg.get('included', {}).get('storage') %}checked{% endif %}> Storage setup</label>
             </div>
-        </section>
+        </details>
 
         <div class="actions">
             <button class="btn btn-primary action-button" type="submit">Save shared defaults</button>
             <button class="btn" hx-post="/autofill-ip-plan" hx-vals='{"return_page":"global_settings"}' hx-target="#main-content" hx-swap="outerHTML" type="button">Fill in default addresses</button>
-            <a class="btn" href="/configs">Open reports & technical details</a>
         </div>
     </form>
 </section>
