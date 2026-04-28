@@ -89,6 +89,131 @@
         return ["Idle", "Complete", "Preview complete", "Completed"].includes(status) ? "ready" : "progress";
     }
 
+    function escapeHtml(value) {
+        return String(value == null ? "" : value)
+            .replace(/&/g, "&amp;")
+            .replace(/</g, "&lt;")
+            .replace(/>/g, "&gt;")
+            .replace(/"/g, "&quot;")
+            .replace(/'/g, "&#39;");
+    }
+
+    function liveStageTone(value, positive, negative) {
+        const label = String(value || "").trim().toLowerCase();
+        const positives = positive || ["verified", "completed", "already correct", "not required", "requested", "mounted", "built", "reachable"];
+        const negatives = negative || ["failed", "mismatch", "blocked", "skipped", "timeout", "unreachable"];
+        if (positives.includes(label)) return "ready";
+        if (negatives.includes(label)) return "pending";
+        return "progress";
+    }
+
+    function buildLiveStageCards(data) {
+        const scope = String(data.scope || "");
+        const stageText = String(data.current_stage || "").toLowerCase();
+        const cards = [];
+
+        function addCard(name, statusLabel, statusToneValue, summary, rows) {
+            if (!rows.length && !summary) return;
+            cards.push({
+                name: name,
+                statusLabel: statusLabel || "In progress",
+                statusTone: statusToneValue || "progress",
+                summary: summary || `${name} checks will appear here while the run is active.`,
+                rows: rows
+            });
+        }
+
+        const dnsStatus = String(data.dns_apply_status || "");
+        const snmpStatus = String(data.snmp_apply_status || "");
+        const resetStatus = String(data.ilo_reset_status || "");
+        const iloRows = [];
+        if (dnsStatus) iloRows.push({ label: "DNS status", value: dnsStatus });
+        if (snmpStatus) iloRows.push({ label: "SNMP status", value: snmpStatus });
+        if (data.local_account_status) iloRows.push({ label: "Local accounts", value: String(data.local_account_status) });
+        if (resetStatus) iloRows.push({ label: "iLO reset", value: resetStatus });
+        if (Object.prototype.hasOwnProperty.call(data, "ilo_final_ip_verified")) {
+            iloRows.push({ label: "Final iLO IP", value: data.ilo_final_ip_verified === true ? "Verified" : "Waiting for verification" });
+        }
+        if (data.target_ip) iloRows.push({ label: "Target iLO IP", value: String(data.target_ip) });
+        if (data.login_ip) iloRows.push({ label: "Login iLO IP", value: String(data.login_ip) });
+        if (iloRows.length || scope.indexOf("ilo") > -1 || stageText.indexOf("ilo") > -1) {
+            const iloStatus = resetStatus || snmpStatus || dnsStatus || "In progress";
+            const iloSummaryParts = [];
+            if (dnsStatus) iloSummaryParts.push(`DNS ${dnsStatus.toLowerCase()}`);
+            if (snmpStatus) iloSummaryParts.push(`SNMP ${snmpStatus.toLowerCase()}`);
+            if (resetStatus) iloSummaryParts.push(`iLO reset ${resetStatus.toLowerCase()}`);
+            if (data.ilo_final_ip_verified === true) iloSummaryParts.push("final IP verified");
+            addCard("iLO", iloStatus, liveStageTone(iloStatus), iloSummaryParts.join(", "), iloRows);
+        }
+
+        const storageRows = [];
+        if (data.apply_path) storageRows.push({ label: "Apply artifact", value: String(data.apply_path) });
+        if (data.workflow_state) storageRows.push({ label: "Workflow state", value: String(data.workflow_state) });
+        if (Object.prototype.hasOwnProperty.call(data, "reboot_required")) {
+            storageRows.push({ label: "Server reboot required", value: data.reboot_required === true ? "Yes" : "No" });
+        }
+        if (data.storage_server_reboot_status) storageRows.push({ label: "Server reboot status", value: String(data.storage_server_reboot_status) });
+        if (storageRows.length || scope.indexOf("storage") > -1 || stageText.indexOf("storage") > -1) {
+            const status = String(data.storage_server_reboot_status || data.workflow_state || "In progress");
+            const summary = data.workflow_state
+                ? `Storage workflow is at ${String(data.workflow_state).replace(/_/g, " ")}.`
+                : "Storage progress and restart checks will appear here while the run is active.";
+            addCard("Storage", status, liveStageTone(status), summary, storageRows);
+        }
+
+        const esxiRows = [];
+        if (data.esxi_iso_path) esxiRows.push({ label: "Built ISO path", value: String(data.esxi_iso_path) });
+        if (data.esxi_iso_url) esxiRows.push({ label: "Virtual media URL", value: String(data.esxi_iso_url) });
+        if (data.esxi_expected_ip) esxiRows.push({ label: "Expected ESXi IP", value: String(data.esxi_expected_ip) });
+        if (data.esxi_trace_path) esxiRows.push({ label: "Technical trace", value: String(data.esxi_trace_path) });
+        if (esxiRows.length || scope.indexOf("esxi") > -1 || stageText.indexOf("esxi") > -1) {
+            const status = data.esxi_iso_path ? "Built" : "In progress";
+            const summaryParts = [];
+            if (data.esxi_iso_path) summaryParts.push("custom ISO built");
+            if (data.esxi_iso_url) summaryParts.push("virtual media prepared");
+            addCard("ESXi", status, liveStageTone(status), summaryParts.join(", "), esxiRows);
+        }
+
+        return cards;
+    }
+
+    function renderLiveStageCards(cards) {
+        if (!cards.length) {
+            return '<div class="result md:col-span-2 xl:col-span-3" style="margin-top: 0;">Stage-by-stage checks will appear here after the run starts writing confirmed DNS, reboot, boot, and verification state.</div>';
+        }
+        return cards.map(function (card) {
+            const rowsHtml = card.rows.map(function (row) {
+                return (
+                    '<div class="result" style="margin-top: 0;">' +
+                    `<div class="dashboard-kicker">${escapeHtml(row.label)}</div>` +
+                    `<div>${escapeHtml(row.value)}</div>` +
+                    "</div>"
+                );
+            }).join("");
+            const detailsHtml = rowsHtml
+                ? (
+                    '<details class="card card-compact mt-3 review-stage-detail">' +
+                    '<summary class="summary-row">' +
+                    '<span class="text-sm font-bold text-slate-300">Show last confirmed checks</span>' +
+                    '<span class="status progress">details</span>' +
+                    "</summary>" +
+                    `<div class="mt-3 grid grid-cols-1 gap-2 text-sm">${rowsHtml}</div>` +
+                    "</details>"
+                )
+                : "";
+            return (
+                '<div class="card card-compact review-stage-card">' +
+                '<div class="flex items-center justify-between gap-3 mb-2">' +
+                `<div class="font-semibold">${escapeHtml(card.name)}</div>` +
+                `<span class="status ${escapeHtml(card.statusTone)}">${escapeHtml(card.statusLabel)}</span>` +
+                "</div>" +
+                `<div class="text-sm">${escapeHtml(card.summary)}</div>` +
+                detailsHtml +
+                "</div>"
+            );
+        }).join("");
+    }
+
     function updateActionStatusCard(payload) {
         const card = document.getElementById("page-action-status");
         if (!card) return;
@@ -235,6 +360,11 @@
                 } else {
                     logs.textContent = "Nothing is running right now. Start a preview or a real run to see live updates here.";
                 }
+            }
+
+            const stageDetails = document.getElementById("execution-live-stage-details");
+            if (stageDetails) {
+                stageDetails.innerHTML = renderLiveStageCards(buildLiveStageCards(data));
             }
         };
     };

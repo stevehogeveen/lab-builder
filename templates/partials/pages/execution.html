@@ -48,6 +48,43 @@
                 <div class="text-sm font-semibold">{{ live_job_story.waiting_on }}</div>
             </div>
         </div>
+        <div class="mt-4">
+            <div class="text-sm font-bold text-slate-300 mb-2">Live stage details</div>
+            <div class="text-sm text-slate-400 mb-3">Shows the last confirmed checks for each stage while the run is active.</div>
+            <div class="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-3" id="execution-live-stage-details">
+                {% if live_stage_cards %}
+                {% for stage in live_stage_cards %}
+                <div class="card card-compact review-stage-card">
+                    <div class="flex items-center justify-between gap-3 mb-2">
+                        <div class="font-semibold">{{ stage.name }}</div>
+                        <span class="status {{ stage.status_tone }}">{{ stage.status_label }}</span>
+                    </div>
+                    <div class="text-sm">{{ stage.summary }}</div>
+                    {% if stage.detail_rows %}
+                    <details class="card card-compact mt-3 review-stage-detail">
+                        <summary class="summary-row">
+                            <span class="text-sm font-bold text-slate-300">Show last confirmed checks</span>
+                            <span class="status progress">details</span>
+                        </summary>
+                        <div class="mt-3 grid grid-cols-1 gap-2 text-sm">
+                            {% for row in stage.detail_rows %}
+                            <div class="result" style="margin-top: 0;">
+                                <div class="dashboard-kicker">{{ row.label }}</div>
+                                <div>{{ row.value }}</div>
+                            </div>
+                            {% endfor %}
+                        </div>
+                    </details>
+                    {% endif %}
+                </div>
+                {% endfor %}
+                {% else %}
+                <div class="result md:col-span-2 xl:col-span-3" style="margin-top: 0;">
+                    Stage-by-stage checks will appear here after the run starts writing confirmed DNS, reboot, boot, and verification state.
+                </div>
+                {% endif %}
+            </div>
+        </div>
         <details class="execution-live-log" {% if job.get('status') not in ['Idle', 'Complete', 'Preview complete', 'Completed'] or job.get('logs') %}open{% endif %}>
             <summary class="summary-row">
                 <span class="text-sm font-bold text-slate-300">Live log</span>
@@ -59,7 +96,7 @@
         </details>
     </section>
 
-    <section class="card execution-controls-card">
+    <section class="card execution-controls-card workflow-hero-card">
         <div class="text-lg font-semibold mb-3">Review run before execution</div>
         <div class="text-sm text-slate-400 mb-4">Choose what you want to run, then review the exact settings before you start.</div>
         <form
@@ -96,7 +133,7 @@
     </section>
 
     {% if execution_review %}
-    <section class="card space-y-4">
+    <section class="card space-y-4 review-shell">
         <div class="flex items-center justify-between gap-3">
             <div>
                 <div class="text-lg font-semibold">Run summary</div>
@@ -107,7 +144,7 @@
 
         <div class="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-3">
             {% for item in execution_review.execution_mode_rows %}
-            <div class="card card-compact">
+            <div class="card card-compact review-stat-tile">
                 <div class="text-xs font-bold uppercase text-slate-400 mb-1">{{ item.label }}</div>
                 <div class="text-sm font-semibold">{{ item.value }}</div>
             </div>
@@ -162,6 +199,33 @@
             {% endif %}
         </div>
 
+        {% if execution_review.change_items %}
+        <div>
+            <div class="text-sm font-bold text-slate-300 mb-2">Everything that will change</div>
+            <div class="text-sm text-slate-400 mb-3">This is the exact saved plan the app will try to apply during this run.</div>
+            <div class="space-y-2">
+                {% for item in execution_review.change_items %}
+                <div class="review-change-row">
+                    <div class="flex items-center justify-between gap-3 flex-wrap">
+                        <div class="font-semibold">{{ item.label }}</div>
+                        <span class="status progress">{{ item.stage }}</span>
+                    </div>
+                    <div class="grid grid-cols-1 md:grid-cols-2 gap-3 mt-3 text-sm">
+                        <div>
+                            <div class="dashboard-kicker">Current</div>
+                            <div>{{ item.before }}</div>
+                        </div>
+                        <div>
+                            <div class="dashboard-kicker">Planned</div>
+                            <div>{{ item.after }}</div>
+                        </div>
+                    </div>
+                </div>
+                {% endfor %}
+            </div>
+        </div>
+        {% endif %}
+
         {% if execution_review.change_summary %}
         <div>
             <div class="text-sm font-bold text-slate-300 mb-2">Before and after this run</div>
@@ -196,7 +260,7 @@
             <div class="text-sm font-bold text-slate-300 mb-2">Stages that will run</div>
             <div class="grid grid-cols-1 md:grid-cols-2 gap-3">
                 {% for stage in execution_review.stages %}
-                <div class="card card-compact">
+                <div class="card card-compact review-stage-card">
                     <div class="flex items-center justify-between gap-3 mb-2">
                         <div class="font-semibold">{{ stage.name }}</div>
                         <span class="status {{ stage.status_tone }}">{{ stage.status_label }}</span>
@@ -219,12 +283,28 @@
                         {% endif %}
                     </div>
                     {% endif %}
+                    {% if stage.detail_rows %}
+                    <details class="card card-compact mt-3 review-stage-detail">
+                        <summary class="summary-row">
+                            <span class="text-sm font-bold text-slate-300">Show exact stage details</span>
+                            <span class="status progress">details</span>
+                        </summary>
+                        <div class="mt-3 grid grid-cols-1 md:grid-cols-2 gap-2 text-sm">
+                            {% for row in stage.detail_rows %}
+                            <div class="result" style="margin-top: 0;">
+                                <div class="dashboard-kicker">{{ row.label }}</div>
+                                <div>{{ row.value }}</div>
+                            </div>
+                            {% endfor %}
+                        </div>
+                    </details>
+                    {% endif %}
                 </div>
                 {% endfor %}
             </div>
         </div>
 
-        <div class="card card-compact">
+        <div class="card card-compact review-warning-card">
             <div class="text-sm font-bold text-slate-300 mb-3">{{ execution_review.warning_title }}</div>
             <div class="space-y-2 text-sm">
                 {% for point in execution_review.warning_points %}

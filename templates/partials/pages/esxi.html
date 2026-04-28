@@ -1,93 +1,135 @@
-<section class="panel space-y-6">
+{% set esxi_advanced = esxi_advanced_profile|default({
+    "available": false,
+    "detected_label": "Saved install profile",
+    "subtitle": "These values come from the current kit and the ESXi builder path the app will use in Run Center.",
+    "summary_fields": [],
+    "areas": [],
+}) %}
+<section class="panel space-y-6" x-data='{"tab":"basic"}'>
     <div>
         <h2 class="text-2xl font-bold">ESXi setup</h2>
-        <div class="text-sm text-slate-400">Save the ESXi host name and root password here. The address, gateway, and DNS come from Global Settings.</div>
+        <div class="text-sm text-slate-400">Save the ESXi name and root password here. The address, gateway, and DNS come from Global Settings.</div>
+        <div class="actions mt-4">
+            <div class="workflow-tabs">
+                <button class="btn workflow-tab" type="button" :class="tab === 'basic' ? 'workflow-tab workflow-tab-active' : 'workflow-tab'" @click="tab = 'basic'">Basic setup</button>
+                <button class="btn workflow-tab" type="button" :class="tab === 'advanced' ? 'workflow-tab workflow-tab-active' : 'workflow-tab'" @click="tab = 'advanced'">Advanced</button>
+            </div>
+        </div>
     </div>
 
-    <section class="card">
-        <div class="text-lg font-semibold mb-2">Readiness at a glance</div>
-        <div class="text-sm text-slate-400 mb-4">Use this as the quick answer before you move into Run Center or start a real ESXi run.</div>
-        <div class="execution-story-grid">
-            {% for item in esxi_page_readiness %}
-            <div class="execution-story-card">
-                <div class="flex items-center justify-between gap-3 mb-2">
-                    <div class="dashboard-kicker">{{ item.label }}</div>
-                    <span class="status {{ item.tone }}">{{ item.status }}</span>
-                </div>
-                <div class="text-sm font-semibold">{{ item.summary }}</div>
-            </div>
-            {% endfor %}
-        </div>
-    </section>
-
-    <section class="card">
-        <div class="text-lg font-semibold mb-2">Hardware identity</div>
-        <div class="text-sm text-slate-400 mb-4">Use this to confirm the installer will be launched against the right server and management controller.</div>
-        <div class="dashboard-identity-banner">
+    <section class="card workflow-hero-card" x-show="tab === 'basic'">
+        <div class="text-lg font-semibold mb-3">Save ESXi setup</div>
+        <div class="text-sm text-slate-400 mb-4">This page is only for the ESXi details that belong to this kit. Run Center builds and launches the installer later.</div>
+        <form hx-post="/save-esxi-settings" hx-target="#main-content" hx-swap="outerHTML" class="space-y-4">
+            <input type="hidden" name="return_page" value="esxi">
             <div>
-                <div class="dashboard-kicker">Active hardware</div>
-                <div class="dashboard-identity-title">{{ dashboard_hardware_identity.title }}</div>
-                <div class="text-sm text-slate-400 mt-2">{{ dashboard_hardware_identity.subtitle }}</div>
+                <label class="block text-sm font-bold text-slate-300 mb-2">Server name</label>
+                <input type="text" name="esxi_hostname" value="{{ cfg.get('esxi', {}).get('hostname', '') }}" class="input">
             </div>
-            <span class="status {{ 'ready' if dashboard_hardware_identity.discovered else 'pending' }}">
-                {{ 'Captured' if dashboard_hardware_identity.discovered else 'Waiting for live read' }}
-            </span>
-        </div>
-        <div class="dashboard-identity-grid">
-            {% for field in dashboard_hardware_identity.fields[:6] %}
-            <div class="dashboard-identity-item">
-                <div class="dashboard-kicker">{{ field.label }}</div>
-                <div class="font-semibold">{{ field.value }}</div>
+            <div>
+                <label class="block text-sm font-bold text-slate-300 mb-2">Root password</label>
+                <input type="password" name="esxi_root_password" value="{{ cfg.get('esxi', {}).get('root_password', '') }}" class="input">
+                <div class="text-xs text-slate-400 mt-1">The app never shows the saved password back in logs. It only reports whether a password is saved.</div>
             </div>
-            {% endfor %}
-        </div>
-    </section>
 
-    <section class="card">
-        <div class="text-lg font-semibold mb-2">Before and after ESXi</div>
-        <div class="text-sm text-slate-400 mb-3">These are the exact saved values the app will bake into the installer and how the run will prove them.</div>
-        <div class="result" style="margin-top: 0;">
-            <div class="font-semibold">{{ esxi_page_review.source_label }}</div>
-            <div class="text-sm text-slate-400 mt-1">{{ esxi_page_review.manual_defaults_label }}</div>
-        </div>
-        <div class="grid grid-cols-1 xl:grid-cols-3 gap-3 mt-4">
-            {% for item in esxi_change_summary %}
-            <div class="card card-compact execution-change-card">
-                <div class="font-semibold mb-3">{{ item.name }}</div>
-                <div class="space-y-3 text-sm">
-                    <div>
-                        <div class="dashboard-kicker">Now</div>
-                        <div>{{ item.before }}</div>
-                    </div>
-                    <div>
-                        <div class="dashboard-kicker">After run</div>
-                        <div>{{ item.after }}</div>
-                    </div>
-                    <div>
-                        <div class="dashboard-kicker">App confirms</div>
-                        <div>{{ item.verify }}</div>
-                    </div>
+            <div class="grid grid-cols-1 md:grid-cols-3 gap-3 workflow-hero-grid">
+                <div class="workflow-summary-tile">
+                    <div class="font-semibold">Address to use</div>
+                    <div>{{ esxi_page_review.management_ip or 'Not set' }}</div>
+                    <div class="text-slate-400 mt-1">This comes from Global Settings unless the kit overrides it.</div>
+                </div>
+                <div class="workflow-summary-tile">
+                    <div class="font-semibold">Gateway and DNS</div>
+                    <div>{{ esxi_page_review.gateway or 'Not set' }}{% if esxi_page_review.dns_servers %} | {{ esxi_page_review.dns_servers|join(', ') }}{% endif %}</div>
+                    <div class="text-slate-400 mt-1">The shared network defaults are reused automatically.</div>
+                </div>
+                <div class="workflow-summary-tile">
+                    <div class="font-semibold">What to do next</div>
+                    <div>Save this page, then open Run Center when you are ready to review and start the install.</div>
+                    <div class="text-slate-400 mt-1">Installer file paths and troubleshooting stay on Reports and Run Center.</div>
                 </div>
             </div>
+
+            <div class="actions">
+                <button class="btn btn-primary action-button" type="submit">Save ESXi setup</button>
+                <a class="btn" href="/execution">Open Run Center</a>
+            </div>
+        </form>
+    </section>
+
+    <section class="card ilo-advanced-shell" x-show="tab === 'advanced'">
+        <div class="flex items-center justify-between gap-3 mb-3 flex-wrap">
+            <div>
+                <div class="text-lg font-semibold">Advanced ESXi installer view</div>
+                <div class="text-sm text-slate-400">This shows the deeper install and builder details the app will use later in Run Center.</div>
+            </div>
+            <span class="status progress ilo-capability-badge">{{ esxi_advanced.detected_label }}</span>
+        </div>
+        {% if esxi_advanced.available %}
+        <div class="text-sm text-slate-400 mb-4">{{ esxi_advanced.subtitle }}</div>
+        <div class="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-3 mb-4 ilo-advanced-grid">
+            {% for item in esxi_advanced.summary_fields %}
+            <div class="ilo-advanced-summary">
+                <div class="dashboard-kicker">{{ item.label }}</div>
+                <div class="font-semibold">{{ item.value }}</div>
+            </div>
             {% endfor %}
         </div>
+        <div class="grid grid-cols-1 xl:grid-cols-2 gap-4 ilo-advanced-grid">
+            {% for area in esxi_advanced.areas %}
+            <div class="card card-compact ilo-capability-card">
+                <div class="flex items-center justify-between gap-3 mb-2">
+                    <div class="font-semibold">{{ area.name }}</div>
+                    <span class="status {{ area.status_tone }} ilo-capability-badge">{{ area.status_label }}</span>
+                </div>
+                <div class="text-sm text-slate-400 mb-3">{{ area.summary }}</div>
+                {% if area["items"] %}
+                <div class="space-y-2 text-sm">
+                    {% for item in area["items"] %}
+                    <div class="result" style="margin-top: 0;">
+                        <div class="dashboard-kicker">{{ item.label }}</div>
+                        <div>{{ item.value }}</div>
+                    </div>
+                    {% endfor %}
+                </div>
+                {% endif %}
+                {% if area.detail_rows %}
+                <details class="card card-compact mt-3 ilo-capability-detail">
+                    <summary class="summary-row">
+                        <span class="text-sm font-bold text-slate-300">Show detected details</span>
+                        <span class="status progress">details</span>
+                    </summary>
+                    <div class="mt-3 space-y-2 text-sm">
+                        {% for row in area.detail_rows %}
+                        <div class="result" style="margin-top: 0;">
+                            <div class="dashboard-kicker">{{ row.label }}</div>
+                            <div>{{ row.value }}</div>
+                        </div>
+                        {% endfor %}
+                    </div>
+                </details>
+                {% endif %}
+            </div>
+            {% endfor %}
+        </div>
+        {% endif %}
     </section>
 
     <section class="card">
-        <div class="text-lg font-semibold mb-2">Latest verified ESXi result</div>
-        <div class="text-sm text-slate-400 mb-4">The latest ESXi receipt stays here so you can see what actually happened last time without opening raw files first.</div>
+        <div class="text-lg font-semibold mb-2">What happened last</div>
+        <div class="text-sm text-slate-400 mb-4">This is the latest ESXi result the app recorded for this kit.</div>
         {% if esxi_latest_receipt %}
         <div class="dashboard-receipt-card">
             <div class="flex items-start justify-between gap-3 flex-wrap">
                 <div>
-                    <div class="dashboard-kicker">{{ esxi_latest_receipt.name }}</div>
+                    <div class="dashboard-kicker">Last ESXi run</div>
                     <div class="font-semibold text-lg">{{ esxi_latest_receipt.human_summary }}</div>
                     <div class="text-sm text-slate-400 mt-1">{{ esxi_latest_receipt.time }}{% if esxi_latest_receipt.target %} | {{ esxi_latest_receipt.target }}{% endif %}</div>
                 </div>
                 <span class="status {{ esxi_latest_receipt.tone }}">{{ esxi_latest_receipt.result }}</span>
             </div>
             {% if esxi_latest_receipt.highlights %}
-            <div class="dashboard-receipt-grid">
+            <div class="receipt-grid mt-4">
                 {% for item in esxi_latest_receipt.highlights %}
                 <div class="result" style="margin-top: 0;">{{ item }}</div>
                 {% endfor %}
@@ -100,58 +142,14 @@
                     <button class="btn btn-primary" type="submit">Open log</button>
                 </form>
                 {% endif %}
-                <a class="btn" href="/configs?report_query={{ esxi_latest_receipt.related_reports_query | urlencode }}">Related reports</a>
+                <a class="btn" href="/execution">Open Run Center</a>
             </div>
         </div>
         {% else %}
         <div class="dashboard-empty-state">
-            <div class="font-semibold">No verified ESXi result yet.</div>
-            <div class="text-sm text-slate-400 mt-1">Run the ESXi stage once and the verified receipt will show up here.</div>
+            <div class="font-semibold">No ESXi run has finished for this kit yet.</div>
+            <div class="text-sm text-slate-400 mt-1">Save this page first, then use Run Center when you are ready to review and start the install.</div>
         </div>
         {% endif %}
-    </section>
-
-    <section class="card">
-        <div class="text-lg font-semibold mb-3">ESXi details</div>
-        <form hx-post="/save-esxi-settings" hx-target="#main-content" hx-swap="outerHTML" class="space-y-4">
-            <input type="hidden" name="return_page" value="esxi">
-            <div>
-                <label class="block text-sm font-bold text-slate-300 mb-2">Server name</label>
-                <input type="text" name="esxi_hostname" value="{{ cfg.get('esxi', {}).get('hostname', '') }}" class="input">
-            </div>
-            <div>
-                <label class="block text-sm font-bold text-slate-300 mb-2">Root password</label>
-                <input type="password" name="esxi_root_password" value="{{ cfg.get('esxi', {}).get('root_password', '') }}" class="input">
-                <div class="text-xs text-slate-400 mt-1">The password is never shown back in logs. The page only reports whether it is saved and whether it passes the local policy check.</div>
-            </div>
-            <div class="grid grid-cols-1 md:grid-cols-2 gap-3">
-                <div class="result" style="margin-top: 0;">
-                    <div class="font-semibold">Management IP</div>
-                    <div>{{ esxi_page_review.management_ip or 'Not set' }}</div>
-                    <div class="text-slate-400 mt-1">Using the shared address plan.</div>
-                </div>
-                <div class="result" style="margin-top: 0;">
-                    <div class="font-semibold">Gateway and DNS</div>
-                    <div>{{ esxi_page_review.gateway or 'Not set' }}{% if esxi_page_review.dns_servers %} | {{ esxi_page_review.dns_servers|join(', ') }}{% endif %}</div>
-                    <div class="text-slate-400 mt-1">Inherited from Global Settings unless overridden in the saved kit file.</div>
-                </div>
-                <div class="result" style="margin-top: 0;">
-                    <div class="font-semibold">Base installer source</div>
-                    <div>{{ esxi_page_review.base_iso_path or 'Not ready' }}</div>
-                    {% if esxi_page_review.base_iso_error %}
-                    <div class="text-slate-400 mt-1">{{ esxi_page_review.base_iso_error }}</div>
-                    {% endif %}
-                </div>
-                <div class="result" style="margin-top: 0;">
-                    <div class="font-semibold">Built installer target</div>
-                    <div>{{ esxi_page_review.output_iso_path }}</div>
-                    <div class="text-slate-400 mt-1">Run Center mounts this built ISO through iLO virtual media.</div>
-                </div>
-            </div>
-            <div class="actions">
-                <button class="btn btn-primary action-button" type="submit">Save ESXi setup</button>
-                <a class="btn" href="/execution">Open Run Center</a>
-            </div>
-        </form>
     </section>
 </section>

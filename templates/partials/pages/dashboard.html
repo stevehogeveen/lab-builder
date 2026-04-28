@@ -1,16 +1,4 @@
 <section class="panel space-y-6">
-    {% set included_flags = [
-        cfg.get('included', {}).get('ilo'),
-        cfg.get('included', {}).get('storage'),
-        cfg.get('included', {}).get('esxi'),
-        cfg.get('included', {}).get('windows'),
-        cfg.get('included', {}).get('qnap'),
-        cfg.get('included', {}).get('iosafe'),
-        cfg.get('included', {}).get('cisco_switch')
-    ] %}
-    {% set included_count = included_flags | select | list | length %}
-    {% set completed_count = (dashboard_job_status.passed | length) + (dashboard_job_status.failed | length) %}
-
     <section class="card dashboard-hero-card">
         <div class="dashboard-hero-header">
             <div>
@@ -77,21 +65,9 @@
         </div>
     </section>
 
-    <section class="card">
+    <section class="card identity-soft-card">
         <div class="text-lg font-semibold mb-2">Job status</div>
         <div class="text-sm text-slate-400 mb-4">See the latest completed runs for this kit.</div>
-        <div class="dashboard-metric-grid mb-4">
-            <div class="dashboard-metric">
-                <div class="dashboard-kicker">Included stages</div>
-                <div class="dashboard-metric-value">{{ included_count }}</div>
-                <div class="text-sm text-slate-400">Enabled for this kit</div>
-            </div>
-            <div class="dashboard-metric">
-                <div class="dashboard-kicker">Recent results</div>
-                <div class="dashboard-metric-value">{{ completed_count }}</div>
-                <div class="text-sm text-slate-400">Completed runs found</div>
-            </div>
-        </div>
         {% set has_job_results = dashboard_job_status.passed or dashboard_job_status.failed %}
         {% if has_job_results %}
         <div class="dashboard-status-list">
@@ -138,97 +114,9 @@
         {% endif %}
     </section>
 
-    <section class="card">
-        <div class="text-lg font-semibold mb-2">Hardware identity</div>
-        <div class="text-sm text-slate-400 mb-4">This gives the build a real hardware anchor so you can tell which server the kit is pointing at.</div>
-        <div class="dashboard-identity-banner">
-            <div>
-                <div class="dashboard-kicker">Active hardware</div>
-                <div class="dashboard-identity-title">{{ dashboard_hardware_identity.title }}</div>
-                <div class="text-sm text-slate-400 mt-2">{{ dashboard_hardware_identity.subtitle }}</div>
-            </div>
-            <span class="status {{ 'ready' if dashboard_hardware_identity.discovered else 'pending' }}">
-                {{ 'Captured' if dashboard_hardware_identity.discovered else 'Waiting for live read' }}
-            </span>
-        </div>
-        <div class="dashboard-identity-grid">
-            {% for field in dashboard_hardware_identity.fields %}
-            <div class="dashboard-identity-item">
-                <div class="dashboard-kicker">{{ field.label }}</div>
-                <div class="font-semibold">{{ field.value }}</div>
-            </div>
-            {% endfor %}
-        </div>
-    </section>
-
-    <section class="card">
-        <div class="text-lg font-semibold mb-2">Latest build receipt</div>
-        <div class="text-sm text-slate-400 mb-4">This is the quick human summary of the most recent run, with the whole story still one click away.</div>
-        {% if dashboard_latest_receipt %}
-        <div class="dashboard-receipt-card">
-            <div class="flex items-start justify-between gap-3 flex-wrap">
-                <div>
-                    <div class="dashboard-kicker">{{ dashboard_latest_receipt.name }}</div>
-                    <div class="font-semibold text-lg">{{ dashboard_latest_receipt.human_summary }}</div>
-                    <div class="text-sm text-slate-400 mt-1">{{ dashboard_latest_receipt.time }}{% if dashboard_latest_receipt.target %} | {{ dashboard_latest_receipt.target }}{% endif %}</div>
-                </div>
-                <span class="status {{ dashboard_latest_receipt.tone }}">{{ dashboard_latest_receipt.result }}</span>
-            </div>
-            {% if dashboard_latest_receipt.highlights %}
-            <div class="dashboard-receipt-grid">
-                {% for item in dashboard_latest_receipt.highlights %}
-                <div class="result" style="margin-top: 0;">{{ item }}</div>
-                {% endfor %}
-            </div>
-            {% endif %}
-            <div class="actions mt-4">
-                {% if dashboard_latest_receipt.run_summary_path %}
-                <form hx-post="/view-run-summary" hx-target="#main-content" hx-swap="outerHTML">
-                    <input type="hidden" name="report_path" value="{{ dashboard_latest_receipt.run_summary_path }}">
-                    <button class="btn btn-primary" type="submit">Open log</button>
-                </form>
-                {% endif %}
-                <a class="btn" href="/configs?report_query={{ dashboard_latest_receipt.related_reports_query | urlencode }}">Related reports</a>
-            </div>
-        </div>
-        {% else %}
-        <div class="dashboard-empty-state">
-            <div class="font-semibold">No build receipt yet.</div>
-            <div class="text-sm text-slate-400 mt-1">Run a stage once and the app will summarize what changed and what was verified here.</div>
-        </div>
-        {% endif %}
-    </section>
-
-    <section class="card">
-        <div class="text-lg font-semibold mb-2">Build timeline</div>
-        <div class="text-sm text-slate-400 mb-4">This turns the kit into a tracked build instead of a loose set of forms.</div>
-        <div class="dashboard-timeline">
-            {% for item in dashboard_timeline %}
-            <div class="dashboard-timeline-item">
-                <div class="dashboard-timeline-marker dashboard-timeline-marker-{{ item.tone }}"></div>
-                <div class="dashboard-timeline-body">
-                    <div class="dashboard-timeline-header">
-                        <div class="font-semibold">{{ item.label }}</div>
-                        <span class="status {{ item.tone }}">{{ item.status }}</span>
-                    </div>
-                    <div class="text-sm text-slate-400 mt-1">{{ item.summary }}</div>
-                    <div class="dashboard-timeline-meta">
-                        {% if item.time %}
-                        <span>{{ item.time }}</span>
-                        {% endif %}
-                        {% if item.href %}
-                        <a href="{{ item.href }}">Open step</a>
-                        {% endif %}
-                    </div>
-                </div>
-            </div>
-            {% endfor %}
-        </div>
-    </section>
-
-    <section class="card">
-        <div class="text-lg font-semibold mb-3">Start with one step</div>
-        <div class="text-sm text-slate-400 mb-4">Use these pages in order when you want the cleanest setup flow.</div>
+    <section class="card identity-hero-card">
+        <div class="text-lg font-semibold mb-3">Continue setup</div>
+        <div class="text-sm text-slate-400 mb-4">Open the next page you need and keep moving forward one step at a time.</div>
         <div class="dashboard-step-grid">
             {% for key in ["global_settings", "ilo", "storage", "esxi", "execution"] %}
             {% set item = workflow_contexts.get(key.replace('global_settings', 'ilo'), {}) if key == 'global_settings' else workflow_contexts.get(key, {}) %}

@@ -6,7 +6,7 @@
         {% set storage_target = storage_target or {} %}
         {% set storage_credentials = storage_credentials or {} %}
         {% set storage_plan_defaults = storage_plan_defaults or storage_plan or {} %}
-        <div class="card">
+        <div class="card identity-soft-card">
             <div class="text-lg font-semibold mb-2">Readiness at a glance</div>
             <div class="text-sm text-slate-400 mb-4">This is the fast check for whether storage is ready to read, approve, and hand off to the real run.</div>
             <div class="execution-story-grid">
@@ -22,21 +22,21 @@
             </div>
         </div>
 
-        <div class="card">
+        <div class="card identity-hero-card">
             <div class="text-lg font-semibold mb-2">Hardware identity</div>
             <div class="text-sm text-slate-400 mb-4">Use this to confirm the storage plan is still pointed at the right machine and controller.</div>
             <div class="dashboard-identity-banner">
                 <div>
                     <div class="dashboard-kicker">Active hardware</div>
-                    <div class="dashboard-identity-title">{{ dashboard_hardware_identity.title }}</div>
-                    <div class="text-sm text-slate-400 mt-2">{{ dashboard_hardware_identity.subtitle }}</div>
+                    <div class="dashboard-identity-title">{{ hardware_identity.title }}</div>
+                    <div class="text-sm text-slate-400 mt-2">{{ hardware_identity.subtitle }}</div>
                 </div>
-                <span class="status {{ 'ready' if dashboard_hardware_identity.discovered else 'pending' }}">
-                    {{ 'Captured' if dashboard_hardware_identity.discovered else 'Waiting for live read' }}
+                <span class="status {{ 'ready' if hardware_identity.discovered else 'pending' }}">
+                    {{ 'Captured' if hardware_identity.discovered else 'Waiting for live read' }}
                 </span>
             </div>
             <div class="dashboard-identity-grid">
-                {% for field in dashboard_hardware_identity.fields %}
+                {% for field in hardware_identity.fields %}
                 {% if field.label in ["Server", "Serial", "Generation", "Current iLO IP", "Final iLO IP", "Controller", "Controller firmware"] %}
                 <div class="dashboard-identity-item">
                     <div class="dashboard-kicker">{{ field.label }}</div>
@@ -47,7 +47,7 @@
             </div>
         </div>
 
-        <div class="card">
+        <div class="card identity-soft-card">
             <div class="text-lg font-semibold mb-2">Before and after storage</div>
             <div class="text-sm text-slate-400 mb-4">This keeps the current server view, the planned layout, and the verification path visible before you approve anything destructive.</div>
             <div class="grid grid-cols-1 xl:grid-cols-3 gap-3">
@@ -73,7 +73,7 @@
             </div>
         </div>
 
-        <div class="card">
+        <div class="card identity-soft-card">
             <div class="text-lg font-semibold mb-2">Latest verified storage result</div>
             <div class="text-sm text-slate-400 mb-4">The latest storage receipt stays here so you can quickly reopen the real outcome and verification trail.</div>
             {% if storage_latest_receipt %}
@@ -302,6 +302,8 @@
                 {% set selected_os_bays = storage_plan_defaults.customization.selected_os_bays if storage_plan_defaults and storage_plan_defaults.customization else [] %}
                 {% set selected_data_bays = storage_plan_defaults.customization.selected_data_bays if storage_plan_defaults and storage_plan_defaults.customization else [] %}
                 {% set selected_hot_spare_bay = storage_plan_defaults.customization.selected_hot_spare_bay if storage_plan_defaults and storage_plan_defaults.customization else '' %}
+                {% set selected_os_raid_level = storage_plan_defaults.customization.selected_os_raid_level if storage_plan_defaults and storage_plan_defaults.customization else 'RAID1' %}
+                {% set selected_data_raid_level = storage_plan_defaults.customization.selected_data_raid_level if storage_plan_defaults and storage_plan_defaults.customization else 'RAID6' %}
                 {% if not selected_os_bays and storage_plan_defaults %}
                     {% set selected_os_bays = storage_plan_defaults.os_raid1.drives | map(attribute='bay') | list %}
                 {% endif %}
@@ -315,7 +317,18 @@
                 <div class="grid grid-cols-1 xl:grid-cols-3 gap-4 mb-4">
                     <div class="card">
                         <div class="text-sm font-semibold mb-2">OS mirror drives</div>
-                        <div class="text-xs text-slate-400 mb-3">Choose exactly two drives for the OS RAID 1 pair.</div>
+                        <div class="text-xs text-slate-400 mb-3">Pick the OS RAID level first, then choose the drives for that section.</div>
+                        <label class="block mb-3">
+                            <div class="text-sm text-slate-300 mb-1">OS RAID level</div>
+                            <select class="input" name="os_raid_level">
+                                <option value="" {% if not selected_os_raid_level %}selected{% endif %}>Do not use this section</option>
+                                <option value="RAID0" {% if selected_os_raid_level == 'RAID0' %}selected{% endif %}>RAID 0</option>
+                                <option value="RAID1" {% if selected_os_raid_level == 'RAID1' %}selected{% endif %}>RAID 1</option>
+                                <option value="RAID5" {% if selected_os_raid_level == 'RAID5' %}selected{% endif %}>RAID 5</option>
+                                <option value="RAID6" {% if selected_os_raid_level == 'RAID6' %}selected{% endif %}>RAID 6</option>
+                                <option value="RAID10" {% if selected_os_raid_level == 'RAID10' %}selected{% endif %}>RAID 10</option>
+                            </select>
+                        </label>
                         <div class="space-y-2">
                             {% for drive in planning_drives if drive.eligible %}
                             <label class="check">
@@ -327,7 +340,18 @@
                     </div>
                     <div class="card">
                         <div class="text-sm font-semibold mb-2">Data array drives</div>
-                        <div class="text-xs text-slate-400 mb-3">Choose four or more matching drives for the data array.</div>
+                        <div class="text-xs text-slate-400 mb-3">Pick the data RAID level first, then choose matching drives for that section.</div>
+                        <label class="block mb-3">
+                            <div class="text-sm text-slate-300 mb-1">Data RAID level</div>
+                            <select class="input" name="data_raid_level">
+                                <option value="" {% if not selected_data_raid_level %}selected{% endif %}>Do not use this section</option>
+                                <option value="RAID0" {% if selected_data_raid_level == 'RAID0' %}selected{% endif %}>RAID 0</option>
+                                <option value="RAID1" {% if selected_data_raid_level == 'RAID1' %}selected{% endif %}>RAID 1</option>
+                                <option value="RAID5" {% if selected_data_raid_level == 'RAID5' %}selected{% endif %}>RAID 5</option>
+                                <option value="RAID6" {% if selected_data_raid_level == 'RAID6' %}selected{% endif %}>RAID 6</option>
+                                <option value="RAID10" {% if selected_data_raid_level == 'RAID10' %}selected{% endif %}>RAID 10</option>
+                            </select>
+                        </label>
                         <div class="space-y-2">
                             {% for drive in planning_drives if drive.eligible %}
                             <label class="check">
@@ -339,7 +363,7 @@
                     </div>
                     <div class="card">
                         <div class="text-sm font-semibold mb-2">Hot spare</div>
-                        <div class="text-xs text-slate-400 mb-3">Choose one spare drive for the data array.</div>
+                        <div class="text-xs text-slate-400 mb-3">Optional. Leave this empty if you want every selected drive used in the arrays.</div>
                         <label>
                             <div class="text-sm text-slate-300 mb-1">Spare bay</div>
                             <select class="input" name="hot_spare_bay">
@@ -386,7 +410,7 @@
             </div>
             {% endif %}
             <div class="result mb-3">
-                <div><strong>Build the new layout:</strong> OS RAID 1 on bays {{ storage_plan.planned_layout.os_raid1.bays or "not selected" }}, Data RAID 6 on bays {{ storage_plan.planned_layout.data_raid6.bays or "not selected" }}, hot spare on bay {{ storage_plan.planned_layout.hot_spare.bay or "not reserved" }}.</div>
+                <div><strong>Build the new layout:</strong> {{ storage_plan.planned_layout.os_raid1.raid or "OS RAID" }} on bays {{ storage_plan.planned_layout.os_raid1.bays or "not selected" }}, {{ storage_plan.planned_layout.data_raid6.raid or "Data RAID" }} on bays {{ storage_plan.planned_layout.data_raid6.bays or "not selected" }}, hot spare on bay {{ storage_plan.planned_layout.hot_spare.bay or "not reserved" }}.</div>
                 <div><strong>Apply it during the real run:</strong> {{ "Yes" if storage_review.include_in_ilo_run else "Choose this below if you want it included." }}</div>
             </div>
             <form hx-post="/approve-storage-plan" hx-target="#main-content" hx-swap="outerHTML" data-action-title="Approving storage plan" data-action-start="Saving this storage plan for the real run." data-action-complete="Storage approval saved.">
@@ -474,7 +498,7 @@
                     {% if storage_plan_paths %}
                     <div class="result mb-4">Plan artifact: {{ storage_plan_paths.plan }}</div>
                     {% endif %}
-                    <div class="text-sm font-bold text-slate-300 mb-2">OS RAID 1 pair</div>
+                    <div class="text-sm font-bold text-slate-300 mb-2">OS section: {{ storage_plan.os_raid1.label or storage_plan.planned_layout.os_raid1.raid or 'RAID 1' }}</div>
                     <div class="muted mb-2">{{ storage_plan.os_raid1.explanation }}</div>
                     <div class="mb-2"><strong>Target size:</strong> about {{ storage_plan.os_raid1.target_size_gib }} GiB</div>
                     {% if storage_plan.os_raid1.drives %}
@@ -488,7 +512,7 @@
                     </table>
                     {% endif %}
 
-                    <div class="text-sm font-bold text-slate-300 mb-2">Data RAID 6 set</div>
+                    <div class="text-sm font-bold text-slate-300 mb-2">Data section: {{ storage_plan.data_raid6.label or storage_plan.planned_layout.data_raid6.raid or 'RAID 6' }}</div>
                     <div class="muted mb-2">{{ storage_plan.data_raid6.explanation }}</div>
                     <div class="mb-2"><strong>Feasible:</strong> {{ "Yes" if storage_plan.data_raid6.feasible else "No" }}</div>
                     {% if storage_plan.data_raid6.drives %}
@@ -512,7 +536,7 @@
                         </tbody>
                     </table>
                     {% else %}
-                    <div class="error mb-4">No compatible hot spare could be reserved for the data-side policy.</div>
+                    <div class="muted mb-4">No dedicated hot spare is selected for this plan.</div>
                     {% endif %}
 
                     <div class="text-sm font-bold text-slate-300 mb-2">Existing logical volumes</div>

@@ -1,5 +1,14 @@
 .venv/
+lab-builder-venv/
 __pycache__/
 *.pyc
+.pytest_cache/
 artifacts/exports/
+artifacts/generated/
 artifacts/history/
+artifacts/jobs/
+artifacts/runs/
+config/current_kit.txt
+config/kits/*.yml
+offline-wheels/
+media/

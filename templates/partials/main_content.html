@@ -23,7 +23,7 @@
         </div>
         <div class="text-sm">{{ action_feedback.summary }}</div>
         {% if action_feedback.outcomes %}
-        <div class="dashboard-kicker mt-4">What changed</div>
+        <div class="dashboard-kicker mt-4">What happened last</div>
         <div class="receipt-grid">
             {% for outcome in action_feedback.outcomes %}
             <div class="result" style="margin-top: 0;">{{ outcome }}</div>
@@ -40,7 +40,7 @@
         {% if action_feedback.details %}
         <details class="mt-4">
             <summary class="summary-row">
-                <span class="text-sm font-bold text-slate-300">Technical trace</span>
+                <span class="text-sm font-bold text-slate-300">More details</span>
                 <span class="status progress">details</span>
             </summary>
             <div class="mt-4 space-y-2 text-sm text-slate-300">
@@ -108,8 +108,6 @@
         {% include "partials/pages/reports.html" %}
     {% elif active_page == "storage" %}
         {% include "partials/pages/storage.html" %}
-    {% elif active_page == "kits" %}
-        {% include "partials/pages/kits.html" %}
     {% elif active_page == "history" %}
         {% include "partials/pages/history.html" %}
     {% else %}

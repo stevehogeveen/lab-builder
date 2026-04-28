@@ -1,3 +1,4 @@
+import asyncio
 import pytest
 import yaml
 from pathlib import Path
@@ -77,8 +78,56 @@ class FakeILOClient:
             },
             "raw": {
                 "service_root": {"RedfishVersion": "1.18.0"},
-                "manager": {"FirmwareVersion": "3.00"},
+                "manager": {
+                    "Model": "iLO 6",
+                    "FirmwareVersion": "3.00",
+                    "Actions": {
+                        "#Manager.Reset": {"target": "/redfish/v1/Managers/1/Actions/Manager.Reset"}
+                    },
+                },
                 "system": {"Model": "ProLiant DL380 Gen11"},
+                "account_service": {"Accounts": {"@odata.id": "/redfish/v1/AccountService/Accounts"}},
+                "virtual_media": [
+                    {
+                        "@odata.id": "/redfish/v1/Managers/1/VirtualMedia/2",
+                        "Id": "2",
+                        "Name": "Virtual CD/DVD",
+                        "Actions": {
+                            "#VirtualMedia.InsertMedia": {"target": "/redfish/v1/Managers/1/VirtualMedia/2/Actions/VirtualMedia.InsertMedia"},
+                            "#VirtualMedia.EjectMedia": {"target": "/redfish/v1/Managers/1/VirtualMedia/2/Actions/VirtualMedia.EjectMedia"},
+                        },
+                    }
+                ],
+                "capability_dump": {
+                    "manager_path": "/redfish/v1/Managers/1",
+                    "network_protocol_path": "/redfish/v1/Managers/1/NetworkProtocol",
+                    "network_protocol_keys": ["FQDN", "HostName", "HTTP", "HTTPS", "SNMP"],
+                    "snmp_keys": ["ProtocolEnabled", "SNMPv1Enabled", "SNMPv2cEnabled", "SNMPv3Enabled", "SNMPv3Username"],
+                    "snmp_object": {
+                        "ProtocolEnabled": True,
+                        "SNMPv1Enabled": False,
+                        "SNMPv2cEnabled": False,
+                        "SNMPv3Enabled": True,
+                        "SNMPv3Username": "ops-user",
+                    },
+                    "network_protocol_oem_keys": ["Hpe"],
+                    "network_protocol_oem_hpe_keys": ["AlertMail", "RemoteSyslog"],
+                    "ethernet_interfaces": [
+                        {
+                            "path": "/redfish/v1/Managers/1/EthernetInterfaces/1",
+                            "keys": ["DHCPv4", "DHCPv6", "FQDN", "HostName", "IPv4Addresses", "IPv6Addresses", "NameServers", "StaticNameServers", "VLAN"],
+                            "oem_keys": ["Hpe"],
+                            "oem_hpe_keys": ["DomainName"],
+                            "host_name": "ilo-live",
+                            "fqdn": "ilo-live.example.test",
+                            "interface_enabled": True,
+                            "link_status": "LinkUp",
+                            "name_servers": ["1.1.1.1", "8.8.8.8"],
+                            "static_name_servers": ["1.1.1.1", "8.8.8.8"],
+                            "vlan": {},
+                        }
+                    ],
+                },
             },
         }
 
@@ -1099,7 +1148,7 @@ def test_ilo_page_removes_old_controls_and_points_to_storage(client):
     assert response.status_code == 200
     assert "Open global settings" not in response.text
     assert "Include iLO setup in this kit" not in response.text
-    assert "Open Storage setup" in response.text
+    assert "Open storage setup" in response.text
     assert "Read current iLO" in response.text
     assert "This is filled in from Global Settings unless you replace it here." in response.text
 
@@ -1109,12 +1158,13 @@ def test_save_esxi_windows_and_qnap_page_settings(client):
     cfg["site"]["name"] = "Workflow Kit"
     main.save_kit_config(cfg)
 
-    client.post("/save-esxi-settings", data={"return_page": "esxi", "esxi_hostname": "esxi-lab", "esxi_root_password": "secret", "included_esxi": "on"})
+    client.post("/save-esxi-settings", data={"return_page": "esxi", "esxi_hostname": "esxi-lab", "esxi_root_password": "secret"})
     client.post("/save-windows-settings", data={"return_page": "windows", "windows_vm_name": "win-lab", "windows_admin_password": "secret", "included_windows": "on"})
     client.post("/save-qnap-settings", data={"return_page": "qnap", "qnap_hostname": "qnap-lab", "qnap_username": "admin", "qnap_password": "secret", "included_qnap": "on"})
 
     cfg = main.load_kit_config("Workflow-Kit")
     assert cfg["esxi"]["hostname"] == "esxi-lab"
+    assert cfg["included"]["esxi"] is True
     assert cfg["windows"]["vm_name"] == "win-lab"
     assert cfg["qnap"]["hostname"] == "qnap-lab"
 
@@ -1136,12 +1186,23 @@ def test_global_settings_and_workflow_pages_show_defaults_and_dependencies(clien
     assert "Global Settings" in global_response.text
     assert "Save the shared defaults here once." in global_response.text
     assert "Default addresses" in global_response.text
+    assert "Shared DNS and alerts" in global_response.text
+    assert "Advanced SNMPv3 users" in global_response.text
+    assert "Advanced kit pages" in global_response.text
     assert "Save shared defaults" in global_response.text
+    assert "Open reports &amp; technical details" not in global_response.text
 
     esxi_response = client.get("/esxi")
     assert esxi_response.status_code == 200
     assert "ESXi setup" in esxi_response.text
-    assert "The server address, gateway, and DNS come from Global Settings" in esxi_response.text
+    assert "The address, gateway, and DNS come from Global Settings." in esxi_response.text
+    assert "Save ESXi setup" in esxi_response.text
+    assert "Advanced ESXi installer view" in esxi_response.text
+    assert "What happened last" in esxi_response.text
+    assert "Address to use" in esxi_response.text
+    assert "Gateway and DNS" in esxi_response.text
+    assert "Installer file paths and troubleshooting stay on Reports and Run Center." in esxi_response.text
+    assert "Build artifacts" in esxi_response.text
     assert "Save ESXi setup" in esxi_response.text
     assert "Generate KS.CFG" not in esxi_response.text
 
@@ -1296,10 +1357,35 @@ def test_export_ilo_inventory_renders_summary_and_download_actions_on_ilo_page(c
     response = client.post("/export-ilo-inventory", data={"return_page": "ilo"})
 
     assert response.status_code == 200
+    assert "Save iLO setup" in response.text
+    assert "What happened last" in response.text
+    assert "Advanced iLO options" in response.text
+    assert "Detected from the latest live iLO read" in response.text
+    assert "SNMP and alerts" in response.text
+    assert "Manager reset" in response.text
+    assert "Virtual media and remote install" in response.text
+    assert "Show detected details" in response.text
+    assert "SNMP protocol enabled" in response.text
+    assert "Virtual media 1" in response.text
+    assert "Interface 1 keys" in response.text
+    assert "Detected Redfish capability keys" in response.text
     assert "Latest Live Summary" in response.text
     assert "serial_number: ABC123" in response.text
     assert "Download current iLO summary" in response.text
     assert "Download raw iLO data" in response.text
+
+
+def test_ilo_page_shows_advanced_tab_empty_state_without_live_read(client):
+    cfg = main.default_config()
+    cfg["site"]["name"] = "Ilo Advanced Empty Kit"
+    main.save_kit_config(cfg)
+
+    response = client.get("/ilo")
+
+    assert response.status_code == 200
+    assert "Advanced" in response.text
+    assert "Advanced iLO options" in response.text
+    assert "Read current iLO to load version-specific advanced options." in response.text
 
 
 def test_read_current_storage_saves_discovery_export_and_renders_summary(client, monkeypatch):
@@ -1325,10 +1411,15 @@ def test_read_current_storage_saves_discovery_export_and_renders_summary(client,
 
     assert response.status_code == 200
     assert "Storage setup" in response.text
+    assert "Readiness at a glance" in response.text
+    assert "Hardware identity" in response.text
+    assert "Before and after storage" in response.text
+    assert "Latest verified storage result" in response.text
     assert "Target server" in response.text
     assert "Current storage setup" in response.text
     assert "Current storage setup loaded" in response.text
     assert "The current storage layout is now ready to review." in response.text
+    assert "ProLiant DL380 Gen11" in response.text
     assert "MR416i-o" in response.text
     assert "1.98" in response.text
     assert "OS Volume / RAID RAID1" in response.text
@@ -1401,13 +1492,17 @@ def test_storage_target_host_prefers_planned_ilo_ip_over_current_and_artifact_ho
 
     resolved = main.resolve_storage_target_host(cfg)
 
-    assert resolved["resolved"] == "10.10.8.89"
-    assert resolved["source"] == "planned iLO target IP"
+    assert resolved["resolved"] == "10.10.8.90"
+    assert resolved["source"] == "current kit iLO IP"
     assert resolved["artifact_fallback"] is False
 
 
 def test_storage_target_host_can_fallback_to_latest_artifact_when_kit_host_is_missing():
     cfg = main.default_config()
+    cfg["ilo"]["target_ip"] = ""
+    cfg["ip_plan"]["ilo"] = ""
+    cfg["ilo"]["current_ip"] = ""
+    cfg["ilo"]["host"] = ""
     cfg["storage"]["latest_host"] = "10.10.8.92"
 
     resolved = main.resolve_storage_target_host(cfg)
@@ -1766,7 +1861,7 @@ def test_plan_raid_layout_uses_displayed_discovery_artifact_and_saves_plan(clien
     assert "HDD-1200" in response.text
     assert "Oddball" in response.text
     assert "Hot spare" in response.text
-    assert "Reserved as the data-side hot spare" in response.text
+    assert "No dedicated hot spare is selected for this plan." in response.text
     assert "Apply it during the real run" in response.text
     assert "Open reports" in response.text
     assert "Open build files" in response.text
@@ -1777,7 +1872,7 @@ def test_plan_raid_layout_uses_displayed_discovery_artifact_and_saves_plan(clien
     assert "default_recommendation: wipe and rebuild" in plan_text
     assert "hot_spare:" in plan_text
     assert "typed_confirmation: WIPE STORAGE" in plan_text
-    assert "Reserved as the data-side hot spare" in plan_text
+    assert "required: false" in plan_text
     assert "Not in the selected RAID 6 compatible media/protocol/capacity" in plan_text
 
 
@@ -1805,6 +1900,8 @@ def test_plan_raid_layout_accepts_custom_drive_selection(client, monkeypatch):
         data={
             "return_page": "storage",
             "discovery_raw_path": str(export_paths["raw"]),
+            "os_raid_level": "RAID1",
+            "data_raid_level": "RAID6",
             "os_bays": ["1", "2"],
             "data_bays": ["4", "5", "6", "7"],
             "hot_spare_bay": "8",
@@ -1819,6 +1916,76 @@ def test_plan_raid_layout_accepts_custom_drive_selection(client, monkeypatch):
     assert plan["planned_layout"]["os_raid1"]["bays"] == "1, 2"
     assert plan["planned_layout"]["data_raid6"]["bays"] == "4, 5, 6, 7"
     assert plan["planned_layout"]["hot_spare"]["bay"] == "8"
+
+
+def test_plan_raid_layout_accepts_custom_raid_levels(client, monkeypatch):
+    def fake_strftime(fmt):
+        if fmt == "%Y%m%d-%H%M%S":
+            return "20260407-170200"
+        if fmt == "%Y-%m-%d %H:%M:%S":
+            return "2026-04-07 17:02:00"
+        raise AssertionError(f"unexpected strftime format: {fmt}")
+
+    monkeypatch.setattr(main.time, "strftime", fake_strftime)
+    cfg = main.default_config()
+    cfg["site"]["name"] = "Custom Raid Level Kit"
+    cfg["ilo"]["target_ip"] = "10.10.8.80"
+    cfg["ip_plan"]["ilo"] = "10.10.8.80"
+    cfg["ilo"]["current_ip"] = "10.10.8.80"
+    cfg["ilo"]["host"] = "10.10.8.80"
+    main.save_kit_config(cfg)
+    discovery = planner_discovery_with_mixed_drives()
+    export_paths = main.export_storage_discovery_snapshot(cfg, discovery, host="10.10.8.80")
+
+    response = client.post(
+        "/plan-raid-layout",
+        data={
+            "return_page": "storage",
+            "discovery_raw_path": str(export_paths["raw"]),
+            "os_raid_level": "RAID10",
+            "data_raid_level": "RAID5",
+            "os_bays": ["1", "2", "3", "4"],
+            "data_bays": ["5", "6", "7"],
+            "hot_spare_bay": "8",
+        },
+    )
+
+    assert response.status_code == 200
+    assert "RAID 10" in response.text
+    assert "RAID 5" in response.text
+    plan_payload = yaml.safe_load((export_paths["directory"] / "raid-plan.yml").read_text(encoding="utf-8"))
+    plan = plan_payload["plan"]
+    assert plan["customization"]["selected_os_raid_level"] == "RAID10"
+    assert plan["customization"]["selected_data_raid_level"] == "RAID5"
+    assert plan["planned_layout"]["os_raid1"]["raid"] == "RAID 10"
+    assert plan["planned_layout"]["data_raid6"]["raid"] == "RAID 5"
+    assert plan["os_raid1"]["raid"] == "RAID10"
+    assert plan["data_raid6"]["raid"] == "RAID5"
+
+
+def test_build_storage_apply_intent_uses_selected_raid_levels():
+    discovery = planner_gen10_apply_discovery(existing_volumes=True)
+    discovery_paths = {
+        "directory": main.Path("/tmp/storage-plan-test"),
+        "summary": main.Path("/tmp/storage-plan-test/summary.yml"),
+        "raw": main.Path("/tmp/storage-plan-test/raw.json"),
+    }
+
+    plan = main.build_raid_plan(
+        discovery,
+        discovery_paths,
+        overrides={
+            "os_raid_level": "RAID10",
+            "data_raid_level": "RAID5",
+            "os_bays": ["1", "2", "3", "4"],
+            "data_bays": ["5", "6", "7"],
+            "hot_spare_bay": "8",
+        },
+    )
+    intent = main.build_storage_apply_intent(plan, "wipe_rebuild")
+
+    assert intent["os_raid1"]["raid"] == "RAID10"
+    assert intent["data_raid6"]["raid"] == "RAID5"
 
 
 def test_approve_storage_plan_saves_exact_artifact_paths_for_later_ilo_run(client):
@@ -1929,7 +2096,14 @@ def test_prepare_execute_shows_combined_storage_review_using_exact_approved_arti
 
     assert response.status_code == 200
     assert "Run summary" in response.text
+    assert "Run confidence" in response.text
+    assert "Everything that will change" in response.text
+    assert "Controller login address" in response.text
+    assert "Apply mode" in response.text
+    assert "Before and after this run" in response.text
     assert "Stages that will run" in response.text
+    assert "Show exact stage details" in response.text
+    assert "Approved discovery path" in response.text
     assert "Technical details" in response.text
     assert "Settings that will be used" in response.text
     assert "Storage run values" in response.text
@@ -1951,6 +2125,8 @@ def test_execution_page_warns_when_storage_is_not_approved(client):
     assert response.status_code == 200
     assert "Run Center" in response.text
     assert "Review run before execution" in response.text
+    assert "Current focus" in response.text
+    assert "Still waiting on" in response.text
     assert "Review one part" not in response.text
 
 
@@ -2003,7 +2179,7 @@ def test_ilo_page_warns_clearly_when_storage_is_not_approved(client):
     response = client.get("/ilo")
 
     assert response.status_code == 200
-    assert "Storage will stay out of the run until it is reviewed and approved." in response.text
+    assert "Storage changes only run after you review and approve a storage plan." in response.text
     assert "Open storage setup" in response.text
 
 
@@ -2346,6 +2522,15 @@ def test_prepare_execute_enables_real_launch_for_esxi_scope(client, monkeypatch)
     assert "http://lab-builder.local:8000/esxi-built-iso/ESXi-Launch-Review-Kit/esxi-20260416-121500.iso" in response.text
     assert "Manual test defaults: Manual test script defaults are not used by Run Center" in response.text
     assert 'name="esxi_run_stamp" value="20260416-121500"' in response.text
+    assert "Run confidence" in response.text
+    assert "Everything that will change" in response.text
+    assert "Management IP" in response.text
+    assert "Current installed ESXi IP" in response.text
+    assert "10.10.8.10" in response.text
+    assert "Before and after this run" in response.text
+    assert "How the app will confirm it" in response.text
+    assert "Show exact stage details" in response.text
+    assert "Base ISO path" in response.text
     stage_section = response.text.split("Stages that will run", 1)[1].split("Review before you start", 1)[0]
     assert "iLO" not in stage_section
 
@@ -4823,6 +5008,49 @@ def test_execution_page_no_longer_shows_view_live_log(client):
     assert "Detailed execution logs are saved with the run" in response.text
 
 
+def test_execution_page_shows_live_stage_details_from_job_state(client):
+    cfg = main.default_config()
+    cfg["site"]["name"] = "Live Stage Kit"
+    main.save_kit_config(cfg)
+    main.save_job(
+        "Live Stage Kit",
+        {
+            "scope": "multi__ilo__storage__esxi",
+            "status": "Running",
+            "current_stage": "Applying iLO settings",
+            "execution_mode": "real",
+            "execution_mode_label": "Real execution",
+            "progress_percent": 62,
+            "completed_steps": 5,
+            "total_steps": 8,
+            "dns_apply_status": "Verified",
+            "snmp_apply_status": "Verified",
+            "ilo_reset_status": "Completed",
+            "ilo_final_ip_verified": True,
+            "target_ip": "10.10.8.30",
+            "storage_server_reboot_status": "Completed",
+            "workflow_state": "post_reboot_validation_complete",
+            "esxi_iso_path": "/tmp/esxi.iso",
+            "esxi_iso_url": "http://127.0.0.1:8000/esxi.iso",
+            "esxi_expected_ip": "10.10.8.50",
+            "esxi_trace_path": "/tmp/esxi-trace.yml",
+            "logs": ["[OK] DNS saved on active iLO interface"],
+        },
+    )
+
+    response = client.get("/execution")
+
+    assert response.status_code == 200
+    assert "Live stage details" in response.text
+    assert "Show last confirmed checks" in response.text
+    assert "DNS status" in response.text
+    assert "SNMP status" in response.text
+    assert "Final iLO IP" in response.text
+    assert "Server reboot status" in response.text
+    assert "Built ISO path" in response.text
+    assert "Expected ESXi IP" in response.text
+
+
 def test_ilo_page_shows_last_run_dns_snmp_and_reset_states(client, monkeypatch):
     cfg = main.default_config()
     cfg["site"]["name"] = "ILO Result Kit"
@@ -4861,6 +5089,8 @@ def test_ilo_page_shows_last_run_dns_snmp_and_reset_states(client, monkeypatch):
 
     assert response.status_code == 200
     assert "iLO setup" in response.text
+    assert "What happened last" in response.text
+    assert "This run handled DNS applied, SNMP verified, iLO reset not requested separately, server reboot completed." in response.text
     assert "Open Run Center" in response.text
 
 
@@ -4919,7 +5149,7 @@ def test_run_job_simulation_finishes_as_preview_complete():
     assert "[DONE] Preview complete. No real changes were made." in job["logs"]
 
 
-def test_build_raid_plan_blocks_when_no_compatible_data_spare_remains():
+def test_build_raid_plan_allows_data_layout_without_hot_spare():
     discovery = planner_discovery_without_data_spare()
     discovery_paths = {
         "directory": main.Path("/tmp/storage-plan-test"),
@@ -4931,10 +5161,77 @@ def test_build_raid_plan_blocks_when_no_compatible_data_spare_remains():
 
     assert plan["data_raid6"]["drive_count"] == 4
     assert plan["hot_spare"]["reserved"] is False
-    assert plan["apply_readiness"]["wipe_rebuild_ready"] is False
+    assert plan["apply_readiness"]["wipe_rebuild_ready"] is True
     assert plan["planned_layout"]["hot_spare"]["bay"] == ""
     assert plan["pre_apply_summary"]["planned_layout"]["data_raid6"]["bays"] == "3, 4, 5, 6"
-    assert any("hot spare" in blocker.lower() for blocker in plan["blockers"])
+    assert not any("hot spare" in blocker.lower() for blocker in plan["blockers"])
+
+
+def test_plan_raid_layout_allows_five_drive_split_without_hot_spare(client, monkeypatch):
+    def fake_strftime(fmt):
+        if fmt == "%Y%m%d-%H%M%S":
+            return "20260407-170300"
+        if fmt == "%Y-%m-%d %H:%M:%S":
+            return "2026-04-07 17:03:00"
+        raise AssertionError(f"unexpected strftime format: {fmt}")
+
+    monkeypatch.setattr(main.time, "strftime", fake_strftime)
+    cfg = main.default_config()
+    cfg["site"]["name"] = "Five Drive Kit"
+    cfg["ilo"]["target_ip"] = "10.10.8.80"
+    cfg["ip_plan"]["ilo"] = "10.10.8.80"
+    cfg["ilo"]["current_ip"] = "10.10.8.80"
+    cfg["ilo"]["host"] = "10.10.8.80"
+    main.save_kit_config(cfg)
+    discovery = planner_discovery_with_mixed_drives()
+    export_paths = main.export_storage_discovery_snapshot(cfg, discovery, host="10.10.8.80")
+
+    response = client.post(
+        "/plan-raid-layout",
+        data={
+            "return_page": "storage",
+            "discovery_raw_path": str(export_paths["raw"]),
+            "os_raid_level": "RAID1",
+            "data_raid_level": "RAID5",
+            "os_bays": ["1", "2"],
+            "data_bays": ["3", "4", "5"],
+            "hot_spare_bay": "",
+        },
+    )
+
+    assert response.status_code == 200
+    assert "No dedicated hot spare is selected for this plan." in response.text
+    plan_payload = yaml.safe_load((export_paths["directory"] / "raid-plan.yml").read_text(encoding="utf-8"))
+    plan = plan_payload["plan"]
+    assert plan["valid"] is True
+    assert plan["hot_spare"]["reserved"] is False
+    assert plan["apply_readiness"]["wipe_rebuild_ready"] is True
+    assert plan["planned_layout"]["data_raid6"]["raid"] == "RAID 5"
+
+
+def test_build_raid_plan_allows_single_os_array_only():
+    discovery = planner_discovery_with_mixed_drives()
+    discovery_paths = {
+        "directory": main.Path("/tmp/storage-plan-test"),
+        "summary": main.Path("/tmp/storage-plan-test/summary.yml"),
+        "raw": main.Path("/tmp/storage-plan-test/raw.json"),
+    }
+    plan = main.build_raid_plan(
+        discovery,
+        discovery_paths,
+        overrides={
+            "os_raid_level": "RAID1",
+            "data_raid_level": "",
+            "os_bays": ["1", "2"],
+            "data_bays": [],
+            "hot_spare_bay": "",
+        },
+    )
+
+    assert plan["valid"] is True
+    assert plan["planned_layout"]["os_raid1"]["raid"] == "RAID 1"
+    assert plan["planned_layout"]["data_raid6"]["raid"] == "Not used"
+    assert plan["planned_layout"]["data_raid6"]["bays"] == ""
 
 
 def test_plan_raid_layout_rejects_discovery_from_different_host(client):
@@ -5399,8 +5696,9 @@ def test_saved_plan_artifact_preserves_smart_storage_location_for_os_data_and_sp
         "1I:1:5",
         "1I:1:6",
         "1I:1:7",
+        "1I:1:8",
     ]
-    assert plan["hot_spare"]["drive"]["smart_storage_location"] == "1I:1:8"
+    assert plan["hot_spare"]["drive"] == {}
 
     plan_payload = yaml.safe_load(plan_paths["plan"].read_text(encoding="utf-8"))
     exported_plan = plan_payload["plan"]
@@ -5412,8 +5710,9 @@ def test_saved_plan_artifact_preserves_smart_storage_location_for_os_data_and_sp
         "1I:1:5",
         "1I:1:6",
         "1I:1:7",
+        "1I:1:8",
     ]
-    assert exported_plan["hot_spare"]["drive"]["smart_storage_location"] == "1I:1:8"
+    assert exported_plan["hot_spare"]["drive"] == {}
 
 
 def test_gen10_preflight_accepts_plan_loaded_from_saved_artifact_with_location_only_in_bay(client, monkeypatch):
@@ -5663,14 +5962,21 @@ def test_dashboard_shows_recommended_next_step_and_workflow_cards(client):
     assert response.status_code == 200
     assert "Dashboard" in response.text
     assert "Active kit" in response.text
+    assert response.text.count("Active kit") == 1
     assert "Choose a kit" in response.text
+    active_section = response.text.split("Active kit", 1)[1]
+    assert "Choose a kit" in active_section
     assert "Create a new kit" in response.text
     assert "Use an existing kit" in response.text
     assert "Open current config" in response.text
     assert "Download current config" in response.text
-    assert "Start with one step" in response.text
+    assert "Recommended next step" in response.text
+    assert "Open next step" in response.text
+    assert "Continue setup" in response.text
+    assert "Run Center" in response.text
     assert "Review ESXi setup" not in response.text
-    assert "Open run history" in response.text
+    assert "Open run history" not in response.text
+    assert "Open reports &amp; technical details" not in response.text
     assert 'name="selected_kit"' in response.text
     assert 'name="new_kit_name"' in response.text
     assert 'type="file"' not in response.text
@@ -5708,8 +6014,8 @@ def test_dashboard_job_status_lists_passed_and_failed_with_dates(client):
     main.save_history(
         "Dash-Status-Kit",
         [
-            {"time": "2026-04-17 10:30:00", "scope": "esxi", "status": "Failed"},
-            {"time": "2026-04-17 09:15:00", "scope": "ilo", "status": "Completed"},
+            {"time": "2026-04-17 10:30:00", "scope": "esxi", "status": "Failed", "run_summary_path": "/tmp/esxi-summary.yml"},
+            {"time": "2026-04-17 09:15:00", "scope": "ilo", "status": "Completed", "run_summary_path": "/tmp/ilo-summary.yml"},
         ],
     )
 
@@ -5718,9 +6024,107 @@ def test_dashboard_job_status_lists_passed_and_failed_with_dates(client):
     assert response.status_code == 200
     assert "Job status" in response.text
     assert "iLO run passed" in response.text
+    assert ">Passed<" in response.text
     assert "2026-04-17 09:15:00" in response.text
     assert "ESXi run failed" in response.text
+    assert ">Failed<" in response.text
     assert "2026-04-17 10:30:00" in response.text
+    assert response.text.count("Open log") >= 2
+    assert "/tmp/ilo-summary.yml" in response.text
+    assert "/tmp/esxi-summary.yml" in response.text
+
+
+def test_dashboard_keeps_focus_on_kit_status_and_next_steps(client):
+    cfg = main.default_config()
+    cfg["site"]["name"] = "Identity Kit"
+    cfg["ilo"]["current_ip"] = "10.10.8.50"
+    cfg["ilo"]["host"] = "10.10.8.50"
+    cfg["ilo"]["target_ip"] = "10.10.8.11"
+    cfg["ilo"]["username"] = "Administrator"
+    cfg["ilo"]["password"] = "secret"
+    cfg["shared_network"]["subnet"] = "10.10.8.0/24"
+    cfg["ip_plan"]["gateway"] = "10.10.8.1"
+
+    ilo_export_dir = main.ILO_LIVE_EXPORT_DIR / "Identity-Server" / "20260424-101500"
+    ilo_export_dir.mkdir(parents=True, exist_ok=True)
+    (ilo_export_dir / "summary.yml").write_text(
+        yaml.safe_dump(
+            {
+                "server_model": "ProLiant DL380 Gen11",
+                "product_name": "DL380",
+                "serial_number": "ABC123",
+                "current_ilo_ip": "10.10.8.50",
+                "target_ilo_ip": "10.10.8.11",
+                "ilo_firmware_version": "3.00",
+                "storage": {"controllers": [{"name": "Smart Array", "firmware_version": {"Current": {"VersionString": "1.98"}}}]},
+            },
+            sort_keys=False,
+        ),
+        encoding="utf-8",
+    )
+    (ilo_export_dir / "raw.json").write_text(
+        main.json.dumps({"inventory": {"summary": {"manager": {"model": "iLO 6"}}}}, indent=2),
+        encoding="utf-8",
+    )
+
+    storage_export_dir = main.STORAGE_RAID_EXPORT_DIR / "ABC123" / "20260424-101700"
+    storage_export_dir.mkdir(parents=True, exist_ok=True)
+    storage_raw_path = storage_export_dir / "raw.json"
+    (storage_export_dir / "summary.yml").write_text(
+        yaml.safe_dump(
+            {
+                "server": {
+                    "model": "ProLiant DL380 Gen11",
+                    "product_name": "DL380",
+                    "generation": "Gen11",
+                    "serial_number": "ABC123",
+                },
+                "ilo": {"model": "iLO 6", "version": "iLO 6", "firmware": "3.00"},
+                "standard_redfish_storage": {
+                    "controllers": [{"name": "Smart Array", "model": "MR416i-o", "firmware_version": {"Current": {"VersionString": "1.98"}}}]
+                },
+            },
+            sort_keys=False,
+        ),
+        encoding="utf-8",
+    )
+    storage_raw_path.write_text(main.json.dumps({"discovery": {}}, indent=2), encoding="utf-8")
+    cfg["storage"]["latest_discovery_raw_path"] = str(storage_raw_path)
+    main.save_kit_config(cfg)
+
+    main.save_history(
+        "Identity-Kit",
+        [
+            {
+                "time": "2026-04-24 10:30:00",
+                "scope": "ilo",
+                "status": "Completed",
+                "current_stage": "Finished",
+                "run_summary_path": "/tmp/ilo-summary.yml",
+                "config_summary": {
+                    "login_ip": "10.10.8.50",
+                    "target_ip": "10.10.8.11",
+                    "dns_apply_status": "Verified",
+                    "snmp_apply_status": "Verified",
+                    "ilo_reset_status": "Completed",
+                    "ilo_final_ip_verified": True,
+                },
+            }
+        ],
+    )
+
+    response = client.get("/dashboard")
+
+    assert response.status_code == 200
+    assert "Active kit" in response.text
+    assert "Choose a kit" in response.text
+    assert "Job status" in response.text
+    assert "iLO run passed" in response.text
+    assert "Open log" in response.text
+    assert "Continue setup" in response.text
+    assert "Hardware identity" not in response.text
+    assert "Latest build receipt" not in response.text
+    assert "Build timeline" not in response.text
 
 
 def test_dashboard_uses_simplified_primary_navigation(client):
@@ -5737,6 +6141,32 @@ def test_dashboard_uses_simplified_primary_navigation(client):
     assert "Reset dashboard layout" not in response.text
 
 
+def test_sidebar_shows_optional_setup_pages_when_included(client):
+    cfg = main.default_config()
+    cfg["site"]["name"] = "More Setup Kit"
+    cfg["included"]["windows"] = True
+    cfg["included"]["qnap"] = True
+    main.save_kit_config(cfg)
+
+    response = client.get("/dashboard")
+
+    assert response.status_code == 200
+    assert 'href="/windows">Windows Setup</a>' in response.text
+    assert 'href="/qnap">QNAP Setup</a>' in response.text
+    assert '.sidebar .nav-link[href="/windows"]' not in response.text
+    assert '.sidebar .nav-link[href="/qnap"]' not in response.text
+
+
+def test_kits_route_falls_back_to_dashboard_workflow(client):
+    response = client.get("/kits")
+
+    assert response.status_code == 200
+    assert "Dashboard" in response.text
+    assert "Active kit" in response.text
+    assert "Choose a kit" in response.text
+    assert "Continue setup" in response.text
+
+
 def test_create_new_kit_updates_active_kit_on_dashboard(client):
     response = client.post(
         "/new-kit",
@@ -5746,6 +6176,32 @@ def test_create_new_kit_updates_active_kit_on_dashboard(client):
     assert response.status_code == 200
     assert "Active kit" in response.text
     assert "Fresh-Kit" in response.text
+
+
+def test_websocket_job_stream_exits_cleanly_on_cancelled_sleep(monkeypatch):
+    class FakeWebSocket:
+        def __init__(self):
+            self.accepted = False
+            self.sent = []
+
+        async def accept(self):
+            self.accepted = True
+
+        async def send_text(self, payload):
+            self.sent.append(payload)
+
+    async def cancelled_sleep(_seconds):
+        raise asyncio.CancelledError()
+
+    monkeypatch.setattr(main, "load_job", lambda kit_name: {"status": "Idle", "kit": kit_name})
+    monkeypatch.setattr(main.asyncio, "sleep", cancelled_sleep)
+
+    websocket = FakeWebSocket()
+    asyncio.run(main.websocket_job_stream(websocket, "Shutdown Kit"))
+
+    assert websocket.accepted is True
+    assert websocket.sent
+    assert "Shutdown-Kit" in websocket.sent[0]
 
 
 def test_reports_page_hides_live_jobs_and_config_capture_blocks(client):
@@ -5766,9 +6222,26 @@ def test_esxi_page_removes_duplicate_include_and_global_settings_prompt(client):
     response = client.get("/esxi")
 
     assert response.status_code == 200
-    assert "Save the ESXi host name and root password here." in response.text
+    assert "Save the ESXi name and root password here." in response.text
     assert "Include ESXi setup in this kit" not in response.text
     assert "Open global settings" not in response.text
+
+
+def test_save_esxi_settings_preserves_disabled_inclusion_when_page_has_no_toggle(client):
+    cfg = main.default_config()
+    cfg["site"]["name"] = "ESXi Preserve Kit"
+    cfg["included"]["esxi"] = False
+    main.save_kit_config(cfg)
+
+    response = client.post(
+        "/save-esxi-settings",
+        data={"return_page": "esxi", "esxi_hostname": "esxi-preserve", "esxi_root_password": "ValidPass1"},
+    )
+
+    assert response.status_code == 200
+    cfg = main.load_kit_config("ESXi-Preserve-Kit")
+    assert cfg["esxi"]["hostname"] == "esxi-preserve"
+    assert cfg["included"]["esxi"] is False
 
 
 def test_report_center_lists_storage_reports_and_view_report(client):
@@ -5785,9 +6258,9 @@ def test_report_center_lists_storage_reports_and_view_report(client):
 
     assert response.status_code == 200
     assert "Recent history" in response.text
-    assert "Run bundles" in response.text
-    assert "Search reports" in response.text
-    assert "Report browser" in response.text
+    assert "Latest run bundles" in response.text
+    assert "Find saved files" in response.text
+    assert "Recent matching files" in response.text
     assert "View" in response.text
 
     view_response = client.post(
@@ -5847,16 +6320,96 @@ def test_history_and_report_center_show_run_bundle_links(client):
     history_response = client.get("/history")
     assert history_response.status_code == 200
     assert "Run bundles" in history_response.text
+    assert "Recent runs" in history_response.text
     assert "Open run summary" in history_response.text
     assert "Related reports" in history_response.text
 
     configs_response = client.get("/configs")
     assert configs_response.status_code == 200
-    assert "Live job and logs" in configs_response.text
     assert "Recent history" in configs_response.text
-    assert "Run bundles" in configs_response.text
+    assert "Latest run bundles" in configs_response.text
     assert "Open bundle" in configs_response.text
-    assert "Load a saved kit config" in configs_response.text
+    assert "Find saved files" in configs_response.text
+
+
+def test_report_center_collapses_large_raw_file_list_by_default(client):
+    cfg = main.default_config()
+    cfg["site"]["name"] = "Large Reports Kit"
+    main.save_kit_config(cfg)
+
+    for index in range(15):
+        folder = main.CONFIG_EXPORT_DIR / "Large-Reports-Kit" / f"set-{index:02d}"
+        folder.mkdir(parents=True, exist_ok=True)
+        (folder / f"config-{index:02d}.yml").write_text(f"item: {index}\n", encoding="utf-8")
+
+    response = client.get("/configs?report_type=config")
+
+    assert response.status_code == 200
+    assert "Recent matching files" in response.text
+    assert "Browse all matching files" in response.text
+    assert "15 matching files" in response.text
+
+
+def test_report_center_collapses_older_bundles_by_stage(client):
+    cfg = main.default_config()
+    cfg["site"]["name"] = "Bundle Summary Kit"
+    cfg["ilo"]["current_ip"] = "10.10.8.90"
+    cfg["ilo"]["host"] = "10.10.8.90"
+    main.save_kit_config(cfg)
+
+    main.save_history(
+        "Bundle Summary Kit",
+        [
+            {"time": "2026-04-24 10:30:00", "scope": "ilo", "status": "Completed", "current_stage": "Finished", "run_summary_path": "/tmp/ilo-new.yml", "config_summary": {"target_ip": "10.10.8.90"}},
+            {"time": "2026-04-24 09:00:00", "scope": "ilo", "status": "Failed", "current_stage": "Retry needed", "run_summary_path": "/tmp/ilo-old.yml", "config_summary": {"target_ip": "10.10.8.90"}},
+            {"time": "2026-04-24 08:00:00", "scope": "esxi", "status": "Completed", "current_stage": "Installed", "run_summary_path": "/tmp/esxi.yml", "config_summary": {"target_ip": "10.10.8.20"}},
+        ],
+    )
+
+    response = client.get("/configs")
+
+    assert response.status_code == 200
+    assert "Latest run bundles" in response.text
+    assert "Older runs" in response.text
+    assert response.text.count("iLO run") >= 2
+    assert "ESXi run" in response.text
+
+
+def test_report_center_shows_human_friendly_bundle_summary(client):
+    cfg = main.default_config()
+    cfg["site"]["name"] = "Friendly Bundle Kit"
+    main.save_kit_config(cfg)
+    main.save_history(
+        "Friendly Bundle Kit",
+        [
+            {
+                "time": "2026-04-24 10:30:00",
+                "scope": "ilo",
+                "status": "Completed",
+                "current_stage": "Finished",
+                "run_summary_path": "/tmp/ilo-friendly.yml",
+                "config_summary": {
+                    "login_ip": "10.10.8.90",
+                    "target_ip": "10.10.8.30",
+                    "dns_apply_status": "Verified",
+                    "snmp_apply_status": "Verified",
+                    "ilo_reset_status": "Completed",
+                    "ilo_final_ip_verified": True,
+                },
+            }
+        ],
+    )
+
+    response = client.get("/configs")
+
+    assert response.status_code == 200
+    assert "This run handled DNS verified, SNMP verified, iLO reset completed, final iLO IP verified." in response.text
+    assert "iLO IP 10.10.8.90 -&gt; 10.10.8.30" in response.text
+    assert "DNS Verified" in response.text
+    assert "SNMP Verified" in response.text
+    assert "iLO reset Completed" in response.text
+    assert "Full story:" in response.text
+    assert "Finished" in response.text
 
 
 def test_load_job_handles_partial_yaml_without_crashing():
@@ -5900,6 +6453,40 @@ def test_history_page_renders_boolean_config_summary_values(client):
     assert "Storage Included:" in response.text
     assert "Yes" in response.text
     assert "1.1.1.1, 8.8.8.8" in response.text
+
+
+def test_history_page_shows_human_friendly_run_summary(client):
+    cfg = main.default_config()
+    cfg["site"]["name"] = "History Friendly Kit"
+    main.save_kit_config(cfg)
+    main.append_history_entry(
+        "History Friendly Kit",
+        {
+            "time": "2026-04-24 10:30:00",
+            "scope": "ilo",
+            "status": "Completed",
+            "current_stage": "Finished",
+            "progress_percent": 100,
+            "completed_steps": 10,
+            "total_steps": 10,
+            "config_summary": {
+                "login_ip": "10.10.8.90",
+                "target_ip": "10.10.8.30",
+                "dns_apply_status": "Verified",
+                "snmp_apply_status": "Verified",
+                "ilo_reset_status": "Completed",
+                "ilo_final_ip_verified": True,
+            },
+        },
+    )
+
+    response = client.get("/history")
+
+    assert response.status_code == 200
+    assert "This run handled DNS verified, SNMP verified, iLO reset completed, final iLO IP verified." in response.text
+    assert "iLO IP 10.10.8.90 -&gt; 10.10.8.30" in response.text
+    assert "Full story:" in response.text
+    assert "Finished" in response.text
 
 
 def test_import_kit_config_loads_uploaded_config(client):

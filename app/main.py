@@ -116,10 +116,6 @@ PAGE_META = {
         "title": "Storage setup",
         "subtitle": "Read what is on the server, build the new layout, approve it, and send it into the real run.",
     },
-    "kits": {
-        "title": "Kits",
-        "subtitle": "Load existing kits or create a new kit.",
-    },
     "history": {
         "title": "History",
         "subtitle": "Review recent execution runs for the active kit.",
@@ -759,46 +755,6 @@ def live_inventory_export_metadata(export_paths: dict[str, Path]) -> dict[str, s
     }
 
 
-def build_live_inventory_status(
-    state: str,
-    title: str,
-    details: list[str] | None = None,
-    busy: bool = False,
-) -> dict:
-    if state == "Complete":
-        class_name = "ready"
-    elif state == "Failed":
-        class_name = "pending"
-    else:
-        class_name = "progress"
-
-    return {
-        "state": state,
-        "title": title,
-        "details": details or [],
-        "busy": busy,
-        "class_name": class_name,
-    }
-
-
-def live_inventory_success_status(title: str, export_paths: dict[str, Path], host: str = "", label: str = "") -> dict:
-    metadata = live_inventory_export_metadata(export_paths)
-    details = [
-        f"Export path: {Path(metadata['summary_path']).parent if metadata['summary_path'] else 'not set'}",
-        f"Summary file: {metadata['summary_path']}",
-        f"Raw file: {metadata['raw_path']}",
-        f"Label: {label or metadata['label'] or 'not set'}",
-        f"Host: {host or metadata['host'] or 'not set'}",
-    ]
-    return build_live_inventory_status("Complete", title, details)
-
-
-def live_inventory_failure_status(title: str, error: Exception | str) -> dict:
-    message = str(error).strip() or "The Live Inventory action failed."
-    message = message.splitlines()[0]
-    return build_live_inventory_status("Failed", title, [message])
-
-
 def live_inventory_download_headers(latest: dict[str, Path]) -> dict[str, str]:
     metadata = live_inventory_export_metadata(latest)
     return {
@@ -1294,82 +1250,6 @@ WORKFLOW_STATE_UI = {
 }
 
 
-PAGE_RUNBOOKS = {
-    "dashboard": {
-        "title": "Command center",
-        "what": "This page shows what is ready, what is stale, what is currently running, and the best next step.",
-        "before": "Set shared defaults first, then fill in the workflow pages that matter for this kit.",
-        "when_run": "Use this page to navigate. The real work happens on the workflow pages and in Run Center.",
-        "restart": "Restarts may be needed later if storage or iLO changes are included.",
-        "reports": "Recent activity, run history, and saved reports are available from the Dashboard, Run History, and Artifacts & Reports pages.",
-    },
-    "global_settings": {
-        "title": "Shared defaults",
-        "what": "This page sets the shared network, DNS, SNMP, and inclusion defaults used across the app.",
-        "before": "Set the kit name, shared subnet, and default addresses before tuning workflow pages.",
-        "when_run": "Saving here updates the shared defaults that other pages can inherit.",
-        "restart": "Saving defaults does not trigger a restart by itself.",
-        "reports": "The saved kit config and exported snapshots are available from Artifacts & Reports.",
-    },
-    "ilo": {
-        "title": "iLO setup",
-        "what": "This page controls the iLO target, sign-in details, and the settings that will be applied during an iLO run.",
-        "before": "Make sure the current iLO address and credentials are known before preparing the run.",
-        "when_run": "A real iLO run can change network settings, hostname, DNS, SNMP, and may request an iLO reset.",
-        "restart": "An iLO reset may happen as part of the run. Storage work may also require a server restart if included.",
-        "reports": "Current snapshots, run reviews, and resulting history entries are available from Artifacts & Reports and Run History.",
-    },
-    "storage": {
-        "title": "Storage planning",
-        "what": "This page reads current storage, builds a proposed layout, and lets you approve the exact plan for a later iLO run.",
-        "before": "Set the current iLO address and credentials first, then read the current storage before planning.",
-        "when_run": "Read and plan steps are safe. Storage apply and restart actions are destructive and use the approved plan exactly as saved.",
-        "restart": "A restart is often needed after staged storage changes.",
-        "reports": "Discovery exports, plan files, apply logs, and post-change results are saved under storage-raid exports and linked from this page.",
-    },
-    "esxi": {
-        "title": "ESXi prep",
-        "what": "This page stores the ESXi-specific hostname and credentials and compares them with the shared network defaults.",
-        "before": "Set the shared IP plan first so the ESXi target inherits the right address and gateway.",
-        "when_run": "The ESXi workflow uses the saved setup here plus generated install inputs like KS.CFG.",
-        "restart": "A real ESXi build can reboot the target.",
-        "reports": "Saved config exports and run history entries are available from Artifacts & Reports and Run History.",
-    },
-    "windows": {
-        "title": "Windows prep",
-        "what": "This page stores the Windows VM name, password, and inherited network target.",
-        "before": "Set the shared network plan first so the Windows target address is correct.",
-        "when_run": "The Windows workflow uses the saved VM and credential settings from this page.",
-        "restart": "A real Windows deployment may reboot as part of installation.",
-        "reports": "Saved config exports and run history entries are available from Artifacts & Reports and Run History.",
-    },
-    "qnap": {
-        "title": "QNAP prep",
-        "what": "This page stores the QNAP hostname and credentials along with the inherited target address.",
-        "before": "Set the shared IP plan first so the target address is correct.",
-        "when_run": "The QNAP workflow uses the saved local settings from this page.",
-        "restart": "A real QNAP setup may require a restart depending on the changes applied.",
-        "reports": "Saved config exports and run history entries are available from Artifacts & Reports and Run History.",
-    },
-    "execution": {
-        "title": "Run center",
-        "what": "This page is the final review and launch point for full-kit runs and single-stage runs.",
-        "before": "Make sure targets, credentials, and any required approved plans are ready before starting.",
-        "when_run": "This page shows the run review, validation checks, live progress, and the resulting history.",
-        "restart": "Restarts may happen if storage or iLO changes are included.",
-        "reports": "Detailed logs live in Run History and Artifacts & Reports.",
-    },
-    "configs": {
-        "title": "Artifacts and reports",
-        "what": "This page is the report center for saved snapshots, configs, and exported run artifacts.",
-        "before": "Run captures or setup actions first so there is something to browse.",
-        "when_run": "Use this page to view, search, open, and download reports without changing the kit state.",
-        "restart": "Viewing reports never requires a restart.",
-        "reports": "All exported snapshots and run artifacts are indexed here.",
-    },
-}
-
-
 def workflow_state_ui(state: str) -> dict[str, str]:
     return WORKFLOW_STATE_UI.get(state, {"label": state.replace("_", " ").title(), "tone": "pending"})
 
@@ -1587,7 +1467,7 @@ def _first_non_empty(*values: object) -> str:
     return ""
 
 
-def build_dashboard_hardware_identity(cfg: dict[str, Any]) -> dict[str, Any]:
+def build_hardware_identity(cfg: dict[str, Any]) -> dict[str, Any]:
     live_snapshot = load_latest_live_inventory_snapshot()
     storage_snapshot = load_latest_storage_discovery_snapshot(cfg)
 
@@ -1674,117 +1554,233 @@ def build_dashboard_hardware_identity(cfg: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def build_dashboard_timeline(
-    cfg: dict[str, Any],
-    workflow_contexts: dict[str, dict[str, Any]],
-    history: list[dict[str, Any]],
-    job: dict[str, Any],
-    hardware_identity: dict[str, Any],
-    latest_receipt: dict[str, Any] | None,
-) -> list[dict[str, str]]:
-    shared_subnet = str((cfg.get("shared_network", {}) or {}).get("subnet") or "").strip()
-    shared_gateway = str((cfg.get("ip_plan", {}) or {}).get("gateway") or "").strip()
-    ilo_cfg = cfg.get("ilo", {}) or {}
-    latest_real_run = next((item for item in history if item.get("kind") != "event"), None) or {}
+def build_ilo_advanced_profile(cfg: dict[str, Any]) -> dict[str, Any]:
+    live_snapshot = load_latest_live_inventory_snapshot()
+    if not live_snapshot:
+        return {
+            "available": False,
+            "detected_label": "No live iLO read yet",
+            "subtitle": "Read current iLO to load version-specific advanced options.",
+            "summary_fields": [],
+            "areas": [],
+            "raw_key_groups": [],
+        }
 
-    items: list[dict[str, str]] = [
-        {
-            "label": "Kit selected",
-            "status": "Active",
-            "tone": "ready",
-            "summary": f"Using kit {cfg.get('site', {}).get('name', '') or 'Kit-01'}.",
-            "href": "/dashboard",
-            "time": "",
-        },
-        {
-            "label": "Shared defaults",
-            "status": "Saved" if (shared_subnet and shared_gateway) else "Needs setup",
-            "tone": "ready" if (shared_subnet and shared_gateway) else "pending",
-            "summary": (
-                f"Subnet {shared_subnet} and gateway {shared_gateway} are ready."
-                if (shared_subnet and shared_gateway)
-                else "Save the shared subnet and gateway before moving deeper into the build."
-            ),
-            "href": "/global-settings",
-            "time": "",
-        },
-        {
-            "label": "iLO setup",
-            "status": workflow_contexts["ilo"]["state_label"],
-            "tone": workflow_contexts["ilo"]["tone"],
-            "summary": workflow_contexts["ilo"]["planned_summary"],
-            "href": "/ilo",
-            "time": str((latest_history_entry_for_scope(history, ["ilo"]) or {}).get("time") or ""),
-        },
-        {
-            "label": "Hardware identified",
-            "status": "Verified" if hardware_identity.get("discovered") else "Waiting",
-            "tone": "ready" if hardware_identity.get("discovered") else "pending",
-            "summary": hardware_identity.get("subtitle") or "No live identity has been captured yet.",
-            "href": "/ilo",
-            "time": "",
-        },
+    summary = live_snapshot.get("summary", {}) or {}
+    inventory = ((live_snapshot.get("raw", {}) or {}).get("inventory", {}) or {})
+    inventory_summary = inventory.get("summary", {}) or {}
+    inventory_raw = inventory.get("raw", {}) or {}
+    manager_summary = inventory_summary.get("manager", {}) or {}
+    manager_raw = inventory_raw.get("manager", {}) or {}
+    network_protocol = inventory_summary.get("network_protocol", {}) or {}
+    active_interface = inventory_summary.get("active_interface", {}) or {}
+    accounts = inventory_summary.get("accounts", []) or []
+    virtual_media = inventory_raw.get("virtual_media", []) or []
+    capability_dump = inventory_raw.get("capability_dump", {}) or {}
+    manager_interfaces = capability_dump.get("ethernet_interfaces") or []
+    snmp_obj = capability_dump.get("snmp_object") or network_protocol.get("snmp") or {}
+    snmp_keys = list(capability_dump.get("snmp_keys") or (sorted(snmp_obj.keys()) if isinstance(snmp_obj, dict) else []))
+    network_protocol_keys = list(capability_dump.get("network_protocol_keys") or [])
+    network_protocol_oem_hpe_keys = list(capability_dump.get("network_protocol_oem_hpe_keys") or [])
+    reset_target = str((((manager_raw.get("Actions") or {}).get("#Manager.Reset") or {}).get("target")) or "").strip()
+
+    def bool_label(value: bool) -> str:
+        return "Available" if value else "Not exposed"
+
+    def add_area(
+        name: str,
+        available: bool,
+        summary_text: str,
+        items: list[dict[str, str]],
+        detail_rows: list[dict[str, str]] | None = None,
+    ) -> dict[str, Any]:
+        return {
+            "name": name,
+            "status_label": "Detected" if available else "Not detected",
+            "status_tone": "ready" if available else "progress",
+            "summary": summary_text,
+            "items": [item for item in items if str(item.get("value") or "").strip()],
+            "detail_rows": [item for item in (detail_rows or []) if str(item.get("value") or "").strip()],
+        }
+
+    static_ipv4 = active_interface.get("ipv4_static_addresses") or active_interface.get("ipv4_addresses") or []
+    current_ips = ", ".join([str(item.get("Address") or "").strip() for item in static_ipv4 if str(item.get("Address") or "").strip()]) or "Not identified"
+    dns_keys_present = any(
+        key in network_protocol_keys
+        for key in ("NameServers", "StaticNameServers")
+    ) or any(
+        key in (manager_interfaces[0].get("keys", []) if manager_interfaces else [])
+        for key in ("NameServers", "StaticNameServers")
+    )
+    dns_values = ", ".join(active_interface.get("static_name_servers") or active_interface.get("name_servers") or []) or "Not identified"
+    snmp_v3_keys = [key for key in snmp_keys if "v3" in key.lower()]
+    snmp_legacy_keys = [key for key in snmp_keys if "v1" in key.lower() or "v2" in key.lower()]
+    vm_insert = sum(1 for item in virtual_media if ((item.get("Actions") or {}).get("#VirtualMedia.InsertMedia") or {}).get("target"))
+    vm_eject = sum(1 for item in virtual_media if ((item.get("Actions") or {}).get("#VirtualMedia.EjectMedia") or {}).get("target"))
+    account_names = ", ".join([str(item.get("username") or "").strip() for item in accounts if str(item.get("username") or "").strip()][:5]) or "Not identified"
+    vlan_supported = any("VLAN" in (item.get("keys") or []) or item.get("vlan") for item in manager_interfaces)
+    ipv6_supported = any("IPv6Addresses" in (item.get("keys") or []) for item in manager_interfaces)
+
+    areas = [
+        add_area(
+            "Network identity and DNS",
+            bool(network_protocol or active_interface),
+            f"Hostname, address, gateway, and DNS options detected on the active iLO interface at {current_ips}.",
+            [
+                {"label": "Current hostname", "value": str(active_interface.get("hostname") or network_protocol.get("hostname") or "Not identified")},
+                {"label": "Current IP addresses", "value": current_ips},
+                {"label": "Current DNS servers", "value": dns_values},
+                {"label": "Static DNS keys", "value": bool_label(dns_keys_present)},
+                {"label": "ManagerNetworkProtocol path", "value": str(capability_dump.get("network_protocol_path") or manager_summary.get("path") or "")},
+            ],
+            detail_rows=[
+                {"label": "Current FQDN", "value": str(active_interface.get("fqdn") or network_protocol.get("fqdn") or "Not identified")},
+                {"label": "IPv4 static entries", "value": str(len(static_ipv4))},
+                {"label": "DHCPv4", "value": str((active_interface.get("dhcpv4") or {}).get("DHCPEnabled", "Not identified"))},
+                {"label": "Network protocol keys", "value": ", ".join(network_protocol_keys) or "Not detected"},
+                {"label": "Network OEM HPE keys", "value": ", ".join(network_protocol_oem_hpe_keys) or "Not detected"},
+            ],
+        ),
+        add_area(
+            "SNMP and alerts",
+            bool(snmp_obj or snmp_keys),
+            "These are the SNMP controls the last live iLO read exposed for this firmware version.",
+            [
+                {"label": "Detected SNMP keys", "value": ", ".join(snmp_keys) or "Not exposed"},
+                {"label": "SNMPv3 controls", "value": bool_label(bool(snmp_v3_keys))},
+                {"label": "Legacy SNMP controls", "value": bool_label(bool(snmp_legacy_keys))},
+                {"label": "Current SNMPv3 username", "value": str(snmp_obj.get("SNMPv3Username") or snmp_obj.get("SNMPv3UserName") or snmp_obj.get("Username") or snmp_obj.get("UserName") or "Not identified")},
+            ],
+            detail_rows=[
+                {"label": "SNMP protocol enabled", "value": str(snmp_obj.get("ProtocolEnabled", "Not identified"))},
+                {"label": "SNMPv1 enabled", "value": str(snmp_obj.get("SNMPv1Enabled", "Not identified"))},
+                {"label": "SNMPv2c enabled", "value": str(snmp_obj.get("SNMPv2cEnabled", "Not identified"))},
+                {"label": "SNMPv3 enabled", "value": str(snmp_obj.get("SNMPv3Enabled", "Not identified"))},
+                {"label": "SNMP object path", "value": str(capability_dump.get("network_protocol_path") or "")},
+            ],
+        ),
+        add_area(
+            "Local accounts and roles",
+            bool(accounts),
+            f"The last live iLO read found {len(accounts)} local account(s) on this controller.",
+            [
+                {"label": "Detected local accounts", "value": str(len(accounts))},
+                {"label": "Account names", "value": account_names},
+                {"label": "Account collection", "value": bool_label(bool(inventory_raw.get("account_service")))},
+            ],
+            detail_rows=[
+                {"label": f"Account {index + 1}", "value": f"{item.get('username') or 'Unknown'} | role {item.get('role') or 'Unknown'}"}
+                for index, item in enumerate(accounts[:8])
+            ],
+        ),
+        add_area(
+            "Manager reset",
+            bool(reset_target),
+            "This shows whether the current iLO firmware exposed a direct Manager.Reset action.",
+            [
+                {"label": "Manager reset action", "value": reset_target or "Not exposed"},
+            ],
+            detail_rows=[
+                {"label": "Detected manager model", "value": str(manager_summary.get("model") or manager_raw.get("Model") or "Not identified")},
+                {"label": "Detected manager firmware", "value": str(manager_summary.get("firmware") or manager_raw.get("FirmwareVersion") or "Not identified")},
+            ],
+        ),
+        add_area(
+            "Virtual media and remote install",
+            bool(virtual_media),
+            f"The last live iLO read found {len(virtual_media)} virtual media device(s).",
+            [
+                {"label": "Virtual media devices", "value": str(len(virtual_media)) if virtual_media else "None detected"},
+                {"label": "Insert media actions", "value": str(vm_insert) if virtual_media else ""},
+                {"label": "Eject media actions", "value": str(vm_eject) if virtual_media else ""},
+            ],
+            detail_rows=[
+                {
+                    "label": f"Virtual media {index + 1}",
+                    "value": (
+                        f"{item.get('Name') or item.get('Id') or 'Unknown'}"
+                        f" | inserted={item.get('Inserted', 'Not identified')}"
+                        f" | image={item.get('Image') or '(none)'}"
+                    ),
+                }
+                for index, item in enumerate(virtual_media[:8])
+            ],
+        ),
+        add_area(
+            "Interface features",
+            bool(manager_interfaces),
+            f"The last live iLO read found {len(manager_interfaces)} manager interface capability set(s).",
+            [
+                {"label": "Manager interfaces", "value": str(len(manager_interfaces)) if manager_interfaces else ""},
+                {"label": "VLAN controls", "value": bool_label(vlan_supported)},
+                {"label": "IPv6 controls", "value": bool_label(ipv6_supported)},
+                {"label": "Network OEM HPE keys", "value": ", ".join(network_protocol_oem_hpe_keys) or "None detected"},
+            ],
+            detail_rows=[
+                {
+                    "label": f"Interface {index + 1}",
+                    "value": (
+                        f"{item.get('path') or 'Unknown path'}"
+                        f" | host={item.get('host_name') or 'Unknown'}"
+                        f" | link={item.get('link_status') or 'Unknown'}"
+                    ),
+                }
+                for index, item in enumerate(manager_interfaces[:8])
+            ] + [
+                {
+                    "label": f"Interface {index + 1} keys",
+                    "value": ", ".join(item.get("keys") or []) or "Not detected",
+                }
+                for index, item in enumerate(manager_interfaces[:4])
+            ],
+        ),
     ]
 
-    if cfg.get("included", {}).get("storage"):
-        items.append(
-            {
-                "label": "Storage plan",
-                "status": workflow_contexts["storage"]["state_label"],
-                "tone": workflow_contexts["storage"]["tone"],
-                "summary": workflow_contexts["storage"]["approved_summary"] if workflow_contexts["storage"].get("approved") else workflow_contexts["storage"]["current_summary"],
-                "href": "/storage",
-                "time": str((latest_history_entry_for_scope(history, ["storage-apply", "storage-reboot"]) or {}).get("time") or ""),
-            }
-        )
+    raw_key_groups: list[dict[str, Any]] = []
+    if network_protocol_keys:
+        raw_key_groups.append({"label": "ManagerNetworkProtocol keys", "values": network_protocol_keys})
+    if snmp_keys:
+        raw_key_groups.append({"label": "SNMP keys", "values": snmp_keys})
+    if network_protocol_oem_hpe_keys:
+        raw_key_groups.append({"label": "ManagerNetworkProtocol OEM HPE keys", "values": network_protocol_oem_hpe_keys})
+    for index, item in enumerate(manager_interfaces, start=1):
+        interface_keys = list(item.get("keys") or [])
+        if interface_keys:
+            raw_key_groups.append(
+                {
+                    "label": f"Manager interface {index} keys",
+                    "values": interface_keys,
+                }
+            )
+        interface_oem_keys = list(item.get("oem_hpe_keys") or [])
+        if interface_oem_keys:
+            raw_key_groups.append(
+                {
+                    "label": f"Manager interface {index} OEM HPE keys",
+                    "values": interface_oem_keys,
+                }
+            )
 
-    if cfg.get("included", {}).get("esxi"):
-        items.append(
-            {
-                "label": "ESXi setup",
-                "status": workflow_contexts["esxi"]["state_label"],
-                "tone": workflow_contexts["esxi"]["tone"],
-                "summary": workflow_contexts["esxi"]["planned_summary"],
-                "href": "/esxi",
-                "time": str((latest_history_entry_for_scope(history, ["esxi"]) or {}).get("time") or ""),
-            }
-        )
+    detected_label = _first_non_empty(
+        manager_summary.get("model"),
+        inventory_raw.get("manager", {}).get("Model"),
+        summary.get("ilo_hostname"),
+    ) or "Detected iLO"
 
-    job_status = str(job.get("status") or "")
-    if job_status not in {"", "Idle"}:
-        items.append(
-            {
-                "label": "Live run",
-                "status": job_status,
-                "tone": "progress" if job_status not in {"Completed", "Complete", "Preview complete"} else "ready",
-                "summary": str(job.get("current_stage") or "The app is working through the active run."),
-                "href": "/execution",
-                "time": "",
-            }
-        )
-    else:
-        items.append(
-            {
-                "label": "Latest run",
-                "status": str((latest_receipt or {}).get("result") or "Not run yet"),
-                "tone": str((latest_receipt or {}).get("tone") or "pending"),
-                "summary": str((latest_receipt or {}).get("human_summary") or "No completed run has been recorded yet."),
-                "href": "/execution",
-                "time": str(latest_real_run.get("time") or ""),
-            }
-        )
+    summary_fields = [
+        {"label": "Detected iLO", "value": detected_label},
+        {"label": "Firmware", "value": _first_non_empty(summary.get("ilo_firmware_version"), manager_summary.get("firmware"), inventory_raw.get("manager", {}).get("FirmwareVersion")) or "Not identified"},
+        {"label": "Source", "value": _first_non_empty(summary.get("current_ilo_ip"), cfg.get("ilo", {}).get("current_ip"), cfg.get("ilo", {}).get("host")) or "Not set"},
+        {"label": "Last live read", "value": str(summary.get("export_timestamp") or "Not recorded")},
+    ]
 
-    return items
-
-
-def build_dashboard_latest_receipt(cfg: dict[str, Any], history: list[dict[str, Any]]) -> dict[str, Any] | None:
-    bundles = build_run_bundles(cfg, history)
-    if not bundles:
-        return None
-    bundle = bundles[0]
     return {
-        **bundle,
-        "cta_label": "Open log" if bundle.get("run_summary_path") else "",
+        "available": True,
+        "detected_label": detected_label,
+        "subtitle": "Detected from the latest live iLO read for this app. Read current iLO again after a firmware change to refresh this list.",
+        "summary_fields": summary_fields,
+        "areas": areas,
+        "raw_key_groups": raw_key_groups,
     }
 
 
@@ -1827,6 +1823,141 @@ def build_live_job_story(job: dict[str, Any]) -> dict[str, str]:
     }
 
 
+def build_live_stage_cards(job: dict[str, Any]) -> list[dict[str, Any]]:
+    cards: list[dict[str, Any]] = []
+    scope = str(job.get("scope") or "")
+    stage_text = str(job.get("current_stage") or "").lower()
+
+    def tone_for(value: str, *, positive: set[str] | None = None, negative: set[str] | None = None) -> str:
+        value_norm = str(value or "").strip().lower()
+        positive = positive or {"verified", "completed", "already correct", "not required", "requested", "mounted"}
+        negative = negative or {"failed", "mismatch", "blocked", "skipped"}
+        if value_norm in positive:
+            return "ready"
+        if value_norm in negative:
+            return "pending"
+        return "progress"
+
+    def add_card(name: str, status_label: str, status_tone: str, summary: str, detail_rows: list[dict[str, str]]) -> None:
+        if not detail_rows:
+            return
+        cards.append(
+            {
+                "name": name,
+                "status_label": status_label,
+                "status_tone": status_tone,
+                "summary": summary,
+                "detail_rows": detail_rows,
+            }
+        )
+
+    dns_status = str(job.get("dns_apply_status") or "").strip()
+    snmp_status = str(job.get("snmp_apply_status") or "").strip()
+    reset_status = str(job.get("ilo_reset_status") or "").strip()
+    local_account_status = str(job.get("local_account_status") or "").strip()
+    final_ip_verified = bool(job.get("ilo_final_ip_verified"))
+    ilo_rows: list[dict[str, str]] = []
+    if dns_status:
+        ilo_rows.append({"label": "DNS status", "value": dns_status})
+    if snmp_status:
+        ilo_rows.append({"label": "SNMP status", "value": snmp_status})
+    if local_account_status:
+        ilo_rows.append({"label": "Local accounts", "value": local_account_status})
+    if reset_status:
+        ilo_rows.append({"label": "iLO reset", "value": reset_status})
+    if "ilo_final_ip_verified" in job:
+        ilo_rows.append({"label": "Final iLO IP", "value": "Verified" if final_ip_verified else "Waiting for verification"})
+    if job.get("target_ip"):
+        ilo_rows.append({"label": "Target iLO IP", "value": str(job.get("target_ip"))})
+    if job.get("login_ip"):
+        ilo_rows.append({"label": "Login iLO IP", "value": str(job.get("login_ip"))})
+    if ilo_rows or "ilo" in scope or "ilo" in stage_text:
+        if reset_status:
+            ilo_status = reset_status
+        elif snmp_status:
+            ilo_status = snmp_status
+        elif dns_status:
+            ilo_status = dns_status
+        else:
+            ilo_status = "In progress" if job.get("status") not in {"Idle", "Complete", "Completed", "Preview complete"} else "Waiting"
+        ilo_summary_parts = []
+        if dns_status:
+            ilo_summary_parts.append(f"DNS {dns_status.lower()}")
+        if snmp_status:
+            ilo_summary_parts.append(f"SNMP {snmp_status.lower()}")
+        if reset_status:
+            ilo_summary_parts.append(f"iLO reset {reset_status.lower()}")
+        if final_ip_verified:
+            ilo_summary_parts.append("final IP verified")
+        ilo_summary = ", ".join(ilo_summary_parts) if ilo_summary_parts else "iLO checks will appear here while the run is active."
+        add_card("iLO", ilo_status, tone_for(ilo_status), ilo_summary, ilo_rows)
+
+    storage_reboot_status = str(job.get("storage_server_reboot_status") or "").strip()
+    storage_rows: list[dict[str, str]] = []
+    if job.get("apply_path"):
+        storage_rows.append({"label": "Apply artifact", "value": str(job.get("apply_path"))})
+    if job.get("workflow_state"):
+        storage_rows.append({"label": "Workflow state", "value": str(job.get("workflow_state"))})
+    if "reboot_required" in job:
+        storage_rows.append({"label": "Server reboot required", "value": "Yes" if bool(job.get("reboot_required")) else "No"})
+    if storage_reboot_status:
+        storage_rows.append({"label": "Server reboot status", "value": storage_reboot_status})
+    if storage_rows or "storage" in scope or "storage" in stage_text:
+        storage_status = storage_reboot_status or workflow_state_ui(str(job.get("workflow_state") or "idle")).get("label", "Waiting")
+        storage_summary = (
+            f"Storage workflow is at {str(job.get('workflow_state') or 'idle').replace('_', ' ')}."
+            if job.get("workflow_state")
+            else "Storage progress and restart checks will appear here while the run is active."
+        )
+        add_card("Storage", storage_status, tone_for(storage_status), storage_summary, storage_rows)
+
+    esxi_rows: list[dict[str, str]] = []
+    if job.get("esxi_iso_path"):
+        esxi_rows.append({"label": "Built ISO path", "value": str(job.get("esxi_iso_path"))})
+    if job.get("esxi_iso_url"):
+        esxi_rows.append({"label": "Virtual media URL", "value": str(job.get("esxi_iso_url"))})
+    if job.get("esxi_expected_ip"):
+        esxi_rows.append({"label": "Expected ESXi IP", "value": str(job.get("esxi_expected_ip"))})
+    if job.get("esxi_trace_path"):
+        esxi_rows.append({"label": "Technical trace", "value": str(job.get("esxi_trace_path"))})
+    boot_override = job.get("esxi_boot_override") or {}
+    if isinstance(boot_override, dict):
+        after_enabled = str(boot_override.get("after_enabled") or "")
+        after_target = str(boot_override.get("after_target") or "")
+        matched = boot_override.get("matched")
+        if after_enabled or after_target or matched is not None:
+            boot_value = f"{after_enabled or '(unknown)'} / {after_target or '(unknown)'}"
+            if matched is False:
+                boot_value += " (best effort only)"
+            esxi_rows.append({"label": "Boot override readback", "value": boot_value})
+    mgmt_network = job.get("esxi_management_network") or {}
+    if isinstance(mgmt_network, dict) and mgmt_network:
+        reachability = str(mgmt_network.get("status") or mgmt_network.get("result") or "")
+        if reachability:
+            esxi_rows.append({"label": "Management reachability", "value": reachability})
+    if esxi_rows or "esxi" in scope or "esxi" in stage_text:
+        esxi_status = "In progress"
+        if isinstance(mgmt_network, dict):
+            reachability = str(mgmt_network.get("status") or mgmt_network.get("result") or "").strip()
+            if reachability:
+                esxi_status = reachability
+        elif job.get("esxi_iso_path"):
+            esxi_status = "Built"
+        esxi_summary_parts = []
+        if job.get("esxi_iso_path"):
+            esxi_summary_parts.append("custom ISO built")
+        if job.get("esxi_iso_url"):
+            esxi_summary_parts.append("virtual media prepared")
+        if isinstance(mgmt_network, dict):
+            reachability = str(mgmt_network.get("status") or mgmt_network.get("result") or "").strip()
+            if reachability:
+                esxi_summary_parts.append(f"management reachability {reachability.lower()}")
+        esxi_summary = ", ".join(esxi_summary_parts) if esxi_summary_parts else "ESXi build and boot checks will appear here while the run is active."
+        add_card("ESXi", esxi_status, tone_for(esxi_status, positive={"reachable", "connected", "built", "verified", "mounted"}, negative={"failed", "timeout", "unreachable"}), esxi_summary, esxi_rows)
+
+    return cards
+
+
 def latest_scope_receipt(cfg: dict[str, Any], history: list[dict[str, Any]], scopes: list[str]) -> dict[str, Any] | None:
     scope_set = set(scopes)
     for bundle in build_run_bundles(cfg, history):
@@ -1836,95 +1967,6 @@ def latest_scope_receipt(cfg: dict[str, Any], history: list[dict[str, Any]], sco
                 "cta_label": "Open log" if bundle.get("run_summary_path") else "",
             }
     return None
-
-
-def build_ilo_page_readiness(
-    cfg: dict[str, Any],
-    latest_ilo_receipt: dict[str, Any] | None,
-    storage_execution_status: dict[str, Any],
-) -> list[dict[str, str]]:
-    ilo_cfg = cfg.get("ilo", {}) or {}
-    current_ip = str(ilo_cfg.get("current_ip") or ilo_cfg.get("host") or "").strip()
-    username = str(ilo_cfg.get("username") or "").strip()
-    password = str(ilo_cfg.get("password") or "")
-    shared_subnet = str((cfg.get("shared_network", {}) or {}).get("subnet") or "").strip()
-    shared_gateway = str((cfg.get("ip_plan", {}) or {}).get("gateway") or "").strip()
-    latest_summary = str((latest_ilo_receipt or {}).get("human_summary") or "")
-    items = [
-        {
-            "label": "Current endpoint",
-            "status": "Saved" if current_ip else "Needs setup",
-            "tone": "ready" if current_ip else "pending",
-            "summary": current_ip or "Save the iLO address the server is using right now.",
-        },
-        {
-            "label": "Sign-in",
-            "status": "Ready" if (username and password) else "Needs setup",
-            "tone": "ready" if (username and password) else "pending",
-            "summary": username if (username and password) else "Save the iLO username and password before you run.",
-        },
-        {
-            "label": "Shared network defaults",
-            "status": "Ready" if (shared_subnet and shared_gateway) else "Needs setup",
-            "tone": "ready" if (shared_subnet and shared_gateway) else "pending",
-            "summary": (
-                f"{shared_subnet} | gateway {shared_gateway}"
-                if (shared_subnet and shared_gateway)
-                else "Save the shared subnet and gateway in Global Settings."
-            ),
-        },
-        {
-            "label": "Last verified iLO run",
-            "status": str((latest_ilo_receipt or {}).get("result") or "Not run yet"),
-            "tone": str((latest_ilo_receipt or {}).get("tone") or "pending"),
-            "summary": latest_summary or "No iLO run has been recorded yet.",
-        },
-        {
-            "label": "Storage handoff",
-            "status": str(storage_execution_status.get("badge") or "Not ready"),
-            "tone": str(storage_execution_status.get("tone") or "pending"),
-            "summary": str(storage_execution_status.get("summary") or ""),
-        },
-    ]
-    return items
-
-
-def build_ilo_change_summary(cfg: dict[str, Any]) -> list[dict[str, str]]:
-    ilo_cfg = cfg.get("ilo", {}) or {}
-    dns_values = [x for x in cfg.get("shared_network", {}).get("dns_servers", []) if x and str(x).strip()]
-    additional_users = ilo_cfg.get("additional_users", []) or []
-    shared_snmp = cfg.get("shared_snmp", {}) or {}
-    return [
-        {
-            "name": "Endpoint",
-            "before": f"Current iLO IP {ilo_cfg.get('current_ip') or ilo_cfg.get('host') or 'Not set'}",
-            "after": f"Final iLO IP {ilo_cfg.get('target_ip') or cfg.get('ip_plan', {}).get('ilo') or 'Not set'}",
-            "verify": "Reconnect to the final iLO endpoint after any required reset.",
-        },
-        {
-            "name": "Network settings",
-            "before": f"Using shared gateway {cfg.get('ip_plan', {}).get('gateway') or 'Not set'}",
-            "after": (
-                f"Gateway {ilo_cfg.get('gateway') or cfg.get('ip_plan', {}).get('gateway') or 'Not set'}"
-                f" | hostname {ilo_cfg.get('hostname') or 'Unchanged'}"
-                f" | DNS {', '.join(dns_values) or 'Not set'}"
-            ),
-            "verify": "Read back hostname, gateway, and DNS after the iLO stage finishes.",
-        },
-        {
-            "name": "Security and users",
-            "before": f"Primary user {ilo_cfg.get('username') or 'Not set'}",
-            "after": (
-                f"SNMPv3 user {shared_snmp.get('v3_username') or 'Not set'}"
-                f" | auth {shared_snmp.get('v3_auth_protocol', 'SHA')}"
-                f" | privacy {shared_snmp.get('v3_priv_protocol', 'AES')}"
-                f" | extra iLO users {len(additional_users)}"
-            ),
-            "verify": "Verify SNMP and user changes without exposing the saved secrets.",
-        },
-    ]
-
-
 def build_storage_page_readiness(
     storage_review: dict[str, Any],
     storage_target: dict[str, Any],
@@ -2048,103 +2090,93 @@ def build_esxi_page_review(cfg: dict[str, Any]) -> dict[str, Any]:
     return review
 
 
-def build_esxi_page_readiness(
-    cfg: dict[str, Any],
-    esxi_review: dict[str, Any],
-    latest_esxi_receipt: dict[str, Any] | None,
-) -> list[dict[str, str]]:
-    shared_subnet = str((cfg.get("shared_network", {}) or {}).get("subnet") or "").strip()
-    dns_values = [str(item).strip() for item in (esxi_review.get("dns_servers") or []) if str(item).strip()]
-    password_saved = bool(esxi_review.get("root_password_saved"))
-    policy_valid = bool(esxi_review.get("root_password_policy_valid"))
-    return [
-        {
-            "label": "Install target",
-            "status": "Ready" if (esxi_review.get("hostname") and esxi_review.get("management_ip")) else "Needs setup",
-            "tone": "ready" if (esxi_review.get("hostname") and esxi_review.get("management_ip")) else "pending",
-            "summary": (
-                f"{esxi_review.get('hostname')} | {esxi_review.get('management_ip')}"
-                if (esxi_review.get("hostname") and esxi_review.get("management_ip"))
-                else "Save the ESXi host name and final management IP."
-            ),
-        },
-        {
-            "label": "Shared network defaults",
-            "status": "Ready" if (shared_subnet and esxi_review.get("gateway")) else "Needs setup",
-            "tone": "ready" if (shared_subnet and esxi_review.get("gateway")) else "pending",
-            "summary": (
-                f"{shared_subnet} | gateway {esxi_review.get('gateway')} | DNS {', '.join(dns_values) or 'Not set'}"
-                if (shared_subnet and esxi_review.get("gateway"))
-                else "Save the shared subnet, gateway, and DNS in Global Settings."
-            ),
-        },
-        {
-            "label": "Installer source",
-            "status": "Ready" if esxi_review.get("base_iso_ready") else "Needs setup",
-            "tone": "ready" if esxi_review.get("base_iso_ready") else "pending",
-            "summary": str(esxi_review.get("base_iso_path") or esxi_review.get("base_iso_error") or "No base installer ISO is available yet."),
-        },
-        {
-            "label": "Install secret",
-            "status": "Ready" if (password_saved and policy_valid) else "Needs review" if password_saved else "Needs setup",
-            "tone": "ready" if (password_saved and policy_valid) else "pending",
-            "summary": (
-                f"Root password saved | policy-valid={'yes' if policy_valid else 'no'}"
-                if password_saved
-                else "Save the ESXi root password before the real run."
-            ),
-        },
-        {
-            "label": "Last verified ESXi run",
-            "status": str((latest_esxi_receipt or {}).get("result") or "Not run yet"),
-            "tone": str((latest_esxi_receipt or {}).get("tone") or "pending"),
-            "summary": str((latest_esxi_receipt or {}).get("human_summary") or "No ESXi run has been recorded yet."),
-        },
+def build_esxi_advanced_profile(cfg: dict[str, Any], review: dict[str, Any] | None = None) -> dict[str, Any]:
+    review = dict(review or build_esxi_page_review(cfg) or {})
+
+    def yes_no(value: bool) -> str:
+        return "Yes" if value else "No"
+
+    missing_fields = list(review.get("missing_fields") or [])
+    summary_fields = [
+        {"label": "Source", "value": str(review.get("source_label") or "Saved kit values")},
+        {"label": "Base ISO ready", "value": "Ready" if review.get("base_iso_ready") else "Missing"},
+        {"label": "Root password saved", "value": yes_no(bool(review.get("root_password_saved")))},
+        {"label": "Run stamp", "value": str(review.get("run_stamp") or "Not set")},
     ]
 
+    def area(name: str, status_label: str, tone: str, summary: str, items: list[dict[str, str]], detail_rows: list[dict[str, str]] | None = None) -> dict[str, Any]:
+        return {
+            "name": name,
+            "status_label": status_label,
+            "status_tone": tone,
+            "summary": summary,
+            "items": [item for item in items if str(item.get("value") or "").strip()],
+            "detail_rows": [item for item in (detail_rows or []) if str(item.get("value") or "").strip()],
+        }
 
-def build_esxi_change_summary(esxi_review: dict[str, Any]) -> list[dict[str, str]]:
-    dns_values = ", ".join(esxi_review.get("dns_servers") or []) or "Not set"
-    return [
-        {
-            "name": "Install network",
-            "before": (
-                f"Saved hostname {esxi_review.get('hostname') or 'Not set'}"
-                f" | target IP {esxi_review.get('management_ip') or 'Not set'}"
-            ),
-            "after": (
-                f"Subnet {esxi_review.get('subnet_mask') or 'Not set'}"
-                f" | gateway {esxi_review.get('gateway') or 'Not set'}"
-                f" | DNS {dns_values}"
-            ),
-            "verify": "Build the installer from these saved values and wait for ESXi to answer on the target IP.",
-        },
-        {
-            "name": "Installer media",
-            "before": esxi_review.get("base_iso_path") or esxi_review.get("base_iso_error") or "Base installer source not ready yet.",
-            "after": (
-                f"Built ISO {esxi_review.get('output_iso_path') or 'Pending'}"
-                f" | URL {esxi_review.get('virtual_media_url') or 'Pending'}"
-            ),
-            "verify": "Build the custom installer ISO and log the exact ISO path and virtual media URL used.",
-        },
-        {
-            "name": "Access and services",
-            "before": (
-                f"Root password {'saved' if esxi_review.get('root_password_saved') else 'missing'}"
-                f" | policy-valid={'yes' if esxi_review.get('root_password_policy_valid') else 'no'}"
-            ),
-            "after": (
-                f"SSH {'enabled' if esxi_review.get('enable_ssh') else 'disabled'}"
-                f" | IPv6 {'disabled' if esxi_review.get('disable_ipv6') else 'enabled'}"
-                f" | VLAN {esxi_review.get('vlan_id') or 'None'}"
-                f" | NTP {esxi_review.get('ntp_server') or 'Not set'}"
-            ),
-            "verify": "Run Center uses the saved kit values only. Manual test defaults are not part of the real ESXi run.",
-        },
+    areas = [
+        area(
+            "Installer identity",
+            "Ready" if review.get("hostname") and review.get("management_ip") else "Needs values",
+            "ready" if review.get("hostname") and review.get("management_ip") else "pending",
+            "These are the main ESXi identity values the app will bake into the installer.",
+            [
+                {"label": "Hostname", "value": str(review.get("hostname") or "Not set")},
+                {"label": "Management IP", "value": str(review.get("management_ip") or "Not set")},
+                {"label": "Subnet mask", "value": str(review.get("subnet_mask") or "Not set")},
+                {"label": "Gateway", "value": str(review.get("gateway") or "Not set")},
+                {"label": "DNS servers", "value": ", ".join(review.get("dns_servers") or []) or "Not set"},
+            ],
+        ),
+        area(
+            "Install services",
+            "Ready" if review.get("root_password_saved") else "Needs values",
+            "ready" if review.get("root_password_saved") else "pending",
+            "These are the service and policy choices the builder will include for this ESXi install.",
+            [
+                {"label": "Root password saved", "value": yes_no(bool(review.get("root_password_saved")))},
+                {"label": "Password policy looks valid", "value": yes_no(bool(review.get("root_password_policy_valid"))) if review.get("root_password_saved") else "Not checked"},
+                {"label": "VLAN ID", "value": str(review.get("vlan_id") or "Not set")},
+                {"label": "NTP server", "value": str(review.get("ntp_server") or "Not set")},
+                {"label": "Enable SSH", "value": yes_no(bool(review.get("enable_ssh")))},
+                {"label": "Disable IPv6", "value": yes_no(bool(review.get("disable_ipv6")))},
+            ],
+        ),
+        area(
+            "Build artifacts",
+            "Ready" if review.get("base_iso_ready") else "Blocked",
+            "ready" if review.get("base_iso_ready") else "pending",
+            "These are the file paths and mount source the app will use during the real ESXi run.",
+            [
+                {"label": "Base ISO path", "value": str(review.get("base_iso_path") or review.get("base_iso_error") or "Not set")},
+                {"label": "Built ISO path", "value": str(review.get("output_iso_path") or "Not set")},
+                {"label": "Virtual media URL", "value": str(review.get("virtual_media_url") or "Not set")},
+                {"label": "Manual test defaults", "value": str(review.get("manual_defaults_label") or "Not set")},
+            ],
+        ),
+        area(
+            "Readiness",
+            "Ready" if not missing_fields and review.get("base_iso_ready") else "Needs attention",
+            "ready" if not missing_fields and review.get("base_iso_ready") else "pending",
+            "This shows whether the saved values are complete enough for Run Center to build and launch the installer.",
+            [
+                {"label": "Missing required values", "value": ", ".join(missing_fields) or "None"},
+                {"label": "Base ISO status", "value": "Ready" if review.get("base_iso_ready") else str(review.get("base_iso_error") or "Missing")},
+            ],
+            detail_rows=[
+                {"label": "Source label", "value": str(review.get("source_label") or "Not set")},
+                {"label": "Run stamp", "value": str(review.get("run_stamp") or "Not set")},
+            ],
+        ),
     ]
 
-
+    return {
+        "available": True,
+        "detected_label": "Saved install profile",
+        "subtitle": "These values come from the current kit and the ESXi builder path the app will use in Run Center.",
+        "summary_fields": summary_fields,
+        "areas": areas,
+    }
 def validation_check(
     label: str,
     ok: bool,
@@ -2429,53 +2461,6 @@ def build_workflow_contexts(cfg: dict[str, Any], job: dict[str, Any], history: l
     return contexts
 
 
-def build_page_comparisons(cfg: dict[str, Any], workflow_contexts: dict[str, dict[str, Any]], history: list[dict[str, Any]]) -> dict[str, list[dict[str, str]]]:
-    latest_ilo = latest_history_entry_for_scope(history, ["ilo"]) or {}
-    latest_storage = latest_history_entry_for_scope(history, ["storage-apply", "storage-reboot"]) or {}
-    latest_ilo_cfg = latest_ilo.get("config_summary", {}) or {}
-    ilo_result_parts = [latest_ilo.get("status") or "No iLO run recorded yet."]
-    if latest_ilo_cfg.get("dns_apply_status"):
-        ilo_result_parts.append(f"DNS {latest_ilo_cfg.get('dns_apply_status')}")
-    if latest_ilo_cfg.get("snmp_apply_status"):
-        ilo_result_parts.append(f"SNMP {latest_ilo_cfg.get('snmp_apply_status')}")
-    if latest_ilo_cfg.get("ilo_reset_status"):
-        ilo_result_parts.append(f"iLO reset {latest_ilo_cfg.get('ilo_reset_status')}")
-    if latest_ilo_cfg.get("storage_server_reboot_status"):
-        ilo_result_parts.append(f"Storage reboot {latest_ilo_cfg.get('storage_server_reboot_status')}")
-    return {
-        "ilo": [
-            {"label": "Current", "value": (cfg.get("ilo", {}).get("current_ip") or cfg.get("ilo", {}).get("host") or "Not set")},
-            {"label": "Planned", "value": f"IP {cfg.get('ilo', {}).get('target_ip') or 'Unchanged'} | gateway {cfg.get('ilo', {}).get('gateway') or 'Unchanged'} | hostname {cfg.get('ilo', {}).get('hostname') or 'Unchanged'}"},
-            {"label": "Approved", "value": "iLO uses the saved settings on this page directly."},
-            {"label": "Result", "value": " | ".join(ilo_result_parts)},
-        ],
-        "storage": [
-            {"label": "Current", "value": workflow_contexts["storage"]["current_summary"]},
-            {"label": "Planned", "value": workflow_contexts["storage"]["planned_summary"]},
-            {"label": "Approved", "value": workflow_contexts["storage"]["approved_summary"]},
-            {"label": "Result", "value": latest_storage.get("status") or "No storage run recorded yet."},
-        ],
-        "esxi": [
-            {"label": "Current", "value": workflow_contexts["esxi"]["target"]},
-            {"label": "Planned", "value": workflow_contexts["esxi"]["planned_summary"]},
-            {"label": "Approved", "value": workflow_contexts["esxi"]["approved_summary"]},
-            {"label": "Result", "value": workflow_contexts["esxi"]["result_summary"]},
-        ],
-        "windows": [
-            {"label": "Current", "value": workflow_contexts["windows"]["target"]},
-            {"label": "Planned", "value": workflow_contexts["windows"]["planned_summary"]},
-            {"label": "Approved", "value": workflow_contexts["windows"]["approved_summary"]},
-            {"label": "Result", "value": workflow_contexts["windows"]["result_summary"]},
-        ],
-        "qnap": [
-            {"label": "Current", "value": workflow_contexts["qnap"]["target"]},
-            {"label": "Planned", "value": workflow_contexts["qnap"]["planned_summary"]},
-            {"label": "Approved", "value": workflow_contexts["qnap"]["approved_summary"]},
-            {"label": "Result", "value": workflow_contexts["qnap"]["result_summary"]},
-        ],
-    }
-
-
 def build_recommended_next_step(cfg: dict[str, Any], workflow_contexts: dict[str, dict[str, Any]]) -> dict[str, str]:
     ilo_host = (cfg.get("ilo", {}).get("current_ip") or cfg.get("ilo", {}).get("host") or "").strip()
     if not ilo_host:
@@ -2486,243 +2471,6 @@ def build_recommended_next_step(cfg: dict[str, Any], workflow_contexts: dict[str
         if cfg.get("included", {}).get(key) and workflow_contexts[key]["state"] in {"not_started", "failed"}:
             return {"title": f"Review {workflow_contexts[key]['name']} setup", "summary": f"Open the {workflow_contexts[key]['name']} page and finish the saved setup values.", "href": workflow_contexts[key]["review_href"]}
     return {"title": "Review the run", "summary": "Open Run Center to review the included stages, checks, and warnings before starting.", "href": "/execution"}
-
-
-def latest_page_history_entry(history: list[dict[str, Any]], *, workflows: list[str] | None = None, scopes: list[str] | None = None) -> dict[str, Any] | None:
-    workflows = workflows or []
-    scopes = scopes or []
-    for item in history:
-        item_scope = str(item.get("scope") or "")
-        item_workflow = str(item.get("workflow") or "")
-        if item_scope in scopes or item_workflow in workflows:
-            return item
-    return None
-
-
-def build_page_briefing(
-    active_page: str,
-    cfg: dict[str, Any],
-    workflow_contexts: dict[str, dict[str, Any]],
-    history: list[dict[str, Any]],
-    execution_review: dict[str, Any] | None = None,
-) -> dict[str, str] | None:
-    if active_page in {"configs", "history", "kits"}:
-        return None
-
-    storage_review = build_storage_review_context(cfg)
-    mapping = {
-        "dashboard": {
-            "title": "Start here",
-            "purpose": "This is the home page. It shows the most important next step for this kit.",
-            "next": build_recommended_next_step(cfg, workflow_contexts)["summary"],
-            "next_label": build_recommended_next_step(cfg, workflow_contexts)["title"],
-            "next_href": build_recommended_next_step(cfg, workflow_contexts)["href"],
-            "last": (history[0].get("summary") if history else "") or "Nothing has happened yet for this kit.",
-        },
-        "global_settings": {
-            "title": "Global settings",
-            "purpose": "Use this page to save the shared defaults that the rest of the app can reuse.",
-            "next": "Fill in the shared defaults, save them, then open the setup page you want to finish next.",
-            "next_label": "Save shared defaults",
-            "next_href": "/global-settings",
-            "last": (
-                (latest_page_history_entry(history, workflows=["global_settings"]) or {}).get("summary")
-                or "Nothing has been saved here recently."
-            ),
-        },
-        "configuration": {
-            "title": "Global settings",
-            "purpose": "Use this page to save the shared defaults that the rest of the app can reuse.",
-            "next": "Fill in the shared defaults, save them, then open the setup page you want to finish next.",
-            "next_label": "Save shared defaults",
-            "next_href": "/global-settings",
-            "last": (
-                (latest_page_history_entry(history, workflows=["global_settings"]) or {}).get("summary")
-                or "Nothing has been saved here recently."
-            ),
-        },
-        "ilo": {
-            "title": "iLO setup",
-            "purpose": "Use this page to tell the app how to reach iLO and what iLO settings you want to use.",
-            "next": (
-                "Save the iLO address and sign-in details first."
-                if not (cfg.get("ilo", {}).get("current_ip") or cfg.get("ilo", {}).get("host"))
-                else "Save the iLO setup, then go to Run Center when you are ready."
-            ),
-            "next_label": (
-                "Save iLO setup"
-                if not (cfg.get("ilo", {}).get("current_ip") or cfg.get("ilo", {}).get("host"))
-                else "Open Run Center"
-            ),
-            "next_href": "/ilo" if not (cfg.get("ilo", {}).get("current_ip") or cfg.get("ilo", {}).get("host")) else "/execution",
-            "last": (
-                (latest_page_history_entry(history, workflows=["ilo"], scopes=["ilo"]) or {}).get("summary")
-                or "No iLO run has finished yet."
-            ),
-        },
-        "storage": {
-            "title": "Storage setup",
-            "purpose": "Use this page to read the disks, build a layout, approve it, and send it into the real run.",
-            "next": (
-                "Read current storage first."
-                if storage_review.get("state") in {"not_started", "idle"} or not storage_review.get("latest")
-                else "Build storage plan next."
-                if storage_review.get("state") == "discovered"
-                else "Approve this plan next."
-                if storage_review.get("state") == "planned" or storage_review.get("stale")
-                else "Open Run Center when you are ready to use the approved plan."
-            ),
-            "next_label": (
-                "Read current storage"
-                if storage_review.get("state") in {"not_started", "idle"} or not storage_review.get("latest")
-                else "Build storage plan"
-                if storage_review.get("state") == "discovered"
-                else "Approve this plan"
-                if storage_review.get("state") == "planned" or storage_review.get("stale")
-                else "Run for real"
-            ),
-            "next_href": (
-                "/storage#read-current-storage"
-                if storage_review.get("state") in {"not_started", "idle"} or not storage_review.get("latest")
-                else "/storage#build-storage-plan"
-                if storage_review.get("state") == "discovered"
-                else "/storage#approve-storage-plan"
-                if storage_review.get("state") == "planned" or storage_review.get("stale")
-                else "/execution"
-            ),
-            "last": (
-                (latest_page_history_entry(history, workflows=["storage"], scopes=["storage-apply", "storage-reboot"]) or {}).get("summary")
-                or storage_review.get("status_reason")
-                or "No storage run has finished yet."
-            ),
-        },
-        "esxi": {
-            "title": "ESXi setup",
-            "purpose": "Use this page to save the ESXi name and password for this kit.",
-            "next": (
-                "Enter the ESXi name and password, then save them."
-                if not (cfg.get("esxi", {}).get("hostname") and cfg.get("esxi", {}).get("root_password"))
-                else "Open Run Center when you are ready."
-            ),
-            "next_label": (
-                "Save ESXi setup"
-                if not (cfg.get("esxi", {}).get("hostname") and cfg.get("esxi", {}).get("root_password"))
-                else "Open Run Center"
-            ),
-            "next_href": "/esxi" if not (cfg.get("esxi", {}).get("hostname") and cfg.get("esxi", {}).get("root_password")) else "/execution",
-            "last": (
-                (latest_page_history_entry(history, workflows=["esxi"], scopes=["esxi"]) or {}).get("summary")
-                or "No ESXi run has finished yet."
-            ),
-        },
-        "windows": {
-            "title": "Windows setup",
-            "purpose": "Use this page to save the Windows details for this kit.",
-            "next": "Fill in the Windows setup, save it, then use Run Center when you are ready.",
-            "next_label": "Save Windows setup",
-            "next_href": "/windows",
-            "last": (
-                (latest_page_history_entry(history, workflows=["windows"], scopes=["windows"]) or {}).get("summary")
-                or "No Windows run has finished yet."
-            ),
-        },
-        "qnap": {
-            "title": "QNAP setup",
-            "purpose": "Use this page to save the QNAP details for this kit.",
-            "next": "Fill in the QNAP setup, save it, then use Run Center when you are ready.",
-            "next_label": "Save QNAP setup",
-            "next_href": "/qnap",
-            "last": (
-                (latest_page_history_entry(history, workflows=["qnap"], scopes=["qnap"]) or {}).get("summary")
-                or "No QNAP run has finished yet."
-            ),
-        },
-        "execution": {
-            "title": "Run Center",
-            "purpose": "Use this page to check the plan one last time before you run anything.",
-            "next": (
-                "Pick Review full run to see the full checklist."
-                if not execution_review
-                else "If the review looks right, choose Preview only or Run for real."
-            ),
-            "next_label": "Review full run" if not execution_review else "Run for real",
-            "next_href": "/execution",
-            "last": (
-                (history[0].get("summary") if history else "") or "No run has finished yet."
-            ),
-        },
-    }
-    return mapping.get(active_page)
-
-
-def mask_secret(value: str) -> str:
-    return "Saved" if str(value or "") else "Not set"
-
-
-def source_label(kind: str) -> str:
-    mapping = {
-        "global": "Using global value",
-        "override": "Overridden on this page",
-        "local": "Saved on this page",
-        "current": "Using current iLO address",
-        "planned": "Using planned iLO address",
-        "storage_override": "Overridden on this page",
-        "storage_fallback": "Using previously saved address",
-    }
-    return mapping.get(kind, kind)
-
-
-def build_settings_sources(cfg: dict[str, Any]) -> dict[str, list[dict[str, str]]]:
-    storage_target = resolve_storage_target_host(cfg)
-    storage_credentials = resolve_storage_target_credentials(cfg)
-    ilo_cfg = cfg.get("ilo", {}) or {}
-    return {
-        "global_settings": [
-            {"label": "Shared subnet", "value": cfg.get("shared_network", {}).get("subnet", "") or "Not set", "source": "Feeds iLO, ESXi, Windows, QNAP, and Run Center"},
-            {"label": "Shared gateway", "value": cfg.get("ip_plan", {}).get("gateway", "") or "Not set", "source": "Feeds every workflow that inherits the shared network"},
-            {"label": "Shared DNS", "value": ", ".join([item for item in cfg.get("shared_network", {}).get("dns_servers", []) if item]) or "Not set", "source": "Used unless a workflow page overrides it later"},
-        ],
-        "ilo": [
-            {"label": "Current iLO address", "value": ilo_cfg.get("current_ip") or ilo_cfg.get("host") or "Not set", "source": source_label("local")},
-            {"label": "Planned final iLO IP", "value": ilo_cfg.get("target_ip") or cfg.get("ip_plan", {}).get("ilo", "") or "Not set", "source": source_label("override") if ilo_cfg.get("target_ip") and ilo_cfg.get("target_ip") != cfg.get("ip_plan", {}).get("ilo", "") else source_label("global")},
-            {"label": "Gateway", "value": ilo_cfg.get("gateway") or cfg.get("ip_plan", {}).get("gateway", "") or "Not set", "source": source_label("override") if ilo_cfg.get("gateway") and ilo_cfg.get("gateway") != cfg.get("ip_plan", {}).get("gateway", "") else source_label("global")},
-            {"label": "Username", "value": ilo_cfg.get("username") or "Not set", "source": source_label("local")},
-            {"label": "Password", "value": mask_secret(ilo_cfg.get("password") or ""), "source": source_label("local")},
-        ],
-        "storage": [
-            {
-                "label": "Using right now",
-                "value": storage_target.get("resolved") or "Not set",
-                "source": (
-                    source_label("storage_override")
-                    if storage_target.get("override_active")
-                    else source_label("planned")
-                    if storage_target.get("source") == "planned iLO target IP"
-                    else source_label("current")
-                    if storage_target.get("source") in {"current kit iLO IP", "current kit iLO host"}
-                    else source_label("storage_fallback")
-                ),
-            },
-            {"label": "Username", "value": storage_credentials.get("username") or "Not set", "source": source_label("override") if storage_credentials.get("username_source") == "storage page override" else source_label("local")},
-            {"label": "Password", "value": mask_secret(storage_credentials.get("password") or ""), "source": source_label("override") if storage_credentials.get("password_source") == "storage page override" else source_label("local")},
-        ],
-        "esxi": [
-            {"label": "Target IP", "value": cfg.get("esxi", {}).get("management_ip") or cfg.get("ip_plan", {}).get("esxi", "") or "Not set", "source": source_label("global")},
-            {"label": "Hostname", "value": cfg.get("esxi", {}).get("hostname", "") or "Not set", "source": source_label("local")},
-            {"label": "Root password", "value": mask_secret(cfg.get("esxi", {}).get("root_password", "")), "source": source_label("local")},
-        ],
-        "windows": [
-            {"label": "Target IP", "value": cfg.get("windows", {}).get("ip_address") or cfg.get("ip_plan", {}).get("windows", "") or "Not set", "source": source_label("global")},
-            {"label": "VM name", "value": cfg.get("windows", {}).get("vm_name", "") or "Not set", "source": source_label("local")},
-            {"label": "Admin password", "value": mask_secret(cfg.get("windows", {}).get("admin_password", "")), "source": source_label("local")},
-        ],
-        "qnap": [
-            {"label": "Target IP", "value": cfg.get("qnap", {}).get("ip") or cfg.get("ip_plan", {}).get("qnap", "") or "Not set", "source": source_label("global")},
-            {"label": "Hostname", "value": cfg.get("qnap", {}).get("hostname", "") or "Not set", "source": source_label("local")},
-            {"label": "Username", "value": cfg.get("qnap", {}).get("username", "") or "Not set", "source": source_label("local")},
-            {"label": "Password", "value": mask_secret(cfg.get("qnap", {}).get("password", "")), "source": source_label("local")},
-        ],
-    }
 
 
 def collect_report_entries(cfg: dict[str, Any], query: str = "", report_type: str = "all", limit: int = 120) -> list[dict[str, str]]:
@@ -3599,9 +3347,12 @@ def choose_os_drive_pair(eligible_drives: list[dict]) -> tuple[list[dict], str]:
     )
 
 
-def choose_raid6_layout(remaining_drives: list[dict]) -> tuple[list[dict], dict, list[dict], str, list[str]]:
+def choose_data_layout(remaining_drives: list[dict], raid_level: str) -> tuple[list[dict], dict, list[dict], str, list[str]]:
+    selected_raid = normalize_raid_choice("data", raid_level, allow_empty=True)
+    if not selected_raid:
+        return [], {}, list(remaining_drives), "No default data array is selected for the remaining drives.", []
     if not remaining_drives:
-        return [], {}, [], "No remaining eligible drives were available for RAID 6.", ["No remaining eligible drives are available for the Data RAID 6 set."]
+        return [], {}, [], f"No remaining eligible drives were available for {raid_label(selected_raid)}.", [f"No remaining eligible drives are available for the {raid_label(selected_raid)} set."]
 
     groups: dict[tuple, list[dict]] = {}
     for drive in remaining_drives:
@@ -3611,35 +3362,31 @@ def choose_raid6_layout(remaining_drives: list[dict]) -> tuple[list[dict], dict,
     selected_key, selected_group = ranked_groups[0]
     compatible_group = sorted(selected_group, key=storage_drive_sort_key)
     excluded = [
-        {**drive, "exclude_reason": "Not in the selected RAID 6 compatible media/protocol/capacity group."}
+        {**drive, "exclude_reason": f"Not in the selected {raid_label(selected_raid)} compatible media/protocol/capacity group."}
         for drive in remaining_drives
         if drive not in selected_group
     ]
-    blockers = []
-    if len(compatible_group) < 4:
-        blockers.append("RAID 6 requires at least four compatible remaining drives.")
-        explanation = (
-            f"Best remaining compatible group for RAID 6 was too small: media={selected_key[0]}, "
-            f"protocol={selected_key[1]}, capacity≈{selected_key[2]} GiB, drives={len(compatible_group)}."
-        )
-        return compatible_group, {}, excluded, explanation, blockers
-
-    if len(compatible_group) < 5:
-        blockers.append("Storage policy requires one additional compatible hot spare beyond the RAID 6 drive set.")
-        explanation = (
-            f"Compatible RAID 6 group found with media={selected_key[0]}, protocol={selected_key[1]}, "
-            f"capacity≈{selected_key[2]} GiB, but only {len(compatible_group)} drives remain so no hot spare can be reserved."
-        )
-        return compatible_group, {}, excluded, explanation, blockers
-
-    spare = compatible_group[-1]
-    raid6_set = compatible_group[:-1]
+    blockers = validate_raid_drive_count(selected_raid, compatible_group, section="data")
     explanation = (
-        f"Selected the largest compatible remaining group for RAID 6: media={selected_key[0]}, "
-        f"protocol={selected_key[1]}, capacity≈{selected_key[2]} GiB. "
-        f"Reserved bay {spare['bay'] or spare['id']} as the data-side hot spare."
+        f"Selected the largest compatible remaining group for {raid_label(selected_raid)}: "
+        f"media={selected_key[0]}, protocol={selected_key[1]}, capacity≈{selected_key[2]} GiB, drives={len(compatible_group)}."
     )
-    return raid6_set, spare, excluded, explanation, blockers
+    if blockers:
+        explanation = (
+            f"Best remaining compatible group for {raid_label(selected_raid)} was too small: "
+            f"media={selected_key[0]}, protocol={selected_key[1]}, capacity≈{selected_key[2]} GiB, drives={len(compatible_group)}."
+        )
+    return compatible_group, {}, excluded, explanation, blockers
+
+
+def choose_default_data_raid(remaining_drives: list[dict]) -> str:
+    if len(remaining_drives) >= 4:
+        return "RAID6"
+    if len(remaining_drives) >= 3:
+        return "RAID5"
+    if len(remaining_drives) >= 2:
+        return "RAID1"
+    return ""
 
 
 def storage_firmware_display(value: object) -> str:
@@ -3660,6 +3407,59 @@ def plan_drive_bays(drives: list[dict]) -> str:
     bays = [str(drive.get("bay") or drive.get("id") or "").strip() for drive in drives or []]
     bays = [bay for bay in bays if bay]
     return ", ".join(bays)
+
+
+COMMON_RAID_OPTIONS: list[dict[str, Any]] = [
+    {"value": "RAID0", "label": "RAID 0", "min_drives": 2},
+    {"value": "RAID1", "label": "RAID 1", "min_drives": 2, "exact_drives": 2},
+    {"value": "RAID5", "label": "RAID 5", "min_drives": 3},
+    {"value": "RAID6", "label": "RAID 6", "min_drives": 4},
+    {"value": "RAID10", "label": "RAID 10", "min_drives": 4, "even_drives": True},
+]
+
+
+def storage_raid_options(section: str) -> list[dict[str, Any]]:
+    del section
+    return COMMON_RAID_OPTIONS
+
+
+def normalize_raid_choice(section: str, value: str, *, allow_empty: bool = False) -> str:
+    normalized = re.sub(r"[^0-9A-Za-z]", "", str(value or "").strip()).upper()
+    if allow_empty and not normalized:
+        return ""
+    allowed = {item["value"] for item in storage_raid_options(section)}
+    if normalized in allowed:
+        return normalized
+    return "RAID1" if section == "os" else "RAID6"
+
+
+def raid_label(value: str) -> str:
+    normalized = re.sub(r"[^0-9A-Za-z]", "", str(value or "").strip()).upper()
+    if not normalized:
+        return "Not used"
+    if normalized.startswith("RAID") and len(normalized) > 4:
+        return f"RAID {normalized[4:]}"
+    return str(value or "").strip() or "RAID"
+
+
+def validate_raid_drive_count(raid: str, drives: list[dict[str, Any]], *, section: str) -> list[str]:
+    count = len(drives)
+    if count == 0:
+        return []
+    normalized = normalize_raid_choice(section, raid)
+    rules = {item["value"]: item for item in storage_raid_options(section)}
+    rule = rules[normalized]
+    issues: list[str] = []
+    exact_drives = rule.get("exact_drives")
+    min_drives = int(rule.get("min_drives") or 0)
+    section_label = "OS" if section == "os" else "data"
+    if exact_drives is not None and count != int(exact_drives):
+        issues.append(f"Choose exactly {exact_drives} drives for {raid_label(normalized)} in the {section_label} section.")
+    elif min_drives and count < min_drives:
+        issues.append(f"Choose at least {min_drives} drives for {raid_label(normalized)} in the {section_label} section.")
+    if rule.get("even_drives") and count % 2:
+        issues.append(f"{raid_label(normalized)} in the {section_label} section requires an even number of drives.")
+    return issues
 
 
 def build_storage_planning_drives(summary: dict[str, Any] | None) -> list[dict[str, Any]]:
@@ -3762,24 +3562,44 @@ def build_raid_plan(discovery: dict, discovery_paths: dict[str, Path], overrides
 
     default_os_paths = {drive["path"] for drive in default_os_pair}
     default_remaining = [drive for drive in eligible_drives if drive["path"] not in default_os_paths]
-    default_data_set, default_hot_spare, default_raid6_excluded, default_raid6_explanation, default_raid6_blockers = choose_raid6_layout(sorted(default_remaining, key=storage_drive_sort_key))
+    default_data_raid = choose_default_data_raid(default_remaining)
+    default_data_set, default_hot_spare, default_raid_excluded, default_data_explanation, default_data_blockers = choose_data_layout(
+        sorted(default_remaining, key=storage_drive_sort_key),
+        default_data_raid,
+    )
 
     eligible_by_bay = {str(drive.get("bay") or ""): drive for drive in eligible_drives}
     selected_os_bays = [str(item).strip() for item in list(overrides.get("os_bays") or []) if str(item).strip()]
     selected_data_bays = [str(item).strip() for item in list(overrides.get("data_bays") or []) if str(item).strip()]
     selected_spare_bay = str(overrides.get("hot_spare_bay") or "").strip()
+    raw_os_raid = overrides["os_raid_level"] if "os_raid_level" in overrides else ""
+    selected_os_raid = normalize_raid_choice("os", str(raw_os_raid or ""), allow_empty=True)
+    if not selected_os_raid:
+        selected_os_raid = "RAID1"
+    raw_data_raid = overrides["data_raid_level"] if "data_raid_level" in overrides else default_data_raid
+    selected_data_raid = normalize_raid_choice("data", str(raw_data_raid or ""), allow_empty=True)
 
-    customization_active = bool(selected_os_bays or selected_data_bays or selected_spare_bay)
+    customization_active = bool(
+        selected_os_bays
+        or selected_data_bays
+        or selected_spare_bay
+        or selected_os_raid != "RAID1"
+        or selected_data_raid != "RAID6"
+    )
     os_pair = list(default_os_pair)
     os_explanation = default_os_explanation
     data_set = list(default_data_set)
     hot_spare = dict(default_hot_spare) if default_hot_spare else {}
-    raid6_excluded = list(default_raid6_excluded)
-    raid6_explanation = default_raid6_explanation
+    raid_excluded = list(default_raid_excluded)
+    data_explanation = default_data_explanation
 
     if customization_active:
         custom_blockers = []
         overlap_blockers = []
+        if not selected_data_raid and not selected_data_bays:
+            data_set = []
+            hot_spare = {}
+            data_explanation = "This section is not used in the current plan."
         if selected_os_bays:
             os_pair = [eligible_by_bay[bay] for bay in selected_os_bays if bay in eligible_by_bay]
             missing_os = [bay for bay in selected_os_bays if bay not in eligible_by_bay]
@@ -3791,7 +3611,7 @@ def build_raid_plan(discovery: dict, discovery_paths: dict[str, Path], overrides
             missing_data = [bay for bay in selected_data_bays if bay not in eligible_by_bay]
             if missing_data:
                 custom_blockers.append(f"Selected data drives are not eligible or were not found: {', '.join(missing_data)}.")
-            raid6_explanation = "Using the drives chosen below for the data array."
+            data_explanation = "Using the drives chosen below for the data array."
         if selected_spare_bay:
             hot_spare = dict(eligible_by_bay.get(selected_spare_bay) or {})
             if not hot_spare:
@@ -3802,10 +3622,10 @@ def build_raid_plan(discovery: dict, discovery_paths: dict[str, Path], overrides
             overlap_blockers.append("The same drive cannot be used for both the OS mirror and the data array.")
         if selected_spare_bay and (selected_spare_bay in os_bays_set or selected_spare_bay in data_bays_set):
             overlap_blockers.append("The hot spare must be different from the OS and data drives.")
-        if len(os_pair) != 2:
-            custom_blockers.append("Choose exactly two drives for the OS RAID 1 pair.")
-        if len(data_set) < 4:
-            custom_blockers.append("Choose at least four compatible drives for the Data RAID 6 set.")
+        if selected_spare_bay and not data_set:
+            custom_blockers.append("Choose data drives before assigning a dedicated hot spare.")
+        custom_blockers.extend(validate_raid_drive_count(selected_os_raid, os_pair, section="os"))
+        custom_blockers.extend(validate_raid_drive_count(selected_data_raid, data_set, section="data"))
         if hot_spare:
             compatibility_group = {drive_group_key(drive) for drive in data_set + [hot_spare]}
         else:
@@ -3813,7 +3633,7 @@ def build_raid_plan(discovery: dict, discovery_paths: dict[str, Path], overrides
         if data_set and len(compatibility_group) > 1:
             custom_blockers.append("The selected data drives and hot spare must use the same media type, protocol, and size.")
         blockers.extend(custom_blockers + overlap_blockers)
-        raid6_excluded = [
+        raid_excluded = [
             {**drive, "exclude_reason": "Not selected for the custom data layout."}
             for drive in eligible_drives
             if drive.get("bay") not in {*(drive.get("bay") for drive in os_pair), *(drive.get("bay") for drive in data_set), selected_spare_bay}
@@ -3823,16 +3643,18 @@ def build_raid_plan(discovery: dict, discovery_paths: dict[str, Path], overrides
     excluded_drives.extend({**drive, "exclude_reason": "Reserved for OS RAID 1 pair."} for drive in os_pair)
     if hot_spare:
         excluded_drives.append({**hot_spare, "exclude_reason": "Reserved as the data-side hot spare."})
-        excluded_drives.extend(raid6_excluded)
-    else:
-        blockers.extend(default_raid6_blockers)
-    if len(default_os_pair) < 2:
-        blockers.append("Could not choose two suitable drives for the OS RAID 1 pair.")
+    excluded_drives.extend(raid_excluded)
+    if not customization_active:
+        blockers.extend(default_data_blockers)
+    blockers.extend(validate_raid_drive_count(selected_os_raid, os_pair, section="os"))
+    blockers.extend(validate_raid_drive_count(selected_data_raid, data_set, section="data"))
+    if not os_pair and not data_set:
+        blockers.append("Choose drives for at least one array.")
 
     apply_readiness = {
         "next_action": "wipe and rebuild" if existing_volumes else "create only",
-        "create_only_ready": not existing_volumes and len(data_set) >= 4 and bool(hot_spare) and len(os_pair) == 2,
-        "wipe_rebuild_ready": len(data_set) >= 4 and bool(hot_spare) and len(os_pair) == 2,
+        "create_only_ready": not existing_volumes and not validate_raid_drive_count(selected_os_raid, os_pair, section="os") and not validate_raid_drive_count(selected_data_raid, data_set, section="data"),
+        "wipe_rebuild_ready": not validate_raid_drive_count(selected_os_raid, os_pair, section="os") and not validate_raid_drive_count(selected_data_raid, data_set, section="data"),
         # Future apply split:
         # - Gen10 / iLO 5 typically uses HPE SmartStorageConfig-style delete/create/apply semantics.
         # - Gen11 / iLO 6 typically uses the standard Redfish Storage/Volume model.
@@ -3844,36 +3666,28 @@ def build_raid_plan(discovery: dict, discovery_paths: dict[str, Path], overrides
     create_only_blockers = []
     if existing_volumes:
         create_only_blockers.append("Existing logical volumes are present. Create-only is disabled until the controller is empty.")
-    if len(os_pair) != 2:
-        create_only_blockers.append("Two suitable drives were not selected for the OS RAID 1 pair.")
-    if len(data_set) < 4:
-        create_only_blockers.append("At least four compatible data drives are required for the Data RAID 6 set.")
-    if not hot_spare:
-        create_only_blockers.append("A compatible hot spare could not be reserved.")
+    create_only_blockers.extend(validate_raid_drive_count(selected_os_raid, os_pair, section="os"))
+    create_only_blockers.extend(validate_raid_drive_count(selected_data_raid, data_set, section="data"))
     wipe_rebuild_blockers = []
-    if len(os_pair) != 2:
-        wipe_rebuild_blockers.append("Two suitable drives were not selected for the OS RAID 1 pair.")
-    if len(data_set) < 4:
-        wipe_rebuild_blockers.append("At least four compatible data drives are required for the Data RAID 6 set.")
-    if not hot_spare:
-        wipe_rebuild_blockers.append("A compatible hot spare could not be reserved.")
+    wipe_rebuild_blockers.extend(validate_raid_drive_count(selected_os_raid, os_pair, section="os"))
+    wipe_rebuild_blockers.extend(validate_raid_drive_count(selected_data_raid, data_set, section="data"))
     apply_readiness["create_only_blockers"] = create_only_blockers
     apply_readiness["wipe_rebuild_blockers"] = wipe_rebuild_blockers
     planned_layout = {
         "os_raid1": {
-            "raid": "RAID 1",
+            "raid": raid_label(selected_os_raid),
             "target_size_gib": 500,
             "bays": plan_drive_bays(os_pair),
             "drives": os_pair,
         },
         "data_raid6": {
-            "raid": "RAID 6",
+            "raid": raid_label(selected_data_raid),
             "bays": plan_drive_bays(data_set),
-            "capacity_intent": "Use the remaining compatible eligible drives after reserving one hot spare.",
+            "capacity_intent": "Use the selected compatible eligible drives for the data array.",
             "drives": data_set,
         },
         "hot_spare": {
-            "required": True,
+            "required": False,
             "bay": str(hot_spare.get("bay") or hot_spare.get("id") or "") if hot_spare else "",
             "drive": hot_spare,
         },
@@ -3901,20 +3715,22 @@ def build_raid_plan(discovery: dict, discovery_paths: dict[str, Path], overrides
         "default_recommendation": "wipe and rebuild" if existing_volumes else "create only",
         "existing_logical_volumes": existing_volumes,
         "desired_layout": {
-            "os_volume": {"raid": "RAID 1", "target_size_gib": 500},
-            "data_volume": {"raid": "RAID 6", "capacity": "remaining compatible eligible drives after reserving one hot spare"},
-            "hot_spare": {"required": True, "scope": "data-side compatible spare"},
+            "os_volume": {"raid": raid_label(selected_os_raid), "target_size_gib": 500},
+            "data_volume": {"raid": raid_label(selected_data_raid), "capacity": "selected compatible eligible drives"},
+            "hot_spare": {"required": False, "scope": "optional dedicated spare if selected"},
         },
         "customization": {
             "active": customization_active,
+            "selected_os_raid_level": selected_os_raid,
+            "selected_data_raid_level": selected_data_raid,
             "selected_os_bays": [str(drive.get("bay") or "") for drive in os_pair],
             "selected_data_bays": [str(drive.get("bay") or "") for drive in data_set],
             "selected_hot_spare_bay": str((hot_spare or {}).get("bay") or ""),
         },
         "planned_layout": planned_layout,
-        "os_raid1": {"target_size_gib": 500, "drives": os_pair, "explanation": os_explanation},
-        "data_raid6": {"feasible": len(data_set) >= 4 and bool(hot_spare), "drives": data_set, "drive_count": len(data_set), "explanation": raid6_explanation},
-        "hot_spare": {"required": True, "drive": hot_spare, "reserved": bool(hot_spare)},
+        "os_raid1": {"raid": selected_os_raid, "label": raid_label(selected_os_raid), "target_size_gib": 500, "drives": os_pair, "explanation": os_explanation},
+        "data_raid6": {"raid": selected_data_raid, "label": raid_label(selected_data_raid), "feasible": not validate_raid_drive_count(selected_data_raid, data_set, section="data"), "drives": data_set, "drive_count": len(data_set), "explanation": data_explanation},
+        "hot_spare": {"required": False, "drive": hot_spare, "reserved": bool(hot_spare)},
         "apply_readiness": apply_readiness,
         "pre_apply_summary": pre_apply_summary,
         "excluded_drives": sorted(excluded_drives, key=storage_drive_sort_key),
@@ -4148,14 +3964,16 @@ def build_storage_apply_intent(plan: dict, apply_mode: str) -> dict[str, Any]:
         "mode": apply_mode,
         "controller": controller,
         "os_raid1": {
-            "raid": "RAID1",
+            "raid": normalize_raid_choice("os", str(plan.get("os_raid1", {}).get("raid") or ""), allow_empty=True) if plan.get("os_raid1", {}).get("drives") else "",
+            "label": f"OS {raid_label(str(plan.get('os_raid1', {}).get('raid') or 'RAID1'))} logical drive",
             "target_size_gib": plan.get("os_raid1", {}).get("target_size_gib", 500),
             "bays": [drive.get("bay") for drive in plan.get("os_raid1", {}).get("drives", [])],
             "drive_paths": [drive.get("path") for drive in plan.get("os_raid1", {}).get("drives", [])],
             "drives": list(plan.get("os_raid1", {}).get("drives", []) or []),
         },
         "data_raid6": {
-            "raid": "RAID6",
+            "raid": normalize_raid_choice("data", str(plan.get("data_raid6", {}).get("raid") or ""), allow_empty=True) if plan.get("data_raid6", {}).get("drives") else "",
+            "label": f"Data {raid_label(str(plan.get('data_raid6', {}).get('raid') or 'RAID6'))} logical drive",
             "bays": [drive.get("bay") for drive in plan.get("data_raid6", {}).get("drives", [])],
             "drive_paths": [drive.get("path") for drive in plan.get("data_raid6", {}).get("drives", [])],
             "drives": list(plan.get("data_raid6", {}).get("drives", []) or []),
@@ -4252,8 +4070,6 @@ def validate_storage_apply_request(
         controllers.extend(((plan.get("source_discovery", {}) or {}).get(source_key, {}) or {}).get("controllers", []) or [])
     if len(controllers) > 1:
         raise ValueError("This destructive apply path only supports a single detected storage controller.")
-    if not plan.get("hot_spare", {}).get("reserved"):
-        raise ValueError("Storage apply requires a reserved hot spare.")
     readiness = plan.get("apply_readiness", {}) or {}
     if apply_mode == "create_only" and not readiness.get("create_only_ready"):
         raise ValueError("Create-only apply is not ready for this plan.")
@@ -4339,82 +4155,133 @@ def execute_storage_apply_gen10(
         current += 1
 
     os_intent = intent["os_raid1"]
-    record_storage_apply_step(
-        kit_name,
-        job,
-        apply_state,
-        apply_paths,
-        "Create OS RAID 1 logical drive",
-        current,
-        total_steps,
-        "running",
-        "Create OS RAID 1 logical drive",
-        targets={"controller": apply_state["controller"].get("name") or apply_state["controller"].get("model") or "", "bays": os_intent.get("bays", [])},
-        details=f"Staging OS RAID 1 into one consolidated SmartStorageConfig payload at {settings_path}.",
-        progress_percent=progress_resolver(current, total_steps) if progress_resolver else None,
-    )
-    record_storage_apply_step(
-        kit_name,
-        job,
-        apply_state,
-        apply_paths,
-        "Create OS RAID 1 logical drive",
-        current,
-        total_steps,
-        "ok",
-        "Create OS RAID 1 logical drive",
-        targets={"controller": apply_state["controller"].get("name") or apply_state["controller"].get("model") or "", "bays": os_intent.get("bays", [])},
-        details="Queued OS RAID 1 in the final pending config.",
-        progress_percent=progress_resolver(current, total_steps) if progress_resolver else None,
-    )
+    os_label = str(os_intent.get("label") or "OS logical drive")
+    if os_intent.get("drives"):
+        record_storage_apply_step(
+            kit_name,
+            job,
+            apply_state,
+            apply_paths,
+            f"Create {os_label}",
+            current,
+            total_steps,
+            "running",
+            f"Create {os_label}",
+            targets={"controller": apply_state["controller"].get("name") or apply_state["controller"].get("model") or "", "bays": os_intent.get("bays", [])},
+            details=f"Staging {os_label} into one consolidated SmartStorageConfig payload at {settings_path}.",
+            progress_percent=progress_resolver(current, total_steps) if progress_resolver else None,
+        )
+        record_storage_apply_step(
+            kit_name,
+            job,
+            apply_state,
+            apply_paths,
+            f"Create {os_label}",
+            current,
+            total_steps,
+            "ok",
+            f"Create {os_label}",
+            targets={"controller": apply_state["controller"].get("name") or apply_state["controller"].get("model") or "", "bays": os_intent.get("bays", [])},
+            details=f"Queued {os_label} in the final pending config.",
+            progress_percent=progress_resolver(current, total_steps) if progress_resolver else None,
+        )
+    else:
+        record_storage_apply_step(
+            kit_name,
+            job,
+            apply_state,
+            apply_paths,
+            "Create OS array",
+            current,
+            total_steps,
+            "skip",
+            "Create OS array",
+            targets={"controller": apply_state["controller"].get("name") or apply_state["controller"].get("model") or ""},
+            details="No OS array is selected in this plan.",
+            progress_percent=progress_resolver(current, total_steps) if progress_resolver else None,
+        )
     current += 1
 
     data_intent = intent["data_raid6"]
-    record_storage_apply_step(
-        kit_name,
-        job,
-        apply_state,
-        apply_paths,
-        "Create Data RAID 6 logical drive",
-        current,
-        total_steps,
-        "running",
-        "Create Data RAID 6 logical drive",
-        targets={"controller": apply_state["controller"].get("name") or apply_state["controller"].get("model") or "", "bays": data_intent.get("bays", [])},
-        details=f"Staging Data RAID 6 into one consolidated SmartStorageConfig payload at {settings_path}.",
-        progress_percent=progress_resolver(current, total_steps) if progress_resolver else None,
-    )
-    record_storage_apply_step(
-        kit_name,
-        job,
-        apply_state,
-        apply_paths,
-        "Create Data RAID 6 logical drive",
-        current,
-        total_steps,
-        "ok",
-        "Create Data RAID 6 logical drive",
-        targets={"controller": apply_state["controller"].get("name") or apply_state["controller"].get("model") or "", "bays": data_intent.get("bays", [])},
-        details="Queued Data RAID 6 in the final pending config.",
-        progress_percent=progress_resolver(current, total_steps) if progress_resolver else None,
-    )
+    data_label = str(data_intent.get("label") or "Data logical drive")
+    if data_intent.get("drives"):
+        record_storage_apply_step(
+            kit_name,
+            job,
+            apply_state,
+            apply_paths,
+            f"Create {data_label}",
+            current,
+            total_steps,
+            "running",
+            f"Create {data_label}",
+            targets={"controller": apply_state["controller"].get("name") or apply_state["controller"].get("model") or "", "bays": data_intent.get("bays", [])},
+            details=f"Staging {data_label} into one consolidated SmartStorageConfig payload at {settings_path}.",
+            progress_percent=progress_resolver(current, total_steps) if progress_resolver else None,
+        )
+        record_storage_apply_step(
+            kit_name,
+            job,
+            apply_state,
+            apply_paths,
+            f"Create {data_label}",
+            current,
+            total_steps,
+            "ok",
+            f"Create {data_label}",
+            targets={"controller": apply_state["controller"].get("name") or apply_state["controller"].get("model") or "", "bays": data_intent.get("bays", [])},
+            details=f"Queued {data_label} in the final pending config.",
+            progress_percent=progress_resolver(current, total_steps) if progress_resolver else None,
+        )
+    else:
+        record_storage_apply_step(
+            kit_name,
+            job,
+            apply_state,
+            apply_paths,
+            "Create data array",
+            current,
+            total_steps,
+            "skip",
+            "Create data array",
+            targets={"controller": apply_state["controller"].get("name") or apply_state["controller"].get("model") or ""},
+            details="No data array is selected in this plan.",
+            progress_percent=progress_resolver(current, total_steps) if progress_resolver else None,
+        )
     current += 1
 
     spare_intent = intent["hot_spare"]
-    record_storage_apply_step(
-        kit_name,
-        job,
-        apply_state,
-        apply_paths,
-        "Assign hot spare",
-        current,
-        total_steps,
-        "running",
-        "Assign hot spare",
-        targets={"controller": apply_state["controller"].get("name") or apply_state["controller"].get("model") or "", "bays": [spare_intent.get("bay", "")]},
-        details=f"Submitting one consolidated SmartStorageConfig payload with the reserved hot spare at {settings_path}.",
-        progress_percent=progress_resolver(current, total_steps) if progress_resolver else None,
-    )
+    spare_bay = str(spare_intent.get("bay", "") or "").strip()
+    if spare_bay:
+        record_storage_apply_step(
+            kit_name,
+            job,
+            apply_state,
+            apply_paths,
+            "Assign hot spare",
+            current,
+            total_steps,
+            "running",
+            "Assign hot spare",
+            targets={"controller": apply_state["controller"].get("name") or apply_state["controller"].get("model") or "", "bays": [spare_bay]},
+            details=f"Submitting one consolidated SmartStorageConfig payload with the optional dedicated spare at {settings_path}.",
+            progress_percent=progress_resolver(current, total_steps) if progress_resolver else None,
+        )
+    else:
+        record_storage_apply_step(
+            kit_name,
+            job,
+            apply_state,
+            apply_paths,
+            "Assign hot spare",
+            current,
+            total_steps,
+            "skip",
+            "Assign hot spare",
+            targets={"controller": apply_state["controller"].get("name") or apply_state["controller"].get("model") or ""},
+            details="No dedicated hot spare was selected for this plan.",
+            progress_percent=progress_resolver(current, total_steps) if progress_resolver else None,
+        )
     response = client.apply_gen10_storage_layout(
         settings_path=settings_path,
         apply_mode=apply_mode,
@@ -4434,8 +4301,12 @@ def execute_storage_apply_gen10(
         total_steps,
         "ok",
         "Assign hot spare",
-        targets={"controller": apply_state["controller"].get("name") or apply_state["controller"].get("model") or "", "bays": [spare_intent.get("bay", "")]},
-        details="Submitted the consolidated SmartStorageConfig pending payload with OS RAID 1, Data RAID 6, and dedicated hot spare.",
+        targets={"controller": apply_state["controller"].get("name") or apply_state["controller"].get("model") or "", "bays": [spare_bay] if spare_bay else []},
+        details=(
+            f"Submitted the consolidated SmartStorageConfig pending payload with {os_label}, {data_label}, and the optional dedicated spare."
+            if spare_bay
+            else f"Submitted the consolidated SmartStorageConfig pending payload with {os_label} and {data_label}."
+        ),
         response=response,
         progress_percent=progress_resolver(current, total_steps) if progress_resolver else None,
     )
@@ -6308,6 +6179,66 @@ def build_execution_review(cfg: dict, scope: str):
             ]
         return []
 
+    def stage_detail_rows(key: str) -> list[dict[str, str]]:
+        if key == "ilo":
+            dns_values = ", ".join([x for x in cfg.get("shared_network", {}).get("dns_servers", []) if x and str(x).strip()]) or "Not set"
+            extra_users = cfg.get("ilo", {}).get("additional_users", []) or []
+            snmp_users = cfg.get("shared_snmp", {}).get("users", []) or []
+            rows = [
+                {"label": "Current iLO IP", "value": cfg["ilo"].get("current_ip") or cfg["ilo"].get("host") or "Not set"},
+                {"label": "Planned iLO IP", "value": cfg["ilo"].get("target_ip") or "Unchanged"},
+                {"label": "Hostname", "value": cfg["ilo"].get("hostname") or "Unchanged"},
+                {"label": "Gateway", "value": cfg["ilo"].get("gateway") or cfg.get("ip_plan", {}).get("gateway") or "Not set"},
+                {"label": "DNS servers", "value": dns_values},
+                {"label": "SNMP profile count", "value": str(len(snmp_users)) if snmp_users else "0"},
+                {"label": "Extra local users", "value": str(len(extra_users)) if extra_users else "0"},
+            ]
+            if snmp_users:
+                primary = snmp_users[0]
+                rows.extend(
+                    [
+                        {"label": "Primary SNMPv3 username", "value": str(primary.get("username") or "Not set")},
+                        {"label": "Primary SNMPv3 protocols", "value": f"{primary.get('auth_protocol') or 'SHA'} / {primary.get('priv_protocol') or 'AES'}"},
+                    ]
+                )
+            return rows
+        if key == "storage":
+            review = build_storage_run_review()
+            return [
+                {"label": "Approved host", "value": review.get("approved_host") or "Not set"},
+                {"label": "Apply mode", "value": review.get("apply_mode_label") or "Not set"},
+                {"label": "Controller", "value": review.get("controller") or "Not set"},
+                {"label": "OS RAID 1 bays", "value": review.get("os_bays") or "Not selected"},
+                {"label": "Data RAID bays", "value": review.get("data_bays") or "Not selected"},
+                {"label": "Hot spare bay", "value": review.get("spare_bay") or "Not reserved"},
+                {"label": "Approved plan path", "value": review.get("plan_path") or "Not set"},
+                {"label": "Approved discovery path", "value": review.get("discovery_raw_path") or "Not set"},
+            ]
+        if key == "esxi":
+            rows = [
+                {"label": "Source", "value": esxi_install_review.get("source_label") or "Not set"},
+                {"label": "Hostname", "value": esxi_install_review.get("hostname") or "Not set"},
+                {"label": "Management IP", "value": esxi_install_review.get("management_ip") or "Not set"},
+                {"label": "Subnet mask", "value": esxi_install_review.get("subnet_mask") or "Not set"},
+                {"label": "Gateway", "value": esxi_install_review.get("gateway") or "Not set"},
+                {"label": "DNS servers", "value": ", ".join(esxi_install_review.get("dns_servers") or []) or "Not set"},
+                {"label": "Root password saved", "value": "Yes" if esxi_install_review.get("root_password_saved") else "No"},
+                {"label": "Built ISO path", "value": esxi_install_review.get("output_iso_path") or "Not set"},
+                {"label": "Virtual media URL", "value": esxi_install_review.get("virtual_media_url") or "Not set"},
+                {"label": "Base ISO path", "value": esxi_install_review.get("base_iso_path") or "Not set"},
+                {"label": "Manual test defaults", "value": esxi_install_review.get("manual_defaults_label") or "Not set"},
+                {"label": "Enable SSH", "value": "Yes" if esxi_install_review.get("enable_ssh") else "No"},
+                {"label": "Disable IPv6", "value": "Yes" if esxi_install_review.get("disable_ipv6") else "No"},
+            ]
+            if esxi_install_review.get("vlan_id"):
+                rows.append({"label": "VLAN ID", "value": str(esxi_install_review.get("vlan_id"))})
+            if esxi_install_review.get("ntp_server"):
+                rows.append({"label": "NTP server", "value": str(esxi_install_review.get("ntp_server"))})
+            if esxi_install_review.get("missing_fields"):
+                rows.append({"label": "Missing required values", "value": ", ".join(esxi_install_review.get("missing_fields") or [])})
+            return rows
+        return []
+
     def stage_dependencies(key: str) -> list[str]:
         if key == "ilo":
             return ["Global Settings", "Saved iLO target and credentials"]
@@ -6399,6 +6330,204 @@ def build_execution_review(cfg: dict, scope: str):
             "verify": "Use the saved stage settings during the run.",
         }
 
+    def stage_change_items(key: str) -> list[dict[str, str]]:
+        if key == "ilo":
+            dns_values = ", ".join([x for x in cfg.get("shared_network", {}).get("dns_servers", []) if x and str(x).strip()]) or "Not set"
+            shared_snmp = cfg.get("shared_snmp", {}) or {}
+            extra_users = cfg.get("ilo", {}).get("additional_users", []) or []
+            items = [
+                {
+                    "stage": "iLO",
+                    "label": "Controller login address",
+                    "before": cfg["ilo"].get("current_ip") or cfg["ilo"].get("host") or "Not set",
+                    "after": cfg["ilo"].get("target_ip") or cfg["ilo"].get("current_ip") or cfg["ilo"].get("host") or "Not set",
+                },
+                {
+                    "stage": "iLO",
+                    "label": "Gateway",
+                    "before": "Current live gateway",
+                    "after": cfg["ilo"].get("gateway") or cfg.get("ip_plan", {}).get("gateway") or "Not set",
+                },
+                {
+                    "stage": "iLO",
+                    "label": "Server name",
+                    "before": "Current live hostname",
+                    "after": cfg["ilo"].get("hostname") or "Unchanged",
+                },
+                {
+                    "stage": "iLO",
+                    "label": "DNS servers",
+                    "before": "Current live DNS",
+                    "after": dns_values,
+                },
+            ]
+            if shared_snmp.get("v3_username"):
+                items.extend(
+                    [
+                        {
+                            "stage": "iLO",
+                            "label": "SNMPv3 username",
+                            "before": "Current live SNMP user",
+                            "after": shared_snmp.get("v3_username") or "Not set",
+                        },
+                        {
+                            "stage": "iLO",
+                            "label": "SNMPv3 protocols",
+                            "before": "Current live SNMP protocols",
+                            "after": f"{shared_snmp.get('v3_auth_protocol', 'SHA')} / {shared_snmp.get('v3_priv_protocol', 'AES')}",
+                        },
+                    ]
+                )
+            if extra_users:
+                items.append(
+                    {
+                        "stage": "iLO",
+                        "label": "Additional local iLO users",
+                        "before": "Current live user set",
+                        "after": str(len(extra_users)),
+                    }
+                )
+            return items
+        if key == "storage":
+            review = build_storage_run_review()
+            return [
+                {
+                    "stage": "Storage",
+                    "label": "Apply mode",
+                    "before": "Current storage layout",
+                    "after": review.get("apply_mode_label") or "Not set",
+                },
+                {
+                    "stage": "Storage",
+                    "label": "Controller",
+                    "before": "Detected controller",
+                    "after": review.get("controller") or "Not set",
+                },
+                {
+                    "stage": "Storage",
+                    "label": "OS RAID 1 bays",
+                    "before": "Current OS volume layout",
+                    "after": review.get("os_bays") or "Not selected",
+                },
+                {
+                    "stage": "Storage",
+                    "label": "Data RAID bays",
+                    "before": "Current data volume layout",
+                    "after": review.get("data_bays") or "Not selected",
+                },
+                {
+                    "stage": "Storage",
+                    "label": "Hot spare bay",
+                    "before": "Current spare layout",
+                    "after": review.get("spare_bay") or "Not reserved",
+                },
+            ]
+        if key == "esxi":
+            items = [
+                {
+                    "stage": "ESXi",
+                    "label": "Hostname",
+                    "before": "Current installed ESXi hostname",
+                    "after": esxi_install_review.get("hostname") or "Not set",
+                },
+                {
+                    "stage": "ESXi",
+                    "label": "Management IP",
+                    "before": "Current installed ESXi IP",
+                    "after": esxi_install_review.get("management_ip") or "Not set",
+                },
+                {
+                    "stage": "ESXi",
+                    "label": "Subnet mask",
+                    "before": "Current installed ESXi subnet",
+                    "after": esxi_install_review.get("subnet_mask") or "Not set",
+                },
+                {
+                    "stage": "ESXi",
+                    "label": "Gateway",
+                    "before": "Current installed ESXi gateway",
+                    "after": esxi_install_review.get("gateway") or "Not set",
+                },
+                {
+                    "stage": "ESXi",
+                    "label": "DNS servers",
+                    "before": "Current installed ESXi DNS",
+                    "after": ", ".join(esxi_install_review.get("dns_servers") or []) or "Not set",
+                },
+                {
+                    "stage": "ESXi",
+                    "label": "Root password",
+                    "before": "Current installed ESXi root password",
+                    "after": "Saved" if esxi_install_review.get("root_password_saved") else "Missing",
+                },
+            ]
+            if esxi_install_review.get("vlan_id"):
+                items.append(
+                    {
+                        "stage": "ESXi",
+                        "label": "VLAN ID",
+                        "before": "Current installed VLAN",
+                        "after": str(esxi_install_review.get("vlan_id")),
+                    }
+                )
+            if esxi_install_review.get("ntp_server"):
+                items.append(
+                    {
+                        "stage": "ESXi",
+                        "label": "NTP server",
+                        "before": "Current installed NTP",
+                        "after": esxi_install_review.get("ntp_server") or "Not set",
+                    }
+                )
+            items.extend(
+                [
+                    {
+                        "stage": "ESXi",
+                        "label": "SSH",
+                        "before": "Current installed SSH state",
+                        "after": "Enabled" if esxi_install_review.get("enable_ssh") else "Disabled",
+                    },
+                    {
+                        "stage": "ESXi",
+                        "label": "IPv6",
+                        "before": "Current installed IPv6 state",
+                        "after": "Disabled" if esxi_install_review.get("disable_ipv6") else "Enabled",
+                    },
+                ]
+            )
+            return items
+        if key == "windows":
+            return [
+                {
+                    "stage": "Windows",
+                    "label": "VM name",
+                    "before": "Current Windows target",
+                    "after": cfg["windows"].get("vm_name") or "Not set",
+                },
+                {
+                    "stage": "Windows",
+                    "label": "Target IP",
+                    "before": "Current Windows IP",
+                    "after": cfg["windows"].get("ip_address") or cfg.get("ip_plan", {}).get("windows") or "Not set",
+                },
+            ]
+        if key == "qnap":
+            return [
+                {
+                    "stage": "QNAP",
+                    "label": "Hostname",
+                    "before": "Current QNAP hostname",
+                    "after": cfg["qnap"].get("hostname") or "Not set",
+                },
+                {
+                    "stage": "QNAP",
+                    "label": "Target IP",
+                    "before": "Current QNAP IP",
+                    "after": cfg["qnap"].get("ip") or cfg.get("ip_plan", {}).get("qnap") or "Not set",
+                },
+            ]
+        return []
+
     def stage_entry(key: str, included: bool) -> dict:
         meta = components[key]
         summary = meta["summary"]
@@ -6449,6 +6578,7 @@ def build_execution_review(cfg: dict, scope: str):
             "preflight_ready": [item.get("label") for item in ready_items],
             "preflight_blockers": blockers,
             "settings": stage_settings(key),
+            "detail_rows": stage_detail_rows(key),
         }
 
     included_stages = []
@@ -6566,6 +6696,11 @@ def build_execution_review(cfg: dict, scope: str):
         confidence_tone = "ready"
         confidence_summary = "The selected stages have the required saved values and look ready for a final review."
     change_summary = [stage_change_summary(stage["key"]) for stage in included_stages if stage.get("included")]
+    change_items = []
+    for stage in included_stages:
+        if not stage.get("included"):
+            continue
+        change_items.extend(stage_change_items(stage["key"]))
     final_summary = {
         "will_run": will_run or ["Nothing yet"],
         "will_not_run": will_not_run or ["Everything selected is in scope"],
@@ -6606,6 +6741,7 @@ def build_execution_review(cfg: dict, scope: str):
             "review_checks": review_checks,
         },
         "change_summary": change_summary,
+        "change_items": change_items,
         "recoverability": recoverability,
         "restart_expected": any("Restart expected" in item.get("label", "") and item.get("value") == "Yes" for item in summary_items),
         "detail_text": "\n".join(lines),
@@ -9418,7 +9554,6 @@ def render_page(
     config_view_title: str | None = None,
     config_view_content: str | None = None,
     action_feedback: dict | None = None,
-    live_inventory_status: dict | None = None,
     storage_discovery: dict | None = None,
     storage_export_paths: dict[str, Path] | None = None,
     storage_plan: dict | None = None,
@@ -9465,33 +9600,26 @@ def render_page(
         workflow_contexts["storage"]["state_label"] = storage_ui["label"]
         workflow_contexts["storage"]["tone"] = storage_ui["tone"]
         workflow_contexts["storage"]["result_summary"] = storage_workflow_state.get("workflow_summary") or workflow_contexts["storage"]["result_summary"]
-    page_comparisons = build_page_comparisons(cfg, workflow_contexts, history)
     recommended_next_step = build_recommended_next_step(cfg, workflow_contexts)
     activity_feed = build_activity_feed(history)
     history_display = build_history_display_entries(history)
     dashboard_job_status = build_dashboard_job_status(history)
-    dashboard_hardware_identity = build_dashboard_hardware_identity(cfg)
-    dashboard_latest_receipt = build_dashboard_latest_receipt(cfg, history)
-    dashboard_timeline = build_dashboard_timeline(cfg, workflow_contexts, history, job, dashboard_hardware_identity, dashboard_latest_receipt)
+    hardware_identity = build_hardware_identity(cfg)
+    ilo_advanced_profile = build_ilo_advanced_profile(cfg)
     ilo_latest_receipt = latest_scope_receipt(cfg, history, ["ilo"])
     storage_latest_receipt = latest_scope_receipt(cfg, history, ["storage-apply", "storage-reboot"])
     esxi_latest_receipt = latest_scope_receipt(cfg, history, ["esxi"])
-    ilo_page_readiness = build_ilo_page_readiness(cfg, ilo_latest_receipt, storage_execution_status)
-    ilo_change_summary = build_ilo_change_summary(cfg)
     storage_page_readiness = build_storage_page_readiness(storage_review, storage_target, storage_credentials, storage_execution_status, storage_export_paths)
     storage_change_summary = build_storage_change_summary(storage_review, storage_plan)
     esxi_page_review = build_esxi_page_review(cfg)
-    esxi_page_readiness = build_esxi_page_readiness(cfg, esxi_page_review, esxi_latest_receipt)
-    esxi_change_summary = build_esxi_change_summary(esxi_page_review)
+    esxi_advanced_profile = build_esxi_advanced_profile(cfg, esxi_page_review)
     live_job_story = build_live_job_story(job)
+    live_stage_cards = build_live_stage_cards(job)
     report_center = build_report_center(
         cfg,
         query=str(request.query_params.get("report_query", "") or ""),
         report_type=str(request.query_params.get("report_type", "all") or "all"),
     )
-    page_briefing = build_page_briefing(active_page, cfg, workflow_contexts, history, execution_review)
-    page_runbook = PAGE_RUNBOOKS.get(active_page, {})
-    settings_sources = build_settings_sources(cfg)
     selected_run_scopes = ["included"] if not confirm_scope else (run_center_scope_keys(confirm_scope, cfg) or ([confirm_scope] if confirm_scope == "included" else []))
     ilo_inclusion = component_inclusion_status(cfg, "ilo")
     esxi_inclusion = component_inclusion_status(cfg, "esxi")
@@ -9530,7 +9658,6 @@ def render_page(
         "config_view_title": config_view_title,
         "config_view_content": config_view_content,
         "action_feedback": action_feedback,
-        "live_inventory_status": live_inventory_status,
         "storage_discovery": storage_discovery,
         "storage_export_paths": storage_export_paths,
         "storage_plan": storage_plan,
@@ -9546,29 +9673,22 @@ def render_page(
         "storage_display_drives": storage_display_drives,
         "storage_plan_defaults": storage_plan_defaults,
         "workflow_contexts": workflow_contexts,
-        "page_comparisons": page_comparisons,
         "recommended_next_step": recommended_next_step,
         "activity_feed": activity_feed,
         "history_display": history_display,
         "dashboard_job_status": dashboard_job_status,
-        "dashboard_hardware_identity": dashboard_hardware_identity,
-        "dashboard_latest_receipt": dashboard_latest_receipt,
-        "dashboard_timeline": dashboard_timeline,
+        "hardware_identity": hardware_identity,
+        "ilo_advanced_profile": ilo_advanced_profile,
         "ilo_latest_receipt": ilo_latest_receipt,
         "storage_latest_receipt": storage_latest_receipt,
         "esxi_latest_receipt": esxi_latest_receipt,
-        "ilo_page_readiness": ilo_page_readiness,
-        "ilo_change_summary": ilo_change_summary,
         "storage_page_readiness": storage_page_readiness,
         "storage_change_summary": storage_change_summary,
         "esxi_page_review": esxi_page_review,
-        "esxi_page_readiness": esxi_page_readiness,
-        "esxi_change_summary": esxi_change_summary,
+        "esxi_advanced_profile": esxi_advanced_profile,
         "live_job_story": live_job_story,
+        "live_stage_cards": live_stage_cards,
         "report_center": report_center,
-        "page_briefing": page_briefing,
-        "page_runbook": page_runbook,
-        "settings_sources": settings_sources,
         "ilo_inclusion": ilo_inclusion,
         "esxi_inclusion": esxi_inclusion,
         "windows_inclusion": windows_inclusion,
@@ -9613,7 +9733,7 @@ def page_name_from_request_path(path: str) -> str:
         "configs": "configs",
         "reports": "configs",
         "history": "history",
-        "kits": "kits",
+        "kits": "dashboard",
     }
     return normalize_page_name(route_map.get(first, first))
 
@@ -9782,7 +9902,7 @@ async def save_storage_target(
 @app.get("/kits", response_class=HTMLResponse)
 async def kits_page(request: Request):
     cfg = load_kit_config()
-    return render_page(request, cfg, active_page="kits")
+    return render_page(request, cfg, active_page="dashboard")
 
 
 @app.get("/history", response_class=HTMLResponse)
@@ -9792,14 +9912,16 @@ async def history_page(request: Request):
 
 
 @app.post("/load-kit", response_class=HTMLResponse)
-async def load_kit_route(request: Request, selected_kit: str = Form(...), return_page: str = Form("kits")):
+async def load_kit_route(request: Request, selected_kit: str = Form(...), return_page: str = Form("dashboard")):
     set_current_kit_name(selected_kit)
     cfg = load_kit_config(selected_kit)
+    if str(return_page).strip().lower() == "kits":
+        return_page = "dashboard"
     return render_page(request, cfg, active_page=return_page, message=f"Loaded kit: {selected_kit}")
 
 
 @app.post("/new-kit", response_class=HTMLResponse)
-async def new_kit_route(request: Request, new_kit_name: str = Form(...), return_page: str = Form("kits")):
+async def new_kit_route(request: Request, new_kit_name: str = Form(...), return_page: str = Form("dashboard")):
     name = sanitize_kit_name(new_kit_name)
     cfg = default_config()
     cfg["site"]["name"] = name
@@ -9814,6 +9936,8 @@ async def new_kit_route(request: Request, new_kit_name: str = Form(...), return_
         "logs": [],
     })
     save_history(name, [])
+    if str(return_page).strip().lower() == "kits":
+        return_page = "dashboard"
     return render_page(request, cfg, active_page=return_page, message=f"Created new kit: {name}")
 
 
@@ -10336,7 +10460,6 @@ async def export_ilo_inventory(request: Request, return_page: str = Form("config
             cfg,
             active_page=return_page,
             error_message=error_text,
-            live_inventory_status=build_live_inventory_status("Failed", "Failed", [error_text]),
         )
 
     try:
@@ -10358,7 +10481,6 @@ async def export_ilo_inventory(request: Request, return_page: str = Form("config
                 ],
                 links=[{"label": "Open artifacts page", "href": "/configs"}],
             ),
-            live_inventory_status=live_inventory_success_status("Complete", export_paths, host=host),
             config_view_title=f"Latest Live Summary: {export_paths['summary'].parent.name}",
             config_view_content=yaml_text,
         )
@@ -10369,7 +10491,6 @@ async def export_ilo_inventory(request: Request, return_page: str = Form("config
             cfg,
             active_page=return_page,
             error_message=error_text,
-            live_inventory_status=live_inventory_failure_status("Failed", error_text),
         )
 
 
@@ -10396,7 +10517,6 @@ async def export_ad_hoc_ilo_inventory(
             cfg,
             active_page=return_page,
             error_message=error_text,
-            live_inventory_status=build_live_inventory_status("Failed", "Failed", [error_text]),
         )
 
     try:
@@ -10434,7 +10554,6 @@ async def export_ad_hoc_ilo_inventory(
                 ],
                 links=[{"label": "Open artifacts page", "href": "/configs"}],
             ),
-            live_inventory_status=live_inventory_success_status("Complete", export_paths, host=host, label=label),
             config_view_title=f"Latest Live Summary: {export_paths['summary'].parent.name}",
             config_view_content=yaml_text,
         )
@@ -10445,7 +10564,6 @@ async def export_ad_hoc_ilo_inventory(
             cfg,
             active_page=return_page,
             error_message=error_text,
-            live_inventory_status=live_inventory_failure_status("Failed", error_text),
         )
 
 
@@ -10460,7 +10578,6 @@ async def view_latest_live_summary(request: Request, return_page: str = Form("co
             cfg,
             active_page=return_page,
             error_message=error_text,
-            live_inventory_status=build_live_inventory_status("Failed", "Failed", [error_text]),
         )
 
     return render_page(
@@ -10473,7 +10590,6 @@ async def view_latest_live_summary(request: Request, return_page: str = Form("co
             tone="ready",
             outcomes=[f"Source folder: {latest['directory']}"],
         ),
-        live_inventory_status=live_inventory_success_status("Complete", latest),
         config_view_title=f"Latest Live Summary: {latest['directory'].name}",
         config_view_content=latest["summary"].read_text(encoding="utf-8"),
     )
@@ -10575,6 +10691,8 @@ async def plan_raid_layout(
     request: Request,
     return_page: str = Form("storage"),
     discovery_raw_path: str = Form(""),
+    os_raid_level: str | None = Form(None),
+    data_raid_level: str | None = Form(None),
     os_bays: list[str] = Form([]),
     data_bays: list[str] = Form([]),
     hot_spare_bay: str = Form(""),
@@ -10592,15 +10710,16 @@ async def plan_raid_layout(
 
     try:
         discovery, discovery_paths = load_storage_discovery_artifact(discovery_raw_path, expected_host=host)
-        plan = build_raid_plan(
-            discovery,
-            discovery_paths,
-            overrides={
-                "os_bays": os_bays,
-                "data_bays": data_bays,
-                "hot_spare_bay": hot_spare_bay,
-            },
-        )
+        overrides = {
+            "os_bays": os_bays,
+            "data_bays": data_bays,
+            "hot_spare_bay": hot_spare_bay,
+        }
+        if os_raid_level is not None:
+            overrides["os_raid_level"] = os_raid_level
+        if data_raid_level is not None:
+            overrides["data_raid_level"] = data_raid_level
+        plan = build_raid_plan(discovery, discovery_paths, overrides=overrides)
         plan_paths = export_raid_plan_snapshot(cfg, plan, discovery_paths)
         update_storage_latest_state(cfg, discovery=discovery, discovery_paths=discovery_paths, plan=plan, plan_paths=plan_paths)
         save_kit_config(cfg)

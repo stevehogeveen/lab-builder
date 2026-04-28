@@ -142,7 +142,8 @@ class ILOClient:
         drives = []
 
         for storage in storage_subsystems:
-            for controller in storage.get("StorageControllers", []) or []:
+            storage_controllers = list(storage.get("StorageControllers", []) or [])
+            for controller in storage_controllers:
                 controllers.append(
                     {
                         "name": controller.get("Name", ""),
@@ -152,6 +153,24 @@ class ILOClient:
                         "serial_number": controller.get("SerialNumber", ""),
                         "speed_gbps": controller.get("SpeedGbps", None),
                         "status": controller.get("Status", {}),
+                    }
+                )
+            if not storage_controllers and (
+                storage.get("DrivesExpanded")
+                or storage.get("VolumesExpanded")
+                or storage.get("Drives")
+                or storage.get("Volumes")
+            ):
+                fallback = self._normalize_standard_storage_member_controller(storage)
+                controllers.append(
+                    {
+                        "name": fallback.get("name", ""),
+                        "model": fallback.get("model", ""),
+                        "firmware_version": fallback.get("firmware_version", ""),
+                        "manufacturer": fallback.get("manufacturer", ""),
+                        "serial_number": fallback.get("serial_number", ""),
+                        "speed_gbps": fallback.get("speed_gbps", None),
+                        "status": storage.get("Status", {}),
                     }
                 )
             for volume in storage.get("VolumesExpanded", []) or []:
@@ -233,6 +252,19 @@ class ILOClient:
         placement = part_location.get("LocationOrdinalValue") if isinstance(part_location, dict) else None
         return str(item.get("BayNumber") or item.get("Location") or placement or item.get("Id") or "")
 
+    def _normalize_standard_storage_member_controller(self, storage: dict[str, Any]) -> dict[str, Any]:
+        storage_path = str(storage.get("@odata.id", "") or "")
+        return {
+            "path": storage_path,
+            "name": storage.get("Name") or storage.get("Id") or storage.get("MemberId") or storage_path.rsplit("/", 1)[-1],
+            "model": storage.get("Model", "") or storage.get("Description", ""),
+            "firmware_version": storage.get("FirmwareVersion", ""),
+            "manufacturer": storage.get("Manufacturer", ""),
+            "serial_number": storage.get("SerialNumber", ""),
+            "speed_gbps": storage.get("SpeedGbps", None),
+            "status": self._storage_status_text(storage),
+        }
+
     def _normalize_standard_storage(self, storage_subsystems: list[dict[str, Any]]) -> dict[str, Any]:
         controllers = []
         volumes = []
@@ -240,7 +272,8 @@ class ILOClient:
 
         for storage in storage_subsystems:
             storage_path = storage.get("@odata.id", "")
-            for controller in storage.get("StorageControllers", []) or []:
+            storage_controllers = list(storage.get("StorageControllers", []) or [])
+            for controller in storage_controllers:
                 controllers.append(
                     {
                         "path": storage_path,
@@ -251,6 +284,13 @@ class ILOClient:
                         "status": self._storage_status_text(controller),
                     }
                 )
+            if not storage_controllers and (
+                storage.get("DrivesExpanded")
+                or storage.get("VolumesExpanded")
+                or storage.get("Drives")
+                or storage.get("Volumes")
+            ):
+                controllers.append(self._normalize_standard_storage_member_controller(storage))
 
             for volume in storage.get("VolumesExpanded", []) or []:
                 volumes.append(
@@ -1327,25 +1367,54 @@ class ILOClient:
         return drive_locations
 
     def _logical_drive_payload(self, logical_drive_kind: str, intent: dict[str, Any]) -> dict[str, Any]:
+        raid_value = re.sub(r"[^0-9A-Za-z]", "", str(intent.get("raid") or "").strip()).upper()
+        logical_drive_name = str(intent.get("label") or "").strip()
+        if not raid_value:
+            raid_value = "RAID1" if logical_drive_kind == "os_raid1" else "RAID6"
+
+        raid_map = {
+            "RAID0": "Raid0",
+            "RAID1": "Raid1",
+            "RAID5": "Raid5",
+            "RAID6": "Raid6",
+            "RAID10": "Raid10",
+        }
+        raid_redfish = raid_map.get(raid_value)
+        if not raid_redfish:
+            raise ILOError(f"Unsupported Gen10 RAID level requested: {raid_value or '(empty)'}")
+
+        rules = {
+            "RAID0": {"min": 2},
+            "RAID1": {"exact": 2},
+            "RAID5": {"min": 3},
+            "RAID6": {"min": 4},
+            "RAID10": {"min": 4, "even": True},
+        }
+        rule = rules[raid_value]
+
+        drive_locations = self._required_drive_locations(
+            intent,
+            len(intent.get("drives", []) or []),
+            logical_drive_name or "Logical drive",
+        )
+        if rule.get("exact") is not None and len(drive_locations) != int(rule["exact"]):
+            raise ILOError(f"{logical_drive_name or raid_value} requires exactly {int(rule['exact'])} mapped drives, found {len(drive_locations)}.")
+        if rule.get("min") is not None and len(drive_locations) < int(rule["min"]):
+            raise ILOError(f"{logical_drive_name or raid_value} requires at least {int(rule['min'])} mapped drives, found {len(drive_locations)}.")
+        if rule.get("even") and len(drive_locations) % 2:
+            raise ILOError(f"{logical_drive_name or raid_value} requires an even number of mapped drives, found {len(drive_locations)}.")
+
         if logical_drive_kind == "os_raid1":
-            drive_locations = self._required_drive_locations(intent, 2, "OS RAID 1")
             return {
-                "LogicalDriveName": "OS RAID 1",
-                "Raid": "Raid1",
+                "LogicalDriveName": logical_drive_name or f"OS {raid_value.replace('RAID', 'RAID ')}",
+                "Raid": raid_redfish,
                 "CapacityGiB": int(intent.get("target_size_gib") or 500),
                 "DataDrives": drive_locations,
             }
         if logical_drive_kind == "data_raid6":
-            drive_locations = self._required_drive_locations(
-                intent,
-                len(intent.get("drives", []) or []),
-                "Data RAID 6",
-            )
-            if len(drive_locations) < 4:
-                raise ILOError(f"Data RAID 6 requires at least 4 mapped drives, found {len(drive_locations)}.")
             return {
-                "LogicalDriveName": "Data RAID 6",
-                "Raid": "Raid6",
+                "LogicalDriveName": logical_drive_name or f"Data {raid_value.replace('RAID', 'RAID ')}",
+                "Raid": raid_redfish,
                 "DataDrives": drive_locations,
             }
         raise ILOError(f"Unsupported Gen10 logical drive kind: {logical_drive_kind}")
@@ -1395,12 +1464,9 @@ class ILOClient:
         data_payload = self._logical_drive_payload("data_raid6", data_intent)
         spare_drive = (spare_intent.get("drive") or {})
         spare_location = str(spare_drive.get("smart_storage_location") or spare_drive.get("location") or "").strip()
-        if not spare_location:
-            raise ILOError(
-                f"Hot-spare mapping is incomplete. Missing Smart Storage location for planned bay {spare_intent.get('bay') or 'unknown'}."
-            )
-        data_payload["SpareDrives"] = [spare_location]
-        data_payload["SpareRebuildMode"] = "Dedicated"
+        if spare_location:
+            data_payload["SpareDrives"] = [spare_location]
+            data_payload["SpareRebuildMode"] = "Dedicated"
 
         logical_drives.extend([os_payload, data_payload])
         return {
