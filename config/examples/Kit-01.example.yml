@@ -1,0 +1,87 @@
+site:
+  name: Kit-01
+shared_network:
+  subnet: 10.10.8.0/24
+  dns_servers:
+    - 10.10.8.1
+    - 1.1.1.1
+    - ""
+    - ""
+shared_snmp:
+  v3_username: snmpuser
+  v3_auth_protocol: SHA
+  v3_auth_password: CHANGE_ME
+  v3_priv_protocol: AES
+  v3_priv_password: CHANGE_ME
+  users:
+    - username: snmpuser
+      auth_protocol: SHA
+      auth_password: CHANGE_ME
+      priv_protocol: AES
+      priv_password: CHANGE_ME
+ip_plan:
+  gateway: 10.10.8.1
+  switch: 10.10.8.2
+  esxi: 10.10.8.10
+  ilo: 10.10.8.11
+  windows: 10.10.8.20
+  qnap: 10.10.8.30
+  iosafe: 10.10.8.31
+included:
+  ilo: true
+  esxi: true
+  windows: false
+  qnap: false
+  iosafe: false
+  cisco_switch: false
+  storage: false
+ilo:
+  host: 10.10.8.11
+  current_ip: 10.10.8.11
+  target_ip: 10.10.8.11
+  subnet_mask: 255.255.255.0
+  gateway: 10.10.8.1
+  dns_servers:
+    - 10.10.8.1
+    - 1.1.1.1
+    - ""
+    - ""
+  hostname: ilo01
+  username: Administrator
+  password: CHANGE_ME
+  additional_users:
+    - username: ops-user
+      password: CHANGE_ME
+      role: ReadOnly
+esxi:
+  hostname: esxi01
+  management_ip: 10.10.8.10
+  subnet_mask: 255.255.255.0
+  gateway: 10.10.8.1
+  dns_servers:
+    - 10.10.8.1
+    - 1.1.1.1
+  root_password: CHANGE_ME
+windows:
+  vm_name: win2022-01
+  admin_password: CHANGE_ME
+  ip_address: 10.10.8.20
+  subnet_mask: 255.255.255.0
+  gateway: 10.10.8.1
+  dns_servers:
+    - 10.10.8.1
+qnap:
+  hostname: qnap01
+  ip: 10.10.8.30
+  username: admin
+  password: CHANGE_ME
+iosafe:
+  hostname: iosafe01
+  ip: 10.10.8.31
+  username: admin
+  password: CHANGE_ME
+cisco_switch:
+  hostname: sw01
+  ip: 10.10.8.2
+  username: admin
+  password: CHANGE_ME

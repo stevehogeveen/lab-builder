@@ -6424,6 +6424,37 @@ def test_load_job_handles_partial_yaml_without_crashing():
     assert "[WARN] Live job state was mid-write. Refreshing." in job["logs"][0]
 
 
+def test_load_kit_config_bootstraps_default_kit_when_none_exist(tmp_path, monkeypatch):
+    kits_dir = tmp_path / "kits"
+    kits_dir.mkdir(parents=True, exist_ok=True)
+    current_kit_file = tmp_path / "current_kit.txt"
+
+    monkeypatch.setattr(main, "KITS_DIR", kits_dir)
+    monkeypatch.setattr(main, "CURRENT_KIT_FILE", current_kit_file)
+
+    cfg = main.load_kit_config()
+
+    assert (kits_dir / "Kit-01.yml").exists()
+    assert cfg["site"]["name"] == "Kit-01"
+    assert cfg["ilo"]["username"] == "Administrator"
+
+
+def test_get_current_kit_name_skips_missing_pointer_and_uses_available_kit(tmp_path, monkeypatch):
+    kits_dir = tmp_path / "kits"
+    kits_dir.mkdir(parents=True, exist_ok=True)
+    current_kit_file = tmp_path / "current_kit.txt"
+    current_kit_file.write_text("Missing-Kit", encoding="utf-8")
+    (kits_dir / "Available-Kit.yml").write_text(
+        yaml.safe_dump({"site": {"name": "Available-Kit"}}, sort_keys=False),
+        encoding="utf-8",
+    )
+
+    monkeypatch.setattr(main, "KITS_DIR", kits_dir)
+    monkeypatch.setattr(main, "CURRENT_KIT_FILE", current_kit_file)
+
+    assert main.get_current_kit_name() == "Available-Kit"
+
+
 def test_history_page_renders_boolean_config_summary_values(client):
     cfg = main.default_config()
     cfg["site"]["name"] = "History Bool Kit"

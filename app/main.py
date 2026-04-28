@@ -124,15 +124,16 @@ PAGE_META = {
 
 STORAGE_APPROVAL_CONFIRM = "APPROVE STORAGE"
 RUN_CENTER_STAGE_KEYS = ["ilo", "storage", "esxi", "windows", "qnap", "iosafe", "cisco_switch"]
+DEFAULT_KIT_NAME = "Kit-01"
 
 
 def sanitize_kit_name(name: str) -> str:
     name = (name or "").strip()
     if not name:
-        return "Kit-01"
+        return DEFAULT_KIT_NAME
     name = re.sub(r"[^\w\- ]+", "", name)
     name = name.replace(" ", "-")
-    return name or "Kit-01"
+    return name or DEFAULT_KIT_NAME
 
 
 def normalize_ilo_hostname(value: str) -> str:
@@ -155,6 +156,18 @@ def kit_path(kit_name: str) -> Path:
 
 def list_kits():
     return sorted([p.stem for p in KITS_DIR.glob("*.yml")])
+
+
+def ensure_bootstrap_kit() -> str:
+    kits = list_kits()
+    if kits:
+        return kits[0]
+    kit_name = DEFAULT_KIT_NAME
+    cfg = merge_defaults({"site": {"name": kit_name}})
+    path = kit_path(kit_name)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(yaml.safe_dump(cfg, sort_keys=False), encoding="utf-8")
+    return kit_name
 
 
 def normalize_run_center_scope(scope: str | None, selected_scopes: list[str] | None = None) -> str:
@@ -193,9 +206,11 @@ def run_center_scope_keys(scope: str, cfg: dict | None = None) -> list[str]:
 
 def get_current_kit_name():
     if CURRENT_KIT_FILE.exists():
-        return CURRENT_KIT_FILE.read_text(encoding="utf-8").strip()
+        selected = sanitize_kit_name(CURRENT_KIT_FILE.read_text(encoding="utf-8").strip())
+        if kit_path(selected).exists():
+            return selected
     kits = list_kits()
-    return kits[0] if kits else "Kit-01"
+    return kits[0] if kits else ensure_bootstrap_kit()
 
 
 def set_current_kit_name(name: str):
@@ -209,7 +224,12 @@ def load_kit_config(kit_name: str | None = None):
         with open(path, "r", encoding="utf-8") as f:
             data = yaml.safe_load(f) or {}
     else:
-        data = {}
+        if not list_kits() and name == DEFAULT_KIT_NAME:
+            ensure_bootstrap_kit()
+            with open(path, "r", encoding="utf-8") as f:
+                data = yaml.safe_load(f) or {}
+        else:
+            data = {}
     data = merge_defaults(data)
     try:
         data = apply_ip_plan(data)
