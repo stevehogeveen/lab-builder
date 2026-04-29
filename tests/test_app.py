@@ -7,6 +7,7 @@ from fastapi.testclient import TestClient
 
 from app.ilo import ILOClient, ILOConfig, ILOError
 from app.esxi.kickstart import build_kickstart
+import app.ilo as ilo_module
 import app.main as main
 
 
@@ -130,6 +131,163 @@ class FakeILOClient:
                 },
             },
         }
+
+    def get_storage_discovery(self, deep_smart_storage_scan=False):
+        return {
+            "summary": {
+                "server": {
+                    "model": "ProLiant DL380 Gen11",
+                    "product_name": "DL380",
+                    "generation": "Gen11",
+                    "serial_number": "ABC123",
+                },
+                "ilo": {
+                    "model": "iLO 6",
+                    "version": "iLO 6",
+                    "firmware": "3.00",
+                },
+                "capabilities": {
+                    "standard_redfish_storage": True,
+                    "hpe_smart_storage": False,
+                    "standard_storage_path": "/redfish/v1/Systems/1/Storage",
+                    "hpe_smart_storage_paths": [],
+                    "hpe_smart_storage_diagnostics": {
+                        "probed_paths": [],
+                        "collections": [],
+                        "warnings": [],
+                        "deep_scan_requested": deep_smart_storage_scan,
+                        "deep_fallback_ran": False,
+                    },
+                },
+                "standard_redfish_storage": {
+                    "controllers": [
+                        {
+                            "path": "/redfish/v1/Systems/1/Storage/1",
+                            "name": "Smart Array",
+                            "model": "MR416i-o",
+                            "firmware_version": {"Current": {"VersionString": "1.98"}},
+                            "manufacturer": "HPE",
+                            "status": "OK / Enabled",
+                        }
+                    ],
+                    "volumes": [
+                        {
+                            "path": "/redfish/v1/Systems/1/Storage/1/Volumes/1",
+                            "id": "1",
+                            "name": "OS Volume",
+                            "raid_type": "RAID1",
+                            "capacity_gib": 480,
+                            "drive_bays": ["1"],
+                            "spare_bays": ["2"],
+                            "status": "OK / Enabled",
+                        }
+                    ],
+                    "drives": [
+                        {
+                            "path": "/redfish/v1/Systems/1/Storage/1/Drives/1",
+                            "id": "1",
+                            "bay": "1",
+                            "name": "Drive 1",
+                            "model": "HPE SSD",
+                            "serial_number": "SER1",
+                            "size_gib": 480,
+                            "media_type": "SSD",
+                            "protocol": "SAS",
+                            "status": "OK / Enabled",
+                        },
+                        {
+                            "path": "/redfish/v1/Systems/1/Storage/1/Drives/2",
+                            "id": "2",
+                            "bay": "2",
+                            "name": "Drive 2",
+                            "model": "HPE SSD",
+                            "serial_number": "SER2",
+                            "size_gib": 480,
+                            "media_type": "SSD",
+                            "protocol": "SAS",
+                            "status": "OK / Enabled",
+                        },
+                    ],
+                },
+            },
+            "raw": {
+                "source_host": getattr(self.cfg, "host", ""),
+                "deep_scan_requested": deep_smart_storage_scan,
+            },
+        }
+
+
+def test_ilo_client_retries_get_after_no_valid_session(monkeypatch):
+    class FakeCookies:
+        def clear(self):
+            return None
+
+    class FakeResponse:
+        def __init__(self, status_code, text="", json_data=None, headers=None):
+            self.status_code = status_code
+            self.text = text
+            self._json_data = json_data
+            self.headers = headers or {}
+
+        def json(self):
+            if self._json_data is None:
+                raise ValueError("no json")
+            return self._json_data
+
+    class FakeSession:
+        def __init__(self):
+            self.calls = []
+            self.cookies = FakeCookies()
+            self.first_get = True
+
+        def request(self, method, url, **kwargs):
+            self.calls.append((method, url, kwargs))
+            if method == "GET" and url.endswith("/redfish/v1/Managers") and self.first_get:
+                self.first_get = False
+                return FakeResponse(
+                    401,
+                    '{"error":{"@Message.ExtendedInfo":[{"MessageId":"Base.1.18.NoValidSession"}]}}',
+                    json_data={"error": "NoValidSession"},
+                )
+            if method == "GET" and url.endswith("/redfish/v1/Managers"):
+                return FakeResponse(
+                    200,
+                    '{"Members":[{"@odata.id":"/redfish/v1/Managers/1"}]}',
+                    json_data={"Members": [{"@odata.id": "/redfish/v1/Managers/1"}]},
+                )
+            raise AssertionError(f"unexpected request: {method} {url}")
+
+        def post(self, url, **kwargs):
+            self.calls.append(("POST", url, kwargs))
+            assert url.endswith("/redfish/v1/SessionService/Sessions")
+            return FakeResponse(
+                201,
+                "",
+                json_data={},
+                headers={
+                    "X-Auth-Token": "token-123",
+                    "Location": "/redfish/v1/SessionService/Sessions/1",
+                },
+            )
+
+    created = {}
+
+    def build_session():
+        session = FakeSession()
+        created["session"] = session
+        return session
+
+    monkeypatch.setattr(ilo_module.requests, "Session", build_session)
+
+    client = ILOClient(ILOConfig(host="10.10.8.110", username="Administrator", password="secret"))
+
+    assert client.get_managers() == ["/redfish/v1/Managers/1"]
+    session = created["session"]
+    assert session.calls[0][0] == "GET"
+    assert session.calls[1][0] == "POST"
+    assert session.calls[2][0] == "GET"
+    assert "auth" in session.calls[0][2]
+    assert session.calls[2][2]["headers"]["X-Auth-Token"] == "token-123"
 
     def get_storage_discovery(self, deep_smart_storage_scan=False):
         return {
@@ -1136,6 +1294,65 @@ def test_save_ilo_settings_persists_additional_users(client):
     ]
 
 
+def test_save_ilo_settings_rejects_invalid_primary_credentials(client):
+    cfg = main.default_config()
+    cfg["site"]["name"] = "Ilo Invalid Credentials Kit"
+    cfg["ip_plan"]["gateway"] = "10.10.8.1"
+    cfg["ilo"]["username"] = "Administrator"
+    cfg["ilo"]["password"] = "secret"
+    main.save_kit_config(cfg)
+
+    response = client.post(
+        "/save-ilo-settings",
+        data={
+            "return_page": "ilo",
+            "ilo_current_ip": "10.10.8.50",
+            "ilo_target_ip": "10.10.8.11",
+            "ilo_gateway": "",
+            "ilo_hostname": "ilo-invalid",
+            "ilo_username": "bad user",
+            "ilo_password": "secret",
+        },
+    )
+
+    assert response.status_code == 200
+    assert "iLO setup needs attention" in response.text
+    assert "iLO username cannot contain spaces." in response.text
+    assert 'name="ilo_username"' in response.text
+    assert "field-error" in response.text
+    assert "input-invalid" in response.text
+    saved = main.load_kit_config("Ilo-Invalid-Credentials-Kit")
+    assert saved["ilo"]["username"] == "Administrator"
+
+
+def test_save_ilo_settings_rejects_invalid_additional_user_credentials(client):
+    cfg = main.default_config()
+    cfg["site"]["name"] = "Ilo Invalid Extra User Kit"
+    cfg["ip_plan"]["gateway"] = "10.10.8.1"
+    main.save_kit_config(cfg)
+
+    response = client.post(
+        "/save-ilo-settings",
+        data={
+            "return_page": "ilo",
+            "ilo_current_ip": "10.10.8.50",
+            "ilo_target_ip": "10.10.8.11",
+            "ilo_gateway": "",
+            "ilo_hostname": "ilo-users",
+            "ilo_username": "Administrator",
+            "ilo_password": "secret",
+            "ilo_extra_username": ["ops user"],
+            "ilo_extra_password": ["extra-pass"],
+            "ilo_extra_role": ["Administrator"],
+        },
+    )
+
+    assert response.status_code == 200
+    assert "Extra iLO user 1 username cannot contain spaces." in response.text
+    saved = main.load_kit_config("Ilo-Invalid-Extra-User-Kit")
+    assert saved["ilo"]["additional_users"] == []
+
+
 def test_ilo_page_removes_old_controls_and_points_to_storage(client):
     cfg = main.default_config()
     cfg["site"]["name"] = "Ilo UI Kit"
@@ -1151,6 +1368,7 @@ def test_ilo_page_removes_old_controls_and_points_to_storage(client):
     assert "Open storage setup" in response.text
     assert "Read current iLO" in response.text
     assert "This is filled in from Global Settings unless you replace it here." in response.text
+    assert "Use a single printable login name, 39 characters or less." in response.text
 
 
 def test_save_esxi_windows_and_qnap_page_settings(client):
@@ -1158,7 +1376,7 @@ def test_save_esxi_windows_and_qnap_page_settings(client):
     cfg["site"]["name"] = "Workflow Kit"
     main.save_kit_config(cfg)
 
-    client.post("/save-esxi-settings", data={"return_page": "esxi", "esxi_hostname": "esxi-lab", "esxi_root_password": "secret"})
+    client.post("/save-esxi-settings", data={"return_page": "esxi", "esxi_hostname": "esxi-lab", "esxi_root_password": "Valid1Pass!"})
     client.post("/save-windows-settings", data={"return_page": "windows", "windows_vm_name": "win-lab", "windows_admin_password": "secret", "included_windows": "on"})
     client.post("/save-qnap-settings", data={"return_page": "qnap", "qnap_hostname": "qnap-lab", "qnap_username": "admin", "qnap_password": "secret", "included_qnap": "on"})
 
@@ -1183,6 +1401,7 @@ def test_global_settings_and_workflow_pages_show_defaults_and_dependencies(clien
 
     global_response = client.get("/global-settings")
     assert global_response.status_code == 200
+    assert "Use a single printable name, 32 characters or less." in global_response.text
     assert "Global Settings" in global_response.text
     assert "Save the shared defaults here once." in global_response.text
     assert "Default addresses" in global_response.text
@@ -1343,6 +1562,35 @@ def test_latest_live_summary_and_raw_downloads_use_new_export_layout(client, mon
     assert raw_download.headers["x-live-inventory-raw-path"].endswith("raw.json")
 
 
+def test_load_latest_live_inventory_snapshot_for_cfg_does_not_leak_other_kits(monkeypatch):
+    monkeypatch.setattr(main, "ILOClient", FakeILOClient)
+
+    other_cfg = main.default_config()
+    other_cfg["site"]["name"] = "Other-Kit"
+    other_cfg["ilo"]["current_ip"] = "10.10.8.50"
+    other_cfg["ilo"]["host"] = "10.10.8.50"
+    main.save_kit_config(other_cfg)
+    inventory = FakeILOClient(None).get_current_config_snapshot()
+    main.export_ilo_inventory_snapshot(other_cfg, inventory, label="other-kit", source_host="10.10.8.50")
+
+    current_cfg = main.default_config()
+    current_cfg["site"]["name"] = "Current-Kit"
+    current_cfg["ilo"]["current_ip"] = "10.10.8.110"
+    current_cfg["ilo"]["host"] = "10.10.8.110"
+
+    assert main.load_latest_live_inventory_snapshot_for_cfg(current_cfg) == {}
+
+
+def test_load_latest_storage_discovery_snapshot_does_not_fallback_to_other_server():
+    cfg = main.default_config()
+    cfg["site"]["name"] = "Current-Kit"
+    cfg["ilo"]["current_ip"] = "10.10.8.110"
+    cfg["ilo"]["host"] = "10.10.8.110"
+    cfg["storage"]["latest_discovery_raw_path"] = ""
+
+    assert main.load_latest_storage_discovery_snapshot(cfg) == {}
+
+
 def test_export_ilo_inventory_renders_summary_and_download_actions_on_ilo_page(client, monkeypatch):
     monkeypatch.setattr(main, "ILOClient", FakeILOClient)
 
@@ -1417,8 +1665,8 @@ def test_read_current_storage_saves_discovery_export_and_renders_summary(client,
     assert "Latest verified storage result" in response.text
     assert "Target server" in response.text
     assert "Current storage setup" in response.text
-    assert "Current storage setup loaded" in response.text
-    assert "The current storage layout is now ready to review." in response.text
+    assert "Warning: something needs attention" not in response.text
+    assert "Storage discovery failed" not in response.text
     assert "ProLiant DL380 Gen11" in response.text
     assert "MR416i-o" in response.text
     assert "1.98" in response.text
@@ -1477,7 +1725,8 @@ def test_read_current_storage_warns_when_smart_storage_controller_has_no_childre
     response = client.post("/read-current-storage", data={"return_page": "storage"})
 
     assert response.status_code == 200
-    assert "Current storage setup loaded" in response.text
+    assert "Warning: something needs attention" not in response.text
+    assert "Storage discovery failed" not in response.text
     assert "Build storage plan" in response.text
     assert "Open reports" in response.text
 
@@ -1821,6 +2070,234 @@ def planner_gen10_apply_discovery(existing_volumes: bool = True) -> dict:
     }
 
 
+def planner_standard_redfish_apply_discovery(
+    existing_volumes: bool = True,
+    generation: str = "Gen11",
+    ilo_version: str = "iLO 6",
+    include_second_controller: bool = False,
+) -> dict:
+    controller_path = "/redfish/v1/Systems/1/Storage/DE009000"
+    second_controller_path = "/redfish/v1/Systems/1/Storage/DE009001"
+    volumes = []
+    if existing_volumes:
+        volumes.append(
+            {
+                "path": f"{controller_path}/Volumes/1",
+                "controller_path": controller_path,
+                "id": "1",
+                "name": "Existing OS",
+                "raid_type": "RAID1",
+                "capacity_gib": 480,
+                "status": "OK / Enabled",
+            }
+        )
+
+    controllers = [
+        {
+            "path": controller_path,
+            "name": "HPE MR416i-o Gen11" if generation == "Gen11" else "HPE MR416i-a Gen10+",
+            "model": "MR416i-o" if generation == "Gen11" else "MR416i-a",
+            "firmware_version": "1.71" if generation == "Gen11" else "3.03",
+            "manufacturer": "HPE",
+            "status": "OK / Enabled",
+        }
+    ]
+    if include_second_controller:
+        controllers.append(
+            {
+                "path": second_controller_path,
+                "name": "HPE NS204i-u Gen11 Boot Controller",
+                "model": "NS204i-u",
+                "firmware_version": "1.00",
+                "manufacturer": "HPE",
+                "status": "OK / Enabled",
+            }
+        )
+
+    drives = [
+        {"path": "/redfish/v1/Chassis/DE009000/Drives/0", "controller_path": controller_path, "id": "0", "bay": "1", "name": "Drive 1", "model": "SSD-480", "size_gib": 480, "media_type": "SSD", "protocol": "SAS", "status": "OK / Enabled"},
+        {"path": "/redfish/v1/Chassis/DE009000/Drives/1", "controller_path": controller_path, "id": "1", "bay": "2", "name": "Drive 2", "model": "SSD-480", "size_gib": 480, "media_type": "SSD", "protocol": "SAS", "status": "OK / Enabled"},
+        {"path": "/redfish/v1/Chassis/DE009000/Drives/2", "controller_path": controller_path, "id": "2", "bay": "3", "name": "Drive 3", "model": "SSD-960", "size_gib": 960, "media_type": "SSD", "protocol": "SAS", "status": "OK / Enabled"},
+        {"path": "/redfish/v1/Chassis/DE009000/Drives/3", "controller_path": controller_path, "id": "3", "bay": "4", "name": "Drive 4", "model": "SSD-960", "size_gib": 960, "media_type": "SSD", "protocol": "SAS", "status": "OK / Enabled"},
+        {"path": "/redfish/v1/Chassis/DE009000/Drives/4", "controller_path": controller_path, "id": "4", "bay": "5", "name": "Drive 5", "model": "SSD-960", "size_gib": 960, "media_type": "SSD", "protocol": "SAS", "status": "OK / Enabled"},
+    ]
+    if include_second_controller:
+        drives.extend(
+            [
+                {"path": "/redfish/v1/Systems/1/Storage/DE009001/Drives/1", "controller_path": second_controller_path, "id": "5", "bay": "6", "name": "Boot Drive 1", "model": "NVMe-480", "size_gib": 480, "media_type": "SSD", "protocol": "NVMe", "status": "OK / Enabled"},
+                {"path": "/redfish/v1/Systems/1/Storage/DE009001/Drives/2", "controller_path": second_controller_path, "id": "6", "bay": "7", "name": "Boot Drive 2", "model": "NVMe-480", "size_gib": 480, "media_type": "SSD", "protocol": "NVMe", "status": "OK / Enabled"},
+            ]
+        )
+
+    raw_storage = [
+        {
+            "@odata.id": controller_path,
+            "Id": "DE009000",
+            "Name": controllers[0]["name"],
+            "Status": {"Health": "OK", "State": "Enabled"},
+            "Controllers": {"@odata.id": f"{controller_path}/Controllers"},
+            "Volumes": {"@odata.id": f"{controller_path}/Volumes"},
+            "Actions": {
+                "#Storage.ResetToDefaults": {
+                    "target": f"{controller_path}/Actions/Storage.ResetToDefaults",
+                    "ResetType@Redfish.AllowableValues": ["ResetAll", "PreserveVolumes"],
+                }
+            },
+            "DrivesExpanded": [],
+            "VolumesExpanded": [],
+        }
+    ]
+    if include_second_controller:
+        raw_storage.append(
+            {
+                "@odata.id": second_controller_path,
+                "Id": "DE009001",
+                "Name": "HPE NS204i-u Gen11 Boot Controller",
+                "Status": {"Health": "OK", "State": "Enabled"},
+                "Controllers": {"@odata.id": f"{second_controller_path}/Controllers"},
+                "Volumes": {"@odata.id": f"{second_controller_path}/Volumes"},
+                "Actions": {"#Storage.ResetToDefaults": {"target": f"{second_controller_path}/Actions/Storage.ResetToDefaults"}},
+                "DrivesExpanded": [],
+                "VolumesExpanded": [],
+            }
+        )
+
+    return {
+        "summary": {
+            "server": {
+                "model": "ProLiant DL360 Gen11" if generation == "Gen11" else "ProLiant DL360 Gen10 Plus",
+                "product_name": "DL360",
+                "generation": generation,
+                "serial_number": "3M1D3V105V" if generation == "Gen11" else "3M1D1Y11Z2",
+            },
+            "ilo": {
+                "model": ilo_version,
+                "version": ilo_version,
+                "firmware": "1.71" if generation == "Gen11" else "3.03",
+            },
+            "capabilities": {
+                "standard_redfish_storage": True,
+                "hpe_smart_storage": generation == "Gen10+",
+                "standard_storage_path": "/redfish/v1/Systems/1/Storage",
+                "hpe_smart_storage_paths": ["/redfish/v1/Systems/1/SmartStorage"] if generation == "Gen10+" else [],
+                "hpe_smart_storage_diagnostics": {"probed_paths": [], "collections": [], "warnings": [], "deep_scan_requested": False, "deep_fallback_ran": False},
+            },
+            "standard_redfish_storage": {
+                "controllers": controllers,
+                "volumes": volumes,
+                "drives": drives,
+            },
+            "hpe_smart_storage": {"controllers": [], "volumes": [], "drives": [], "diagnostics": {"probed_paths": [], "collections": [], "warnings": [], "deep_scan_requested": False, "deep_fallback_ran": False}},
+        },
+        "raw": {
+            "source_host": "10.10.8.90",
+            "standard_storage": raw_storage,
+            "system": {"Oem": {"Hpe": {"DeviceDiscoveryComplete": {"DeviceDiscovery": "vMainDeviceDiscoveryComplete"}}}},
+            "hpe_smart_storage_diagnostics": {"probed_paths": [], "collections": [], "warnings": [], "deep_scan_requested": False, "deep_fallback_ran": False},
+        },
+    }
+
+
+def planner_gen10_plus_hpe_inventory_without_settings_path() -> dict:
+    diagnostics = {
+        "found_paths": [
+            {"path": "/redfish/v1/Systems/1/SmartStorage", "source": "system", "key": "SmartStorage"},
+            {"path": "/redfish/v1/Systems/1/SmartStorage/ArrayControllers", "source": "guessed", "key": "synthetic"},
+            {"path": "/redfish/v1/Systems/1/SmartStorageConfig", "source": "guessed", "key": "synthetic"},
+            {"path": "/redfish/v1/Systems/1/SmartStorageConfig/Settings", "source": "guessed", "key": "synthetic"},
+        ],
+        "followed_links": [],
+        "collection_counts": {},
+        "collections": [],
+        "warnings": [],
+        "deep_scan_requested": False,
+        "deep_fallback_ran": False,
+        "probed_paths": [
+            {
+                "phase": "fast_pass",
+                "path": "/redfish/v1/Systems/1/SmartStorage",
+                "status": "ok",
+                "exists": True,
+                "error": "",
+                "name": "HpeSmartStorage",
+                "members": 0,
+            },
+            {
+                "phase": "fast_pass",
+                "path": "/redfish/v1/Systems/1/SmartStorage/ArrayControllers",
+                "status": "ok",
+                "exists": True,
+                "error": "",
+                "name": "HpeSmartStorageArrayControllers",
+                "members": 0,
+            },
+            {
+                "phase": "fast_pass",
+                "path": "/redfish/v1/Systems/1/SmartStorageConfig",
+                "status": "error",
+                "exists": False,
+                "error": "404 ResourceMissingAtURI",
+                "name": "",
+                "members": 0,
+            },
+            {
+                "phase": "fast_pass",
+                "path": "/redfish/v1/Systems/1/SmartStorageConfig/Settings",
+                "status": "error",
+                "exists": False,
+                "error": "404 ResourceMissingAtURI",
+                "name": "",
+                "members": 0,
+            },
+        ],
+    }
+    return {
+        "summary": {
+            "server": {
+                "model": "ProLiant DL360 Gen10 Plus",
+                "product_name": "",
+                "generation": "Gen10+",
+                "serial_number": "3M1D1Y11Z2",
+            },
+            "ilo": {
+                "model": "iLO 5",
+                "version": "iLO 5",
+                "firmware": "iLO 5 v3.03",
+            },
+            "capabilities": {
+                "standard_redfish_storage": False,
+                "hpe_smart_storage": True,
+                "standard_storage_path": "/redfish/v1/Systems/1/Storage",
+                "hpe_smart_storage_paths": [
+                    "/redfish/v1/Systems/1/SmartStorage",
+                    "/redfish/v1/Systems/1/SmartStorage/ArrayControllers",
+                ],
+                "hpe_smart_storage_diagnostics": diagnostics,
+            },
+            "standard_redfish_storage": {"controllers": [], "volumes": [], "drives": []},
+            "hpe_smart_storage": {
+                "controllers": [
+                    {
+                        "path": "/redfish/v1/Systems/1/SmartStorage/ArrayControllers/0",
+                        "name": "HPE MR416i-a Gen10+",
+                        "model": "MR416i-a Gen10+",
+                        "firmware_version": "1.00",
+                        "manufacturer": "HPE",
+                        "status": "OK / Enabled",
+                    }
+                ],
+                "volumes": [],
+                "drives": [],
+                "diagnostics": diagnostics,
+            },
+        },
+        "raw": {
+            "source_host": "10.10.8.110",
+            "hpe_smart_storage_diagnostics": diagnostics,
+        },
+    }
+
+
 def planner_discovery_without_data_spare() -> dict:
     discovery = planner_discovery_with_mixed_drives()
     standard = discovery["summary"]["standard_redfish_storage"]
@@ -1961,6 +2438,49 @@ def test_plan_raid_layout_accepts_custom_raid_levels(client, monkeypatch):
     assert plan["planned_layout"]["data_raid6"]["raid"] == "RAID 5"
     assert plan["os_raid1"]["raid"] == "RAID10"
     assert plan["data_raid6"]["raid"] == "RAID5"
+
+
+def test_storage_page_only_shows_controller_selector_when_multiple_exist(client, monkeypatch):
+    def fake_strftime(fmt):
+        if fmt == "%Y%m%d-%H%M%S":
+            return "20260428-110000"
+        if fmt == "%Y-%m-%d %H:%M:%S":
+            return "2026-04-28 11:00:00"
+        raise AssertionError(f"unexpected strftime format: {fmt}")
+
+    monkeypatch.setattr(main.time, "strftime", fake_strftime)
+    cfg = main.default_config()
+    cfg["site"]["name"] = "Multi Controller Kit"
+    cfg["ilo"]["target_ip"] = "10.10.8.80"
+    cfg["ip_plan"]["ilo"] = "10.10.8.80"
+    cfg["ilo"]["current_ip"] = "10.10.8.80"
+    cfg["ilo"]["host"] = "10.10.8.80"
+    main.save_kit_config(cfg)
+
+    discovery = planner_standard_redfish_apply_discovery(existing_volumes=False, generation="Gen11", ilo_version="iLO 6", include_second_controller=True)
+    export_paths = main.export_storage_discovery_snapshot(cfg, discovery, host="10.10.8.80")
+
+    response = client.post(
+        "/plan-raid-layout",
+        data={
+            "return_page": "storage",
+            "discovery_raw_path": str(export_paths["raw"]),
+            "controller_path": "/redfish/v1/Systems/1/Storage/DE009001",
+            "os_raid_level": "RAID1",
+            "data_raid_level": "",
+            "os_bays": ["6", "7"],
+            "data_bays": [],
+            "hot_spare_bay": "",
+        },
+    )
+
+    assert response.status_code == 200
+    assert "This server has more than one controller." in response.text
+    assert "Detected controllers" in response.text
+    plan_payload = yaml.safe_load((export_paths["directory"] / "raid-plan.yml").read_text(encoding="utf-8"))
+    plan = plan_payload["plan"]
+    assert plan["source_discovery"]["controller"]["path"] == "/redfish/v1/Systems/1/Storage/DE009001"
+    assert plan["customization"]["selected_controller_path"] == "/redfish/v1/Systems/1/Storage/DE009001"
 
 
 def test_build_storage_apply_intent_uses_selected_raid_levels():
@@ -2315,7 +2835,7 @@ def test_execute_real_scope_starts_esxi_path(client, monkeypatch):
     cfg["ilo"]["username"] = "Administrator"
     cfg["ilo"]["password"] = "secret"
     cfg["esxi"]["hostname"] = "esxi-lab"
-    cfg["esxi"]["root_password"] = "esxisecret"
+    cfg["esxi"]["root_password"] = "Valid1Pass!"
     cfg["included"]["esxi"] = True
     main.save_kit_config(cfg)
 
@@ -2477,7 +2997,7 @@ def test_prepare_execute_enables_real_launch_for_esxi_scope(client, monkeypatch)
     cfg["ilo"]["username"] = "Administrator"
     cfg["ilo"]["password"] = "secret"
     cfg["esxi"]["hostname"] = "esxi-lab"
-    cfg["esxi"]["root_password"] = "esxisecret"
+    cfg["esxi"]["root_password"] = "Valid1Pass!"
     cfg["included"]["esxi"] = True
     main.save_kit_config(cfg)
 
@@ -2691,7 +3211,7 @@ def test_prepare_execute_accepts_multiple_selected_runs(client):
     cfg["ilo"]["username"] = "Administrator"
     cfg["ilo"]["password"] = "secret"
     cfg["esxi"]["hostname"] = "esxi-lab"
-    cfg["esxi"]["root_password"] = "esxisecret"
+    cfg["esxi"]["root_password"] = "Valid1Pass!"
     cfg["windows"]["vm_name"] = "lab-win"
     cfg["windows"]["admin_password"] = "windowssecret"
     main.save_kit_config(cfg)
@@ -2721,7 +3241,7 @@ def test_prepare_execute_whole_run_launches_supported_included_stages(client):
     cfg["esxi"]["management_ip"] = "10.10.8.20"
     cfg["esxi"]["subnet_mask"] = "255.255.255.0"
     cfg["esxi"]["gateway"] = "10.10.8.1"
-    cfg["esxi"]["root_password"] = "esxisecret"
+    cfg["esxi"]["root_password"] = "Valid1Pass!"
     cfg["included"]["ilo"] = True
     cfg["included"]["storage"] = True
     cfg["included"]["esxi"] = True
@@ -2757,7 +3277,7 @@ def test_execute_whole_run_starts_multi_stage_path(client, monkeypatch):
     cfg["esxi"]["management_ip"] = "10.10.8.20"
     cfg["esxi"]["subnet_mask"] = "255.255.255.0"
     cfg["esxi"]["gateway"] = "10.10.8.1"
-    cfg["esxi"]["root_password"] = "esxisecret"
+    cfg["esxi"]["root_password"] = "Valid1Pass!"
     cfg["included"]["ilo"] = True
     cfg["included"]["storage"] = True
     cfg["included"]["esxi"] = True
@@ -2811,7 +3331,7 @@ def test_multi_real_run_promotes_final_ilo_ip_before_esxi(client, monkeypatch):
     cfg["ilo"]["username"] = "Administrator"
     cfg["ilo"]["password"] = "secret"
     cfg["esxi"]["hostname"] = "esxi-lab"
-    cfg["esxi"]["root_password"] = "esxisecret"
+    cfg["esxi"]["root_password"] = "Valid1Pass!"
     main.save_kit_config(cfg)
 
     calls = []
@@ -2896,7 +3416,7 @@ def test_run_esxi_real_builds_iso_and_starts_virtual_media_boot(monkeypatch, tmp
     cfg["esxi"]["subnet_mask"] = "255.255.255.0"
     cfg["esxi"]["gateway"] = "10.10.8.1"
     cfg["esxi"]["dns_servers"] = ["1.1.1.1", ""]
-    cfg["esxi"]["root_password"] = "esxisecret"
+    cfg["esxi"]["root_password"] = "Valid1Pass!"
 
     built_iso = tmp_path / "esxi-20260416-120000.iso"
     built_iso.write_text("iso", encoding="utf-8")
@@ -3101,7 +3621,7 @@ def test_run_esxi_real_builds_iso_and_starts_virtual_media_boot(monkeypatch, tmp
     assert "[RUNNING] Powering server on" in joined_logs
     assert "[RUNNING] Waiting for ESXi management network on 10.10.8.10" in joined_logs
     assert "[OK] ESXi responded on configured IP 10.10.8.10:443 after 2 checks. ESXi boot sequence started." in joined_logs
-    assert "esxisecret" not in joined_logs
+    assert "Valid1Pass!" not in joined_logs
     assert job["status"] == "Completed"
     assert len(created_clients) == 1
     assert job["esxi_iso_path"] == str(built_iso)
@@ -3113,7 +3633,7 @@ def test_run_esxi_real_builds_iso_and_starts_virtual_media_boot(monkeypatch, tmp
     assert spec.subnet_mask == "255.255.255.0"
     assert spec.gateway == "10.10.8.1"
     assert spec.dns_servers == ["1.1.1.1"]
-    assert spec.root_password == "esxisecret"
+    assert spec.root_password == "Valid1Pass!"
     assert spec.output_name == "esxi-20260416-120000"
     trace_path = main.Path(job["esxi_trace_path"])
     assert trace_path.exists()
@@ -3121,7 +3641,7 @@ def test_run_esxi_real_builds_iso_and_starts_virtual_media_boot(monkeypatch, tmp
     summary = yaml.safe_load(main.Path(job["run_summary_path"]).read_text(encoding="utf-8"))
     assert trace["install_values"]["hostname"] == "esxi-lab"
     assert trace["install_values"]["root_password_saved"] is True
-    assert trace["install_values"]["root_password_policy_valid"] is False
+    assert trace["install_values"]["root_password_policy_valid"] is True
     assert trace["artifacts"]["base_iso_path"] == "/tmp/base-esxi.iso"
     assert trace["artifacts"]["output_iso_path"] == str(built_iso)
     assert trace["artifacts"]["virtual_media_url"].endswith("/esxi-built-iso/Real-ESXi-Run-Kit/esxi-20260416-120000.iso")
@@ -3185,7 +3705,7 @@ def test_run_esxi_real_reconnects_after_build_when_ilo_session_has_expired(monke
     cfg["esxi"]["management_ip"] = "10.10.8.10"
     cfg["esxi"]["subnet_mask"] = "255.255.255.0"
     cfg["esxi"]["gateway"] = "10.10.8.1"
-    cfg["esxi"]["root_password"] = "esxisecret"
+    cfg["esxi"]["root_password"] = "Valid1Pass!"
 
     built_iso = tmp_path / "esxi-refresh.iso"
     built_iso.write_text("iso", encoding="utf-8")
@@ -3293,7 +3813,7 @@ def test_run_esxi_real_blocks_power_on_when_boot_override_does_not_stick(monkeyp
     cfg["esxi"]["management_ip"] = "10.10.8.10"
     cfg["esxi"]["subnet_mask"] = "255.255.255.0"
     cfg["esxi"]["gateway"] = "10.10.8.1"
-    cfg["esxi"]["root_password"] = "esxisecret"
+    cfg["esxi"]["root_password"] = "Valid1Pass!"
 
     built_iso = tmp_path / "esxi-20260416-120000.iso"
     built_iso.write_text("iso", encoding="utf-8")
@@ -3396,7 +3916,7 @@ def test_run_esxi_real_continues_when_eject_media_is_unsupported(monkeypatch, tm
     cfg["esxi"]["management_ip"] = "10.10.8.10"
     cfg["esxi"]["subnet_mask"] = "255.255.255.0"
     cfg["esxi"]["gateway"] = "10.10.8.1"
-    cfg["esxi"]["root_password"] = "esxisecret"
+    cfg["esxi"]["root_password"] = "Valid1Pass!"
 
     built_iso = tmp_path / "esxi-20260420-200000.iso"
     built_iso.write_text("iso", encoding="utf-8")
@@ -3492,7 +4012,7 @@ def test_run_esxi_real_fails_when_virtual_media_readback_does_not_match(monkeypa
     cfg["esxi"]["management_ip"] = "10.10.8.10"
     cfg["esxi"]["subnet_mask"] = "255.255.255.0"
     cfg["esxi"]["gateway"] = "10.10.8.1"
-    cfg["esxi"]["root_password"] = "esxisecret"
+    cfg["esxi"]["root_password"] = "Valid1Pass!"
 
     built_iso = tmp_path / "esxi-20260416-120000.iso"
     built_iso.write_text("iso", encoding="utf-8")
@@ -3591,7 +4111,7 @@ def test_run_esxi_real_fails_when_expected_management_ip_never_comes_up(monkeypa
     cfg["esxi"]["management_ip"] = "10.10.8.10"
     cfg["esxi"]["subnet_mask"] = "255.255.255.0"
     cfg["esxi"]["gateway"] = "10.10.8.1"
-    cfg["esxi"]["root_password"] = "esxisecret"
+    cfg["esxi"]["root_password"] = "Valid1Pass!"
 
     built_iso = tmp_path / "esxi-failure.iso"
     built_iso.write_text("iso", encoding="utf-8")
@@ -3696,7 +4216,7 @@ def test_run_esxi_real_fails_early_when_stuck_in_post(monkeypatch, tmp_path):
     cfg["esxi"]["management_ip"] = "10.10.8.10"
     cfg["esxi"]["subnet_mask"] = "255.255.255.0"
     cfg["esxi"]["gateway"] = "10.10.8.1"
-    cfg["esxi"]["root_password"] = "esxisecret"
+    cfg["esxi"]["root_password"] = "Valid1Pass!"
 
     built_iso = tmp_path / "esxi-stuck.iso"
     built_iso.write_text("iso", encoding="utf-8")
@@ -3814,7 +4334,7 @@ def test_build_kickstart_uses_explicit_management_network_fields():
         subnet_mask="255.255.255.0",
         gateway="10.10.8.1",
         dns_servers=["1.1.1.1", "8.8.8.8"],
-        root_password="esxisecret",
+        root_password="Valid1Pass!",
         vlan_id="123",
     )
 
@@ -4773,7 +5293,7 @@ def test_run_esxi_real_persists_boot_option_fallback_reason(monkeypatch, tmp_pat
     cfg["esxi"]["management_ip"] = "10.10.8.10"
     cfg["esxi"]["subnet_mask"] = "255.255.255.0"
     cfg["esxi"]["gateway"] = "10.10.8.1"
-    cfg["esxi"]["root_password"] = "esxisecret"
+    cfg["esxi"]["root_password"] = "Valid1Pass!"
 
     built_iso = tmp_path / "esxi-fallback.iso"
     built_iso.write_text("iso", encoding="utf-8")
@@ -5407,6 +5927,116 @@ def test_apply_storage_layout_creates_artifacts_and_logs_success(client, monkeyp
     assert "\"workflow_state\": \"staged_reboot_required\"" in apply_results_text
 
 
+def test_choose_storage_apply_platform_rejects_guessed_smartstorageconfig_settings_path():
+    discovery = planner_gen10_plus_hpe_inventory_without_settings_path()
+    export_paths = {
+        "directory": main.Path("/tmp/storage-plan-test"),
+        "summary": main.Path("/tmp/storage-plan-test/summary.yml"),
+        "raw": main.Path("/tmp/storage-plan-test/raw.json"),
+    }
+    plan = main.build_raid_plan(discovery, export_paths)
+
+    platform = main.choose_storage_apply_platform(discovery, plan)
+
+    assert platform["supported"] is False
+    assert platform["id"] == "hpe_smart_storage_read_only"
+    assert platform["settings_path"] == ""
+    assert "no writable SmartStorageConfig settings URI was verified" in platform["reason"]
+
+
+def test_run_storage_as_part_of_real_run_fails_early_when_only_read_only_hpe_inventory_exists(monkeypatch):
+    cfg = main.default_config()
+    cfg["site"]["name"] = "Lab-Uplands-G10"
+    cfg["ilo"]["current_ip"] = "10.10.8.110"
+    cfg["ilo"]["target_ip"] = "10.10.8.110"
+    cfg["ilo"]["host"] = "10.10.8.110"
+    cfg["ilo"]["username"] = "Administrator"
+    cfg["ilo"]["password"] = "kit-password"
+    main.save_kit_config(cfg)
+
+    discovery = planner_gen10_apply_discovery(existing_volumes=False)
+    discovery["summary"]["server"]["model"] = "ProLiant DL360 Gen10 Plus"
+    discovery["summary"]["server"]["generation"] = "Gen10+"
+    diagnostics = discovery["summary"]["capabilities"]["hpe_smart_storage_diagnostics"]
+    diagnostics["probed_paths"] = [
+        {
+            "phase": "fast_pass",
+            "path": "/redfish/v1/Systems/1/SmartStorage",
+            "status": "ok",
+            "exists": True,
+            "error": "",
+            "name": "HpeSmartStorage",
+            "members": 0,
+        },
+        {
+            "phase": "fast_pass",
+            "path": "/redfish/v1/Systems/1/SmartStorage/ArrayControllers",
+            "status": "ok",
+            "exists": True,
+            "error": "",
+            "name": "HpeSmartStorageArrayControllers",
+            "members": 0,
+        },
+        {
+            "phase": "fast_pass",
+            "path": "/redfish/v1/Systems/1/SmartStorageConfig",
+            "status": "error",
+            "exists": False,
+            "error": "404 ResourceMissingAtURI",
+            "name": "",
+            "members": 0,
+        },
+        {
+            "phase": "fast_pass",
+            "path": "/redfish/v1/Systems/1/SmartStorageConfig/Settings",
+            "status": "error",
+            "exists": False,
+            "error": "404 ResourceMissingAtURI",
+            "name": "",
+            "members": 0,
+        },
+    ]
+    export_paths = main.export_storage_discovery_snapshot(cfg, discovery, host="10.10.8.110")
+    plan = main.build_raid_plan(discovery, export_paths)
+    plan_paths = main.export_raid_plan_snapshot(cfg, plan, export_paths)
+    storage_execution = {
+        "discovery_raw_path": str(export_paths["raw"]),
+        "plan_path": str(plan_paths["plan"]),
+        "approved_host": "10.10.8.110",
+    }
+    job = {
+        "status": "Running",
+        "scope": "multi__ilo__storage__esxi",
+        "current_stage": "",
+        "progress_percent": 0,
+        "completed_steps": 0,
+        "total_steps": 32,
+        "logs": [],
+    }
+    main.save_job(cfg["site"]["name"], job)
+
+    class FakeClient:
+        def get_storage_discovery(self, deep_smart_storage_scan=False):
+            return discovery
+
+    with pytest.raises(ILOError) as exc:
+        main.run_storage_as_part_of_real_run(
+            cfg,
+            FakeClient(),
+            "10.10.8.110",
+            "10.10.8.110",
+            storage_execution,
+            cfg["site"]["name"],
+            job,
+            17,
+            32,
+        )
+
+    text = str(exc.value)
+    assert "HPE Smart Storage inventory only" in text
+    assert "no writable SmartStorageConfig settings URI was verified" in text
+
+
 def test_apply_storage_layout_failure_logs_are_saved(client, monkeypatch):
     def fake_strftime(fmt):
         if fmt == "%Y%m%d-%H%M%S":
@@ -5781,6 +6411,49 @@ class RecordingGen10SmartStorageWriteClient(ILOClient):
         return {"Messages": [{"MessageId": "SmartStorage.ResetRequired"}], "reboot_required": self.reboot_required}
 
 
+class RecordingStandardRedfishStorageWriteClient(ILOClient):
+    def __init__(self):
+        super().__init__(ILOConfig(host="ilo-gen11.example.test", username="Administrator", password="secret"))
+        self.calls = []
+        self.fail_delete = False
+        self.fail_post = False
+
+    def _get(self, path: str, timeout=None):
+        if path == "/redfish/v1/Systems/1":
+            return {"Oem": {"Hpe": {"DeviceDiscoveryComplete": {"DeviceDiscovery": "vMainDeviceDiscoveryComplete"}}}}
+        if path == "/redfish/v1/Systems/1/Storage/DE009000/Volumes/Capabilities":
+            return {
+                "@odata.id": "/redfish/v1/Systems/1/Storage/DE009000/Volumes/Capabilities",
+                "Links": {
+                    "Drives@Redfish.RequiredOnCreate": True,
+                    "DedicatedSpareDrives@Redfish.OptionalOnCreate": True,
+                },
+                "RAIDType@Redfish.AllowableValues": ["RAID0", "RAID1", "RAID5", "RAID6", "RAID10"],
+            }
+        raise ILOError(f"GET {path} failed with HTTP 404")
+
+    def _post(self, path: str, payload: dict | None = None):
+        self.calls.append(("POST", path, payload or {}))
+        if self.fail_post:
+            raise ILOError(f"POST {path} failed with HTTP 400: simulated write failure")
+        return {"Id": "Task1", "Messages": []}
+
+    def _delete(self, path: str):
+        self.calls.append(("DELETE", path, None))
+        if self.fail_delete:
+            raise ILOError(f"DELETE {path} failed with HTTP 400: simulated delete failure")
+        return {"Messages": []}
+
+
+class RecordingStandardRedfishApplyClient(RecordingStandardRedfishStorageWriteClient):
+    def __init__(self, discovery: dict[str, Any]):
+        super().__init__()
+        self.discovery = discovery
+
+    def get_storage_discovery(self, deep_smart_storage_scan=False):
+        return self.discovery
+
+
 def test_delete_storage_logical_drive_uses_settings_put_payload():
     client = RecordingGen10SmartStorageWriteClient()
 
@@ -5946,6 +6619,174 @@ def test_gen10_helper_reboot_required_respects_explicit_controller_response():
     )
 
     assert response["reboot_required"] is False
+
+
+def test_choose_storage_apply_platform_supports_standard_redfish_volumes_backend():
+    discovery = planner_standard_redfish_apply_discovery(existing_volumes=False, generation="Gen11", ilo_version="iLO 6")
+    export_paths = {
+        "directory": Path("/tmp"),
+        "summary": Path("/tmp/summary.yml"),
+        "raw": Path("/tmp/raw.json"),
+    }
+    plan = main.build_raid_plan(discovery, export_paths)
+
+    platform = main.choose_storage_apply_platform(discovery, plan)
+
+    assert platform["supported"] is True
+    assert platform["id"] == "standard_redfish_volumes"
+    assert platform["controller_path"] == "/redfish/v1/Systems/1/Storage/DE009000"
+    assert platform["volumes_path"] == "/redfish/v1/Systems/1/Storage/DE009000/Volumes"
+    assert platform["reset_target"] == "/redfish/v1/Systems/1/Storage/DE009000/Actions/Storage.ResetToDefaults"
+
+
+def test_build_raid_plan_scopes_drives_to_selected_controller_when_multiple_are_detected():
+    discovery = planner_standard_redfish_apply_discovery(existing_volumes=False, generation="Gen11", ilo_version="iLO 6", include_second_controller=True)
+    export_paths = {
+        "directory": Path("/tmp"),
+        "summary": Path("/tmp/summary.yml"),
+        "raw": Path("/tmp/raw.json"),
+    }
+
+    plan = main.build_raid_plan(discovery, export_paths)
+
+    assert "More than one storage controller was detected" in " ".join(plan["warnings"])
+    assert all(drive.get("controller_path") == "/redfish/v1/Systems/1/Storage/DE009000" for drive in plan["os_raid1"]["drives"])
+    assert all(drive.get("controller_path") == "/redfish/v1/Systems/1/Storage/DE009000" for drive in plan["data_raid6"]["drives"])
+
+
+def test_build_raid_plan_uses_selected_controller_when_multiple_are_detected():
+    discovery = planner_standard_redfish_apply_discovery(existing_volumes=False, generation="Gen11", ilo_version="iLO 6", include_second_controller=True)
+    export_paths = {
+        "directory": Path("/tmp"),
+        "summary": Path("/tmp/summary.yml"),
+        "raw": Path("/tmp/raw.json"),
+    }
+
+    plan = main.build_raid_plan(
+        discovery,
+        export_paths,
+        overrides={"controller_path": "/redfish/v1/Systems/1/Storage/DE009001"},
+    )
+
+    assert plan["source_discovery"]["controller"]["path"] == "/redfish/v1/Systems/1/Storage/DE009001"
+    assert plan["customization"]["selected_controller_path"] == "/redfish/v1/Systems/1/Storage/DE009001"
+    all_drive_paths = [drive.get("controller_path") for drive in plan["os_raid1"]["drives"] + plan["data_raid6"]["drives"]]
+    assert all(path == "/redfish/v1/Systems/1/Storage/DE009001" for path in all_drive_paths)
+
+
+def test_standard_redfish_storage_layout_uses_delete_and_volume_posts():
+    client = RecordingStandardRedfishStorageWriteClient()
+
+    response = client.delete_standard_storage_volume("/redfish/v1/Systems/1/Storage/DE009000/Volumes/1")
+    create_response = client.create_standard_storage_volume(
+        "/redfish/v1/Systems/1/Storage/DE009000/Volumes",
+        {
+            "raid": "RAID1",
+            "label": "OS RAID 1 logical drive",
+            "target_size_gib": 500,
+            "drives": [
+                {"path": "/redfish/v1/Chassis/DE009000/Drives/0"},
+                {"path": "/redfish/v1/Chassis/DE009000/Drives/1"},
+            ],
+        },
+        capabilities=client.get_standard_storage_volume_capabilities("/redfish/v1/Systems/1/Storage/DE009000/Volumes"),
+    )
+
+    assert response["reboot_required"] is False
+    assert create_response["reboot_required"] is False
+    assert client.calls == [
+        ("DELETE", "/redfish/v1/Systems/1/Storage/DE009000/Volumes/1", None),
+        (
+            "POST",
+            "/redfish/v1/Systems/1/Storage/DE009000/Volumes",
+            {
+                "RAIDType": "RAID1",
+                "Links": {
+                    "Drives": [
+                        {"@odata.id": "/redfish/v1/Chassis/DE009000/Drives/0"},
+                        {"@odata.id": "/redfish/v1/Chassis/DE009000/Drives/1"},
+                    ]
+                },
+                    "DisplayName": "OS RAID 1 logic",
+                "CapacityBytes": 536870912000,
+            },
+        ),
+    ]
+
+
+def test_run_storage_as_part_of_real_run_supports_standard_redfish_volumes_backend():
+    cfg = main.default_config()
+    cfg["site"]["name"] = "Std-Storage-Kit"
+    main.save_kit_config(cfg)
+
+    discovery = planner_standard_redfish_apply_discovery(existing_volumes=True, generation="Gen11", ilo_version="iLO 6")
+    export_paths = main.export_storage_discovery_snapshot(cfg, discovery, host="10.122.142.13")
+    plan = main.build_raid_plan(discovery, export_paths)
+    plan_paths = main.export_raid_plan_snapshot(cfg, plan, export_paths)
+    storage_execution = {
+        "discovery_raw_path": str(export_paths["raw"]),
+        "plan_path": str(plan_paths["plan"]),
+        "approved_host": "10.122.142.13",
+    }
+    job = {
+        "status": "Running",
+        "scope": "multi__ilo__storage__esxi",
+        "current_stage": "",
+        "progress_percent": 0,
+        "completed_steps": 0,
+        "total_steps": 32,
+        "logs": [],
+    }
+    main.save_job(cfg["site"]["name"], job)
+    client = RecordingStandardRedfishApplyClient(discovery)
+
+    result = main.run_storage_as_part_of_real_run(
+        cfg,
+        client,
+        "10.122.142.13",
+        "10.122.142.13",
+        storage_execution,
+        cfg["site"]["name"],
+        job,
+        17,
+        32,
+    )
+
+    assert result["apply_state"]["apply_path"] == "Standard Redfish Storage Volumes"
+    assert result["apply_state"]["reboot_required"] is False
+    assert client.calls[:4] == [
+        ("DELETE", "/redfish/v1/Systems/1/Storage/DE009000/Volumes/1", None),
+        (
+            "POST",
+            "/redfish/v1/Systems/1/Storage/DE009000/Volumes",
+            {
+                "RAIDType": "RAID1",
+                "Links": {
+                    "Drives": [
+                        {"@odata.id": "/redfish/v1/Chassis/DE009000/Drives/0"},
+                        {"@odata.id": "/redfish/v1/Chassis/DE009000/Drives/1"},
+                    ]
+                },
+                    "DisplayName": "OS RAID 1 logic",
+                "CapacityBytes": 536870912000,
+            },
+        ),
+        (
+            "POST",
+            "/redfish/v1/Systems/1/Storage/DE009000/Volumes",
+            {
+                "RAIDType": "RAID5",
+                "Links": {
+                    "Drives": [
+                        {"@odata.id": "/redfish/v1/Chassis/DE009000/Drives/2"},
+                        {"@odata.id": "/redfish/v1/Chassis/DE009000/Drives/3"},
+                        {"@odata.id": "/redfish/v1/Chassis/DE009000/Drives/4"},
+                    ]
+                },
+                "DisplayName": "Data RAID 5 log",
+            },
+        ),
+    ]
 
 
 def test_dashboard_shows_recommended_next_step_and_workflow_cards(client):
@@ -6223,8 +7064,51 @@ def test_esxi_page_removes_duplicate_include_and_global_settings_prompt(client):
 
     assert response.status_code == 200
     assert "Save the ESXi name and root password here." in response.text
+    assert "Use only letters, numbers, hyphens, and optional dots." in response.text
+    assert "Use the common ESXi default rule" in response.text
     assert "Include ESXi setup in this kit" not in response.text
     assert "Open global settings" not in response.text
+
+
+def test_save_global_settings_rejects_invalid_snmp_values(client):
+    cfg = main.default_config()
+    cfg["site"]["name"] = "SNMP Invalid Kit"
+    main.save_kit_config(cfg)
+
+    response = client.post(
+        "/save-global-settings",
+        data={
+            "return_page": "global_settings",
+            "site_name": "SNMP Invalid Kit",
+            "shared_subnet": "10.10.8.0/24",
+            "gateway_ip": "10.10.8.1",
+            "switch_ip": "10.10.8.2",
+            "esxi_ip": "10.10.8.10",
+            "ilo_target_ip": "10.10.8.11",
+            "windows_ip": "10.10.8.20",
+            "qnap_ip": "10.10.8.30",
+            "iosafe_ip": "10.10.8.31",
+            "dns1": "1.1.1.1",
+            "dns2": "",
+            "dns3": "",
+            "dns4": "",
+            "snmp_v3_username": "bad user",
+            "snmp_v3_auth_protocol": "SHA",
+            "snmp_v3_auth_password": "short",
+            "snmp_v3_priv_protocol": "AES",
+            "snmp_v3_priv_password": "tiny",
+        },
+    )
+
+    assert response.status_code == 200
+    assert "Shared defaults need attention" in response.text
+    assert "SNMPv3 user cannot contain spaces." in response.text
+    assert "SNMPv3 auth password must be at least 8 characters." in response.text
+    assert 'name="snmp_v3_username"' in response.text
+    assert "field-error" in response.text
+    assert "input-invalid" in response.text
+    saved = main.load_kit_config("SNMP-Invalid-Kit")
+    assert saved["shared_snmp"]["v3_username"] == ""
 
 
 def test_save_esxi_settings_preserves_disabled_inclusion_when_page_has_no_toggle(client):
@@ -6235,13 +7119,38 @@ def test_save_esxi_settings_preserves_disabled_inclusion_when_page_has_no_toggle
 
     response = client.post(
         "/save-esxi-settings",
-        data={"return_page": "esxi", "esxi_hostname": "esxi-preserve", "esxi_root_password": "ValidPass1"},
+        data={"return_page": "esxi", "esxi_hostname": "esxi-preserve", "esxi_root_password": "Valid1Pass!"},
     )
 
     assert response.status_code == 200
     cfg = main.load_kit_config("ESXi-Preserve-Kit")
     assert cfg["esxi"]["hostname"] == "esxi-preserve"
     assert cfg["included"]["esxi"] is False
+
+
+def test_save_esxi_settings_rejects_invalid_hostname_and_password(client):
+    cfg = main.default_config()
+    cfg["site"]["name"] = "ESXi Invalid Kit"
+    cfg["esxi"]["hostname"] = "esxi-good"
+    cfg["esxi"]["root_password"] = "Valid1Pass!"
+    main.save_kit_config(cfg)
+
+    response = client.post(
+        "/save-esxi-settings",
+        data={"return_page": "esxi", "esxi_hostname": "bad_host!", "esxi_root_password": "secret"},
+    )
+
+    assert response.status_code == 200
+    assert "ESXi setup needs attention" in response.text
+    assert "Use only letters, numbers, hyphens, and dots in the ESXi server name." in response.text
+    assert "Use at least 3 character types" in response.text
+    assert 'name="esxi_hostname"' in response.text
+    assert "field-error" in response.text
+    assert "input-invalid" in response.text
+
+    saved = main.load_kit_config("ESXi-Invalid-Kit")
+    assert saved["esxi"]["hostname"] == "esxi-good"
+    assert saved["esxi"]["root_password"] == "Valid1Pass!"
 
 
 def test_report_center_lists_storage_reports_and_view_report(client):

@@ -218,6 +218,28 @@
             transition: transform 0.18s ease, border-color 0.18s ease, background 0.18s ease, box-shadow 0.18s ease;
         }
 
+        .input-invalid {
+            border-color: color-mix(in srgb, var(--bad) 42%, var(--border-strong));
+            background: color-mix(in srgb, var(--bad-soft) 58%, white 42%);
+            box-shadow: 0 0 0 3px rgba(194, 102, 93, 0.12);
+        }
+
+        .field-error {
+            background: linear-gradient(180deg, color-mix(in srgb, var(--bad-soft) 78%, white 22%), color-mix(in srgb, var(--bad-soft) 92%, white 8%));
+            border: 1px solid color-mix(in srgb, var(--bad) 18%, var(--border));
+            border-radius: 12px;
+            padding: 10px 12px;
+            color: var(--bad);
+            font-size: 0.88rem;
+            font-weight: 600;
+            margin-bottom: 8px;
+        }
+
+        .field-error + .input,
+        .field-error + select.input {
+            margin-top: 0;
+        }
+
         .btn:hover {
             border-color: var(--accent);
             transform: translateY(-1px);

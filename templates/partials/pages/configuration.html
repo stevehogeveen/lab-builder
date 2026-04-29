@@ -79,7 +79,11 @@
                 </div>
                 <div>
                     <label class="block text-sm font-bold text-slate-300 mb-2">SNMP user</label>
-                    <input type="text" name="snmp_v3_username" value="{{ cfg.get('shared_snmp', {}).get('v3_username', '') }}" class="input">
+                    {% if snmp_field_errors.username %}
+                    <div class="field-error">{{ snmp_field_errors.username|join(' ') }}</div>
+                    {% endif %}
+                    <input type="text" name="snmp_v3_username" value="{{ cfg.get('shared_snmp', {}).get('v3_username', '') }}" class="input{% if snmp_field_errors.username %} input-invalid{% endif %}">
+                    <div class="text-xs text-slate-400 mt-1">Use a single printable name, 32 characters or less.</div>
                 </div>
                 <div>
                     <label class="block text-sm font-bold text-slate-300 mb-2">SNMP auth type</label>
@@ -90,7 +94,11 @@
                 </div>
                 <div>
                     <label class="block text-sm font-bold text-slate-300 mb-2">SNMP auth password</label>
-                    <input type="password" name="snmp_v3_auth_password" value="{{ cfg.get('shared_snmp', {}).get('v3_auth_password', '') }}" class="input">
+                    {% if snmp_field_errors.auth_password %}
+                    <div class="field-error">{{ snmp_field_errors.auth_password|join(' ') }}</div>
+                    {% endif %}
+                    <input type="password" name="snmp_v3_auth_password" value="{{ cfg.get('shared_snmp', {}).get('v3_auth_password', '') }}" class="input{% if snmp_field_errors.auth_password %} input-invalid{% endif %}">
+                    <div class="text-xs text-slate-400 mt-1">SNMPv3 auth passwords are usually at least 8 printable characters.</div>
                 </div>
                 <div>
                     <label class="block text-sm font-bold text-slate-300 mb-2">SNMP privacy type</label>
@@ -101,9 +109,33 @@
                 </div>
                 <div>
                     <label class="block text-sm font-bold text-slate-300 mb-2">SNMP privacy password</label>
-                    <input type="password" name="snmp_v3_priv_password" value="{{ cfg.get('shared_snmp', {}).get('v3_priv_password', '') }}" class="input">
+                    {% if snmp_field_errors.priv_password %}
+                    <div class="field-error">{{ snmp_field_errors.priv_password|join(' ') }}</div>
+                    {% endif %}
+                    <input type="password" name="snmp_v3_priv_password" value="{{ cfg.get('shared_snmp', {}).get('v3_priv_password', '') }}" class="input{% if snmp_field_errors.priv_password %} input-invalid{% endif %}">
+                    <div class="text-xs text-slate-400 mt-1">SNMPv3 privacy passwords are usually at least 8 printable characters.</div>
                 </div>
             </div>
+
+            {% if snmp_input_review.errors or snmp_input_review.notes %}
+            <div class="card card-compact mt-4">
+                <div class="font-semibold mb-2">Saved-value checks</div>
+                {% if snmp_input_review.errors %}
+                <div class="space-y-2">
+                    {% for item in snmp_input_review.errors %}
+                    <div class="result" style="margin-top: 0;">{{ item }}</div>
+                    {% endfor %}
+                </div>
+                {% endif %}
+                {% if snmp_input_review.notes %}
+                <div class="space-y-2 mt-3">
+                    {% for item in snmp_input_review.notes %}
+                    <div class="text-sm text-slate-400">{{ item }}</div>
+                    {% endfor %}
+                </div>
+                {% endif %}
+            </div>
+            {% endif %}
         </section>
 
         <details class="card">
@@ -120,6 +152,7 @@
                             <div>
                                 <label class="block text-sm font-bold text-slate-300 mb-2">Username</label>
                                 <input class="input" type="text" name="snmp_extra_username" x-model="user.username">
+                                <div class="text-xs text-slate-400 mt-1">Single printable name, 32 characters or less.</div>
                             </div>
                             <div>
                                 <label class="block text-sm font-bold text-slate-300 mb-2">Auth type</label>
@@ -131,6 +164,7 @@
                             <div>
                                 <label class="block text-sm font-bold text-slate-300 mb-2">Auth password</label>
                                 <input class="input" type="password" name="snmp_extra_auth_password" x-model="user.auth_password">
+                                <div class="text-xs text-slate-400 mt-1">At least 8 printable characters.</div>
                             </div>
                             <div>
                                 <label class="block text-sm font-bold text-slate-300 mb-2">Privacy type</label>
@@ -142,6 +176,7 @@
                             <div>
                                 <label class="block text-sm font-bold text-slate-300 mb-2">Privacy password</label>
                                 <input class="input" type="password" name="snmp_extra_priv_password" x-model="user.priv_password">
+                                <div class="text-xs text-slate-400 mt-1">At least 8 printable characters.</div>
                             </div>
                         </div>
                         <div class="actions mt-3">

@@ -45,13 +45,41 @@
                 </div>
                 <div>
                     <label class="block text-sm font-bold text-slate-300 mb-2">Username</label>
-                    <input type="text" name="ilo_username" value="{{ cfg.get('ilo', {}).get('username', '') }}" class="input">
+                    {% if ilo_field_errors.username %}
+                    <div class="field-error">{{ ilo_field_errors.username|join(' ') }}</div>
+                    {% endif %}
+                    <input type="text" name="ilo_username" value="{{ cfg.get('ilo', {}).get('username', '') }}" class="input{% if ilo_field_errors.username %} input-invalid{% endif %}">
+                    <div class="text-xs text-slate-400 mt-1">Use a single printable login name, 39 characters or less.</div>
                 </div>
                 <div>
                     <label class="block text-sm font-bold text-slate-300 mb-2">Password</label>
-                    <input type="password" name="ilo_password" value="{{ cfg.get('ilo', {}).get('password', '') }}" class="input">
+                    {% if ilo_field_errors.password %}
+                    <div class="field-error">{{ ilo_field_errors.password|join(' ') }}</div>
+                    {% endif %}
+                    <input type="password" name="ilo_password" value="{{ cfg.get('ilo', {}).get('password', '') }}" class="input{% if ilo_field_errors.password %} input-invalid{% endif %}">
+                    <div class="text-xs text-slate-400 mt-1">Keep it printable and under 40 characters. Many iLO policies use at least 8 characters and 3 character types.</div>
                 </div>
             </div>
+
+            {% if ilo_input_review.errors or ilo_input_review.notes %}
+            <div class="card card-compact">
+                <div class="font-semibold mb-2">Saved-value checks</div>
+                {% if ilo_input_review.errors %}
+                <div class="space-y-2">
+                    {% for item in ilo_input_review.errors %}
+                    <div class="result" style="margin-top: 0;">{{ item }}</div>
+                    {% endfor %}
+                </div>
+                {% endif %}
+                {% if ilo_input_review.notes %}
+                <div class="space-y-2 mt-3">
+                    {% for item in ilo_input_review.notes %}
+                    <div class="text-sm text-slate-400">{{ item }}</div>
+                    {% endfor %}
+                </div>
+                {% endif %}
+            </div>
+            {% endif %}
 
             <details class="card card-compact">
                 <summary class="summary-row">
@@ -69,10 +97,12 @@
                                 <div>
                                     <label class="block text-sm font-bold text-slate-300 mb-2">Username</label>
                                     <input class="input" type="text" name="ilo_extra_username" x-model="user.username">
+                                    <div class="text-xs text-slate-400 mt-1">Single printable login name, 39 characters or less.</div>
                                 </div>
                                 <div>
                                     <label class="block text-sm font-bold text-slate-300 mb-2">Password</label>
                                     <input class="input" type="password" name="ilo_extra_password" x-model="user.password">
+                                    <div class="text-xs text-slate-400 mt-1">Printable only. Many iLO policies expect at least 8 characters and 3 character types.</div>
                                 </div>
                                 <div>
                                     <label class="block text-sm font-bold text-slate-300 mb-2">Role</label>

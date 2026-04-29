@@ -296,6 +296,7 @@ class ILOClient:
                 volumes.append(
                     {
                         "path": volume.get("@odata.id", ""),
+                        "controller_path": storage_path,
                         "id": volume.get("Id", ""),
                         "name": volume.get("Name", ""),
                         "raid_type": volume.get("RAIDType") or volume.get("VolumeType") or "",
@@ -308,6 +309,7 @@ class ILOClient:
                 drives.append(
                     {
                         "path": drive.get("@odata.id", ""),
+                        "controller_path": storage_path,
                         "id": drive.get("Id", ""),
                         "bay": self._storage_drive_bay(drive),
                         "name": drive.get("Name", ""),
@@ -339,8 +341,10 @@ class ILOClient:
             ((volume.get("Links") or {}).get("StandbySpareDrives") or {}).get("@odata.id", "")
             or ((volume.get("Links") or {}).get("SpareDrives") or {}).get("@odata.id", "")
         )
+        controller_path = str(volume.get("controller_path") or volume.get("ControllerPath") or "").strip()
         return {
             "path": volume.get("@odata.id", ""),
+            "controller_path": controller_path,
             "id": volume.get("Id", ""),
             "name": volume.get("LogicalDriveName") or volume.get("Name") or "",
             "logical_drive_name": volume.get("LogicalDriveName") or "",
@@ -368,8 +372,10 @@ class ILOClient:
                 bay = match.group(1)
             elif not bay:
                 bay = smart_location
+        controller_path = str(drive.get("controller_path") or drive.get("ControllerPath") or "").strip()
         return {
             "path": drive.get("@odata.id", ""),
+            "controller_path": controller_path,
             "id": drive.get("Id", ""),
             "bay": bay,
             "name": drive.get("Name", ""),
@@ -681,15 +687,16 @@ class ILOClient:
 
             for controller in controller_docs:
                 controller_docs_seen.append(controller)
+                controller_path = str(controller.get("@odata.id", "") or "")
                 smart_controllers.append(self._normalize_smart_storage_controller(controller))
                 for volume in self._expand_smart_storage_collection(controller, "LogicalDrives", seen_paths, smart_storage_diagnostics, "fast_pass"):
-                    smart_volumes.append(self._normalize_smart_storage_volume(volume))
+                    smart_volumes.append(self._normalize_smart_storage_volume({**volume, "controller_path": controller_path}))
                 for volume in self._expand_smart_storage_collection(controller, "Volumes", seen_paths, smart_storage_diagnostics, "fast_pass"):
-                    smart_volumes.append(self._normalize_smart_storage_volume(volume))
+                    smart_volumes.append(self._normalize_smart_storage_volume({**volume, "controller_path": controller_path}))
                 for drive in self._expand_smart_storage_collection(controller, "DiskDrives", seen_paths, smart_storage_diagnostics, "fast_pass"):
-                    smart_drives.append(self._normalize_smart_storage_drive(drive))
+                    smart_drives.append(self._normalize_smart_storage_drive({**drive, "controller_path": controller_path}))
                 for drive in self._expand_smart_storage_collection(controller, "Drives", seen_paths, smart_storage_diagnostics, "fast_pass"):
-                    smart_drives.append(self._normalize_smart_storage_drive(drive))
+                    smart_drives.append(self._normalize_smart_storage_drive({**drive, "controller_path": controller_path}))
 
             for volume in self._expand_smart_storage_collection(doc, "LogicalDrives", seen_paths, smart_storage_diagnostics, "fast_pass"):
                 smart_volumes.append(self._normalize_smart_storage_volume(volume))
@@ -725,11 +732,15 @@ class ILOClient:
                             if normalized_controller not in smart_controllers:
                                 smart_controllers.append(normalized_controller)
                         elif key in ("LogicalDrives", "Volumes"):
-                            normalized_volume = self._normalize_smart_storage_volume(child)
+                            normalized_volume = self._normalize_smart_storage_volume(
+                                {**child, "controller_path": str(doc.get("@odata.id", "") or "")}
+                            )
                             if normalized_volume not in smart_volumes:
                                 smart_volumes.append(normalized_volume)
                         elif key in ("DiskDrives", "Drives"):
-                            normalized_drive = self._normalize_smart_storage_drive(child)
+                            normalized_drive = self._normalize_smart_storage_drive(
+                                {**child, "controller_path": str(doc.get("@odata.id", "") or "")}
+                            )
                             if normalized_drive not in smart_drives:
                                 smart_drives.append(normalized_drive)
 
@@ -1169,6 +1180,64 @@ class ILOClient:
         self.base = f"https://{cfg.host}"
         self.redfish_root = f"{self.base}/redfish/v1"
         self.auth = HTTPBasicAuth(cfg.username, cfg.password)
+        self.http = requests.Session()
+        self._redfish_session_token = ""
+        self._redfish_session_location = ""
+
+    def _session_service_path(self) -> str:
+        return "/redfish/v1/SessionService/Sessions"
+
+    def _request_headers(self) -> dict[str, str]:
+        headers = {"Accept": "application/json"}
+        if self._redfish_session_token:
+            headers["X-Auth-Token"] = self._redfish_session_token
+        return headers
+
+    def _looks_like_invalid_session(self, status_code: int, body: str) -> bool:
+        text = str(body or "")
+        if "NoValidSession" in text:
+            return True
+        return status_code == 401 and "redfish" in text.lower()
+
+    def _clear_redfish_session(self) -> None:
+        self._redfish_session_token = ""
+        self._redfish_session_location = ""
+        try:
+            self.http.cookies.clear()
+        except Exception:
+            pass
+
+    def _create_redfish_session(self) -> None:
+        self._clear_redfish_session()
+        url = f"{self.base}{self._session_service_path()}"
+        response = self.http.post(
+            url,
+            json={"UserName": self.cfg.username, "Password": self.cfg.password},
+            verify=self.cfg.verify_tls,
+            timeout=self.cfg.timeout,
+            headers={"Accept": "application/json"},
+        )
+        if response.status_code >= 400:
+            raise ILOError(f"POST {url} failed with HTTP {response.status_code}: {response.text[:300]}")
+        token = str(response.headers.get("X-Auth-Token") or "").strip()
+        location = str(response.headers.get("Location") or "").strip()
+        if not token:
+            raise ILOError(f"POST {url} did not return an X-Auth-Token header.")
+        self._redfish_session_token = token
+        self._redfish_session_location = location
+
+    def _request(self, method: str, url: str, *, timeout: int | float | None = None, json_payload: dict[str, Any] | None = None):
+        effective_timeout = self.cfg.timeout if timeout is None else timeout
+        kwargs: dict[str, Any] = {
+            "verify": self.cfg.verify_tls,
+            "timeout": effective_timeout,
+            "headers": self._request_headers(),
+        }
+        if json_payload is not None:
+            kwargs["json"] = json_payload
+        if not self._redfish_session_token:
+            kwargs["auth"] = self.auth
+        return self.http.request(method, url, **kwargs)
 
     def get_capability_dump(self) -> dict[str, Any]:
         manager_path = self.get_managers()[0]
@@ -1235,13 +1304,10 @@ class ILOClient:
         
     def _get(self, path: str, timeout: int | float | None = None) -> dict[str, Any]:
         url = path if path.startswith("http") else f"{self.base}{path}"
-        effective_timeout = self.cfg.timeout if timeout is None else timeout
-        r = requests.get(
-            url,
-            auth=self.auth,
-            verify=self.cfg.verify_tls,
-            timeout=effective_timeout,
-        )
+        r = self._request("GET", url, timeout=timeout)
+        if self._looks_like_invalid_session(r.status_code, r.text):
+            self._create_redfish_session()
+            r = self._request("GET", url, timeout=timeout)
         if r.status_code >= 400:
             raise ILOError(f"GET {url} failed with HTTP {r.status_code}: {r.text[:300]}")
         try:
@@ -1251,13 +1317,7 @@ class ILOClient:
 
     def _post(self, path: str, payload: dict[str, Any] | None = None) -> dict[str, Any] | None:
         url = path if path.startswith("http") else f"{self.base}{path}"
-        r = requests.post(
-            url,
-            json=payload or {},
-            auth=self.auth,
-            verify=self.cfg.verify_tls,
-            timeout=self.cfg.timeout,
-        )
+        r = self._request("POST", url, json_payload=payload or {})
         if r.status_code >= 400:
             raise ILOError(f"POST {url} failed with HTTP {r.status_code}: {r.text[:300]}")
         if not r.text.strip():
@@ -1269,13 +1329,7 @@ class ILOClient:
 
     def _patch(self, path: str, payload: dict[str, Any]) -> dict[str, Any] | None:
         url = path if path.startswith("http") else f"{self.base}{path}"
-        r = requests.patch(
-            url,
-            json=payload,
-            auth=self.auth,
-            verify=self.cfg.verify_tls,
-            timeout=self.cfg.timeout,
-        )
+        r = self._request("PATCH", url, json_payload=payload)
         if r.status_code >= 400:
             raise ILOError(f"PATCH {url} failed with HTTP {r.status_code}: {r.text[:500]}")
         if not r.text.strip():
@@ -1287,12 +1341,7 @@ class ILOClient:
 
     def _delete(self, path: str) -> dict[str, Any] | None:
         url = path if path.startswith("http") else f"{self.base}{path}"
-        r = requests.delete(
-            url,
-            auth=self.auth,
-            verify=self.cfg.verify_tls,
-            timeout=self.cfg.timeout,
-        )
+        r = self._request("DELETE", url)
         if r.status_code >= 400:
             raise ILOError(f"DELETE {url} failed with HTTP {r.status_code}: {r.text[:500]}")
         if not r.text.strip():
@@ -1304,13 +1353,7 @@ class ILOClient:
 
     def _put(self, path: str, payload: dict[str, Any]) -> dict[str, Any] | None:
         url = path if path.startswith("http") else f"{self.base}{path}"
-        r = requests.put(
-            url,
-            json=payload,
-            auth=self.auth,
-            verify=self.cfg.verify_tls,
-            timeout=self.cfg.timeout,
-        )
+        r = self._request("PUT", url, json_payload=payload)
         if r.status_code >= 400:
             raise ILOError(f"PUT {url} failed with HTTP {r.status_code}: {r.text[:500]}")
         if not r.text.strip():
@@ -1319,6 +1362,132 @@ class ILOClient:
             return r.json()
         except Exception:
             return None
+
+    def _storage_reboot_required(self, response: dict[str, Any] | None, default: bool = False) -> bool:
+        if not response:
+            return default
+        if response.get("reboot_required") is not None:
+            return bool(response.get("reboot_required"))
+        messages = response.get("Messages") or response.get("messages") or []
+        if isinstance(messages, list):
+            for item in messages:
+                text = str(item.get("MessageId") or item.get("Message") or item)
+                if "reset" in text.lower() or "reboot" in text.lower():
+                    return True
+        return default
+
+    def wait_for_storage_device_discovery(self, system_path: str = "/redfish/v1/Systems/1", timeout: int = 90, poll_interval: float = 5.0) -> dict[str, Any]:
+        deadline = time.time() + max(timeout, 1)
+        last_doc: dict[str, Any] = {}
+        while time.time() < deadline:
+            last_doc = self._get(system_path)
+            discovery = (((last_doc.get("Oem") or {}).get("Hpe") or {}).get("DeviceDiscoveryComplete") or {})
+            state = str(discovery.get("DeviceDiscovery") or "").strip()
+            if state == "vMainDeviceDiscoveryComplete":
+                return {
+                    "ready": True,
+                    "state": state,
+                    "details": discovery,
+                    "system_path": system_path,
+                }
+            time.sleep(max(poll_interval, 0.2))
+        discovery = (((last_doc.get("Oem") or {}).get("Hpe") or {}).get("DeviceDiscoveryComplete") or {})
+        return {
+            "ready": False,
+            "state": str(discovery.get("DeviceDiscovery") or "").strip(),
+            "details": discovery,
+            "system_path": system_path,
+        }
+
+    def get_standard_storage_volume_capabilities(self, volumes_path: str) -> dict[str, Any]:
+        capabilities_path = f"{volumes_path.rstrip('/')}/Capabilities"
+        doc = self._safe_get(capabilities_path)
+        if doc.get("@error"):
+            return {
+                "path": capabilities_path,
+                "available": False,
+                "error": doc.get("@error", ""),
+                "payload": {},
+            }
+        return {
+            "path": capabilities_path,
+            "available": True,
+            "error": "",
+            "payload": doc,
+        }
+
+    def _standard_volume_payload(
+        self,
+        intent: dict[str, Any],
+        spare_intent: dict[str, Any] | None = None,
+        capabilities: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        raid_value = str(intent.get("raid") or "").strip().upper()
+        if not raid_value:
+            raise ILOError("Standard Redfish volume creation requires a RAID level.")
+        drive_paths = [str(drive.get("path") or "").strip() for drive in intent.get("drives", []) or [] if str(drive.get("path") or "").strip()]
+        if not drive_paths:
+            raise ILOError("Standard Redfish volume creation requires at least one drive path.")
+
+        payload: dict[str, Any] = {
+            "RAIDType": raid_value,
+            "Links": {
+                "Drives": [{"@odata.id": path} for path in drive_paths],
+            },
+        }
+        label = str(intent.get("label") or "").strip()
+        if label:
+            payload["DisplayName"] = label[:15]
+
+        if intent.get("target_size_gib"):
+            try:
+                payload["CapacityBytes"] = int(float(intent["target_size_gib"]) * 1024 * 1024 * 1024)
+            except Exception:
+                pass
+
+        spare_drive = (spare_intent or {}).get("drive") or {}
+        spare_path = str(spare_drive.get("path") or "").strip()
+        capabilities_payload = (capabilities or {}).get("payload") if isinstance(capabilities, dict) else {}
+        dedicated_spare_supported = bool(
+            isinstance(capabilities_payload, dict)
+            and (((capabilities_payload.get("Links") or {}).get("DedicatedSpareDrives@Redfish.OptionalOnCreate")) is True)
+        )
+        if spare_path and (dedicated_spare_supported or not capabilities_payload):
+            payload["Links"]["DedicatedSpareDrives"] = [{"@odata.id": spare_path}]
+        return payload
+
+    def create_standard_storage_volume(
+        self,
+        volumes_path: str,
+        intent: dict[str, Any],
+        spare_intent: dict[str, Any] | None = None,
+        capabilities: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        payload = self._standard_volume_payload(intent, spare_intent=spare_intent, capabilities=capabilities)
+        response = self._post(volumes_path, payload)
+        return {
+            "volumes_path": volumes_path,
+            "payload": payload,
+            "response": response,
+            "reboot_required": self._storage_reboot_required(response, default=False),
+        }
+
+    def delete_standard_storage_volume(self, volume_path: str) -> dict[str, Any]:
+        response = self._delete(volume_path)
+        return {
+            "volume_path": volume_path,
+            "response": response,
+            "reboot_required": self._storage_reboot_required(response, default=False),
+        }
+
+    def reset_standard_storage_to_defaults(self, reset_target: str, reset_type: str = "ResetAll") -> dict[str, Any]:
+        response = self._post(reset_target, {"ResetType": reset_type})
+        return {
+            "reset_target": reset_target,
+            "reset_type": reset_type,
+            "response": response,
+            "reboot_required": self._storage_reboot_required(response, default=False),
+        }
 
     def _smart_storage_settings_parent(self, settings_path: str) -> str:
         if not settings_path:

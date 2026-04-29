@@ -302,6 +302,7 @@
                 {% set selected_os_bays = storage_plan_defaults.customization.selected_os_bays if storage_plan_defaults and storage_plan_defaults.customization else [] %}
                 {% set selected_data_bays = storage_plan_defaults.customization.selected_data_bays if storage_plan_defaults and storage_plan_defaults.customization else [] %}
                 {% set selected_hot_spare_bay = storage_plan_defaults.customization.selected_hot_spare_bay if storage_plan_defaults and storage_plan_defaults.customization else '' %}
+                {% set selected_controller_path = storage_plan_defaults.customization.selected_controller_path if storage_plan_defaults and storage_plan_defaults.customization else '' %}
                 {% set selected_os_raid_level = storage_plan_defaults.customization.selected_os_raid_level if storage_plan_defaults and storage_plan_defaults.customization else 'RAID1' %}
                 {% set selected_data_raid_level = storage_plan_defaults.customization.selected_data_raid_level if storage_plan_defaults and storage_plan_defaults.customization else 'RAID6' %}
                 {% if not selected_os_bays and storage_plan_defaults %}
@@ -313,7 +314,28 @@
                 {% if not selected_hot_spare_bay and storage_plan_defaults and storage_plan_defaults.hot_spare.drive %}
                     {% set selected_hot_spare_bay = storage_plan_defaults.hot_spare.drive.bay %}
                 {% endif %}
+                {% if not selected_controller_path and storage_plan_defaults and storage_plan_defaults.source_discovery and storage_plan_defaults.source_discovery.controller %}
+                    {% set selected_controller_path = storage_plan_defaults.source_discovery.controller.path %}
+                {% endif %}
                 {% if planning_drives %}
+                {% if storage_controller_choices and storage_controller_choices|length > 1 %}
+                <div class="card mb-4">
+                    <div class="text-sm font-semibold mb-2">Storage controller</div>
+                    <div class="text-xs text-slate-400 mb-3">This server has more than one controller. Pick the one you want this storage plan to use.</div>
+                    <label>
+                        <div class="text-sm text-slate-300 mb-1">Detected controllers</div>
+                        <select class="input" name="controller_path">
+                            {% for choice in storage_controller_choices %}
+                            <option value="{{ choice.path }}" {% if choice.path == selected_controller_path %}selected{% endif %}>
+                                {{ choice.label }}{% if choice.details %} | {{ choice.details }}{% endif %}
+                            </option>
+                            {% endfor %}
+                        </select>
+                    </label>
+                </div>
+                {% elif selected_controller_path %}
+                <input type="hidden" name="controller_path" value="{{ selected_controller_path }}">
+                {% endif %}
                 <div class="grid grid-cols-1 xl:grid-cols-3 gap-4 mb-4">
                     <div class="card">
                         <div class="text-sm font-semibold mb-2">OS mirror drives</div>

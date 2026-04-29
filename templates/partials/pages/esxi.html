@@ -24,13 +24,40 @@
             <input type="hidden" name="return_page" value="esxi">
             <div>
                 <label class="block text-sm font-bold text-slate-300 mb-2">Server name</label>
-                <input type="text" name="esxi_hostname" value="{{ cfg.get('esxi', {}).get('hostname', '') }}" class="input">
+                {% if esxi_field_errors.hostname %}
+                <div class="field-error">{{ esxi_field_errors.hostname|join(' ') }}</div>
+                {% endif %}
+                <input type="text" name="esxi_hostname" value="{{ cfg.get('esxi', {}).get('hostname', '') }}" class="input{% if esxi_field_errors.hostname %} input-invalid{% endif %}">
+                <div class="text-xs text-slate-400 mt-1">Use only letters, numbers, hyphens, and optional dots. Do not use underscores or other special characters.</div>
             </div>
             <div>
                 <label class="block text-sm font-bold text-slate-300 mb-2">Root password</label>
-                <input type="password" name="esxi_root_password" value="{{ cfg.get('esxi', {}).get('root_password', '') }}" class="input">
-                <div class="text-xs text-slate-400 mt-1">The app never shows the saved password back in logs. It only reports whether a password is saved.</div>
+                {% if esxi_field_errors.root_password %}
+                <div class="field-error">{{ esxi_field_errors.root_password|join(' ') }}</div>
+                {% endif %}
+                <input type="password" name="esxi_root_password" value="{{ cfg.get('esxi', {}).get('root_password', '') }}" class="input{% if esxi_field_errors.root_password %} input-invalid{% endif %}">
+                <div class="text-xs text-slate-400 mt-1">Use the common ESXi default rule: at least 7 characters and at least 3 character types. Avoid spaces. The app never shows the saved password back in logs.</div>
             </div>
+
+            {% if esxi_page_review.validation_errors or esxi_page_review.validation_notes %}
+            <div class="card card-compact">
+                <div class="font-semibold mb-2">Saved-value checks</div>
+                {% if esxi_page_review.validation_errors %}
+                <div class="space-y-2">
+                    {% for item in esxi_page_review.validation_errors %}
+                    <div class="result" style="margin-top: 0;">{{ item }}</div>
+                    {% endfor %}
+                </div>
+                {% endif %}
+                {% if esxi_page_review.validation_notes %}
+                <div class="space-y-2 mt-3">
+                    {% for item in esxi_page_review.validation_notes %}
+                    <div class="text-sm text-slate-400">{{ item }}</div>
+                    {% endfor %}
+                </div>
+                {% endif %}
+            </div>
+            {% endif %}
 
             <div class="grid grid-cols-1 md:grid-cols-3 gap-3 workflow-hero-grid">
                 <div class="workflow-summary-tile">

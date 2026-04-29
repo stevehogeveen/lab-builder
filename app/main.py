@@ -145,6 +145,265 @@ def normalize_ilo_hostname(value: str) -> str:
     return hostname[:63]
 
 
+def has_non_printable_chars(value: str) -> bool:
+    return any((not ch.isprintable()) or ch in "\r\n\t" for ch in str(value or ""))
+
+
+def count_password_classes(value: str) -> int:
+    text = str(value or "")
+    classes = 0
+    if any(ch.islower() for ch in text):
+        classes += 1
+    if any(ch.isupper() for ch in text):
+        classes += 1
+    if any(ch.isdigit() for ch in text):
+        classes += 1
+    if any(not ch.isalnum() for ch in text):
+        classes += 1
+    return classes
+
+
+def validate_ilo_login_name(value: str, *, label: str, required: bool = True) -> list[str]:
+    username = str(value or "").strip()
+    if not username:
+        return [f"{label} is required."] if required else []
+    errors: list[str] = []
+    if len(username) > 39:
+        errors.append(f"{label} must be 39 characters or less.")
+    if has_non_printable_chars(username):
+        errors.append(f"{label} must use printable characters only.")
+    if re.search(r"\s", username):
+        errors.append(f"{label} cannot contain spaces.")
+    return errors
+
+
+def validate_ilo_password(value: str, *, username: str = "", label: str, required: bool = True) -> dict[str, list[str]]:
+    password = str(value or "")
+    errors: list[str] = []
+    notes: list[str] = []
+    if not password:
+        if required:
+            errors.append(f"{label} is required.")
+        return {"errors": errors, "notes": notes}
+    if len(password) > 39:
+        errors.append(f"{label} must be 39 characters or less.")
+    if has_non_printable_chars(password):
+        errors.append(f"{label} must use printable characters only.")
+    if len(password) < 8:
+        notes.append(f"{label} is under 8 characters. Many iLO policies use a minimum of 8.")
+    if count_password_classes(password) < 3:
+        notes.append(f"{label} does not use 3 character types. iLO complexity policy may reject it.")
+    if username and username.lower() in password.lower():
+        notes.append(f"{label} contains the user name. HPE recommends avoiding that.")
+    return {"errors": errors, "notes": notes}
+
+
+def validate_snmpv3_username(value: str, *, label: str) -> list[str]:
+    username = str(value or "").strip()
+    if not username:
+        return [f"{label} is required."]
+    errors: list[str] = []
+    if len(username) > 32:
+        errors.append(f"{label} must be 32 characters or less.")
+    if has_non_printable_chars(username):
+        errors.append(f"{label} must use printable characters only.")
+    if re.search(r"\s", username):
+        errors.append(f"{label} cannot contain spaces.")
+    return errors
+
+
+def validate_snmpv3_password(value: str, *, label: str, required: bool = True) -> list[str]:
+    password = str(value or "")
+    if not password:
+        return [f"{label} is required."] if required else []
+    errors: list[str] = []
+    if has_non_printable_chars(password):
+        errors.append(f"{label} must use printable characters only.")
+    if len(password) < 8:
+        errors.append(f"{label} must be at least 8 characters.")
+    return errors
+
+
+def build_ilo_input_review(cfg: dict[str, Any]) -> dict[str, Any]:
+    ilo_cfg = cfg.get("ilo", {}) or {}
+    errors: list[str] = []
+    notes: list[str] = []
+    errors.extend(validate_ilo_login_name(ilo_cfg.get("username", ""), label="iLO username"))
+    password_check = validate_ilo_password(
+        ilo_cfg.get("password", ""),
+        username=str(ilo_cfg.get("username") or ""),
+        label="iLO password",
+    )
+    errors.extend(password_check["errors"])
+    notes.extend(password_check["notes"])
+    for index, item in enumerate(normalize_ilo_additional_users(ilo_cfg.get("additional_users", [])), start=1):
+        prefix = f"Extra iLO user {index}"
+        errors.extend(validate_ilo_login_name(item.get("username", ""), label=f"{prefix} username"))
+        extra_check = validate_ilo_password(
+            item.get("password", ""),
+            username=str(item.get("username") or ""),
+            label=f"{prefix} password",
+        )
+        errors.extend(extra_check["errors"])
+        notes.extend(extra_check["notes"])
+    return {"errors": errors, "notes": notes}
+
+
+def build_snmp_input_review(cfg: dict[str, Any]) -> dict[str, Any]:
+    snmp_cfg = cfg.get("shared_snmp", {}) or {}
+    errors: list[str] = []
+    notes: list[str] = []
+    users = normalize_snmp_users(snmp_cfg.get("users", []))
+    primary_username = str(snmp_cfg.get("v3_username") or "").strip()
+    primary_auth_password = str(snmp_cfg.get("v3_auth_password") or "")
+    primary_priv_password = str(snmp_cfg.get("v3_priv_password") or "")
+    if primary_username or primary_auth_password or primary_priv_password:
+        errors.extend(validate_snmpv3_username(primary_username, label="SNMPv3 user"))
+        errors.extend(validate_snmpv3_password(primary_auth_password, label="SNMPv3 auth password"))
+        errors.extend(validate_snmpv3_password(primary_priv_password, label="SNMPv3 privacy password"))
+    for index, item in enumerate(users[1:] if users else [], start=1):
+        prefix = f"Additional SNMPv3 user {index}"
+        errors.extend(validate_snmpv3_username(item.get("username", ""), label=f"{prefix}"))
+        errors.extend(validate_snmpv3_password(item.get("auth_password", ""), label=f"{prefix} auth password"))
+        errors.extend(validate_snmpv3_password(item.get("priv_password", ""), label=f"{prefix} privacy password"))
+    if primary_username and not users:
+        notes.append("The primary SNMPv3 user is saved, but the normalized user list is empty.")
+    return {"errors": errors, "notes": notes}
+
+
+def build_esxi_field_errors(cfg: dict[str, Any]) -> dict[str, list[str]]:
+    values = get_esxi_effective_values(cfg)
+    return {
+        "hostname": list(values.get("hostname_errors") or []),
+        "root_password": list(values.get("root_password_errors") or []),
+    }
+
+
+def build_ilo_field_errors(cfg: dict[str, Any]) -> dict[str, Any]:
+    ilo_cfg = cfg.get("ilo", {}) or {}
+    main_username_errors = validate_ilo_login_name(ilo_cfg.get("username", ""), label="iLO username")
+    main_password_check = validate_ilo_password(
+        ilo_cfg.get("password", ""),
+        username=str(ilo_cfg.get("username") or ""),
+        label="iLO password",
+    )
+    extra_users = []
+    for item in normalize_ilo_additional_users(ilo_cfg.get("additional_users", [])):
+        username_errors = validate_ilo_login_name(item.get("username", ""), label="Extra iLO user username")
+        password_check = validate_ilo_password(
+            item.get("password", ""),
+            username=str(item.get("username") or ""),
+            label="Extra iLO user password",
+        )
+        extra_users.append(
+            {
+                "username": username_errors,
+                "password": list(password_check.get("errors") or []),
+            }
+        )
+    return {
+        "username": main_username_errors,
+        "password": list(main_password_check.get("errors") or []),
+        "extra_users": extra_users,
+    }
+
+
+def build_snmp_field_errors(cfg: dict[str, Any]) -> dict[str, Any]:
+    snmp_cfg = cfg.get("shared_snmp", {}) or {}
+    primary_username = str(snmp_cfg.get("v3_username") or "").strip()
+    primary_auth_password = str(snmp_cfg.get("v3_auth_password") or "")
+    primary_priv_password = str(snmp_cfg.get("v3_priv_password") or "")
+    extra_users = normalize_snmp_users(snmp_cfg.get("users", []))[1:] if snmp_cfg.get("users") else []
+    return {
+        "username": validate_snmpv3_username(primary_username, label="SNMPv3 user") if primary_username or primary_auth_password or primary_priv_password else [],
+        "auth_password": validate_snmpv3_password(primary_auth_password, label="SNMPv3 auth password", required=bool(primary_username or primary_priv_password)),
+        "priv_password": validate_snmpv3_password(primary_priv_password, label="SNMPv3 privacy password", required=bool(primary_username or primary_auth_password)),
+        "extra_users": [
+            {
+                "username": validate_snmpv3_username(item.get("username", ""), label="Additional SNMPv3 user"),
+                "auth_password": validate_snmpv3_password(item.get("auth_password", ""), label="Additional SNMPv3 auth password"),
+                "priv_password": validate_snmpv3_password(item.get("priv_password", ""), label="Additional SNMPv3 privacy password"),
+            }
+            for item in extra_users
+        ],
+    }
+
+
+def validate_esxi_hostname(value: str) -> list[str]:
+    hostname = str(value or "").strip()
+    if not hostname:
+        return ["Server name is required."]
+    if len(hostname) > 253:
+        return ["Server name is too long. Keep the full name at 253 characters or less."]
+    if re.search(r"[^A-Za-z0-9.\-]", hostname):
+        return ["Use only letters, numbers, hyphens, and dots in the ESXi server name."]
+    if hostname.startswith(".") or hostname.endswith("."):
+        return ["Do not start or end the ESXi server name with a dot."]
+    labels = hostname.split(".")
+    if any(not label for label in labels):
+        return ["Do not use empty name parts or two dots in a row in the ESXi server name."]
+    errors: list[str] = []
+    for label in labels:
+        if len(label) > 63:
+            errors.append("Each part of the ESXi server name must be 63 characters or less.")
+            break
+        if not re.fullmatch(r"[A-Za-z0-9](?:[A-Za-z0-9\-]*[A-Za-z0-9])?", label):
+            errors.append("Each part of the ESXi server name must start and end with a letter or number.")
+            break
+    return errors
+
+
+def build_esxi_password_policy_check(password: str, *, username: str = "root") -> dict[str, Any]:
+    value = str(password or "")
+    errors: list[str] = []
+    notes: list[str] = []
+    if not value:
+        errors.append("Root password is required.")
+        return {"valid": False, "errors": errors, "notes": notes, "class_count": 0, "length": 0}
+    if any(ch.isspace() for ch in value):
+        errors.append("Do not use spaces in the ESXi root password.")
+    length = len(value)
+    if length < 7:
+        errors.append("Use at least 7 characters for the ESXi root password.")
+    if length > 39:
+        errors.append("Keep the ESXi root password under 40 characters.")
+
+    lower_count = sum(1 for ch in value if ch.islower())
+    upper_count = sum(1 for ch in value if ch.isupper())
+    digit_count = sum(1 for ch in value if ch.isdigit())
+    special_count = sum(1 for ch in value if not ch.isalnum())
+
+    effective_classes = 0
+    if lower_count:
+        effective_classes += 1
+    if upper_count:
+        if upper_count == 1 and value[:1].isupper():
+            notes.append("A single uppercase letter at the start may not count toward ESXi complexity.")
+        else:
+            effective_classes += 1
+    if digit_count:
+        if digit_count == 1 and value[-1:].isdigit():
+            notes.append("A single number at the end may not count toward ESXi complexity.")
+        else:
+            effective_classes += 1
+    if special_count:
+        effective_classes += 1
+
+    if effective_classes < 3:
+        errors.append("Use at least 3 character types: lowercase, uppercase, number, or special.")
+
+    if username and username.lower() in value.lower():
+        notes.append("Avoid using the username inside the ESXi root password.")
+
+    return {
+        "valid": not errors,
+        "errors": errors,
+        "notes": notes,
+        "class_count": effective_classes,
+        "length": length,
+    }
+
+
 def normalize_page_name(name: str | None) -> str:
     page = (name or "dashboard").strip().lower()
     return page if page in PAGE_META else "dashboard"
@@ -437,6 +696,7 @@ def save_job(kit_name: str, job: dict):
     ensure_run_bundle_for_job(kit_name, job)
     job["updated_at"] = time.strftime("%Y-%m-%d %H:%M:%S")
     path = job_path(kit_name)
+    path.parent.mkdir(parents=True, exist_ok=True)
     tmp_path = path.with_suffix(path.suffix + ".tmp")
     with open(tmp_path, "w", encoding="utf-8") as f:
         yaml.safe_dump(job, f, sort_keys=False)
@@ -457,7 +717,9 @@ def load_history(kit_name: str):
 
 
 def save_history(kit_name: str, entries: list[dict]):
-    with open(history_path(kit_name), "w", encoding="utf-8") as f:
+    path = history_path(kit_name)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with open(path, "w", encoding="utf-8") as f:
         yaml.safe_dump(entries, f, sort_keys=False)
 
 
@@ -1410,7 +1672,7 @@ def build_dashboard_job_status(history: list[dict[str, Any]]) -> dict[str, Any]:
     }
 
 
-def latest_storage_discovery_export(cfg: dict[str, Any]) -> dict[str, Path] | None:
+def latest_storage_discovery_export(cfg: dict[str, Any], allow_global_fallback: bool = False) -> dict[str, Path] | None:
     storage_cfg = cfg.get("storage", {}) or {}
     latest_raw = str(storage_cfg.get("latest_discovery_raw_path") or "").strip()
     if latest_raw:
@@ -1421,6 +1683,9 @@ def latest_storage_discovery_export(cfg: dict[str, Any]) -> dict[str, Path] | No
                 "summary": raw_path.with_name("summary.yml"),
                 "raw": raw_path,
             }
+
+    if not allow_global_fallback:
+        return None
 
     latest_raw_path = None
     latest_mtime = -1.0
@@ -1462,8 +1727,28 @@ def load_latest_live_inventory_snapshot() -> dict[str, Any]:
     return snapshot
 
 
+def load_latest_live_inventory_snapshot_for_cfg(cfg: dict[str, Any]) -> dict[str, Any]:
+    snapshot = load_latest_live_inventory_snapshot()
+    if not snapshot:
+        return {}
+
+    kit_name = sanitize_kit_name(cfg.get("site", {}).get("name", "Kit-01"))
+    summary = snapshot.get("summary", {}) or {}
+    raw = snapshot.get("raw", {}) or {}
+    snapshot_kit = str(summary.get("kit_name") or raw.get("kit_name") or "").strip()
+    if snapshot_kit and snapshot_kit == kit_name:
+        return snapshot
+
+    current_host = str((cfg.get("ilo", {}) or {}).get("current_ip") or (cfg.get("ilo", {}) or {}).get("host") or "").strip()
+    snapshot_host = str(summary.get("current_ilo_ip") or raw.get("source_host") or "").strip()
+    if current_host and snapshot_host and current_host == snapshot_host:
+        return snapshot
+
+    return {}
+
+
 def load_latest_storage_discovery_snapshot(cfg: dict[str, Any]) -> dict[str, Any]:
-    export_paths = latest_storage_discovery_export(cfg)
+    export_paths = latest_storage_discovery_export(cfg, allow_global_fallback=False)
     if not export_paths:
         return {}
 
@@ -1488,7 +1773,7 @@ def _first_non_empty(*values: object) -> str:
 
 
 def build_hardware_identity(cfg: dict[str, Any]) -> dict[str, Any]:
-    live_snapshot = load_latest_live_inventory_snapshot()
+    live_snapshot = load_latest_live_inventory_snapshot_for_cfg(cfg)
     storage_snapshot = load_latest_storage_discovery_snapshot(cfg)
 
     live_summary = live_snapshot.get("summary", {}) or {}
@@ -1575,7 +1860,7 @@ def build_hardware_identity(cfg: dict[str, Any]) -> dict[str, Any]:
 
 
 def build_ilo_advanced_profile(cfg: dict[str, Any]) -> dict[str, Any]:
-    live_snapshot = load_latest_live_inventory_snapshot()
+    live_snapshot = load_latest_live_inventory_snapshot_for_cfg(cfg)
     if not live_snapshot:
         return {
             "available": False,
@@ -2090,17 +2375,24 @@ def build_esxi_page_review(cfg: dict[str, Any]) -> dict[str, Any]:
         "output_iso_path": str(output_iso),
         "virtual_media_url": build_esxi_iso_url(cfg, output_iso, login_ip),
         "hostname": values["hostname"],
+        "hostname_valid": values["hostname_valid"],
+        "hostname_errors": values["hostname_errors"],
+        "hostname_warnings": values["hostname_warnings"],
         "management_ip": values["management_ip"],
         "subnet_mask": values["subnet_mask"],
         "gateway": values["gateway"],
         "dns_servers": values["dns_servers"],
         "root_password_saved": bool(values["root_password"]),
-        "root_password_policy_valid": esxi_password_policy_valid(values["root_password"]) if values["root_password"] else False,
+        "root_password_policy_valid": values["root_password_policy_valid"],
+        "root_password_errors": values["root_password_errors"],
+        "root_password_notes": values["root_password_notes"],
         "vlan_id": values["vlan_id"],
         "ntp_server": values["ntp_server"],
         "enable_ssh": values["enable_ssh"],
         "disable_ipv6": values["disable_ipv6"],
         "missing_fields": list(values["missing_fields"]),
+        "validation_errors": list(values["validation_errors"]),
+        "validation_notes": list(values["validation_notes"]),
     }
     try:
         review["base_iso_path"] = str(resolve_esxi_base_iso_path(cfg))
@@ -2137,8 +2429,8 @@ def build_esxi_advanced_profile(cfg: dict[str, Any], review: dict[str, Any] | No
     areas = [
         area(
             "Installer identity",
-            "Ready" if review.get("hostname") and review.get("management_ip") else "Needs values",
-            "ready" if review.get("hostname") and review.get("management_ip") else "pending",
+            "Ready" if review.get("hostname") and review.get("management_ip") and review.get("hostname_valid") else "Needs values",
+            "ready" if review.get("hostname") and review.get("management_ip") and review.get("hostname_valid") else "pending",
             "These are the main ESXi identity values the app will bake into the installer.",
             [
                 {"label": "Hostname", "value": str(review.get("hostname") or "Not set")},
@@ -2147,11 +2439,15 @@ def build_esxi_advanced_profile(cfg: dict[str, Any], review: dict[str, Any] | No
                 {"label": "Gateway", "value": str(review.get("gateway") or "Not set")},
                 {"label": "DNS servers", "value": ", ".join(review.get("dns_servers") or []) or "Not set"},
             ],
+            detail_rows=[
+                {"label": "Hostname checks", "value": "; ".join(review.get("hostname_errors") or []) or "Passed"},
+                {"label": "Hostname notes", "value": "; ".join(review.get("hostname_warnings") or []) or "None"},
+            ],
         ),
         area(
-            "Install services",
-            "Ready" if review.get("root_password_saved") else "Needs values",
-            "ready" if review.get("root_password_saved") else "pending",
+            "Install sign-in",
+            "Ready" if review.get("root_password_saved") and review.get("root_password_policy_valid") else "Needs values",
+            "ready" if review.get("root_password_saved") and review.get("root_password_policy_valid") else "pending",
             "These are the service and policy choices the builder will include for this ESXi install.",
             [
                 {"label": "Root password saved", "value": yes_no(bool(review.get("root_password_saved")))},
@@ -2160,6 +2456,10 @@ def build_esxi_advanced_profile(cfg: dict[str, Any], review: dict[str, Any] | No
                 {"label": "NTP server", "value": str(review.get("ntp_server") or "Not set")},
                 {"label": "Enable SSH", "value": yes_no(bool(review.get("enable_ssh")))},
                 {"label": "Disable IPv6", "value": yes_no(bool(review.get("disable_ipv6")))},
+            ],
+            detail_rows=[
+                {"label": "Password checks", "value": "; ".join(review.get("root_password_errors") or []) or "Passed"},
+                {"label": "Password notes", "value": "; ".join(review.get("root_password_notes") or []) or "None"},
             ],
         ),
         area(
@@ -2176,11 +2476,12 @@ def build_esxi_advanced_profile(cfg: dict[str, Any], review: dict[str, Any] | No
         ),
         area(
             "Readiness",
-            "Ready" if not missing_fields and review.get("base_iso_ready") else "Needs attention",
-            "ready" if not missing_fields and review.get("base_iso_ready") else "pending",
+            "Ready" if not missing_fields and review.get("base_iso_ready") and not review.get("validation_errors") else "Needs attention",
+            "ready" if not missing_fields and review.get("base_iso_ready") and not review.get("validation_errors") else "pending",
             "This shows whether the saved values are complete enough for Run Center to build and launch the installer.",
             [
                 {"label": "Missing required values", "value": ", ".join(missing_fields) or "None"},
+                {"label": "Saved-value checks", "value": "; ".join(review.get("validation_errors") or []) or "Passed"},
                 {"label": "Base ISO status", "value": "Ready" if review.get("base_iso_ready") else str(review.get("base_iso_error") or "Missing")},
             ],
             detail_rows=[
@@ -2197,6 +2498,8 @@ def build_esxi_advanced_profile(cfg: dict[str, Any], review: dict[str, Any] | No
         "summary_fields": summary_fields,
         "areas": areas,
     }
+
+
 def validation_check(
     label: str,
     ok: bool,
@@ -2339,6 +2642,16 @@ def build_validation_checks(cfg: dict[str, Any], workflow: str) -> list[dict[str
                     "Ready" if not esxi_values["missing_fields"] else f"Missing: {', '.join(esxi_values['missing_fields'])}.",
                     why="The ESXi installer cannot be built or launched until the required install values are saved.",
                     fix="Open the ESXi page and save the missing setup values.",
+                    href="/esxi",
+                )
+            )
+            checks.append(
+                validation_check(
+                    "Saved-value rules",
+                    not esxi_values["validation_errors"],
+                    "Ready" if not esxi_values["validation_errors"] else "; ".join(esxi_values["validation_errors"]),
+                    why="The ESXi installer can still fail later if the saved name or password breaks ESXi input rules.",
+                    fix="Open the ESXi page and fix the saved server name or root password.",
                     href="/esxi",
                 )
             )
@@ -3311,6 +3624,7 @@ def normalized_plan_drive(drive: dict, source: str) -> dict:
     return {
         "source": source,
         "path": drive.get("path", ""),
+        "controller_path": drive.get("controller_path", ""),
         "id": str(drive.get("id") or ""),
         "bay": str(drive.get("bay") or drive.get("id") or ""),
         "name": drive.get("name", ""),
@@ -3323,6 +3637,27 @@ def normalized_plan_drive(drive: dict, source: str) -> dict:
         "smart_storage_location": smart_storage_location,
         "smart_storage_location_format": smart_storage_location_format,
     }
+
+
+def storage_item_matches_controller(item: dict[str, Any], controller: dict[str, Any]) -> bool:
+    if not controller:
+        return True
+    controller_source = str(controller.get("source") or "").strip()
+    item_source = str(item.get("source") or "").strip()
+    if controller_source and item_source and controller_source != item_source:
+        return False
+
+    controller_path = str(controller.get("path") or "").rstrip("/")
+    if not controller_path:
+        return True
+
+    item_controller_path = str(item.get("controller_path") or "").rstrip("/")
+    item_path = str(item.get("path") or "").rstrip("/")
+    if item_controller_path:
+        return item_controller_path == controller_path
+    if item_path and item_path.startswith(f"{controller_path}/"):
+        return True
+    return True
 
 
 def drive_group_key(drive: dict) -> tuple:
@@ -3508,6 +3843,33 @@ def select_primary_storage_controller(summary: dict[str, Any] | None) -> dict[st
     return {}
 
 
+def build_storage_controller_choices(summary: dict[str, Any] | None) -> list[dict[str, str]]:
+    summary = summary or {}
+    hpe = summary.get("hpe_smart_storage", {}) or {}
+    standard = summary.get("standard_redfish_storage", {}) or {}
+    controllers = []
+    for source, items in (("hpe_smart_storage", hpe.get("controllers", [])), ("standard_redfish_storage", standard.get("controllers", []))):
+        for item in items or []:
+            path = str(item.get("path") or "").strip()
+            if not path:
+                continue
+            name = str(item.get("name") or "").strip()
+            model = str(item.get("model") or "").strip()
+            firmware = storage_firmware_display(item.get("firmware_version"))
+            label_bits = [bit for bit in [name, model] if bit]
+            label = " / ".join(dict.fromkeys(label_bits)) or path.rsplit("/", 1)[-1]
+            detail_bits = [bit for bit in [source.replace("_", " ").title(), firmware] if bit]
+            controllers.append(
+                {
+                    "path": path,
+                    "source": source,
+                    "label": label,
+                    "details": " | ".join(detail_bits),
+                }
+            )
+    return controllers
+
+
 def build_storage_display_drives(summary: dict[str, Any] | None) -> list[dict[str, Any]]:
     summary = summary or {}
     standard = summary.get("standard_redfish_storage", {}) or {}
@@ -3553,16 +3915,29 @@ def build_raid_plan(discovery: dict, discovery_paths: dict[str, Path], overrides
     for source, items in (("hpe_smart_storage", hpe.get("controllers", [])), ("standard_redfish_storage", standard.get("controllers", []))):
         for item in items or []:
             controllers.append({**item, "source": source})
-    controller = controllers[0] if controllers else {}
+    requested_controller_path = str(overrides.get("controller_path") or "").strip()
+    controller = {}
+    if requested_controller_path:
+        controller = next((item for item in controllers if str(item.get("path") or "").strip() == requested_controller_path), {})
+        if not controller:
+            warnings.append("The previously selected storage controller is no longer available. Using the first detected controller instead.")
+    if not controller:
+        controller = controllers[0] if controllers else {}
     if not controller:
         blockers.append("No detected storage controller is available for planning.")
     elif controller.get("firmware_version") is not None:
         controller = {**controller, "firmware_version": storage_firmware_display(controller.get("firmware_version"))}
+    if len(controllers) > 1 and controller:
+        warnings.append(
+            "More than one storage controller was detected. Planning is scoped to the controller selected below."
+        )
 
     existing_volumes = []
     for source, items in (("hpe_smart_storage", hpe.get("volumes", [])), ("standard_redfish_storage", standard.get("volumes", []))):
         for item in items or []:
             existing_volumes.append({**item, "source": source})
+    if controller:
+        existing_volumes = [item for item in existing_volumes if storage_item_matches_controller(item, controller)]
     if existing_volumes:
         warnings.append("Existing logical volumes detected; default recommendation is wipe and rebuild before applying this target layout.")
 
@@ -3570,6 +3945,8 @@ def build_raid_plan(discovery: dict, discovery_paths: dict[str, Path], overrides
     excluded_drives = []
     for source, items in (("hpe_smart_storage", hpe.get("drives", [])), ("standard_redfish_storage", standard.get("drives", []))):
         for item in items or []:
+            if controller and not storage_item_matches_controller({**item, "source": source}, controller):
+                continue
             drive = normalized_plan_drive(item, source)
             if drive["size_gib"] <= 0:
                 excluded_drives.append({**drive, "exclude_reason": "Missing or zero drive size."})
@@ -3741,6 +4118,7 @@ def build_raid_plan(discovery: dict, discovery_paths: dict[str, Path], overrides
         },
         "customization": {
             "active": customization_active,
+            "selected_controller_path": str(controller.get("path") or ""),
             "selected_os_raid_level": selected_os_raid,
             "selected_data_raid_level": selected_data_raid,
             "selected_os_bays": [str(drive.get("bay") or "") for drive in os_pair],
@@ -3820,8 +4198,14 @@ def storage_apply_response_excerpt(response: Any) -> Any:
         "create_count",
         "hot_spare_location",
         "deleted_volume_paths",
+        "volume_path",
+        "volumes_path",
+        "reset_target",
+        "reset_type",
         "reboot_required",
         "settings_path",
+        "device_discovery",
+        "volume_capabilities",
         "logical_drive_kind",
         "assigned_bay",
     ):
@@ -4023,45 +4407,138 @@ def storage_apply_mode_for_plan(plan: dict[str, Any]) -> str:
     return "create_only"
 
 
+def _verified_hpe_smartstorage_settings_path(capabilities: dict[str, Any]) -> tuple[str, str]:
+    diagnostics = capabilities.get("hpe_smart_storage_diagnostics", {}) or {}
+    probed_paths = list(diagnostics.get("probed_paths") or [])
+    found_paths = [str(item.get("path") or "").rstrip("/") for item in diagnostics.get("found_paths", []) if item.get("path")]
+    saw_explicit_smartstorage_probe = False
+
+    for item in probed_paths:
+        path = str(item.get("path") or "").rstrip("/")
+        if "smartstorageconfig" in path.lower():
+            saw_explicit_smartstorage_probe = True
+        if "smartstorageconfig" in path.lower() and path.lower().endswith("/settings") and bool(item.get("exists")):
+            return path, ""
+
+    for item in probed_paths:
+        path = str(item.get("path") or "").rstrip("/")
+        if "smartstorageconfig" in path.lower() and bool(item.get("exists")):
+            candidate = path if path.lower().endswith("/settings") else f"{path}/Settings"
+            return candidate, ""
+
+    if not saw_explicit_smartstorage_probe:
+        for path in found_paths:
+            lower = path.lower()
+            if "smartstorageconfig" in lower and lower.endswith("/settings"):
+                return path, ""
+        for path in found_paths:
+            lower = path.lower()
+            if "smartstorageconfig" in lower:
+                return f"{path}/Settings" if not lower.endswith("/settings") else path, ""
+
+    if any("smartstorageconfig" in path.lower() for path in found_paths):
+        return "", "Discovery found SmartStorageConfig references, but no writable SmartStorageConfig settings URI was verified."
+    if capabilities.get("hpe_smart_storage"):
+        return "", "HPE Smart Storage inventory was present, but no writable SmartStorageConfig settings URI was exposed."
+    return "", "No HPE SmartStorageConfig settings URI was discovered."
+
+
+def _standard_redfish_storage_apply_surface(discovery: dict[str, Any], controller_path: str) -> dict[str, str]:
+    controller_path = str(controller_path or "").rstrip("/")
+    if not controller_path:
+        return {
+            "storage_path": "",
+            "volumes_path": "",
+            "reset_target": "",
+            "reason": "The selected storage controller is missing its Redfish storage path.",
+        }
+
+    standard_storage = ((discovery.get("raw") or {}).get("standard_storage") or [])
+    for item in standard_storage:
+        storage_path = str(item.get("@odata.id") or "").rstrip("/")
+        if storage_path != controller_path:
+            continue
+        volumes_path = str(((item.get("Volumes") or {}).get("@odata.id")) or "").rstrip("/")
+        reset_target = str((((item.get("Actions") or {}).get("#Storage.ResetToDefaults") or {}).get("target")) or "").rstrip("/")
+        if volumes_path:
+            return {
+                "storage_path": storage_path,
+                "volumes_path": volumes_path,
+                "reset_target": reset_target,
+                "reason": "",
+            }
+        return {
+            "storage_path": storage_path,
+            "volumes_path": "",
+            "reset_target": reset_target,
+            "reason": "The selected standard Redfish storage controller did not expose a writable Volumes collection.",
+        }
+
+    if (discovery.get("summary", {}) or {}).get("capabilities", {}).get("standard_redfish_storage"):
+        return {
+            "storage_path": controller_path,
+            "volumes_path": f"{controller_path}/Volumes",
+            "reset_target": "",
+            "reason": "",
+        }
+    return {
+        "storage_path": controller_path,
+        "volumes_path": "",
+        "reset_target": "",
+        "reason": "Standard Redfish storage inventory was not available for the selected controller.",
+    }
+
+
 def choose_storage_apply_platform(discovery: dict, plan: dict) -> dict[str, Any]:
     summary = discovery.get("summary", {}) or {}
     server = summary.get("server", {}) or {}
     ilo = summary.get("ilo", {}) or {}
     capabilities = summary.get("capabilities", {}) or {}
-    hpe_diag = capabilities.get("hpe_smart_storage_diagnostics", {}) or {}
-    found_paths = [str(item.get("path") or "") for item in hpe_diag.get("found_paths", []) if item.get("path")]
-
-    settings_path = ""
-    for path in found_paths:
-        lower = path.lower()
-        if "smartstorageconfig" in lower and lower.endswith("/settings"):
-            settings_path = path
-            break
-    if not settings_path:
-        for path in found_paths:
-            lower = path.lower()
-            if "smartstorageconfig" in lower:
-                settings_path = path.rstrip("/") + "/settings"
-                break
 
     controller = plan.get("source_discovery", {}).get("controller", {}) or {}
+    settings_path, settings_reason = _verified_hpe_smartstorage_settings_path(capabilities)
     server_gen = str(server.get("generation") or "")
     ilo_version = str(ilo.get("version") or ilo.get("model") or "")
-    if capabilities.get("hpe_smart_storage") and ("Gen10" in server_gen or "iLO 5" in ilo_version):
+    if settings_path and capabilities.get("hpe_smart_storage") and ("Gen10" in server_gen or "iLO 5" in ilo_version):
         return {
             "id": "gen10_hpe_smartstorageconfig",
             "label": "Gen10 / iLO 5 / HPE SmartStorageConfig",
             "supported": True,
             "settings_path": settings_path,
             "controller_path": controller.get("path", ""),
+            "reason": "",
         }
     if capabilities.get("standard_redfish_storage"):
+        surface = _standard_redfish_storage_apply_surface(discovery, controller.get("path", ""))
+        if surface.get("volumes_path"):
+            return {
+                "id": "standard_redfish_volumes",
+                "label": "Standard Redfish Storage Volumes",
+                "supported": True,
+                "settings_path": "",
+                "controller_path": surface.get("storage_path", ""),
+                "volumes_path": surface.get("volumes_path", ""),
+                "reset_target": surface.get("reset_target", ""),
+                "reason": "",
+            }
         return {
             "id": "gen11_standard_redfish",
-            "label": "Gen11 / iLO 6 / standard Redfish Storage",
+            "label": "Standard Redfish Storage",
             "supported": False,
             "settings_path": "",
             "controller_path": controller.get("path", ""),
+            "volumes_path": surface.get("volumes_path", ""),
+            "reset_target": surface.get("reset_target", ""),
+            "reason": surface.get("reason", "") or "Standard Redfish storage inventory was detected, but no writable volume collection was verified.",
+        }
+    if capabilities.get("hpe_smart_storage"):
+        return {
+            "id": "hpe_smart_storage_read_only",
+            "label": "HPE Smart Storage inventory only",
+            "supported": False,
+            "settings_path": "",
+            "controller_path": controller.get("path", ""),
+            "reason": settings_reason,
         }
     return {
         "id": "unsupported",
@@ -4069,6 +4546,7 @@ def choose_storage_apply_platform(discovery: dict, plan: dict) -> dict[str, Any]
         "supported": False,
         "settings_path": "",
         "controller_path": controller.get("path", ""),
+        "reason": settings_reason or "No supported writable storage apply path was discovered.",
     }
 
 
@@ -4085,11 +4563,12 @@ def validate_storage_apply_request(
     controller = plan.get("source_discovery", {}).get("controller", {}) or {}
     if not (controller.get("name") or controller.get("model") or controller.get("path")):
         raise ValueError("No storage controller is selected for apply.")
-    controllers = []
-    for source_key in ("hpe_smart_storage", "standard_redfish_storage"):
-        controllers.extend(((plan.get("source_discovery", {}) or {}).get(source_key, {}) or {}).get("controllers", []) or [])
-    if len(controllers) > 1:
-        raise ValueError("This destructive apply path only supports a single detected storage controller.")
+    for drive in list(plan.get("os_raid1", {}).get("drives", []) or []) + list(plan.get("data_raid6", {}).get("drives", []) or []):
+        if not storage_item_matches_controller(drive, controller):
+            raise ValueError("Selected storage drives must all belong to the chosen controller.")
+    for volume in plan.get("existing_logical_volumes", []) or []:
+        if not storage_item_matches_controller(volume, controller):
+            raise ValueError("Existing logical volumes must belong to the chosen controller before apply.")
     readiness = plan.get("apply_readiness", {}) or {}
     if apply_mode == "create_only" and not readiness.get("create_only_ready"):
         raise ValueError("Create-only apply is not ready for this plan.")
@@ -4334,6 +4813,260 @@ def execute_storage_apply_gen10(
     return current, responses
 
 
+def execute_storage_apply_standard_redfish(
+    client: ILOClient,
+    plan: dict,
+    apply_mode: str,
+    platform: dict[str, Any],
+    kit_name: str,
+    job: dict[str, Any],
+    apply_state: dict[str, Any],
+    apply_paths: dict[str, Path],
+    starting_step: int,
+    total_steps: int,
+    progress_resolver: Callable[[int, int], int] | None = None,
+) -> tuple[int, list[Any]]:
+    volumes_path = str(platform.get("volumes_path") or "").strip()
+    if not volumes_path:
+        raise ILOError("Standard Redfish volume collection path could not be determined from discovery.")
+
+    responses: list[Any] = []
+    current = starting_step
+    intent = build_storage_apply_intent(plan, apply_mode)
+    controller_name = apply_state["controller"].get("name") or apply_state["controller"].get("model") or ""
+    storage_path = str(platform.get("controller_path") or "").strip()
+    readiness = client.wait_for_storage_device_discovery()
+    responses.append({"device_discovery": readiness, "reboot_required": False})
+    if not readiness.get("ready"):
+        raise ILOError(
+            "Storage device discovery is not complete on the active server. "
+            f"Current state: {readiness.get('state') or 'unknown'}."
+        )
+
+    capabilities = client.get_standard_storage_volume_capabilities(volumes_path)
+    responses.append({"volume_capabilities": capabilities, "reboot_required": False})
+
+    existing_volume_paths = [
+        str(volume.get("path") or "").strip()
+        for volume in plan.get("existing_logical_volumes", []) or []
+        if str(volume.get("path") or "").strip()
+    ]
+
+    if apply_mode == "wipe_rebuild":
+        targets = {"controller": controller_name, "path": storage_path or volumes_path}
+        record_storage_apply_step(
+            kit_name,
+            job,
+            apply_state,
+            apply_paths,
+            "Delete existing logical volumes",
+            current,
+            total_steps,
+            "running",
+            "Delete existing logical volumes",
+            targets=targets,
+            details=(
+                f"Deleting {len(existing_volume_paths)} existing standard Redfish volume(s) from {volumes_path}."
+                if existing_volume_paths
+                else "No existing volumes were captured in the approved plan; attempting controller reset to defaults if available."
+            ),
+            progress_percent=progress_resolver(current, total_steps) if progress_resolver else None,
+        )
+        if existing_volume_paths:
+            for volume_path in existing_volume_paths:
+                delete_response = client.delete_standard_storage_volume(volume_path)
+                responses.append(delete_response)
+        elif platform.get("reset_target"):
+            reset_response = client.reset_standard_storage_to_defaults(str(platform.get("reset_target") or "").strip(), reset_type="ResetAll")
+            responses.append(reset_response)
+        record_storage_apply_step(
+            kit_name,
+            job,
+            apply_state,
+            apply_paths,
+            "Delete existing logical volumes",
+            current,
+            total_steps,
+            "ok",
+            "Delete existing logical volumes",
+            targets=targets,
+            details=(
+                f"Submitted deletion for {len(existing_volume_paths)} standard Redfish volume(s)."
+                if existing_volume_paths
+                else "Submitted Storage.ResetToDefaults because no explicit volume paths were available in the approved plan."
+            ),
+            progress_percent=progress_resolver(current, total_steps) if progress_resolver else None,
+        )
+    else:
+        record_storage_apply_step(
+            kit_name,
+            job,
+            apply_state,
+            apply_paths,
+            "Delete existing logical volumes",
+            current,
+            total_steps,
+            "skip",
+            "Delete existing logical volumes",
+            targets={"controller": controller_name},
+            details="Create-only mode selected; no existing standard Redfish volumes will be removed.",
+            progress_percent=progress_resolver(current, total_steps) if progress_resolver else None,
+        )
+    current += 1
+
+    os_intent = intent["os_raid1"]
+    os_label = str(os_intent.get("label") or "OS logical drive")
+    if os_intent.get("drives"):
+        record_storage_apply_step(
+            kit_name,
+            job,
+            apply_state,
+            apply_paths,
+            f"Create {os_label}",
+            current,
+            total_steps,
+            "running",
+            f"Create {os_label}",
+            targets={"controller": controller_name, "bays": os_intent.get("bays", []), "path": volumes_path},
+            details=f"Submitting {os_label} to the standard Redfish volume collection.",
+            progress_percent=progress_resolver(current, total_steps) if progress_resolver else None,
+        )
+        os_response = client.create_standard_storage_volume(volumes_path, os_intent, capabilities=capabilities)
+        responses.append(os_response)
+        record_storage_apply_step(
+            kit_name,
+            job,
+            apply_state,
+            apply_paths,
+            f"Create {os_label}",
+            current,
+            total_steps,
+            "ok",
+            f"Create {os_label}",
+            targets={"controller": controller_name, "bays": os_intent.get("bays", []), "path": volumes_path},
+            details=f"Submitted {os_label} to {volumes_path}.",
+            response=os_response,
+            progress_percent=progress_resolver(current, total_steps) if progress_resolver else None,
+        )
+    else:
+        record_storage_apply_step(
+            kit_name,
+            job,
+            apply_state,
+            apply_paths,
+            "Create OS array",
+            current,
+            total_steps,
+            "skip",
+            "Create OS array",
+            targets={"controller": controller_name},
+            details="No OS array is selected in this plan.",
+            progress_percent=progress_resolver(current, total_steps) if progress_resolver else None,
+        )
+    current += 1
+
+    data_intent = intent["data_raid6"]
+    data_label = str(data_intent.get("label") or "Data logical drive")
+    spare_intent = intent["hot_spare"]
+    if data_intent.get("drives"):
+        record_storage_apply_step(
+            kit_name,
+            job,
+            apply_state,
+            apply_paths,
+            f"Create {data_label}",
+            current,
+            total_steps,
+            "running",
+            f"Create {data_label}",
+            targets={"controller": controller_name, "bays": data_intent.get("bays", []), "path": volumes_path},
+            details=f"Submitting {data_label} to the standard Redfish volume collection.",
+            progress_percent=progress_resolver(current, total_steps) if progress_resolver else None,
+        )
+        data_response = client.create_standard_storage_volume(volumes_path, data_intent, spare_intent=spare_intent, capabilities=capabilities)
+        responses.append(data_response)
+        record_storage_apply_step(
+            kit_name,
+            job,
+            apply_state,
+            apply_paths,
+            f"Create {data_label}",
+            current,
+            total_steps,
+            "ok",
+            f"Create {data_label}",
+            targets={"controller": controller_name, "bays": data_intent.get("bays", []), "path": volumes_path},
+            details=f"Submitted {data_label} to {volumes_path}.",
+            response=data_response,
+            progress_percent=progress_resolver(current, total_steps) if progress_resolver else None,
+        )
+    else:
+        record_storage_apply_step(
+            kit_name,
+            job,
+            apply_state,
+            apply_paths,
+            "Create data array",
+            current,
+            total_steps,
+            "skip",
+            "Create data array",
+            targets={"controller": controller_name},
+            details="No data array is selected in this plan.",
+            progress_percent=progress_resolver(current, total_steps) if progress_resolver else None,
+        )
+    current += 1
+
+    spare_bay = str(spare_intent.get("bay", "") or "").strip()
+    if spare_bay and not data_intent.get("drives"):
+        record_storage_apply_step(
+            kit_name,
+            job,
+            apply_state,
+            apply_paths,
+            "Assign hot spare",
+            current,
+            total_steps,
+            "skip",
+            "Assign hot spare",
+            targets={"controller": controller_name, "bays": [spare_bay]},
+            details="A dedicated spare was selected, but no data array is being created.",
+            progress_percent=progress_resolver(current, total_steps) if progress_resolver else None,
+        )
+    elif spare_bay:
+        record_storage_apply_step(
+            kit_name,
+            job,
+            apply_state,
+            apply_paths,
+            "Assign hot spare",
+            current,
+            total_steps,
+            "ok",
+            "Assign hot spare",
+            targets={"controller": controller_name, "bays": [spare_bay]},
+            details="The dedicated spare, if supported, was included in the data volume creation request.",
+            progress_percent=progress_resolver(current, total_steps) if progress_resolver else None,
+        )
+    else:
+        record_storage_apply_step(
+            kit_name,
+            job,
+            apply_state,
+            apply_paths,
+            "Assign hot spare",
+            current,
+            total_steps,
+            "skip",
+            "Assign hot spare",
+            targets={"controller": controller_name},
+            details="No dedicated hot spare was selected for this plan.",
+            progress_percent=progress_resolver(current, total_steps) if progress_resolver else None,
+        )
+    current += 1
+    return current, responses
+
+
 def run_storage_apply(
     cfg: dict,
     discovery_raw_path: str,
@@ -4490,8 +5223,27 @@ def run_storage_apply(
             )
             apply_state["responses"].extend({"step": "platform_apply", "response": storage_apply_response_excerpt(item)} for item in responses)
             combined_response = {"responses": [storage_apply_response_excerpt(item) for item in responses]}
+        elif platform.get("id") == "standard_redfish_volumes":
+            current_step, responses = execute_storage_apply_standard_redfish(
+                client,
+                plan,
+                apply_mode,
+                platform,
+                kit_name,
+                job,
+                apply_state,
+                apply_paths,
+                current_step,
+                apply_steps,
+            )
+            apply_state["responses"].extend({"step": "platform_apply", "response": storage_apply_response_excerpt(item)} for item in responses)
+            combined_response = {"responses": [storage_apply_response_excerpt(item) for item in responses]}
         else:
-            raise ILOError(f"Storage apply path {platform.get('label')} is not implemented yet.")
+            reason = str(platform.get("reason") or "").strip()
+            detail = f"Storage apply path {platform.get('label')} is not implemented yet."
+            if reason:
+                detail += f" {reason}"
+            raise ILOError(detail)
 
         record_storage_apply_step(
             kit_name,
@@ -5300,8 +6052,28 @@ def run_storage_as_part_of_real_run(
         )
         apply_state["responses"].extend({"step": "platform_apply", "response": storage_apply_response_excerpt(item)} for item in responses)
         combined_response = {"responses": [storage_apply_response_excerpt(item) for item in responses]}
+    elif platform.get("id") == "standard_redfish_volumes":
+        current_step, responses = execute_storage_apply_standard_redfish(
+            client,
+            plan,
+            apply_mode,
+            platform,
+            kit_name,
+            job,
+            apply_state,
+            apply_paths,
+            current_step,
+            total_steps,
+            progress_resolver=combined_progress_percent,
+        )
+        apply_state["responses"].extend({"step": "platform_apply", "response": storage_apply_response_excerpt(item)} for item in responses)
+        combined_response = {"responses": [storage_apply_response_excerpt(item) for item in responses]}
     else:
-        raise ILOError(f"Storage apply path {platform.get('label')} is not implemented yet.")
+        reason = str(platform.get("reason") or "").strip()
+        detail = f"Storage apply path {platform.get('label')} is not implemented yet."
+        if reason:
+            detail += f" {reason}"
+        raise ILOError(detail)
 
     record_storage_apply_step(
         kit_name,
@@ -6167,6 +6939,8 @@ def build_execution_review(cfg: dict, scope: str):
             values.append(f"Disable IPv6: {'Yes' if esxi_install_review.get('disable_ipv6') else 'No'}")
             if esxi_install_review.get("missing_fields"):
                 values.append(f"Missing required values: {', '.join(esxi_install_review.get('missing_fields') or [])}")
+            if esxi_install_review.get("validation_errors"):
+                values.append(f"Saved-value checks: {'; '.join(esxi_install_review.get('validation_errors') or [])}")
             return values
         if key == "windows":
             windows_cfg = cfg.get("windows", {}) or {}
@@ -6857,6 +7631,8 @@ def validate_execution_scope(cfg: dict, scope: str) -> None:
         esxi_values = get_esxi_effective_values(cfg)
         if esxi_values["missing_fields"]:
             raise ValueError(f"ESXi setup is missing: {', '.join(esxi_values['missing_fields'])}.")
+        if esxi_values["validation_errors"]:
+            raise ValueError(f"ESXi setup has invalid saved values: {'; '.join(esxi_values['validation_errors'])}.")
         if not (cfg.get("ilo", {}).get("current_ip") or cfg.get("ilo", {}).get("host") or "").strip():
             raise ValueError("ESXi setup also needs the current iLO address saved first.")
         if cfg.get("included", {}).get("storage"):
@@ -6880,6 +7656,8 @@ def validate_execution_scope(cfg: dict, scope: str) -> None:
             esxi_values = get_esxi_effective_values(cfg)
             if esxi_values["missing_fields"]:
                 raise ValueError(f"ESXi setup is missing: {', '.join(esxi_values['missing_fields'])}.")
+            if esxi_values["validation_errors"]:
+                raise ValueError(f"ESXi setup has invalid saved values: {'; '.join(esxi_values['validation_errors'])}.")
         return
     if scope == "storage":
         storage_review = build_storage_review_context(cfg)
@@ -7212,7 +7990,29 @@ def get_esxi_effective_values(cfg: dict[str, Any]) -> dict[str, Any]:
         missing.append("gateway")
     if not values["root_password"]:
         missing.append("root password")
+    hostname_errors = [] if not values["hostname"] else validate_esxi_hostname(values["hostname"])
+    password_check = build_esxi_password_policy_check(values["root_password"]) if values["root_password"] else {
+        "valid": False,
+        "errors": [],
+        "notes": [],
+        "class_count": 0,
+        "length": 0,
+    }
     values["missing_fields"] = missing
+    values["hostname_valid"] = not hostname_errors
+    values["hostname_errors"] = hostname_errors
+    values["hostname_warnings"] = (
+        ["If you later join this host to Active Directory, keep the short name under 15 characters to avoid NetBIOS name changes."]
+        if values["hostname"] and len(values["hostname"].split(".", 1)[0]) >= 15
+        else []
+    )
+    values["root_password_policy_valid"] = bool(password_check.get("valid"))
+    values["root_password_errors"] = list(password_check.get("errors") or [])
+    values["root_password_notes"] = list(password_check.get("notes") or [])
+    values["root_password_class_count"] = int(password_check.get("class_count") or 0)
+    values["root_password_length"] = int(password_check.get("length") or 0)
+    values["validation_errors"] = list(hostname_errors) + list(password_check.get("errors") or [])
+    values["validation_notes"] = list(values["hostname_warnings"]) + list(password_check.get("notes") or [])
     return values
 
 
@@ -7244,17 +8044,13 @@ def build_esxi_install_review(cfg: dict, *, run_stamp: str | None = None) -> dic
         "enable_ssh": values["enable_ssh"],
         "disable_ipv6": values["disable_ipv6"],
         "missing_fields": list(values["missing_fields"]),
+        "validation_errors": list(values["validation_errors"]),
+        "validation_notes": list(values["validation_notes"]),
     }
 
 
 def esxi_password_policy_valid(password: str) -> bool:
-    value = str(password or "")
-    return (
-        len(value) >= 8
-        and any(ch.islower() for ch in value)
-        and any(ch.isupper() for ch in value)
-        and any(ch.isdigit() for ch in value)
-    )
+    return bool(build_esxi_password_policy_check(password).get("valid"))
 
 
 def save_esxi_trace(trace_path: Path, payload: dict[str, Any]) -> None:
@@ -7433,6 +8229,17 @@ def run_esxi_real(cfg: dict, run_stamp: str | None = None):
             0,
             total,
             f"[FAILED] Missing ESXi setup values: {', '.join(esxi_values['missing_fields'])}.",
+        )
+        return
+    if esxi_values["validation_errors"]:
+        update_job(
+            kit_name,
+            job,
+            "Failed",
+            "Validation failed",
+            0,
+            total,
+            f"[FAILED] Invalid ESXi saved values: {'; '.join(esxi_values['validation_errors'])}.",
         )
         return
     job["esxi_expected_ip"] = management_ip
@@ -9593,6 +10400,7 @@ def render_page(
     storage_discovery_summary = (storage_discovery or {}).get("summary", storage_discovery) if storage_discovery else None
     storage_planning_drives = build_storage_planning_drives(storage_discovery_summary)
     storage_display_controller = select_primary_storage_controller(storage_discovery_summary)
+    storage_controller_choices = build_storage_controller_choices(storage_discovery_summary)
     storage_display_drives = build_storage_display_drives(storage_discovery_summary)
     storage_plan_defaults = storage_plan
     if not storage_plan_defaults and storage_discovery and storage_export_paths:
@@ -9625,6 +10433,10 @@ def render_page(
     history_display = build_history_display_entries(history)
     dashboard_job_status = build_dashboard_job_status(history)
     hardware_identity = build_hardware_identity(cfg)
+    ilo_input_review = build_ilo_input_review(cfg)
+    snmp_input_review = build_snmp_input_review(cfg)
+    ilo_field_errors = build_ilo_field_errors(cfg)
+    snmp_field_errors = build_snmp_field_errors(cfg)
     ilo_advanced_profile = build_ilo_advanced_profile(cfg)
     ilo_latest_receipt = latest_scope_receipt(cfg, history, ["ilo"])
     storage_latest_receipt = latest_scope_receipt(cfg, history, ["storage-apply", "storage-reboot"])
@@ -9690,6 +10502,7 @@ def render_page(
         "storage_execution_status": storage_execution_status,
         "storage_planning_drives": storage_planning_drives,
         "storage_display_controller": storage_display_controller,
+        "storage_controller_choices": storage_controller_choices,
         "storage_display_drives": storage_display_drives,
         "storage_plan_defaults": storage_plan_defaults,
         "workflow_contexts": workflow_contexts,
@@ -9698,6 +10511,10 @@ def render_page(
         "history_display": history_display,
         "dashboard_job_status": dashboard_job_status,
         "hardware_identity": hardware_identity,
+        "ilo_input_review": ilo_input_review,
+        "ilo_field_errors": ilo_field_errors,
+        "snmp_input_review": snmp_input_review,
+        "snmp_field_errors": snmp_field_errors,
         "ilo_advanced_profile": ilo_advanced_profile,
         "ilo_latest_receipt": ilo_latest_receipt,
         "storage_latest_receipt": storage_latest_receipt,
@@ -9705,6 +10522,7 @@ def render_page(
         "storage_page_readiness": storage_page_readiness,
         "storage_change_summary": storage_change_summary,
         "esxi_page_review": esxi_page_review,
+        "esxi_field_errors": build_esxi_field_errors(cfg),
         "esxi_advanced_profile": esxi_advanced_profile,
         "live_job_story": live_job_story,
         "live_stage_cards": live_stage_cards,
@@ -10125,6 +10943,26 @@ async def save_config_route(
 
     cfg = merge_defaults(cfg)
     cfg["storage"]["include_in_ilo_run"] = cfg.get("included", {}).get("storage", False)
+    snmp_input_review = build_snmp_input_review(cfg)
+    ilo_input_review = build_ilo_input_review(cfg)
+    combined_errors = list(snmp_input_review["errors"]) + list(ilo_input_review["errors"])
+    combined_notes = list(snmp_input_review["notes"]) + list(ilo_input_review["notes"])
+    if combined_errors:
+        return render_page(
+            request,
+            cfg,
+            active_page=return_page,
+            action_feedback=build_action_feedback(
+                "Kit needs attention",
+                "Fix the iLO or SNMP saved values before saving this page.",
+                tone="pending",
+                outcomes=[
+                    f"Kit: {cfg['site']['name']}",
+                    f"Shared subnet: {cfg['shared_network'].get('subnet', '') or 'Not set'}",
+                ],
+                details=combined_errors + combined_notes,
+            ),
+        )
 
     try:
         cfg = apply_ip_plan(cfg)
@@ -10220,6 +11058,23 @@ async def save_global_settings_route(
         }
     )
     cfg["storage"]["include_in_ilo_run"] = cfg["included"]["storage"]
+    snmp_input_review = build_snmp_input_review(cfg)
+    if snmp_input_review["errors"]:
+        return render_page(
+            request,
+            cfg,
+            active_page=return_page,
+            action_feedback=build_action_feedback(
+                "Shared defaults need attention",
+                "Fix the SNMPv3 user or passwords before saving this page.",
+                tone="pending",
+                outcomes=[
+                    f"Kit: {cfg['site'].get('name', '') or 'Unknown'}",
+                    f"Shared subnet: {cfg['shared_network'].get('subnet', '') or 'Not set'}",
+                ],
+                details=list(snmp_input_review["errors"]) + list(snmp_input_review["notes"]),
+            ),
+        )
     cfg["ip_plan"].update(
         {
             "gateway": gateway_ip,
@@ -10279,6 +11134,25 @@ async def save_ilo_settings_route(
     cfg["ilo"]["password"] = ilo_password
     cfg["ilo"]["additional_users"] = extract_ilo_additional_users_from_form(form)
     cfg["included"]["ilo"] = True
+    ilo_input_review = build_ilo_input_review(cfg)
+    if ilo_input_review["errors"]:
+        return render_page(
+            request,
+            cfg,
+            active_page=return_page,
+            message=(f"Normalized iLO hostname to: {normalized_hostname}" if ilo_hostname.strip() and ilo_hostname.strip() != normalized_hostname else None),
+            action_feedback=build_action_feedback(
+                "iLO setup needs attention",
+                "Fix the iLO user names or passwords before saving this page.",
+                tone="pending",
+                outcomes=[
+                    f"Current iLO address: {cfg['ilo'].get('current_ip') or 'Not set'}",
+                    f"Planned final IP: {cfg['ilo'].get('target_ip') or 'Unchanged'}",
+                    f"Hostname: {normalized_hostname or 'Not set'}",
+                ],
+                details=list(ilo_input_review["errors"]) + list(ilo_input_review["notes"]),
+            ),
+        )
     try:
         cfg = apply_ip_plan(cfg)
     except Exception as e:
@@ -10329,8 +11203,27 @@ async def save_esxi_settings_route(
     if included_esxi is not None:
         cfg["included"]["esxi"] = included_esxi == "on"
     cfg = apply_ip_plan(cfg)
-    save_kit_config(cfg)
     effective_values = get_esxi_effective_values(cfg)
+    if effective_values["validation_errors"]:
+        return render_page(
+            request,
+            cfg,
+            active_page=return_page,
+            action_feedback=build_action_feedback(
+                "ESXi setup needs attention",
+                "Fix the ESXi server name or root password rules before saving this page.",
+                tone="pending",
+                outcomes=[
+                    f"Server name: {effective_values.get('hostname') or 'Not set'}",
+                    f"Target: {effective_values.get('management_ip') or 'Not set'}",
+                    f"Gateway: {effective_values.get('gateway') or 'Not set'}",
+                    f"DNS: {', '.join(effective_values.get('dns_servers') or []) or 'Not set'}",
+                ],
+                details=list(effective_values["validation_errors"]) + list(effective_values["validation_notes"]),
+                links=[{"label": "Open Run Center", "href": "/execution"}],
+            ),
+        )
+    save_kit_config(cfg)
     append_activity_event(
         cfg["site"]["name"],
         "esxi_settings_saved",
@@ -10711,6 +11604,7 @@ async def plan_raid_layout(
     request: Request,
     return_page: str = Form("storage"),
     discovery_raw_path: str = Form(""),
+    controller_path: str = Form(""),
     os_raid_level: str | None = Form(None),
     data_raid_level: str | None = Form(None),
     os_bays: list[str] = Form([]),
@@ -10731,6 +11625,7 @@ async def plan_raid_layout(
     try:
         discovery, discovery_paths = load_storage_discovery_artifact(discovery_raw_path, expected_host=host)
         overrides = {
+            "controller_path": controller_path,
             "os_bays": os_bays,
             "data_bays": data_bays,
             "hot_spare_bay": hot_spare_bay,
