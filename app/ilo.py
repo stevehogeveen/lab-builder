@@ -2735,12 +2735,107 @@ class ILOClient:
         target = system.get("Actions", {}).get("#ComputerSystem.Reset", {}).get("target")
         if not target:
             raise ILOError("Reset action not available on this system.")
-        self._post(target, {"ResetType": reset_type})
-        return {
-            "system_path": system_path,
-            "path": target,
-            "reset_type": reset_type,
-        }
+        baseline_power = str(system.get("PowerState") or "")
+        try:
+            self._post(target, {"ResetType": reset_type})
+            return {
+                "system_path": system_path,
+                "path": target,
+                "reset_type": reset_type,
+                "recovered_after_transport_disconnect": False,
+                "recovery_note": "",
+            }
+        except ILOError as e:
+            message = str(e)
+            if not self._is_power_reset_transport_disconnect(message):
+                raise
+            recovery = self._recover_power_reset_after_disconnect(
+                system_path=system_path,
+                reset_type=reset_type,
+                baseline_power=baseline_power,
+            )
+            return {
+                "system_path": system_path,
+                "path": target,
+                "reset_type": reset_type,
+                "recovered_after_transport_disconnect": True,
+                "recovery_note": recovery.get("recovery_note") or "",
+                "recovery_power_state": recovery.get("recovery_power_state") or "",
+                "disconnect_error": message,
+            }
+
+    @staticmethod
+    def _is_power_reset_transport_disconnect(message: str) -> bool:
+        text = str(message or "")
+        return (
+            "Connection aborted" in text
+            or "Remote end closed connection" in text
+            or "RemoteDisconnected" in text
+            or "ConnectionError" in text
+        )
+
+    def _recover_power_reset_after_disconnect(
+        self,
+        *,
+        system_path: str,
+        reset_type: str,
+        baseline_power: str,
+        timeout_seconds: int = 180,
+        poll_interval: int = 5,
+    ) -> dict[str, Any]:
+        expected = self._expected_power_state_for_reset(reset_type, baseline_power)
+        deadline = time.time() + max(timeout_seconds, 1)
+        last_seen = baseline_power
+        observed_transition = False
+        while time.time() < deadline:
+            try:
+                current = self.get_system(system_path)
+            except Exception:
+                time.sleep(max(poll_interval, 1))
+                continue
+            last_seen = str(current.get("PowerState") or "")
+            if baseline_power and last_seen and last_seen.lower() != baseline_power.lower():
+                observed_transition = True
+            if expected:
+                if last_seen.lower() == expected.lower():
+                    return {
+                        "recovery_power_state": last_seen,
+                        "recovery_note": (
+                            "iLO closed the reset connection without a response, "
+                            f"but the server reached expected PowerState={expected}."
+                        ),
+                    }
+            elif reset_type == "ForceRestart":
+                if last_seen.lower() == "on" and (observed_transition or baseline_power.lower() != "on"):
+                    return {
+                        "recovery_power_state": last_seen,
+                        "recovery_note": (
+                            "iLO closed the reset connection without a response, "
+                            "but the server reached final PowerState=On during ForceRestart recovery."
+                        ),
+                    }
+            time.sleep(max(poll_interval, 1))
+
+        if reset_type == "ForceRestart":
+            raise ILOError(
+                "Power reset connection dropped and ForceRestart recovery did not observe reboot completion "
+                f"within timeout. Last observed PowerState={last_seen or 'unknown'}."
+            )
+        raise ILOError(
+            "Power reset connection dropped and expected power state was not reached within timeout. "
+            f"Expected={expected or 'unknown'} last_observed={last_seen or 'unknown'}."
+        )
+
+    @staticmethod
+    def _expected_power_state_for_reset(reset_type: str, baseline_power: str) -> str:
+        value = str(reset_type or "").strip()
+        if value in {"GracefulShutdown", "ForceOff"}:
+            return "Off"
+        if value == "On":
+            return "On"
+        if value == "PushPowerButton":
+            return "On" if str(baseline_power or "").strip().lower() == "off" else "Off"
+        return ""
 
     def reboot_server_and_wait(
         self,

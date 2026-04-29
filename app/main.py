@@ -8537,9 +8537,19 @@ def run_esxi_real(cfg: dict, run_stamp: str | None = None):
             trace_payload["steps"].append({"stage": "power_off", "status": "running", "from_state": current_power})
             save_esxi_trace(trace_path, trace_payload)
             try:
-                run_with_session_refresh("Power off", lambda c: c.power_reset(reset_type="GracefulShutdown", system_path=system_path))
+                power_off_result = run_with_session_refresh("Power off", lambda c: c.power_reset(reset_type="GracefulShutdown", system_path=system_path))
             except Exception:
-                run_with_session_refresh("Power off", lambda c: c.power_reset(reset_type="ForceOff", system_path=system_path))
+                power_off_result = run_with_session_refresh("Power off", lambda c: c.power_reset(reset_type="ForceOff", system_path=system_path))
+            if power_off_result.get("recovered_after_transport_disconnect"):
+                update_job(
+                    kit_name,
+                    job,
+                    "Running",
+                    "Power off",
+                    4,
+                    total,
+                    "[WARN] iLO closed the reset connection without a response, but the server reached expected PowerState=Off, treating as success.",
+                )
             wait_for_power_state(client, "Off", timeout_seconds=180, poll_interval=5)
         else:
             update_job(kit_name, job, "Running", "Power off", 4, total, "[OK] Server was already off; no shutdown request was needed before setting one-time boot")
@@ -8766,7 +8776,17 @@ def run_esxi_real(cfg: dict, run_stamp: str | None = None):
         }
         save_job(kit_name, job)
         save_esxi_trace(trace_path, trace_payload)
-        run_with_session_refresh("Power on", lambda c: c.power_reset(reset_type="On", system_path=system_path))
+        power_on_result = run_with_session_refresh("Power on", lambda c: c.power_reset(reset_type="On", system_path=system_path))
+        if power_on_result.get("recovered_after_transport_disconnect"):
+            update_job(
+                kit_name,
+                job,
+                "Running",
+                "Power on",
+                9,
+                total,
+                "[WARN] iLO closed the reset connection without a response, but the server reached expected PowerState=On, treating as success.",
+            )
         update_job(kit_name, job, "Running", "Wait for server power", 10, total, "[RUNNING] Waiting for the server to power back on")
         wait_for_power_state(client, "On", timeout_seconds=300, poll_interval=5)
         job["esxi_power_transitions"] = {

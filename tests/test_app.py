@@ -6260,6 +6260,92 @@ def test_ilo_put_retries_once_after_connection_abort():
     assert len(calls) == 2
 
 
+def test_ilo_power_reset_recovers_after_disconnect_when_power_reaches_expected_state(monkeypatch):
+    client = ILOClient(ILOConfig(host="10.10.8.110", username="Administrator", password="pw"))
+    monkeypatch.setattr(ilo_module.time, "sleep", lambda _: None)
+    system_states = iter(
+        [
+            {"PowerState": "On", "Actions": {"#ComputerSystem.Reset": {"target": "/redfish/v1/Systems/1/Actions/ComputerSystem.Reset"}}},
+            {"PowerState": "On"},
+            {"PowerState": "Off"},
+        ]
+    )
+
+    def fake_get(path: str, timeout=None):
+        del timeout
+        if path == "/redfish/v1/Systems":
+            return {"Members": [{"@odata.id": "/redfish/v1/Systems/1"}]}
+        if path == "/redfish/v1/Systems/1":
+            return next(system_states)
+        raise AssertionError(path)
+
+    def fake_post(path: str, payload: dict | None = None):
+        del payload
+        raise ILOError(f"POST {path} failed: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response'))")
+
+    client._get = fake_get
+    client._post = fake_post
+
+    result = client.power_reset(reset_type="GracefulShutdown", system_path="/redfish/v1/Systems/1")
+    assert result["recovered_after_transport_disconnect"] is True
+    assert result["recovery_power_state"] == "Off"
+
+
+def test_ilo_power_reset_disconnect_fails_when_expected_state_not_reached(monkeypatch):
+    client = ILOClient(ILOConfig(host="10.10.8.110", username="Administrator", password="pw"))
+    monkeypatch.setattr(ilo_module.time, "sleep", lambda _: None)
+    ticks = {"now": 0}
+    monkeypatch.setattr(ilo_module.time, "time", lambda: ticks.__setitem__("now", ticks["now"] + 30) or ticks["now"])
+    system_states = iter(
+        [
+            {"PowerState": "On", "Actions": {"#ComputerSystem.Reset": {"target": "/redfish/v1/Systems/1/Actions/ComputerSystem.Reset"}}},
+            {"PowerState": "On"},
+            {"PowerState": "On"},
+            {"PowerState": "On"},
+        ]
+    )
+
+    def fake_get(path: str, timeout=None):
+        del timeout
+        if path == "/redfish/v1/Systems":
+            return {"Members": [{"@odata.id": "/redfish/v1/Systems/1"}]}
+        if path == "/redfish/v1/Systems/1":
+            return next(system_states, {"PowerState": "On"})
+        raise AssertionError(path)
+
+    def fake_post(path: str, payload: dict | None = None):
+        del payload
+        raise ILOError(f"POST {path} failed: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response'))")
+
+    client._get = fake_get
+    client._post = fake_post
+
+    with pytest.raises(ILOError, match="expected power state was not reached"):
+        client.power_reset(reset_type="GracefulShutdown", system_path="/redfish/v1/Systems/1")
+
+
+def test_ilo_power_reset_does_not_hide_http_401_errors():
+    client = ILOClient(ILOConfig(host="10.10.8.110", username="Administrator", password="pw"))
+
+    def fake_get(path: str, timeout=None):
+        del timeout
+        if path == "/redfish/v1/Systems":
+            return {"Members": [{"@odata.id": "/redfish/v1/Systems/1"}]}
+        if path == "/redfish/v1/Systems/1":
+            return {"PowerState": "On", "Actions": {"#ComputerSystem.Reset": {"target": "/redfish/v1/Systems/1/Actions/ComputerSystem.Reset"}}}
+        raise AssertionError(path)
+
+    def fake_post(path: str, payload: dict | None = None):
+        del payload
+        raise ILOError(f"POST {path} failed with HTTP 401: Base.1.18.NoValidSession")
+
+    client._get = fake_get
+    client._post = fake_post
+
+    with pytest.raises(ILOError, match="HTTP 401"):
+        client.power_reset(reset_type="GracefulShutdown", system_path="/redfish/v1/Systems/1")
+
+
 def test_apply_storage_layout_failure_logs_are_saved(client, monkeypatch):
     def fake_strftime(fmt):
         if fmt == "%Y%m%d-%H%M%S":
