@@ -77,7 +77,7 @@ def build_custom_iso(spec: EsxiBuildSpec) -> Path:
         stage_dir.mkdir(parents=True, exist_ok=True)
 
         ks_path = stage_dir / "KS.CFG"
-        ks_path.write_text(build_kickstart(spec), encoding="utf-8")
+        ks_path.write_text(build_kickstart(spec, esxi_version=spec.esxi_version), encoding="utf-8")
         ks_generated = ks_path.exists()
 
         boot_cfg = stage_dir / "BOOT.CFG"
@@ -149,6 +149,7 @@ def build_custom_iso(spec: EsxiBuildSpec) -> Path:
 
         summary = {
             "kit_name": spec.kit_name,
+            "esxi_version": str(spec.esxi_version or "7"),
             "base_iso": str(spec.base_iso_path),
             "output_iso": str(output_iso),
             "install_values": {

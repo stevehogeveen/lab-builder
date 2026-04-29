@@ -17,3 +17,4 @@ class EsxiBuildSpec:
     ntp_server: str = ""
     enable_ssh: bool = True
     disable_ipv6: bool = True
+    esxi_version: str = "7"

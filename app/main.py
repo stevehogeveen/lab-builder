@@ -621,6 +621,7 @@ def write_run_bundle_files(kit_name: str, job: dict[str, Any]) -> None:
         summary_payload["esxi_run_summary"] = {
             "install_values": dict(job.get("esxi_install_values") or {}),
             "artifacts": {
+                "selected_esxi_version": str((job.get("esxi_install_values") or {}).get("esxi_version") or ""),
                 "base_iso_path": str(job.get("esxi_base_iso_path") or ""),
                 "built_iso_path": str(job.get("esxi_iso_path") or ""),
                 "virtual_media_url": str(job.get("esxi_iso_url") or ""),
@@ -2421,6 +2422,9 @@ def build_esxi_page_review(cfg: dict[str, Any]) -> dict[str, Any]:
         "run_stamp": stamp,
         "source_label": "Saved kit values from the ESXi Setup page and shared defaults",
         "manual_defaults_label": "Manual test script defaults are not used by Run Center",
+        "version": values["version"],
+        "base_iso_choices": discover_esxi_base_isos(),
+        "selected_base_iso_path": values["base_iso_path"],
         "base_iso_path": "",
         "base_iso_ready": False,
         "base_iso_error": "",
@@ -2447,7 +2451,9 @@ def build_esxi_page_review(cfg: dict[str, Any]) -> dict[str, Any]:
         "validation_notes": list(values["validation_notes"]),
     }
     try:
-        review["base_iso_path"] = str(resolve_esxi_base_iso_path(cfg))
+        base_iso = resolve_esxi_base_iso_path(cfg)
+        review["base_iso_path"] = str(base_iso)
+        validate_esxi_base_iso(base_iso, values["version"])
         review["base_iso_ready"] = True
     except Exception as e:
         review["base_iso_error"] = str(e).splitlines()[0]
@@ -2520,6 +2526,7 @@ def build_esxi_advanced_profile(cfg: dict[str, Any], review: dict[str, Any] | No
             "ready" if review.get("base_iso_ready") else "pending",
             "These are the file paths and mount source the app will use during the real ESXi run.",
             [
+                {"label": "ESXi version", "value": str(review.get("version") or "7")},
                 {"label": "Base ISO path", "value": str(review.get("base_iso_path") or review.get("base_iso_error") or "Not set")},
                 {"label": "Built ISO path", "value": str(review.get("output_iso_path") or "Not set")},
                 {"label": "Virtual media URL", "value": str(review.get("virtual_media_url") or "Not set")},
@@ -7210,6 +7217,8 @@ def default_config():
             "additional_users": [],
         },
         "esxi": {
+            "version": "7",
+            "base_iso_path": "",
             "hostname": "esxi01",
             "management_ip": "",
             "subnet_mask": "255.255.255.0",
@@ -8767,18 +8776,82 @@ def execute_real_job_in_background(cfg: dict, scope: str):
 
 
 def resolve_esxi_base_iso_path(cfg: dict) -> Path:
+    version = normalize_esxi_version((cfg.get("esxi", {}) or {}).get("version"))
     configured = str((cfg.get("esxi", {}) or {}).get("base_iso_path") or "").strip()
     if configured:
         path = Path(configured)
-        if path.exists():
+        if path.exists() and path.suffix.lower() == ".iso":
             return path
+        if path.exists():
+            raise ValueError(f"Configured ESXi base ISO is not an .iso file: {path}")
         raise FileNotFoundError(f"Configured ESXi base ISO was not found: {path}")
 
-    base_dir = BASE_DIR / "media" / "esxi" / "base"
-    candidates = sorted(list(base_dir.glob("*.iso")) + list(base_dir.glob("*.ISO")))
+    candidates = [Path(item["path"]) for item in discover_esxi_base_isos(version=version)]
     if not candidates:
-        raise FileNotFoundError(f"No ESXi base ISO was found under {base_dir}")
+        raise FileNotFoundError(f"No ESXi {version} base ISO was found under {BASE_DIR / 'media' / 'esxi' / 'base'}")
     return candidates[0]
+
+
+def normalize_esxi_version(value: Any) -> str:
+    text = str(value or "7").strip()
+    if text in {"7", "8"}:
+        return text
+    raise ValueError(f"Unsupported ESXi version: {text or '(empty)'}")
+
+
+def discover_esxi_base_isos(version: str | None = None) -> list[dict[str, Any]]:
+    requested = normalize_esxi_version(version) if version else ""
+    base_dir = BASE_DIR / "media" / "esxi" / "base"
+    search_dirs: list[tuple[str, Path]] = [
+        ("", base_dir),
+        ("7", base_dir / "esxi7"),
+        ("8", base_dir / "esxi8"),
+    ]
+    results: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for discovered_version, directory in search_dirs:
+        if requested and discovered_version and discovered_version != requested:
+            continue
+        for path in sorted(list(directory.glob("*.iso")) + list(directory.glob("*.ISO"))):
+            resolved = str(path)
+            if resolved in seen:
+                continue
+            seen.add(resolved)
+            inferred_version = discovered_version or infer_esxi_version_from_iso_path(path)
+            if requested and inferred_version != requested:
+                continue
+            results.append(
+                {
+                    "path": str(path),
+                    "name": path.name,
+                    "version": inferred_version,
+                    "exists": path.exists(),
+                    "readable": os.access(path, os.R_OK),
+                }
+            )
+    return results
+
+
+def infer_esxi_version_from_iso_path(path: Path) -> str:
+    text = str(path).lower()
+    if "esxi8" in text or "esxi-8" in text or "esxi_8" in text or "vmware-vmvisor-installer-8" in text:
+        return "8"
+    return "7"
+
+
+def validate_esxi_base_iso(path: Path, version: str) -> None:
+    normalize_esxi_version(version)
+    if not path.exists():
+        raise FileNotFoundError(f"Selected ESXi {version} base ISO was not found: {path}")
+    if path.suffix.lower() != ".iso":
+        raise ValueError(f"Selected ESXi {version} base ISO must be an .iso file: {path}")
+    if not path.is_file():
+        raise ValueError(f"Selected ESXi {version} base ISO is not a file: {path}")
+    try:
+        with path.open("rb") as handle:
+            handle.read(1)
+    except Exception as exc:
+        raise OSError(f"Selected ESXi {version} base ISO could not be read: {path}") from exc
 
 
 def detect_public_base_url(target_host: str = "") -> str:
@@ -8808,7 +8881,13 @@ def build_esxi_iso_url(cfg: dict, output_iso: Path, target_host: str = "") -> st
 
 def get_esxi_effective_values(cfg: dict[str, Any]) -> dict[str, Any]:
     esxi_cfg = cfg.get("esxi", {}) or {}
+    try:
+        version = normalize_esxi_version(esxi_cfg.get("version"))
+    except ValueError:
+        version = str(esxi_cfg.get("version") or "").strip()
     values = {
+        "version": version,
+        "base_iso_path": str(esxi_cfg.get("base_iso_path") or "").strip(),
         "hostname": str(esxi_cfg.get("hostname") or "").strip(),
         "management_ip": str(esxi_cfg.get("management_ip") or cfg.get("ip_plan", {}).get("esxi") or "").strip(),
         "subnet_mask": str(esxi_cfg.get("subnet_mask") or "").strip(),
@@ -8835,6 +8914,11 @@ def get_esxi_effective_values(cfg: dict[str, Any]) -> dict[str, Any]:
         missing.append("gateway")
     if not values["root_password"]:
         missing.append("root password")
+    version_errors = []
+    try:
+        normalize_esxi_version(values["version"])
+    except ValueError as exc:
+        version_errors.append(str(exc))
     hostname_errors = [] if not values["hostname"] else validate_esxi_hostname(values["hostname"])
     password_check = build_esxi_password_policy_check(values["root_password"]) if values["root_password"] else {
         "valid": False,
@@ -8856,7 +8940,7 @@ def get_esxi_effective_values(cfg: dict[str, Any]) -> dict[str, Any]:
     values["root_password_notes"] = list(password_check.get("notes") or [])
     values["root_password_class_count"] = int(password_check.get("class_count") or 0)
     values["root_password_length"] = int(password_check.get("length") or 0)
-    values["validation_errors"] = list(hostname_errors) + list(password_check.get("errors") or [])
+    values["validation_errors"] = list(version_errors) + list(hostname_errors) + list(password_check.get("errors") or [])
     values["validation_notes"] = list(values["hostname_warnings"]) + list(password_check.get("notes") or [])
     return values
 
@@ -8870,11 +8954,13 @@ def build_esxi_install_review(cfg: dict, *, run_stamp: str | None = None) -> dic
     output_iso = EXPORTS_DIR / "esxi-isos" / kit_name / output_name / f"{output_name}.iso"
     values = get_esxi_effective_values(cfg)
     base_iso_path = resolve_esxi_base_iso_path(cfg)
+    validate_esxi_base_iso(base_iso_path, values["version"])
     iso_url = build_esxi_iso_url(cfg, output_iso, login_ip)
     return {
         "run_stamp": stamp,
         "source_label": "Saved kit values from the ESXi Setup page and shared defaults",
         "manual_defaults_label": "Manual test script defaults are not used by Run Center",
+        "version": values["version"],
         "base_iso_path": str(base_iso_path),
         "output_iso_path": str(output_iso),
         "virtual_media_url": iso_url,
@@ -9106,6 +9192,7 @@ def run_esxi_real(cfg: dict, run_stamp: str | None = None):
             "source_of_truth": esxi_review.get("source_label"),
             "manual_defaults": esxi_review.get("manual_defaults_label"),
             "install_values": {
+                "esxi_version": esxi_review.get("version"),
                 "hostname": esxi_review.get("hostname"),
                 "management_ip": esxi_review.get("management_ip"),
                 "subnet_mask": esxi_review.get("subnet_mask"),
@@ -9119,6 +9206,7 @@ def run_esxi_real(cfg: dict, run_stamp: str | None = None):
                 "disable_ipv6": bool(esxi_review.get("disable_ipv6")),
             },
             "artifacts": {
+                "selected_esxi_version": esxi_review.get("version"),
                 "base_iso_path": esxi_review.get("base_iso_path"),
                 "output_iso_path": esxi_review.get("output_iso_path"),
                 "virtual_media_url": esxi_review.get("virtual_media_url"),
@@ -9135,6 +9223,7 @@ def run_esxi_real(cfg: dict, run_stamp: str | None = None):
             kit_name=sanitize_kit_name(kit_name),
             base_iso_path=base_iso_path,
             output_name=Path(esxi_review["output_iso_path"]).stem,
+            esxi_version=str(esxi_review.get("version") or "7"),
             hostname=esxi_review["hostname"],
             management_ip=esxi_review["management_ip"],
             subnet_mask=esxi_review["subnet_mask"],
@@ -9244,6 +9333,8 @@ def run_esxi_real(cfg: dict, run_stamp: str | None = None):
             "[INFO] First boot network check: attach ESXi management to the first physical NIC with link",
         )
         update_job(kit_name, job, "Running", "Review install values", 1, total, f"[INFO] Base ISO: {base_iso_path}")
+        update_job(kit_name, job, "Running", "Review install values", 1, total, f"[INFO] Selected ESXi version: {esxi_review.get('version') or '7'}")
+        update_job(kit_name, job, "Running", "Review install values", 1, total, "[INFO] Boot mode assumptions: preserve vendor BIOS/UEFI boot entries and patch BOOT.CFG plus EFI/BOOT/BOOT.CFG when present")
 
         update_job(kit_name, job, "Running", "Building custom ESXi ISO", 1, total, "[RUNNING] Building custom ESXi ISO")
         output_iso = build_custom_iso(spec)
@@ -9269,7 +9360,7 @@ def run_esxi_real(cfg: dict, run_stamp: str | None = None):
             generation = build_summary.get("generation", {}) or {}
             self_check = build_summary.get("self_check", {}) or {}
             if (generation.get("ks_cfg", {}) or {}).get("generated"):
-                update_job(kit_name, job, "Running", "Build complete", 2, total, "[OK] KS.CFG generated")
+                update_job(kit_name, job, "Running", "Build complete", 2, total, f"[OK] KS.CFG generated for ESXi {esxi_review.get('version') or '7'}")
             if (generation.get("boot_cfg", {}) or {}).get("patched"):
                 update_job(kit_name, job, "Running", "Build complete", 2, total, "[OK] BOOT.CFG patched")
             efi_meta = generation.get("efi_boot_cfg", {}) or {}
@@ -12075,11 +12166,15 @@ async def save_ilo_settings_route(
 async def save_esxi_settings_route(
     request: Request,
     return_page: str = Form("esxi"),
+    esxi_version: str = Form("7"),
+    esxi_base_iso_path: str = Form(""),
     esxi_hostname: str = Form(""),
     esxi_root_password: str = Form(""),
     included_esxi: str | None = Form(None),
 ):
     cfg = load_kit_config()
+    cfg["esxi"]["version"] = normalize_esxi_version(esxi_version)
+    cfg["esxi"]["base_iso_path"] = esxi_base_iso_path.strip()
     cfg["esxi"]["hostname"] = esxi_hostname
     cfg["esxi"]["root_password"] = esxi_root_password
     if included_esxi is not None:
@@ -12097,7 +12192,8 @@ async def save_esxi_settings_route(
                 tone="pending",
                 outcomes=[
                     f"Server name: {effective_values.get('hostname') or 'Not set'}",
-                    f"Target: {effective_values.get('management_ip') or 'Not set'}",
+                f"Target: {effective_values.get('management_ip') or 'Not set'}",
+                f"ESXi version: {effective_values.get('version') or '7'}",
                     f"Gateway: {effective_values.get('gateway') or 'Not set'}",
                     f"DNS: {', '.join(effective_values.get('dns_servers') or []) or 'Not set'}",
                 ],
@@ -12124,6 +12220,7 @@ async def save_esxi_settings_route(
             outcomes=[
                 f"Hostname: {cfg['esxi'].get('hostname', '') or 'Not set'}",
                 f"Target: {cfg['esxi'].get('management_ip', '') or cfg.get('ip_plan', {}).get('esxi', '') or 'Not set'}",
+                f"ESXi version: {cfg['esxi'].get('version') or '7'}",
                 f"Gateway: {effective_values.get('gateway') or 'Not set'}",
                 f"DNS: {', '.join(effective_values.get('dns_servers') or []) or 'Not set'}",
                 f"Root password saved: {'Yes' if effective_values.get('root_password') else 'No'}",

@@ -14,6 +14,12 @@ import app.main as main
 from app.debug_bundle import redact_value
 
 
+def fake_esxi_base_iso(tmp_path: Path) -> Path:
+    path = tmp_path / "base-esxi.iso"
+    path.write_text("iso", encoding="utf-8")
+    return path
+
+
 @pytest.fixture(autouse=True)
 def isolate_runtime_paths(tmp_path, monkeypatch):
     config_dir = tmp_path / "config"
@@ -1443,6 +1449,64 @@ def test_save_esxi_windows_and_qnap_page_settings(client):
     assert cfg["included"]["esxi"] is True
     assert cfg["windows"]["vm_name"] == "win-lab"
     assert cfg["qnap"]["hostname"] == "qnap-lab"
+
+
+def test_default_esxi_version_is_7():
+    cfg = main.default_config()
+    assert cfg["esxi"]["version"] == "7"
+    assert main.get_esxi_effective_values({})["version"] == "7"
+
+
+def test_save_esxi_settings_persists_version_and_base_iso(client, tmp_path):
+    cfg = main.default_config()
+    cfg["site"]["name"] = "ESXi Version Kit"
+    main.save_kit_config(cfg)
+    iso = tmp_path / "VMware-ESXi-8.iso"
+    iso.write_text("iso", encoding="utf-8")
+
+    response = client.post(
+        "/save-esxi-settings",
+        data={
+            "return_page": "esxi",
+            "esxi_version": "8",
+            "esxi_base_iso_path": str(iso),
+            "esxi_hostname": "esxi8-lab",
+            "esxi_root_password": "Valid1Pass!",
+        },
+    )
+
+    saved = main.load_kit_config("ESXi-Version-Kit")
+    assert response.status_code == 200
+    assert saved["esxi"]["version"] == "8"
+    assert saved["esxi"]["base_iso_path"] == str(iso)
+    assert "ESXi version: 8" in response.text
+
+
+def test_discover_esxi_base_isos_finds_version_folders(tmp_path, monkeypatch):
+    monkeypatch.setattr(main, "BASE_DIR", tmp_path)
+    base = tmp_path / "media" / "esxi" / "base"
+    (base / "esxi7").mkdir(parents=True)
+    (base / "esxi8").mkdir(parents=True)
+    (base / "esxi7" / "esxi7.iso").write_text("iso7", encoding="utf-8")
+    (base / "esxi8" / "esxi8.iso").write_text("iso8", encoding="utf-8")
+
+    all_isos = main.discover_esxi_base_isos()
+    esxi8 = main.discover_esxi_base_isos(version="8")
+
+    assert {item["version"] for item in all_isos} == {"7", "8"}
+    assert [item["name"] for item in esxi8] == ["esxi8.iso"]
+
+
+def test_build_esxi_install_review_fails_missing_selected_iso(tmp_path):
+    cfg = main.default_config()
+    cfg["site"]["name"] = "Missing ESXi ISO Kit"
+    cfg["esxi"]["hostname"] = "esxi-lab"
+    cfg["esxi"]["root_password"] = "Valid1Pass!"
+    cfg["esxi"]["version"] = "8"
+    cfg["esxi"]["base_iso_path"] = str(tmp_path / "missing.iso")
+
+    with pytest.raises(FileNotFoundError, match="Configured ESXi base ISO was not found"):
+        main.build_esxi_install_review(cfg, run_stamp="20260418-191000")
 
 
 def test_global_settings_and_workflow_pages_show_defaults_and_dependencies(client):
@@ -3122,7 +3186,7 @@ def test_execute_real_storage_starts_manual_reboot_watch_when_staged(client, mon
     assert started["directory"] == str(apply_dir)
 
 
-def test_prepare_execute_enables_real_launch_for_esxi_scope(client, monkeypatch):
+def test_prepare_execute_enables_real_launch_for_esxi_scope(client, monkeypatch, tmp_path):
     cfg = main.default_config()
     cfg["site"]["name"] = "ESXi Launch Review Kit"
     cfg["ilo"]["current_ip"] = "10.10.8.90"
@@ -3151,7 +3215,7 @@ def test_prepare_execute_enables_real_launch_for_esxi_scope(client, monkeypatch)
 
     monkeypatch.setattr(main, "datetime", FakeDateTime)
     monkeypatch.setattr(main, "detect_public_base_url", lambda target_host="": "http://lab-builder.local:8000")
-    monkeypatch.setattr(main, "resolve_esxi_base_iso_path", lambda cfg_obj: main.Path("/tmp/base-esxi.iso"))
+    monkeypatch.setattr(main, "resolve_esxi_base_iso_path", lambda cfg_obj: fake_esxi_base_iso(tmp_path))
 
     response = client.post(
         "/prepare-execute",
@@ -3188,7 +3252,7 @@ def test_prepare_execute_enables_real_launch_for_esxi_scope(client, monkeypatch)
     assert "iLO" not in stage_section
 
 
-def test_prepare_execute_shows_exact_missing_esxi_fields(client, monkeypatch):
+def test_prepare_execute_shows_exact_missing_esxi_fields(client, monkeypatch, tmp_path):
     cfg = main.default_config()
     cfg["site"]["name"] = "ESXi Missing Kit"
     cfg["ilo"]["current_ip"] = "10.10.8.90"
@@ -3200,7 +3264,7 @@ def test_prepare_execute_shows_exact_missing_esxi_fields(client, monkeypatch):
     main.save_kit_config(cfg)
 
     monkeypatch.setattr(main, "detect_public_base_url", lambda target_host="": "http://lab-builder.local:8000")
-    monkeypatch.setattr(main, "resolve_esxi_base_iso_path", lambda cfg_obj: main.Path("/tmp/base-esxi.iso"))
+    monkeypatch.setattr(main, "resolve_esxi_base_iso_path", lambda cfg_obj: fake_esxi_base_iso(tmp_path))
 
     response = client.post(
         "/prepare-execute",
@@ -3713,7 +3777,7 @@ def test_run_esxi_real_builds_iso_and_starts_virtual_media_boot(monkeypatch, tmp
         return client
 
     monkeypatch.setattr(main, "build_custom_iso", fake_build_custom_iso)
-    monkeypatch.setattr(main, "resolve_esxi_base_iso_path", lambda cfg_obj: main.Path("/tmp/base-esxi.iso"))
+    monkeypatch.setattr(main, "resolve_esxi_base_iso_path", lambda cfg_obj: fake_esxi_base_iso(tmp_path))
     monkeypatch.setattr(main, "detect_public_base_url", lambda target_host="": "http://lab-builder.local:8000")
     monkeypatch.setattr(main, "wait_for_esxi_management_ready", lambda host, **kwargs: {"host": host, "port": 443, "attempts": 2})
     monkeypatch.setattr(main, "ILOClient", build_client)
@@ -3733,7 +3797,7 @@ def test_run_esxi_real_builds_iso_and_starts_virtual_media_boot(monkeypatch, tmp
     assert "[INFO] ESXi install values: hostname=esxi-lab, management_ip=10.10.8.10, subnet_mask=255.255.255.0, gateway=10.10.8.1, dns=1.1.1.1" in joined_logs
     assert "[INFO] root_password=SET (policy-valid=" in joined_logs
     assert "[INFO] Optional settings: vlan=(none), ntp=(none), ssh=yes, disable_ipv6=yes" in joined_logs
-    assert "[INFO] Base ISO: /tmp/base-esxi.iso" in joined_logs
+    assert f"[INFO] Base ISO: {spec.base_iso_path}" in joined_logs
     assert "[OK] BOOT.CFG patched" in joined_logs
     assert "[OK] EFI/BOOT/BOOT.CFG patched" in joined_logs
     assert "[INFO] ISO self-check: bios_boot=yes, uefi_boot=yes, ks_cfg=yes, boot_cfg=yes, efi_boot_cfg=yes" in joined_logs
@@ -3769,6 +3833,9 @@ def test_run_esxi_real_builds_iso_and_starts_virtual_media_boot(monkeypatch, tmp
     assert spec.dns_servers == ["1.1.1.1"]
     assert spec.root_password == "Valid1Pass!"
     assert spec.output_name == "esxi-20260416-120000"
+    assert spec.esxi_version == "7"
+    assert "[INFO] Selected ESXi version: 7" in joined_logs
+    assert "[OK] KS.CFG generated for ESXi 7" in joined_logs
     trace_path = main.Path(job["esxi_trace_path"])
     assert trace_path.exists()
     trace = yaml.safe_load(trace_path.read_text(encoding="utf-8"))
@@ -3776,12 +3843,12 @@ def test_run_esxi_real_builds_iso_and_starts_virtual_media_boot(monkeypatch, tmp
     assert trace["install_values"]["hostname"] == "esxi-lab"
     assert trace["install_values"]["root_password_saved"] is True
     assert trace["install_values"]["root_password_policy_valid"] is True
-    assert trace["artifacts"]["base_iso_path"] == "/tmp/base-esxi.iso"
+    assert trace["artifacts"]["base_iso_path"] == str(spec.base_iso_path)
     assert trace["artifacts"]["output_iso_path"] == str(built_iso)
     assert trace["artifacts"]["virtual_media_url"].endswith("/esxi-built-iso/Real-ESXi-Run-Kit/esxi-20260416-120000.iso")
     assert trace["builder_summary"]["generation"]["boot_cfg"]["patched"] is True
     assert summary["esxi_run_summary"]["install_values"]["hostname"] == "esxi-lab"
-    assert summary["esxi_run_summary"]["artifacts"]["base_iso_path"] == "/tmp/base-esxi.iso"
+    assert summary["esxi_run_summary"]["artifacts"]["base_iso_path"] == str(spec.base_iso_path)
     assert summary["esxi_run_summary"]["artifacts"]["built_iso_path"] == str(built_iso)
     assert summary["esxi_run_summary"]["artifacts"]["virtual_media_url"].endswith("/esxi-built-iso/Real-ESXi-Run-Kit/esxi-20260416-120000.iso")
     assert summary["esxi_run_summary"]["builder_generation"]["boot_cfg"]["patched"] is True
@@ -3827,6 +3894,81 @@ def test_run_esxi_real_builds_iso_and_starts_virtual_media_boot(monkeypatch, tmp
     assert "[SKIP] Server already Off before ESXi boot preparation." in off_logs
     assert ("power_reset", "ForceOff", "/redfish/v1/Systems/1") not in off_client.calls
     assert ("power_reset", "On", "/redfish/v1/Systems/1") in off_client.calls
+
+
+def test_run_esxi_real_passes_selected_esxi8_iso_to_builder(monkeypatch, tmp_path):
+    cfg = main.default_config()
+    cfg["site"]["name"] = "Real ESXi 8 Run Kit"
+    cfg["ilo"]["current_ip"] = "10.10.8.90"
+    cfg["ilo"]["host"] = "10.10.8.90"
+    cfg["ilo"]["username"] = "Administrator"
+    cfg["ilo"]["password"] = "secret"
+    cfg["esxi"]["version"] = "8"
+    cfg["esxi"]["base_iso_path"] = str(tmp_path / "VMware-ESXi-8.iso")
+    cfg["esxi"]["hostname"] = "esxi8-lab"
+    cfg["esxi"]["management_ip"] = "10.10.8.10"
+    cfg["esxi"]["subnet_mask"] = "255.255.255.0"
+    cfg["esxi"]["gateway"] = "10.10.8.1"
+    cfg["esxi"]["root_password"] = "Valid1Pass!"
+    Path(cfg["esxi"]["base_iso_path"]).write_text("iso8", encoding="utf-8")
+    built_iso = tmp_path / "esxi8-built.iso"
+    built_iso.write_text("iso", encoding="utf-8")
+    built = {}
+
+    class FakeEsxiILOClient:
+        def __init__(self, cfg):
+            self.cfg = cfg
+            self.power_state = "Off"
+            self.virtual_media = {
+                "@odata.id": "/redfish/v1/Managers/1/VirtualMedia/2",
+                "Inserted": False,
+                "Image": "",
+                "MediaTypes": ["CD", "DVD"],
+                "Actions": {"#VirtualMedia.InsertMedia": {"target": "/redfish/v1/Managers/1/VirtualMedia/2/Actions/VirtualMedia.InsertMedia"}},
+            }
+            self.boot_state = {"Boot": {"BootSourceOverrideEnabled": "Once", "BootSourceOverrideTarget": "Cd"}}
+
+        def get_virtual_media(self):
+            return [dict(self.virtual_media)]
+
+        def get_systems(self):
+            return ["/redfish/v1/Systems/1"]
+
+        def get_system(self, system_path):
+            return {"PowerState": self.power_state, "BootProgress": {"LastState": "OSBootStarted"}, "Oem": {"Hpe": {"PostState": "FinishedPost"}}, **self.boot_state}
+
+        def power_reset(self, reset_type="ForceRestart", system_path=None):
+            if reset_type == "On":
+                self.power_state = "On"
+            return {"reset_type": reset_type, "path": f"{system_path}/Actions/ComputerSystem.Reset"}
+
+        def _post(self, target, payload):
+            self.virtual_media["Inserted"] = True
+            self.virtual_media["Image"] = payload["Image"]
+
+        def set_one_time_boot_cd(self, system_path=None):
+            return {"system_path": system_path or "/redfish/v1/Systems/1", "before_enabled": "Disabled", "before_target": "None", "after_enabled": "Once", "after_target": "Cd", "matched": True, "notes": ["Verified."]}
+
+    def fake_build(spec):
+        built["spec"] = spec
+        (built_iso.parent / "build-summary.yml").write_text(
+            yaml.safe_dump({"generation": {"ks_cfg": {"generated": True}}, "self_check": {"output_boot_report": {}, "output_files_present": {}}}),
+            encoding="utf-8",
+        )
+        return built_iso
+
+    monkeypatch.setattr(main, "build_custom_iso", fake_build)
+    monkeypatch.setattr(main, "detect_public_base_url", lambda target_host="": "http://lab-builder.local:8000")
+    monkeypatch.setattr(main, "wait_for_esxi_management_ready", lambda host, **kwargs: {"host": host, "port": 443, "attempts": 1})
+    monkeypatch.setattr(main, "ILOClient", lambda cfg_obj: FakeEsxiILOClient(cfg_obj))
+
+    main.run_esxi_real(cfg, run_stamp="20260418-200000")
+    job = main.load_job("Real ESXi 8 Run Kit")
+    logs = "\n".join(job["logs"])
+
+    assert built["spec"].esxi_version == "8"
+    assert built["spec"].base_iso_path == Path(cfg["esxi"]["base_iso_path"])
+    assert "[INFO] Selected ESXi version: 8" in logs
 
 
 def test_run_esxi_real_reconnects_after_build_when_ilo_session_has_expired(monkeypatch, tmp_path):
@@ -3914,7 +4056,7 @@ def test_run_esxi_real_reconnects_after_build_when_ilo_session_has_expired(monke
             }
 
     monkeypatch.setattr(main, "build_custom_iso", lambda spec: built_iso)
-    monkeypatch.setattr(main, "resolve_esxi_base_iso_path", lambda cfg_obj: main.Path("/tmp/base-esxi.iso"))
+    monkeypatch.setattr(main, "resolve_esxi_base_iso_path", lambda cfg_obj: fake_esxi_base_iso(tmp_path))
     monkeypatch.setattr(main, "detect_public_base_url", lambda target_host="": "http://lab-builder.local:8000")
     monkeypatch.setattr(main, "wait_for_esxi_management_ready", lambda host, **kwargs: {"host": host, "port": 443, "attempts": 1})
     created_clients = []
@@ -4023,7 +4165,7 @@ def test_run_esxi_real_uses_push_power_button_fallback_when_forceoff_does_not_po
             return {"system_path": system_path or "/redfish/v1/Systems/1", "before_enabled": "Disabled", "before_target": "None", "after_enabled": "Once", "after_target": "Cd", "matched": True, "notes": ["Verified one-time boot override."]}
 
     monkeypatch.setattr(main, "build_custom_iso", lambda spec: built_iso)
-    monkeypatch.setattr(main, "resolve_esxi_base_iso_path", lambda cfg_obj: main.Path("/tmp/base-esxi.iso"))
+    monkeypatch.setattr(main, "resolve_esxi_base_iso_path", lambda cfg_obj: fake_esxi_base_iso(tmp_path))
     monkeypatch.setattr(main, "detect_public_base_url", lambda target_host="": "http://lab-builder.local:8000")
     monkeypatch.setattr(main, "wait_for_esxi_management_ready", lambda host, **kwargs: {"host": host, "port": 443, "attempts": 2})
     created_clients = []
@@ -4127,7 +4269,7 @@ def test_run_esxi_real_blocks_power_on_when_boot_override_does_not_stick(monkeyp
             }
 
     monkeypatch.setattr(main, "build_custom_iso", lambda spec: built_iso)
-    monkeypatch.setattr(main, "resolve_esxi_base_iso_path", lambda cfg_obj: main.Path("/tmp/base-esxi.iso"))
+    monkeypatch.setattr(main, "resolve_esxi_base_iso_path", lambda cfg_obj: fake_esxi_base_iso(tmp_path))
     monkeypatch.setattr(main, "detect_public_base_url", lambda target_host="": "http://lab-builder.local:8000")
     monkeypatch.setattr(main, "wait_for_esxi_management_ready", lambda host, **kwargs: {"host": host, "port": 443, "attempts": 2})
     created_clients = []
@@ -4232,7 +4374,7 @@ def test_run_esxi_real_continues_when_eject_media_is_unsupported(monkeypatch, tm
             }
 
     monkeypatch.setattr(main, "build_custom_iso", lambda spec: built_iso)
-    monkeypatch.setattr(main, "resolve_esxi_base_iso_path", lambda cfg_obj: main.Path("/tmp/base-esxi.iso"))
+    monkeypatch.setattr(main, "resolve_esxi_base_iso_path", lambda cfg_obj: fake_esxi_base_iso(tmp_path))
     monkeypatch.setattr(main, "detect_public_base_url", lambda target_host="": "http://lab-builder.local:8000")
     monkeypatch.setattr(main, "wait_for_esxi_management_ready", lambda host, **kwargs: {"host": host, "port": 443, "attempts": 1})
     monkeypatch.setattr(main, "ILOClient", lambda cfg_obj: FakeEsxiILOClient(cfg_obj))
@@ -4323,7 +4465,7 @@ def test_run_esxi_real_fails_when_virtual_media_readback_does_not_match(monkeypa
             }
 
     monkeypatch.setattr(main, "build_custom_iso", lambda spec: built_iso)
-    monkeypatch.setattr(main, "resolve_esxi_base_iso_path", lambda cfg_obj: main.Path("/tmp/base-esxi.iso"))
+    monkeypatch.setattr(main, "resolve_esxi_base_iso_path", lambda cfg_obj: fake_esxi_base_iso(tmp_path))
     monkeypatch.setattr(main, "detect_public_base_url", lambda target_host="": "http://lab-builder.local:8000")
     monkeypatch.setattr(main, "wait_for_esxi_management_ready", lambda host, **kwargs: {"host": host, "port": 443, "attempts": 2})
     created_clients = []
@@ -4436,7 +4578,7 @@ def test_run_esxi_real_fails_when_expected_management_ip_never_comes_up(monkeypa
             }
 
     monkeypatch.setattr(main, "build_custom_iso", lambda spec: built_iso)
-    monkeypatch.setattr(main, "resolve_esxi_base_iso_path", lambda cfg_obj: main.Path("/tmp/base-esxi.iso"))
+    monkeypatch.setattr(main, "resolve_esxi_base_iso_path", lambda cfg_obj: fake_esxi_base_iso(tmp_path))
     monkeypatch.setattr(main, "detect_public_base_url", lambda target_host="": "http://lab-builder.local:8000")
     monkeypatch.setattr(main, "wait_for_esxi_management_ready", lambda host, **kwargs: (_ for _ in ()).throw(main.ILOError(f"ESXi did not answer on configured IP {host}:443 before timeout. Last error: timed out")))
     monkeypatch.setattr(main, "ILOClient", lambda cfg_obj: FakeEsxiILOClient(cfg_obj))
@@ -4555,7 +4697,7 @@ def test_run_esxi_real_fails_early_when_stuck_in_post(monkeypatch, tmp_path):
         raise AssertionError("wait loop should have failed from stuck POST detection before timeout")
 
     monkeypatch.setattr(main, "build_custom_iso", lambda spec: built_iso)
-    monkeypatch.setattr(main, "resolve_esxi_base_iso_path", lambda cfg_obj: main.Path("/tmp/base-esxi.iso"))
+    monkeypatch.setattr(main, "resolve_esxi_base_iso_path", lambda cfg_obj: fake_esxi_base_iso(tmp_path))
     monkeypatch.setattr(main, "detect_public_base_url", lambda target_host="": "http://lab-builder.local:8000")
     monkeypatch.setattr(main, "wait_for_esxi_management_ready", fake_wait)
     monkeypatch.setattr(main, "ILOClient", lambda cfg_obj: FakeEsxiILOClient(cfg_obj))
@@ -5691,7 +5833,7 @@ def test_run_esxi_real_persists_boot_option_fallback_reason(monkeypatch, tmp_pat
             }
 
     monkeypatch.setattr(main, "build_custom_iso", lambda spec: built_iso)
-    monkeypatch.setattr(main, "resolve_esxi_base_iso_path", lambda cfg_obj: main.Path("/tmp/base-esxi.iso"))
+    monkeypatch.setattr(main, "resolve_esxi_base_iso_path", lambda cfg_obj: fake_esxi_base_iso(tmp_path))
     monkeypatch.setattr(main, "detect_public_base_url", lambda target_host="": "http://lab-builder.local:8000")
     monkeypatch.setattr(main, "wait_for_esxi_management_ready", lambda host, **kwargs: {"host": host, "port": 443, "attempts": 1})
     monkeypatch.setattr(main, "ILOClient", lambda cfg_obj: FakeEsxiILOClient(cfg_obj))
@@ -5822,7 +5964,7 @@ def test_run_esxi_real_power_on_failure_populates_debug_diagnosis(monkeypatch, t
             raise error
 
     monkeypatch.setattr(main, "build_custom_iso", lambda spec: built_iso)
-    monkeypatch.setattr(main, "resolve_esxi_base_iso_path", lambda cfg_obj: main.Path("/tmp/base-esxi.iso"))
+    monkeypatch.setattr(main, "resolve_esxi_base_iso_path", lambda cfg_obj: fake_esxi_base_iso(tmp_path))
     monkeypatch.setattr(main, "detect_public_base_url", lambda target_host="": "http://lab-builder.local:8000")
     monkeypatch.setattr(main, "ILOClient", lambda cfg_obj: FakeEsxiILOClient(cfg_obj))
 

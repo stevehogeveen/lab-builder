@@ -22,6 +22,34 @@
         <div class="text-sm text-slate-400 mb-4">This page is only for the ESXi details that belong to this kit. Run Center builds and launches the installer later.</div>
         <form hx-post="/save-esxi-settings" hx-target="#main-content" hx-swap="outerHTML" class="space-y-4">
             <input type="hidden" name="return_page" value="esxi">
+            <div class="grid grid-cols-1 md:grid-cols-2 gap-3">
+                <div>
+                    <label class="block text-sm font-bold text-slate-300 mb-2">ESXi version</label>
+                    <select name="esxi_version" class="input">
+                        <option value="7" {% if esxi_page_review.version|string == "7" %}selected{% endif %}>ESXi 7</option>
+                        <option value="8" {% if esxi_page_review.version|string == "8" %}selected{% endif %}>ESXi 8</option>
+                    </select>
+                    <div class="text-xs text-slate-400 mt-1">Existing kits default to ESXi 7 unless changed here.</div>
+                </div>
+                <div>
+                    <label class="block text-sm font-bold text-slate-300 mb-2">Base ISO</label>
+                    <select name="esxi_base_iso_path" class="input">
+                        <option value="">Auto-select first matching ISO for version</option>
+                        {% for iso in esxi_page_review.base_iso_choices %}
+                        <option value="{{ iso.path }}" {% if esxi_page_review.selected_base_iso_path == iso.path %}selected{% endif %}>ESXi {{ iso.version }} - {{ iso.name }}</option>
+                        {% endfor %}
+                    </select>
+                    <div class="text-xs text-slate-400 mt-1">Searches media/esxi/base, media/esxi/base/esxi7, and media/esxi/base/esxi8.</div>
+                </div>
+            </div>
+            <div class="card card-compact">
+                <div class="font-semibold mb-2">Selected installer media</div>
+                <div class="result" style="margin-top: 0;">Version: ESXi {{ esxi_page_review.version or '7' }}</div>
+                <div class="result" style="margin-top: .5rem;">ISO path: {{ esxi_page_review.base_iso_path or esxi_page_review.selected_base_iso_path or 'Auto-select not resolved' }}</div>
+                {% if esxi_page_review.base_iso_error %}
+                <div class="field-error mt-2">{{ esxi_page_review.base_iso_error }}</div>
+                {% endif %}
+            </div>
             <div>
                 <label class="block text-sm font-bold text-slate-300 mb-2">Server name</label>
                 {% if esxi_field_errors.hostname %}

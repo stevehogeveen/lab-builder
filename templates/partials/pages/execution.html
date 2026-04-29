@@ -345,6 +345,7 @@
                         <div class="result" style="margin-top: 0;">NTP server: {{ execution_review.esxi_install_review.ntp_server or 'Not set' }}</div>
                         <div class="result" style="margin-top: 0;">Enable SSH: {{ 'Yes' if execution_review.esxi_install_review.enable_ssh else 'No' }}</div>
                         <div class="result" style="margin-top: 0;">Disable IPv6: {{ 'Yes' if execution_review.esxi_install_review.disable_ipv6 else 'No' }}</div>
+                        <div class="result md:col-span-2" style="margin-top: 0;">ESXi version: {{ execution_review.esxi_install_review.version or '7' }}</div>
                         <div class="result md:col-span-2" style="margin-top: 0;">Base ISO path: {{ execution_review.esxi_install_review.base_iso_path }}</div>
                         <div class="result md:col-span-2" style="margin-top: 0;">Built ISO path: {{ execution_review.esxi_install_review.output_iso_path }}</div>
                         <div class="result md:col-span-2" style="margin-top: 0;">Virtual media URL: {{ execution_review.esxi_install_review.virtual_media_url }}</div>
