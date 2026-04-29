@@ -3777,6 +3777,7 @@ def test_run_esxi_real_builds_iso_and_starts_virtual_media_boot(monkeypatch, tmp
     assert ("eject", "/redfish/v1/Managers/1/VirtualMedia/2") in client.calls
     assert ("power_reset", "ForceOff", "/redfish/v1/Systems/1") in client.calls
     assert "[INFO] Power reset request sent: ResetType=ForceOff endpoint=/redfish/v1/Systems/1/Actions/ComputerSystem.Reset" in joined_logs
+    assert "allowed=" in joined_logs
     assert (
         "post",
         "/redfish/v1/Managers/1/VirtualMedia/2/Actions/VirtualMedia.InsertMedia",
@@ -3908,6 +3909,100 @@ def test_run_esxi_real_reconnects_after_build_when_ilo_session_has_expired(monke
     assert len(created_clients) == 2
     assert "[INFO] Reconnected to iLO after ISO build" in joined_logs
     assert "[INFO] iLO session expired during ESXi orchestration. Reconnecting and retrying once." in joined_logs
+
+
+def test_run_esxi_real_uses_push_power_button_fallback_when_forceoff_does_not_power_off(monkeypatch, tmp_path):
+    cfg = main.default_config()
+    cfg["site"]["name"] = "Real ESXi ForceOff Fallback Kit"
+    cfg["ilo"]["current_ip"] = "10.10.8.90"
+    cfg["ilo"]["host"] = "10.10.8.90"
+    cfg["ilo"]["username"] = "Administrator"
+    cfg["ilo"]["password"] = "secret"
+    cfg["esxi"]["hostname"] = "esxi-lab"
+    cfg["esxi"]["management_ip"] = "10.10.8.10"
+    cfg["esxi"]["subnet_mask"] = "255.255.255.0"
+    cfg["esxi"]["gateway"] = "10.10.8.1"
+    cfg["esxi"]["root_password"] = "Valid1Pass!"
+
+    built_iso = tmp_path / "esxi-fallback.iso"
+    built_iso.write_text("iso", encoding="utf-8")
+
+    class FakeEsxiILOClient:
+        def __init__(self, cfg):
+            self.cfg = cfg
+            self.power_state = "On"
+            self.boot_state = {"Boot": {"BootSourceOverrideEnabled": "Disabled", "BootSourceOverrideTarget": "None"}}
+            self.virtual_media = {
+                "@odata.id": "/redfish/v1/Managers/1/VirtualMedia/2",
+                "Inserted": False,
+                "Image": "",
+                "MediaTypes": ["CD", "DVD"],
+                "Actions": {"#VirtualMedia.InsertMedia": {"target": "/redfish/v1/Managers/1/VirtualMedia/2/Actions/VirtualMedia.InsertMedia"}},
+            }
+            self.calls = []
+
+        def get_virtual_media(self):
+            return [dict(self.virtual_media)]
+
+        def get_systems(self):
+            return ["/redfish/v1/Systems/1"]
+
+        def get_system(self, system_path):
+            assert system_path == "/redfish/v1/Systems/1"
+            return {
+                "PowerState": self.power_state,
+                "BootProgress": {"LastState": "OSBootStarted" if self.power_state == "On" else "None"},
+                "Oem": {"Hpe": {"PostState": "FinishedPost" if self.power_state == "On" else "Off"}},
+                **self.boot_state,
+            }
+
+        def power_reset(self, reset_type="ForceRestart", system_path=None):
+            self.calls.append(("power_reset", reset_type, system_path))
+            if reset_type == "PushPowerButton":
+                self.power_state = "Off"
+            elif reset_type == "On":
+                self.power_state = "On"
+            return {
+                "reset_type": reset_type,
+                "system_path": system_path,
+                "path": f"{system_path}/Actions/ComputerSystem.Reset",
+                "allowed_reset_types": ["On", "ForceOff", "PushPowerButton"],
+            }
+
+        def _post(self, target, payload):
+            self.calls.append(("post", target, payload))
+            if target.endswith("VirtualMedia.InsertMedia"):
+                self.virtual_media["Inserted"] = True
+                self.virtual_media["Image"] = payload["Image"]
+
+        def set_one_time_boot_cd(self, system_path=None):
+            self.calls.append(("set_one_time_boot_cd", system_path))
+            return {"system_path": system_path or "/redfish/v1/Systems/1", "before_enabled": "Disabled", "before_target": "None", "after_enabled": "Once", "after_target": "Cd", "matched": True, "notes": ["Verified one-time boot override."]}
+
+    monkeypatch.setattr(main, "build_custom_iso", lambda spec: built_iso)
+    monkeypatch.setattr(main, "resolve_esxi_base_iso_path", lambda cfg_obj: main.Path("/tmp/base-esxi.iso"))
+    monkeypatch.setattr(main, "detect_public_base_url", lambda target_host="": "http://lab-builder.local:8000")
+    monkeypatch.setattr(main, "wait_for_esxi_management_ready", lambda host, **kwargs: {"host": host, "port": 443, "attempts": 2})
+    created_clients = []
+
+    def fake_wait_for_power_state(client, expected_state, **kwargs):
+        if expected_state == "Off":
+            has_push = ("power_reset", "PushPowerButton", "/redfish/v1/Systems/1") in getattr(client, "calls", [])
+            if not has_push:
+                raise ILOError("Timed out waiting for server power state Off. Last observed state: On.")
+            return {"PowerState": "Off"}
+        return {"PowerState": "On"}
+
+    monkeypatch.setattr(main, "wait_for_power_state", fake_wait_for_power_state)
+    monkeypatch.setattr(main, "ILOClient", lambda cfg_obj: created_clients.append(FakeEsxiILOClient(cfg_obj)) or created_clients[-1])
+
+    main.run_esxi_real(cfg, run_stamp="20260416-120100")
+    job = main.load_job("Real ESXi ForceOff Fallback Kit")
+    joined_logs = "\n".join(job["logs"])
+    client = created_clients[0]
+    assert ("power_reset", "ForceOff", "/redfish/v1/Systems/1") in client.calls
+    assert ("power_reset", "PushPowerButton", "/redfish/v1/Systems/1") in client.calls
+    assert "trying PushPowerButton fallback" in joined_logs
 
 
 def test_run_esxi_real_blocks_power_on_when_boot_override_does_not_stick(monkeypatch, tmp_path):
@@ -6445,6 +6540,61 @@ def test_ilo_power_reset_does_not_hide_http_401_errors():
     client._post = fake_post
 
     with pytest.raises(ILOError, match="HTTP 401"):
+        client.power_reset(reset_type="GracefulShutdown", system_path="/redfish/v1/Systems/1")
+
+
+def test_ilo_power_reset_uses_action_metadata_and_returns_allowed_types():
+    client = ILOClient(ILOConfig(host="10.10.8.110", username="Administrator", password="pw"))
+
+    def fake_get(path: str, timeout=None):
+        del timeout
+        if path == "/redfish/v1/Systems/1":
+            return {
+                "PowerState": "On",
+                "Actions": {
+                    "#ComputerSystem.Reset": {
+                        "target": "/redfish/v1/Systems/1/Actions/ComputerSystem.Reset",
+                        "ResetType@Redfish.AllowableValues": ["On", "ForceOff", "PushPowerButton"],
+                    }
+                },
+            }
+        raise AssertionError(path)
+
+    post_calls = []
+
+    def fake_post(path: str, payload: dict | None = None):
+        post_calls.append((path, payload))
+        return {"ok": True}
+
+    client._get = fake_get
+    client._post = fake_post
+
+    result = client.power_reset(reset_type="ForceOff", system_path="/redfish/v1/Systems/1")
+    assert post_calls == [("/redfish/v1/Systems/1/Actions/ComputerSystem.Reset", {"ResetType": "ForceOff"})]
+    assert result["allowed_reset_types"] == ["On", "ForceOff", "PushPowerButton"]
+
+
+def test_ilo_power_reset_rejects_disallowed_reset_type():
+    client = ILOClient(ILOConfig(host="10.10.8.110", username="Administrator", password="pw"))
+
+    def fake_get(path: str, timeout=None):
+        del timeout
+        if path == "/redfish/v1/Systems/1":
+            return {
+                "PowerState": "On",
+                "Actions": {
+                    "#ComputerSystem.Reset": {
+                        "target": "/redfish/v1/Systems/1/Actions/ComputerSystem.Reset",
+                        "ResetType@Redfish.AllowableValues": ["On", "ForceOff"],
+                    }
+                },
+            }
+        raise AssertionError(path)
+
+    client._get = fake_get
+    client._post = lambda path, payload=None: {"ok": True}
+
+    with pytest.raises(ILOError, match="not allowed"):
         client.power_reset(reset_type="GracefulShutdown", system_path="/redfish/v1/Systems/1")
 
 

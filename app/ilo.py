@@ -2732,9 +2732,16 @@ class ILOClient:
             system_path = systems[0]
 
         system = self._get(system_path)
-        target = system.get("Actions", {}).get("#ComputerSystem.Reset", {}).get("target")
+        reset_action = (system.get("Actions", {}) or {}).get("#ComputerSystem.Reset", {}) or {}
+        target = reset_action.get("target")
         if not target:
             raise ILOError("Reset action not available on this system.")
+        allowed_reset_types = [str(item).strip() for item in list(reset_action.get("ResetType@Redfish.AllowableValues") or []) if str(item).strip()]
+        if allowed_reset_types and str(reset_type).strip() not in allowed_reset_types:
+            raise ILOError(
+                f"ResetType {reset_type} is not allowed on this system. "
+                f"Allowed values: {', '.join(allowed_reset_types)}"
+            )
         baseline_power = str(system.get("PowerState") or "")
         try:
             self._post(target, {"ResetType": reset_type})
@@ -2742,6 +2749,7 @@ class ILOClient:
                 "system_path": system_path,
                 "path": target,
                 "reset_type": reset_type,
+                "allowed_reset_types": allowed_reset_types,
                 "recovered_after_transport_disconnect": False,
                 "recovery_note": "",
             }
@@ -2758,6 +2766,7 @@ class ILOClient:
                 "system_path": system_path,
                 "path": target,
                 "reset_type": reset_type,
+                "allowed_reset_types": allowed_reset_types,
                 "recovered_after_transport_disconnect": True,
                 "recovery_note": recovery.get("recovery_note") or "",
                 "recovery_power_state": recovery.get("recovery_power_state") or "",
