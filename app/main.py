@@ -6071,7 +6071,7 @@ def run_storage_as_part_of_real_run(
         f"[INFO] Storage stage initial PowerState={initial_power_state or 'unknown'} on {system_path}.",
     )
     if str(initial_power_state).strip().lower() != "on":
-        power_on_result = client.power_reset(reset_type="On", system_path=system_path)
+        ensure_on = client.ensure_power_state("On", system_path=system_path, timeout_seconds=300, poll_interval=5)
         update_job(
             kit_name,
             job,
@@ -6081,12 +6081,11 @@ def run_storage_as_part_of_real_run(
             total_steps,
             (
                 "[INFO] Storage stage power-on request sent: "
-                f"ResetType={power_on_result.get('reset_type') or 'On'} "
-                f"endpoint={power_on_result.get('path') or '(unknown)'} "
-                f"allowed={','.join(power_on_result.get('allowed_reset_types') or []) or '(unknown)'}"
+                f"ResetType={ensure_on.get('action') or 'On'} "
+                f"endpoint={ensure_on.get('reset_target') or '(unknown)'} "
+                f"allowed={','.join(ensure_on.get('allowed_reset_types') or []) or '(unknown)'}"
             ),
         )
-        wait_for_power_state(client, "On", timeout_seconds=300, poll_interval=5)
         update_job(
             kit_name,
             job,
@@ -8511,6 +8510,42 @@ def run_esxi_real(cfg: dict, run_stamp: str | None = None):
                 client = build_esxi_ilo_client()
                 return operation(client)
 
+        def ensure_power_state_with_fallback(expected_state: str, *, system_path: str, timeout_seconds: int, poll_interval: int):
+            def op(c):
+                if hasattr(c, "ensure_power_state"):
+                    return c.ensure_power_state(
+                        expected_state,
+                        system_path=system_path,
+                        timeout_seconds=timeout_seconds,
+                        poll_interval=poll_interval,
+                    )
+                current = str(c.get_system(system_path).get("PowerState") or "")
+                if current.lower() == str(expected_state).lower():
+                    return {
+                        "system_path": system_path,
+                        "reset_target": "",
+                        "allowed_reset_types": [],
+                        "initial_power_state": current,
+                        "final_power_state": current,
+                        "changed": False,
+                        "action": "skip",
+                    }
+                reset_type = "On" if str(expected_state).lower() == "on" else "ForceOff"
+                result = c.power_reset(reset_type=reset_type, system_path=system_path) or {}
+                wait_for_power_state(c, expected_state, timeout_seconds=timeout_seconds, poll_interval=poll_interval)
+                return {
+                    "system_path": system_path,
+                    "reset_target": str(result.get("path") or ""),
+                    "allowed_reset_types": list(result.get("allowed_reset_types") or []),
+                    "initial_power_state": current,
+                    "final_power_state": str(expected_state),
+                    "changed": True,
+                    "action": reset_type,
+                    "result": result,
+                }
+
+            return run_with_session_refresh("Power off" if str(expected_state).lower() == "off" else "Power on", op)
+
         update_job(kit_name, job, "Running", "Generate KS.CFG", 1, total, "[RUNNING] Generating KS.CFG")
         trace_payload["steps"].append({"stage": "generate_ks_cfg", "status": "running"})
         save_esxi_trace(trace_path, trace_payload)
@@ -8670,7 +8705,7 @@ def run_esxi_real(cfg: dict, run_stamp: str | None = None):
             update_job(kit_name, job, "Running", "Power off", 4, total, "[RUNNING] Powering server off before setting one-time boot")
             trace_payload["steps"].append({"stage": "power_off", "status": "running", "from_state": current_power})
             save_esxi_trace(trace_path, trace_payload)
-            power_off_result = run_with_session_refresh("Power off", lambda c: c.power_reset(reset_type="ForceOff", system_path=system_path))
+            power_off_result = ensure_power_state_with_fallback("Off", system_path=system_path, timeout_seconds=180, poll_interval=5)
             update_job(
                 kit_name,
                 job,
@@ -8680,12 +8715,12 @@ def run_esxi_real(cfg: dict, run_stamp: str | None = None):
                 total,
                 (
                     "[INFO] Power reset request sent: "
-                    f"ResetType={power_off_result.get('reset_type') or 'ForceOff'} "
-                    f"endpoint={power_off_result.get('path') or '(unknown)'} "
+                    f"ResetType={power_off_result.get('action') or 'ForceOff'} "
+                    f"endpoint={power_off_result.get('reset_target') or '(unknown)'} "
                     f"allowed={','.join(power_off_result.get('allowed_reset_types') or []) or '(unknown)'}"
                 ),
             )
-            if power_off_result.get("recovered_after_transport_disconnect"):
+            if str(power_off_result.get("action") or "") == "PushPowerButton":
                 update_job(
                     kit_name,
                     job,
@@ -8693,29 +8728,8 @@ def run_esxi_real(cfg: dict, run_stamp: str | None = None):
                     "Power off",
                     4,
                     total,
-                    "[WARN] iLO closed the reset connection without a response, but the server reached expected PowerState=Off, treating as success.",
+                    "[WARN] ForceOff did not reach Off; PushPowerButton fallback was used.",
                 )
-            try:
-                wait_for_power_state(client, "Off", timeout_seconds=180, poll_interval=5)
-            except ILOError:
-                allowed = [str(item).strip() for item in list(power_off_result.get("allowed_reset_types") or []) if str(item).strip()]
-                if "PushPowerButton" not in allowed:
-                    raise
-                push_result = run_with_session_refresh("Power off", lambda c: c.power_reset(reset_type="PushPowerButton", system_path=system_path))
-                update_job(
-                    kit_name,
-                    job,
-                    "Running",
-                    "Power off",
-                    4,
-                    total,
-                    (
-                        "[WARN] ForceOff did not reach PowerState=Off; trying PushPowerButton fallback. "
-                        f"endpoint={push_result.get('path') or '(unknown)'} "
-                        f"allowed={','.join(push_result.get('allowed_reset_types') or []) or '(unknown)'}"
-                    ),
-                )
-                wait_for_power_state(client, "Off", timeout_seconds=180, poll_interval=5)
         else:
             update_job(kit_name, job, "Running", "Power off", 4, total, "[SKIP] Server already Off before ESXi boot preparation.")
             trace_payload["steps"].append({"stage": "power_off", "status": "already_off", "from_state": current_power})
@@ -9679,6 +9693,15 @@ def run_ilo_real(cfg: dict):
         update_job(kit_name, job, "Running", "Connect to Redfish", 1, total, f"[RUNNING] Connecting to https://{active_ip}/redfish/v1/")
         summary = client.get_summary()
         update_job(kit_name, job, "Running", "Read service root", 2, total, f"[OK] Redfish version: {summary.get('redfish_version', '')}")
+        update_job(
+            kit_name,
+            job,
+            "Running",
+            "Read system inventory",
+            3,
+            total,
+            f"[INFO] iLO stage initial PowerState={summary.get('power_state', '') or 'unknown'}",
+        )
 
         update_job(
             kit_name,

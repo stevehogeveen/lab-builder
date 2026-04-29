@@ -2773,6 +2773,166 @@ class ILOClient:
                 "disconnect_error": message,
             }
 
+    def get_power_state(self, system_path: str | None = None) -> str:
+        return str(self.get_system(system_path).get("PowerState") or "")
+
+    def get_reset_action_metadata(self, system_path: str | None = None) -> dict[str, Any]:
+        if not system_path:
+            systems = self.get_systems()
+            if not systems:
+                raise ILOError("No Redfish systems found.")
+            system_path = systems[0]
+        system = self.get_system(system_path)
+        reset_action = (system.get("Actions", {}) or {}).get("#ComputerSystem.Reset", {}) or {}
+        target = str(reset_action.get("target") or "").strip()
+        allowed = [str(item).strip() for item in list(reset_action.get("ResetType@Redfish.AllowableValues") or []) if str(item).strip()]
+        return {
+            "system_path": system_path,
+            "power_state": str(system.get("PowerState") or ""),
+            "target": target,
+            "allowed_reset_types": allowed,
+        }
+
+    def ensure_power_state(
+        self,
+        expected_state: str,
+        *,
+        system_path: str | None = None,
+        timeout_seconds: int = 300,
+        poll_interval: int = 5,
+    ) -> dict[str, Any]:
+        expected = str(expected_state or "").strip().lower()
+        if expected not in {"on", "off"}:
+            raise ILOError(f"Unsupported expected power state: {expected_state}")
+
+        metadata = self.get_reset_action_metadata(system_path=system_path)
+        current = str(metadata.get("power_state") or "").strip()
+        allowed = list(metadata.get("allowed_reset_types") or [])
+        target = str(metadata.get("target") or "")
+        path = str(metadata.get("system_path") or "")
+        if current.lower() == expected:
+            return {
+                "system_path": path,
+                "reset_target": target,
+                "allowed_reset_types": allowed,
+                "initial_power_state": current,
+                "final_power_state": current,
+                "changed": False,
+                "action": "skip",
+            }
+
+        if expected == "on":
+            if allowed and "On" not in allowed:
+                raise ILOError(f"Cannot power on system. Reset target={target} allowed={allowed}.")
+            action_result = self.power_reset(reset_type="On", system_path=path)
+            final = self._wait_for_power_state(path, "On", timeout_seconds=timeout_seconds, poll_interval=poll_interval)
+            return {
+                "system_path": path,
+                "reset_target": target,
+                "allowed_reset_types": allowed,
+                "initial_power_state": current,
+                "final_power_state": final,
+                "changed": True,
+                "action": "On",
+                "result": action_result,
+            }
+
+        if allowed and "ForceOff" not in allowed and "PushPowerButton" not in allowed:
+            raise ILOError(f"Cannot power off system. Reset target={target} allowed={allowed}.")
+        if (not allowed) or ("ForceOff" in allowed):
+            action_result = self.power_reset(reset_type="ForceOff", system_path=path)
+            try:
+                final = self._wait_for_power_state(path, "Off", timeout_seconds=timeout_seconds, poll_interval=poll_interval)
+                return {
+                    "system_path": path,
+                    "reset_target": target,
+                    "allowed_reset_types": allowed,
+                    "initial_power_state": current,
+                    "final_power_state": final,
+                    "changed": True,
+                    "action": "ForceOff",
+                    "result": action_result,
+                }
+            except ILOError:
+                if allowed and "PushPowerButton" not in allowed:
+                    raise
+        action_result = self.power_reset(reset_type="PushPowerButton", system_path=path)
+        final = self._wait_for_power_state(path, "Off", timeout_seconds=timeout_seconds, poll_interval=poll_interval)
+        return {
+            "system_path": path,
+            "reset_target": target,
+            "allowed_reset_types": allowed,
+            "initial_power_state": current,
+            "final_power_state": final,
+            "changed": True,
+            "action": "PushPowerButton",
+            "result": action_result,
+        }
+
+    def _wait_for_power_state(
+        self,
+        system_path: str,
+        expected_state: str,
+        *,
+        timeout_seconds: int = 300,
+        poll_interval: int = 5,
+    ) -> str:
+        deadline = time.time() + max(timeout_seconds, 1)
+        last_seen = ""
+        while time.time() < deadline:
+            try:
+                last_seen = self.get_power_state(system_path=system_path)
+            except Exception:
+                time.sleep(max(poll_interval, 1))
+                continue
+            if last_seen.lower() == str(expected_state).lower():
+                return last_seen
+            time.sleep(max(poll_interval, 1))
+        raise ILOError(
+            f"Timed out waiting for server power state {expected_state}. Last observed state: {last_seen or 'unknown'}."
+        )
+
+    def discover_redfish_capabilities(self) -> dict[str, Any]:
+        systems = self.get_systems()
+        system_path = systems[0] if systems else ""
+        reset_target = ""
+        reset_allowed: list[str] = []
+        power_state = ""
+        if system_path:
+            metadata = self.get_reset_action_metadata(system_path=system_path)
+            reset_target = str(metadata.get("target") or "")
+            reset_allowed = list(metadata.get("allowed_reset_types") or [])
+            power_state = str(metadata.get("power_state") or "")
+        virtual_media_targets = []
+        for vm in self.get_virtual_media():
+            insert_target = str((((vm.get("Actions") or {}).get("#VirtualMedia.InsertMedia") or {}).get("target")) or "").strip()
+            eject_target = str((((vm.get("Actions") or {}).get("#VirtualMedia.EjectMedia") or {}).get("target")) or "").strip()
+            if insert_target or eject_target:
+                virtual_media_targets.append(
+                    {
+                        "path": str(vm.get("@odata.id") or ""),
+                        "insert_target": insert_target,
+                        "eject_target": eject_target,
+                    }
+                )
+        storage = self.get_storage_discovery(deep_smart_storage_scan=False)
+        raw_storage = list(((storage.get("raw") or {}).get("standard_storage") or []))
+        writable_volumes = [
+            str(((item.get("Volumes") or {}).get("@odata.id") or "")).strip()
+            for item in raw_storage
+            if str(((item.get("Volumes") or {}).get("@odata.id") or "")).strip()
+        ]
+        return {
+            "systems_collection_path": "/redfish/v1/Systems",
+            "system_path": system_path,
+            "power_state": power_state,
+            "reset_target": reset_target,
+            "reset_allowed_types": reset_allowed,
+            "virtual_media_actions": virtual_media_targets,
+            "storage_controller_paths": [str(item.get("@odata.id") or "") for item in raw_storage if str(item.get("@odata.id") or "")],
+            "writable_volumes_paths": writable_volumes,
+        }
+
     @staticmethod
     def _is_power_reset_transport_disconnect(message: str) -> bool:
         text = str(message or "")

@@ -3969,6 +3969,23 @@ def test_run_esxi_real_uses_push_power_button_fallback_when_forceoff_does_not_po
                 "allowed_reset_types": ["On", "ForceOff", "PushPowerButton"],
             }
 
+        def ensure_power_state(self, expected_state, *, system_path=None, timeout_seconds=300, poll_interval=5):
+            del timeout_seconds, poll_interval
+            if expected_state == "Off":
+                self.power_reset("ForceOff", system_path=system_path)
+                self.power_reset("PushPowerButton", system_path=system_path)
+                return {
+                    "action": "PushPowerButton",
+                    "reset_target": f"{system_path}/Actions/ComputerSystem.Reset",
+                    "allowed_reset_types": ["On", "ForceOff", "PushPowerButton"],
+                }
+            self.power_reset("On", system_path=system_path)
+            return {
+                "action": "On",
+                "reset_target": f"{system_path}/Actions/ComputerSystem.Reset",
+                "allowed_reset_types": ["On", "ForceOff", "PushPowerButton"],
+            }
+
         def _post(self, target, payload):
             self.calls.append(("post", target, payload))
             if target.endswith("VirtualMedia.InsertMedia"):
@@ -4002,7 +4019,7 @@ def test_run_esxi_real_uses_push_power_button_fallback_when_forceoff_does_not_po
     client = created_clients[0]
     assert ("power_reset", "ForceOff", "/redfish/v1/Systems/1") in client.calls
     assert ("power_reset", "PushPowerButton", "/redfish/v1/Systems/1") in client.calls
-    assert "trying PushPowerButton fallback" in joined_logs
+    assert "PushPowerButton fallback was used" in joined_logs
 
 
 def test_run_esxi_real_blocks_power_on_when_boot_override_does_not_stick(monkeypatch, tmp_path):
@@ -6596,6 +6613,96 @@ def test_ilo_power_reset_rejects_disallowed_reset_type():
 
     with pytest.raises(ILOError, match="not allowed"):
         client.power_reset(reset_type="GracefulShutdown", system_path="/redfish/v1/Systems/1")
+
+
+def test_ensure_power_state_off_skips_when_already_off():
+    client = ILOClient(ILOConfig(host="10.10.8.110", username="Administrator", password="pw"))
+
+    client.get_reset_action_metadata = lambda system_path=None: {
+        "system_path": "/redfish/v1/Systems/1",
+        "power_state": "Off",
+        "target": "/redfish/v1/Systems/1/Actions/ComputerSystem.Reset",
+        "allowed_reset_types": ["On", "ForceOff", "PushPowerButton"],
+    }
+    result = client.ensure_power_state("Off", system_path="/redfish/v1/Systems/1")
+    assert result["changed"] is False
+    assert result["action"] == "skip"
+
+
+def test_ensure_power_state_on_powers_on_when_off(monkeypatch):
+    client = ILOClient(ILOConfig(host="10.10.8.110", username="Administrator", password="pw"))
+    state = {"value": "Off"}
+    client.get_reset_action_metadata = lambda system_path=None: {
+        "system_path": "/redfish/v1/Systems/1",
+        "power_state": state["value"],
+        "target": "/redfish/v1/Systems/1/Actions/ComputerSystem.Reset",
+        "allowed_reset_types": ["On", "ForceOff", "PushPowerButton"],
+    }
+    client.power_reset = lambda reset_type="ForceRestart", system_path=None: state.__setitem__("value", "On") or {"reset_type": reset_type}
+    client.get_power_state = lambda system_path=None: state["value"]
+    monkeypatch.setattr(ilo_module.time, "sleep", lambda _: None)
+    result = client.ensure_power_state("On", system_path="/redfish/v1/Systems/1", timeout_seconds=5, poll_interval=1)
+    assert result["action"] == "On"
+    assert result["final_power_state"] == "On"
+
+
+def test_ensure_power_state_off_forceoff_disconnect_then_poll_success(monkeypatch):
+    client = ILOClient(ILOConfig(host="10.10.8.110", username="Administrator", password="pw"))
+    state = {"value": "On"}
+    client.get_reset_action_metadata = lambda system_path=None: {
+        "system_path": "/redfish/v1/Systems/1",
+        "power_state": state["value"],
+        "target": "/redfish/v1/Systems/1/Actions/ComputerSystem.Reset",
+        "allowed_reset_types": ["ForceOff", "PushPowerButton"],
+    }
+
+    def fake_power_reset(reset_type="ForceRestart", system_path=None):
+        if reset_type == "ForceOff":
+            state["value"] = "Off"
+            return {"reset_type": reset_type, "allowed_reset_types": ["ForceOff", "PushPowerButton"]}
+        return {"reset_type": reset_type, "allowed_reset_types": ["ForceOff", "PushPowerButton"]}
+
+    client.power_reset = fake_power_reset
+    client.get_power_state = lambda system_path=None: state["value"]
+    monkeypatch.setattr(ilo_module.time, "sleep", lambda _: None)
+    result = client.ensure_power_state("Off", system_path="/redfish/v1/Systems/1", timeout_seconds=5, poll_interval=1)
+    assert result["action"] == "ForceOff"
+    assert result["final_power_state"] == "Off"
+
+
+def test_ensure_power_state_off_uses_push_power_button_fallback(monkeypatch):
+    client = ILOClient(ILOConfig(host="10.10.8.110", username="Administrator", password="pw"))
+    state = {"value": "On"}
+    calls = []
+    client.get_reset_action_metadata = lambda system_path=None: {
+        "system_path": "/redfish/v1/Systems/1",
+        "power_state": state["value"],
+        "target": "/redfish/v1/Systems/1/Actions/ComputerSystem.Reset",
+        "allowed_reset_types": ["ForceOff", "PushPowerButton"],
+    }
+
+    def fake_power_reset(reset_type="ForceRestart", system_path=None):
+        calls.append(reset_type)
+        if reset_type == "PushPowerButton":
+            state["value"] = "Off"
+        return {"reset_type": reset_type, "allowed_reset_types": ["ForceOff", "PushPowerButton"]}
+
+    client.power_reset = fake_power_reset
+    ticks = {"n": 0}
+
+    def fake_get_power_state(system_path=None):
+        ticks["n"] += 1
+        if ticks["n"] < 3:
+            return "On"
+        return state["value"]
+
+    client.get_power_state = fake_get_power_state
+    monkeypatch.setattr(ilo_module.time, "sleep", lambda _: None)
+    monkeypatch.setattr(ilo_module.time, "time", lambda: ticks["n"])
+    result = client.ensure_power_state("Off", system_path="/redfish/v1/Systems/1", timeout_seconds=10, poll_interval=1)
+    assert calls[0] == "ForceOff"
+    assert "PushPowerButton" in calls
+    assert result["action"] == "PushPowerButton"
 
 
 def test_apply_storage_layout_failure_logs_are_saved(client, monkeypatch):
