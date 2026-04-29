@@ -6083,7 +6083,11 @@ def run_storage_as_part_of_real_run(
                 "[INFO] Storage stage power-on request sent: "
                 f"ResetType={ensure_on.get('action') or 'On'} "
                 f"endpoint={ensure_on.get('reset_target') or '(unknown)'} "
-                f"allowed={','.join(ensure_on.get('allowed_reset_types') or []) or '(unknown)'}"
+                f"allowed={','.join(ensure_on.get('allowed_reset_types') or []) or '(unknown)'} "
+                f"http={((ensure_on.get('result') or {}).get('http_status_code')) if isinstance(ensure_on.get('result'), dict) else '(none)'} "
+                f"message_ids={','.join(((ensure_on.get('result') or {}).get('message_ids') or [])) if isinstance(ensure_on.get('result'), dict) else '(none)'} "
+                f"first_observed={ensure_on.get('first_observed_power_state') or '(unknown)'} "
+                f"last_observed={ensure_on.get('last_observed_power_state') or '(unknown)'}"
             ),
         )
         update_job(

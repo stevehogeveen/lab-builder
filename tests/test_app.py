@@ -6638,71 +6638,99 @@ def test_ensure_power_state_on_powers_on_when_off(monkeypatch):
         "target": "/redfish/v1/Systems/1/Actions/ComputerSystem.Reset",
         "allowed_reset_types": ["On", "ForceOff", "PushPowerButton"],
     }
-    client.power_reset = lambda reset_type="ForceRestart", system_path=None: state.__setitem__("value", "On") or {"reset_type": reset_type}
+    client._submit_reset_action = lambda system_path, target, reset_type: state.__setitem__("value", "On") or {"reset_type": reset_type, "http_status_code": 200, "message_ids": ["Base.1.18.Success"], "connection_dropped": False}
     client.get_power_state = lambda system_path=None: state["value"]
     monkeypatch.setattr(ilo_module.time, "sleep", lambda _: None)
     result = client.ensure_power_state("On", system_path="/redfish/v1/Systems/1", timeout_seconds=5, poll_interval=1)
     assert result["action"] == "On"
     assert result["final_power_state"] == "On"
+    assert result["result"]["http_status_code"] == 200
+    assert "Base.1.18.Success" in result["result"]["message_ids"]
 
 
-def test_ensure_power_state_off_forceoff_disconnect_then_poll_success(monkeypatch):
+def test_ensure_power_state_on_connection_drop_then_poll_success(monkeypatch):
     client = ILOClient(ILOConfig(host="10.10.8.110", username="Administrator", password="pw"))
-    state = {"value": "On"}
+    state = {"value": "Off"}
     client.get_reset_action_metadata = lambda system_path=None: {
         "system_path": "/redfish/v1/Systems/1",
         "power_state": state["value"],
         "target": "/redfish/v1/Systems/1/Actions/ComputerSystem.Reset",
-        "allowed_reset_types": ["ForceOff", "PushPowerButton"],
+        "allowed_reset_types": ["On", "PushPowerButton"],
     }
 
-    def fake_power_reset(reset_type="ForceRestart", system_path=None):
-        if reset_type == "ForceOff":
-            state["value"] = "Off"
-            return {"reset_type": reset_type, "allowed_reset_types": ["ForceOff", "PushPowerButton"]}
-        return {"reset_type": reset_type, "allowed_reset_types": ["ForceOff", "PushPowerButton"]}
+    def fake_submit(system_path, target, reset_type):
+        state["value"] = "On"
+        return {"reset_type": reset_type, "http_status_code": None, "message_ids": [], "connection_dropped": True}
 
-    client.power_reset = fake_power_reset
+    client._submit_reset_action = fake_submit
     client.get_power_state = lambda system_path=None: state["value"]
     monkeypatch.setattr(ilo_module.time, "sleep", lambda _: None)
-    result = client.ensure_power_state("Off", system_path="/redfish/v1/Systems/1", timeout_seconds=5, poll_interval=1)
-    assert result["action"] == "ForceOff"
-    assert result["final_power_state"] == "Off"
+    result = client.ensure_power_state("On", system_path="/redfish/v1/Systems/1", timeout_seconds=5, poll_interval=1)
+    assert result["action"] == "On"
+    assert result["final_power_state"] == "On"
+    assert result["result"]["connection_dropped"] is True
 
 
-def test_ensure_power_state_off_uses_push_power_button_fallback(monkeypatch):
+def test_ensure_power_state_on_uses_push_power_button_fallback(monkeypatch):
     client = ILOClient(ILOConfig(host="10.10.8.110", username="Administrator", password="pw"))
-    state = {"value": "On"}
+    state = {"value": "Off"}
     calls = []
     client.get_reset_action_metadata = lambda system_path=None: {
         "system_path": "/redfish/v1/Systems/1",
         "power_state": state["value"],
         "target": "/redfish/v1/Systems/1/Actions/ComputerSystem.Reset",
-        "allowed_reset_types": ["ForceOff", "PushPowerButton"],
+        "allowed_reset_types": ["On", "PushPowerButton"],
     }
 
-    def fake_power_reset(reset_type="ForceRestart", system_path=None):
+    def fake_submit(system_path, target, reset_type):
+        del system_path, target
         calls.append(reset_type)
         if reset_type == "PushPowerButton":
-            state["value"] = "Off"
-        return {"reset_type": reset_type, "allowed_reset_types": ["ForceOff", "PushPowerButton"]}
+            state["value"] = "On"
+        return {"reset_type": reset_type, "http_status_code": 200, "message_ids": [], "connection_dropped": False}
 
-    client.power_reset = fake_power_reset
+    client._submit_reset_action = fake_submit
     ticks = {"n": 0}
 
     def fake_get_power_state(system_path=None):
         ticks["n"] += 1
         if ticks["n"] < 3:
-            return "On"
+            return "Off"
         return state["value"]
 
     client.get_power_state = fake_get_power_state
     monkeypatch.setattr(ilo_module.time, "sleep", lambda _: None)
     monkeypatch.setattr(ilo_module.time, "time", lambda: ticks["n"])
-    result = client.ensure_power_state("Off", system_path="/redfish/v1/Systems/1", timeout_seconds=10, poll_interval=1)
-    assert calls[0] == "ForceOff"
+    result = client.ensure_power_state("On", system_path="/redfish/v1/Systems/1", timeout_seconds=10, poll_interval=1)
+    assert calls[0] == "On"
     assert "PushPowerButton" in calls
     assert result["action"] == "PushPowerButton"
+
+
+def test_ensure_power_state_on_http_400_not_masked():
+    client = ILOClient(ILOConfig(host="10.10.8.110", username="Administrator", password="pw"))
+    client.get_reset_action_metadata = lambda system_path=None: {
+        "system_path": "/redfish/v1/Systems/1",
+        "power_state": "Off",
+        "target": "/redfish/v1/Systems/1/Actions/ComputerSystem.Reset",
+        "allowed_reset_types": ["On"],
+    }
+    client._submit_reset_action = lambda system_path, target, reset_type: (_ for _ in ()).throw(ILOError("POST /redfish/v1/Systems/1/Actions/ComputerSystem.Reset failed with HTTP 400: bad request"))
+    with pytest.raises(ILOError, match="HTTP 400"):
+        client.ensure_power_state("On", system_path="/redfish/v1/Systems/1")
+
+
+def test_ensure_power_state_on_http_401_not_masked():
+    client = ILOClient(ILOConfig(host="10.10.8.110", username="Administrator", password="pw"))
+    client.get_reset_action_metadata = lambda system_path=None: {
+        "system_path": "/redfish/v1/Systems/1",
+        "power_state": "Off",
+        "target": "/redfish/v1/Systems/1/Actions/ComputerSystem.Reset",
+        "allowed_reset_types": ["On"],
+    }
+    client._submit_reset_action = lambda system_path, target, reset_type: (_ for _ in ()).throw(ILOError("POST /redfish/v1/Systems/1/Actions/ComputerSystem.Reset failed with HTTP 401: unauthorized"))
+    with pytest.raises(ILOError, match="HTTP 401"):
+        client.ensure_power_state("On", system_path="/redfish/v1/Systems/1")
 
 
 def test_apply_storage_layout_failure_logs_are_saved(client, monkeypatch):
@@ -7224,6 +7252,27 @@ class RecordingStandardRedfishApplyClient(RecordingStandardRedfishStorageWriteCl
             "system_path": system_path,
             "path": f"{system_path}/Actions/ComputerSystem.Reset" if system_path else "/redfish/v1/Systems/1/Actions/ComputerSystem.Reset",
         }
+
+    def ensure_power_state(self, expected_state, *, system_path=None, timeout_seconds=300, poll_interval=5):
+        del timeout_seconds, poll_interval
+        expected = str(expected_state or "").strip().lower()
+        if expected == "on":
+            if self.system_power_state.lower() != "on":
+                result = self.power_reset("On", system_path=system_path)
+                return {
+                    "action": "On",
+                    "reset_target": result.get("path") or "",
+                    "allowed_reset_types": ["On", "ForceOff", "PushPowerButton"],
+                    "result": {"http_status_code": 200, "message_ids": ["Base.1.18.Success"], "connection_dropped": False},
+                    "first_observed_power_state": "Off",
+                    "last_observed_power_state": "On",
+                    "changed": True,
+                }
+            return {"action": "skip", "changed": False}
+        if self.system_power_state.lower() != "off":
+            result = self.power_reset("ForceOff", system_path=system_path)
+            return {"action": "ForceOff", "reset_target": result.get("path") or "", "allowed_reset_types": ["On", "ForceOff", "PushPowerButton"], "changed": True}
+        return {"action": "skip", "changed": False}
 
 
 def test_delete_storage_logical_drive_uses_settings_put_payload():

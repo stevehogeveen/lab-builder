@@ -2798,7 +2798,7 @@ class ILOClient:
         expected_state: str,
         *,
         system_path: str | None = None,
-        timeout_seconds: int = 300,
+        timeout_seconds: int = 180,
         poll_interval: int = 5,
     ) -> dict[str, Any]:
         expected = str(expected_state or "").strip().lower()
@@ -2824,49 +2824,149 @@ class ILOClient:
         if expected == "on":
             if allowed and "On" not in allowed:
                 raise ILOError(f"Cannot power on system. Reset target={target} allowed={allowed}.")
-            action_result = self.power_reset(reset_type="On", system_path=path)
-            final = self._wait_for_power_state(path, "On", timeout_seconds=timeout_seconds, poll_interval=poll_interval)
-            return {
-                "system_path": path,
-                "reset_target": target,
-                "allowed_reset_types": allowed,
-                "initial_power_state": current,
-                "final_power_state": final,
-                "changed": True,
-                "action": "On",
-                "result": action_result,
-            }
-
-        if allowed and "ForceOff" not in allowed and "PushPowerButton" not in allowed:
-            raise ILOError(f"Cannot power off system. Reset target={target} allowed={allowed}.")
-        if (not allowed) or ("ForceOff" in allowed):
-            action_result = self.power_reset(reset_type="ForceOff", system_path=path)
-            try:
-                final = self._wait_for_power_state(path, "Off", timeout_seconds=timeout_seconds, poll_interval=poll_interval)
+            action_result = self._submit_reset_action(path, target, "On")
+            poll = self._wait_for_power_state(path, "On", timeout_seconds=timeout_seconds, poll_interval=poll_interval)
+            if not poll.get("matched") and "PushPowerButton" in allowed:
+                fallback_result = self._submit_reset_action(path, target, "PushPowerButton")
+                fallback_poll = self._wait_for_power_state(path, "On", timeout_seconds=timeout_seconds, poll_interval=poll_interval)
+                if not fallback_poll.get("matched"):
+                    raise ILOError(
+                        "Power reset command submission succeeded but expected power state was not reached within timeout. "
+                        f"Expected=On first_observed={fallback_poll.get('first_observed') or poll.get('first_observed') or 'unknown'} "
+                        f"last_observed={fallback_poll.get('last_observed') or poll.get('last_observed') or 'unknown'}."
+                    )
                 return {
                     "system_path": path,
                     "reset_target": target,
                     "allowed_reset_types": allowed,
                     "initial_power_state": current,
-                    "final_power_state": final,
+                    "final_power_state": str(fallback_poll.get("last_observed") or "On"),
+                    "changed": True,
+                    "action": "PushPowerButton",
+                    "result": fallback_result,
+                    "first_observed_power_state": fallback_poll.get("first_observed"),
+                    "last_observed_power_state": fallback_poll.get("last_observed"),
+                }
+            if not poll.get("matched"):
+                raise ILOError(
+                    "Power reset command submission succeeded but expected power state was not reached within timeout. "
+                    f"Expected=On first_observed={poll.get('first_observed') or 'unknown'} "
+                    f"last_observed={poll.get('last_observed') or 'unknown'}."
+                )
+            return {
+                "system_path": path,
+                "reset_target": target,
+                "allowed_reset_types": allowed,
+                "initial_power_state": current,
+                "final_power_state": str(poll.get("last_observed") or "On"),
+                "changed": True,
+                "action": "On",
+                "result": action_result,
+                "first_observed_power_state": poll.get("first_observed"),
+                "last_observed_power_state": poll.get("last_observed"),
+            }
+
+        if allowed and "ForceOff" not in allowed and "PushPowerButton" not in allowed:
+            raise ILOError(f"Cannot power off system. Reset target={target} allowed={allowed}.")
+        if (not allowed) or ("ForceOff" in allowed):
+            action_result = self._submit_reset_action(path, target, "ForceOff")
+            poll = self._wait_for_power_state(path, "Off", timeout_seconds=timeout_seconds, poll_interval=poll_interval)
+            if poll.get("matched"):
+                return {
+                    "system_path": path,
+                    "reset_target": target,
+                    "allowed_reset_types": allowed,
+                    "initial_power_state": current,
+                    "final_power_state": str(poll.get("last_observed") or "Off"),
                     "changed": True,
                     "action": "ForceOff",
                     "result": action_result,
+                    "first_observed_power_state": poll.get("first_observed"),
+                    "last_observed_power_state": poll.get("last_observed"),
                 }
-            except ILOError:
-                if allowed and "PushPowerButton" not in allowed:
-                    raise
-        action_result = self.power_reset(reset_type="PushPowerButton", system_path=path)
-        final = self._wait_for_power_state(path, "Off", timeout_seconds=timeout_seconds, poll_interval=poll_interval)
+            if allowed and "PushPowerButton" not in allowed:
+                raise ILOError(
+                    "Power reset command submission succeeded but expected power state was not reached within timeout. "
+                    f"Expected=Off first_observed={poll.get('first_observed') or 'unknown'} "
+                    f"last_observed={poll.get('last_observed') or 'unknown'}."
+                )
+        action_result = self._submit_reset_action(path, target, "PushPowerButton")
+        poll = self._wait_for_power_state(path, "Off", timeout_seconds=timeout_seconds, poll_interval=poll_interval)
+        if not poll.get("matched"):
+            raise ILOError(
+                "Power reset command submission succeeded but expected power state was not reached within timeout. "
+                f"Expected=Off first_observed={poll.get('first_observed') or 'unknown'} "
+                f"last_observed={poll.get('last_observed') or 'unknown'}."
+            )
         return {
             "system_path": path,
             "reset_target": target,
             "allowed_reset_types": allowed,
             "initial_power_state": current,
-            "final_power_state": final,
+            "final_power_state": str(poll.get("last_observed") or "Off"),
             "changed": True,
             "action": "PushPowerButton",
             "result": action_result,
+            "first_observed_power_state": poll.get("first_observed"),
+            "last_observed_power_state": poll.get("last_observed"),
+        }
+
+    @staticmethod
+    def _extract_redfish_message_ids(payload: dict[str, Any] | None) -> list[str]:
+        if not isinstance(payload, dict):
+            return []
+        ids: list[str] = []
+        for message in list(payload.get("Messages") or []):
+            if isinstance(message, dict):
+                value = str(message.get("MessageId") or "").strip()
+                if value:
+                    ids.append(value)
+        error_block = payload.get("error")
+        if isinstance(error_block, dict):
+            for item in list(error_block.get("@Message.ExtendedInfo") or []):
+                if isinstance(item, dict):
+                    value = str(item.get("MessageId") or "").strip()
+                    if value:
+                        ids.append(value)
+        return ids
+
+    def _submit_reset_action(self, system_path: str, target: str, reset_type: str) -> dict[str, Any]:
+        url = target if target.startswith("http") else f"{self.base}{target}"
+        payload = {"ResetType": reset_type}
+        try:
+            response = self._request_with_transport_retry(
+                "POST",
+                url,
+                json_payload=payload,
+                retry_on_transport_error=False,
+            )
+        except ILOError as e:
+            if not self._is_power_reset_transport_disconnect(str(e)):
+                raise
+            return {
+                "reset_type": reset_type,
+                "path": target,
+                "http_status_code": None,
+                "message_ids": [],
+                "connection_dropped": True,
+            }
+        status_code = int(response.status_code)
+        text = str(response.text or "")
+        body = None
+        if text.strip():
+            try:
+                body = response.json()
+            except Exception:
+                body = None
+        if status_code >= 400:
+            raise ILOError(f"POST {url} failed with HTTP {status_code}: {text[:300]}")
+        message_ids = self._extract_redfish_message_ids(body)
+        return {
+            "reset_type": reset_type,
+            "path": target,
+            "http_status_code": status_code,
+            "message_ids": message_ids,
+            "connection_dropped": False,
         }
 
     def _wait_for_power_state(
@@ -2876,8 +2976,9 @@ class ILOClient:
         *,
         timeout_seconds: int = 300,
         poll_interval: int = 5,
-    ) -> str:
+    ) -> dict[str, Any]:
         deadline = time.time() + max(timeout_seconds, 1)
+        first_seen = ""
         last_seen = ""
         while time.time() < deadline:
             try:
@@ -2885,12 +2986,12 @@ class ILOClient:
             except Exception:
                 time.sleep(max(poll_interval, 1))
                 continue
+            if not first_seen and last_seen:
+                first_seen = last_seen
             if last_seen.lower() == str(expected_state).lower():
-                return last_seen
+                return {"matched": True, "first_observed": first_seen or last_seen, "last_observed": last_seen}
             time.sleep(max(poll_interval, 1))
-        raise ILOError(
-            f"Timed out waiting for server power state {expected_state}. Last observed state: {last_seen or 'unknown'}."
-        )
+        return {"matched": False, "first_observed": first_seen, "last_observed": last_seen}
 
     def discover_redfish_capabilities(self) -> dict[str, Any]:
         systems = self.get_systems()
