@@ -2826,9 +2826,43 @@ class ILOClient:
                 raise ILOError(f"Cannot power on system. Reset target={target} allowed={allowed}.")
             action_result = self._submit_reset_action(path, target, "On")
             poll = self._wait_for_power_state(path, "On", timeout_seconds=timeout_seconds, poll_interval=poll_interval)
+            if action_result.get("connection_dropped") and not poll.get("matched"):
+                retry_result = self._submit_reset_action(path, target, "On", retry_attempt=True)
+                retry_poll = self._wait_for_power_state(path, "On", timeout_seconds=timeout_seconds, poll_interval=poll_interval)
+                if not retry_poll.get("matched"):
+                    raise ILOError("Power reset connection dropped and expected PowerState was not reached after retry.")
+                return {
+                    "system_path": path,
+                    "reset_target": target,
+                    "allowed_reset_types": allowed,
+                    "initial_power_state": current,
+                    "final_power_state": str(retry_poll.get("last_observed") or "On"),
+                    "changed": True,
+                    "action": "On",
+                    "result": retry_result,
+                    "first_observed_power_state": retry_poll.get("first_observed"),
+                    "last_observed_power_state": retry_poll.get("last_observed"),
+                }
             if not poll.get("matched") and "PushPowerButton" in allowed:
                 fallback_result = self._submit_reset_action(path, target, "PushPowerButton")
                 fallback_poll = self._wait_for_power_state(path, "On", timeout_seconds=timeout_seconds, poll_interval=poll_interval)
+                if fallback_result.get("connection_dropped") and not fallback_poll.get("matched"):
+                    fallback_retry = self._submit_reset_action(path, target, "PushPowerButton", retry_attempt=True)
+                    fallback_retry_poll = self._wait_for_power_state(path, "On", timeout_seconds=timeout_seconds, poll_interval=poll_interval)
+                    if not fallback_retry_poll.get("matched"):
+                        raise ILOError("Power reset connection dropped and expected PowerState was not reached after retry.")
+                    return {
+                        "system_path": path,
+                        "reset_target": target,
+                        "allowed_reset_types": allowed,
+                        "initial_power_state": current,
+                        "final_power_state": str(fallback_retry_poll.get("last_observed") or "On"),
+                        "changed": True,
+                        "action": "PushPowerButton",
+                        "result": fallback_retry,
+                        "first_observed_power_state": fallback_retry_poll.get("first_observed"),
+                        "last_observed_power_state": fallback_retry_poll.get("last_observed"),
+                    }
                 if not fallback_poll.get("matched"):
                     raise ILOError(
                         "Power reset command submission succeeded but expected power state was not reached within timeout. "
@@ -2871,6 +2905,23 @@ class ILOClient:
         if (not allowed) or ("ForceOff" in allowed):
             action_result = self._submit_reset_action(path, target, "ForceOff")
             poll = self._wait_for_power_state(path, "Off", timeout_seconds=timeout_seconds, poll_interval=poll_interval)
+            if action_result.get("connection_dropped") and not poll.get("matched"):
+                retry_result = self._submit_reset_action(path, target, "ForceOff", retry_attempt=True)
+                retry_poll = self._wait_for_power_state(path, "Off", timeout_seconds=timeout_seconds, poll_interval=poll_interval)
+                if not retry_poll.get("matched"):
+                    raise ILOError("Power reset connection dropped and expected PowerState was not reached after retry.")
+                return {
+                    "system_path": path,
+                    "reset_target": target,
+                    "allowed_reset_types": allowed,
+                    "initial_power_state": current,
+                    "final_power_state": str(retry_poll.get("last_observed") or "Off"),
+                    "changed": True,
+                    "action": "ForceOff",
+                    "result": retry_result,
+                    "first_observed_power_state": retry_poll.get("first_observed"),
+                    "last_observed_power_state": retry_poll.get("last_observed"),
+                }
             if poll.get("matched"):
                 return {
                     "system_path": path,
@@ -2892,6 +2943,23 @@ class ILOClient:
                 )
         action_result = self._submit_reset_action(path, target, "PushPowerButton")
         poll = self._wait_for_power_state(path, "Off", timeout_seconds=timeout_seconds, poll_interval=poll_interval)
+        if action_result.get("connection_dropped") and not poll.get("matched"):
+            retry_result = self._submit_reset_action(path, target, "PushPowerButton", retry_attempt=True)
+            retry_poll = self._wait_for_power_state(path, "Off", timeout_seconds=timeout_seconds, poll_interval=poll_interval)
+            if not retry_poll.get("matched"):
+                raise ILOError("Power reset connection dropped and expected PowerState was not reached after retry.")
+            return {
+                "system_path": path,
+                "reset_target": target,
+                "allowed_reset_types": allowed,
+                "initial_power_state": current,
+                "final_power_state": str(retry_poll.get("last_observed") or "Off"),
+                "changed": True,
+                "action": "PushPowerButton",
+                "result": retry_result,
+                "first_observed_power_state": retry_poll.get("first_observed"),
+                "last_observed_power_state": retry_poll.get("last_observed"),
+            }
         if not poll.get("matched"):
             raise ILOError(
                 "Power reset command submission succeeded but expected power state was not reached within timeout. "
@@ -2930,20 +2998,17 @@ class ILOClient:
                         ids.append(value)
         return ids
 
-    def _submit_reset_action(self, system_path: str, target: str, reset_type: str) -> dict[str, Any]:
+    def _submit_reset_action(
+        self,
+        system_path: str,
+        target: str,
+        reset_type: str,
+        *,
+        retry_attempt: bool = False,
+    ) -> dict[str, Any]:
         url = target if target.startswith("http") else f"{self.base}{target}"
         payload = {"ResetType": reset_type}
-        try:
-            response = self._request_with_transport_retry(
-                "POST",
-                url,
-                json_payload=payload,
-                retry_on_transport_error=False,
-            )
-        except ILOError as e:
-            if not self._is_power_reset_transport_disconnect(str(e)):
-                raise
-            # Retry once using a fresh connection and explicit Connection: close.
+        if retry_attempt:
             self._reset_transport()
             try:
                 response = self.http.request(
@@ -2962,7 +3027,26 @@ class ILOClient:
                     "http_status_code": None,
                     "message_ids": [],
                     "connection_dropped": True,
-                    "retried_after_disconnect": True,
+                    "attempt": "retry",
+                }
+        else:
+            try:
+                response = self._request_with_transport_retry(
+                    "POST",
+                    url,
+                    json_payload=payload,
+                    retry_on_transport_error=False,
+                )
+            except ILOError as e:
+                if not self._is_power_reset_transport_disconnect(str(e)):
+                    raise
+                return {
+                    "reset_type": reset_type,
+                    "path": target,
+                    "http_status_code": None,
+                    "message_ids": [],
+                    "connection_dropped": True,
+                    "attempt": "first",
                 }
         status_code = int(response.status_code)
         text = str(response.text or "")
@@ -2981,7 +3065,7 @@ class ILOClient:
             "http_status_code": status_code,
             "message_ids": message_ids,
             "connection_dropped": False,
-            "retried_after_disconnect": False,
+            "attempt": "retry" if retry_attempt else "first",
         }
 
     def _wait_for_power_state(
