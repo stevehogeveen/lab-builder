@@ -782,10 +782,30 @@ class FakeGen10StorageApplyClient:
         self.fail_on = fail_on
         self.discovery = planner_gen10_apply_discovery(existing_volumes=True)
         self.calls = []
+        self.system_power_state = "On"
 
     def get_storage_discovery(self, deep_smart_storage_scan=False):
         del deep_smart_storage_scan
         return self.discovery
+
+    def get_systems(self):
+        return ["/redfish/v1/Systems/1"]
+
+    def get_system(self, system_path):
+        assert system_path == "/redfish/v1/Systems/1"
+        return {"PowerState": self.system_power_state}
+
+    def power_reset(self, reset_type="ForceRestart", system_path=None):
+        self.calls.append(("POWER_RESET", reset_type, system_path))
+        if reset_type == "On":
+            self.system_power_state = "On"
+        if reset_type in {"ForceOff", "GracefulShutdown"}:
+            self.system_power_state = "Off"
+        return {
+            "reset_type": reset_type,
+            "system_path": system_path,
+            "path": f"{system_path}/Actions/ComputerSystem.Reset" if system_path else "/redfish/v1/Systems/1/Actions/ComputerSystem.Reset",
+        }
 
     def delete_storage_logical_drive(self, volume_path: str, settings_path: str = ""):
         if self.fail_on == "delete":
@@ -3777,7 +3797,7 @@ def test_run_esxi_real_builds_iso_and_starts_virtual_media_boot(monkeypatch, tmp
     off_logs = "\n".join(off_job["logs"])
     off_client = created_clients[-1]
 
-    assert "[OK] Server was already off; no shutdown request was needed before setting one-time boot" in off_logs
+    assert "[SKIP] Server already Off before ESXi boot preparation." in off_logs
     assert ("power_reset", "ForceOff", "/redfish/v1/Systems/1") not in off_client.calls
     assert ("power_reset", "On", "/redfish/v1/Systems/1") in off_client.calls
 
@@ -4183,6 +4203,7 @@ def test_run_esxi_real_fails_when_virtual_media_readback_does_not_match(monkeypa
     client = created_clients[0]
 
     assert job["status"] == "Failed"
+    assert job["current_stage"] == "Mount ISO"
     assert "[FAILED] Virtual media mount readback did not match the built ESXi ISO URL." in joined_logs
     assert ("set_one_time_boot_cd", "/redfish/v1/Systems/1") not in client.calls
     assert ("power_reset", "On", "/redfish/v1/Systems/1") not in client.calls
@@ -4634,6 +4655,74 @@ def test_run_ilo_real_executes_storage_when_included(monkeypatch):
     assert "dns: already-correct" in summary_text
     assert "ilo_reset_decision:" in summary_text
     assert "reason: iLO IP changed" in summary_text
+
+
+def test_run_ilo_real_marks_storage_failures_as_storage_error(monkeypatch):
+    cfg = main.default_config()
+    cfg["site"]["name"] = "Real Storage Error Label Kit"
+    cfg["ilo"]["current_ip"] = "10.10.8.90"
+    cfg["ilo"]["host"] = "10.10.8.90"
+    cfg["ilo"]["target_ip"] = "10.10.8.90"
+    cfg["ilo"]["username"] = "Administrator"
+    cfg["ilo"]["password"] = "secret"
+    cfg["ilo"]["hostname"] = "Home-Test-01"
+    cfg["shared_network"]["dns_servers"] = ["1.1.1.1", "", "", ""]
+    cfg["shared_snmp"]["v3_username"] = "snmpuser"
+    cfg["shared_snmp"]["v3_auth_password"] = "authpass"
+    cfg["shared_snmp"]["v3_priv_password"] = "privpass"
+
+    discovery = planner_gen10_apply_discovery(existing_volumes=True)
+    export_paths = main.export_storage_discovery_snapshot(cfg, discovery, host="10.10.8.90")
+    plan = main.build_raid_plan(discovery, export_paths)
+    plan_paths = main.export_raid_plan_snapshot(cfg, plan, export_paths)
+    main.approve_storage_plan_for_cfg(cfg, discovery, export_paths, plan, plan_paths, include_in_ilo_run=True)
+
+    class FakeRunILOClient(RecordingGen10SmartStorageWriteClient):
+        def __init__(self, cfg):
+            super().__init__()
+            self.cfg = cfg
+
+        def get_summary(self):
+            return {"redfish_version": "1.16.0", "system_manufacturer": "HPE", "system_model": "DL360 Gen10", "power_state": "On"}
+
+        def get_active_manager_interface(self):
+            return {
+                "@odata.id": "/redfish/v1/Managers/1/EthernetInterfaces/1",
+                "DHCPv4": {"DHCPEnabled": False},
+                "IPv4Addresses": [{"Address": self.cfg.host}],
+                "StaticNameServers": ["1.1.1.1"],
+                "NameServers": ["1.1.1.1"],
+                "HostName": "Home-Test-01",
+            }
+
+        def get_network_protocol(self):
+            return (
+                "/redfish/v1/Managers/1/NetworkProtocol",
+                {
+                    "HostName": "Home-Test-01",
+                    "SNMP": {
+                        "ProtocolEnabled": True,
+                        "UserName": "snmpuser",
+                        "AuthProtocol": "SHA",
+                        "PrivacyProtocol": "AES",
+                    },
+                },
+            )
+
+        def disable_ipv6_best_effort(self):
+            return {"method": "patch", "path": "/redfish/v1/Managers/1/EthernetInterfaces/1"}
+
+        def get_storage_discovery(self, deep_smart_storage_scan=False):
+            del deep_smart_storage_scan
+            return discovery
+
+    monkeypatch.setattr(main, "ILOClient", lambda cfg_obj: FakeRunILOClient(cfg_obj))
+    monkeypatch.setattr(main, "run_storage_as_part_of_real_run", lambda *args, **kwargs: (_ for _ in ()).throw(ILOError("simulated storage apply failure")))
+
+    main.run_ilo_real(cfg)
+    job = main.load_job(cfg["site"]["name"])
+    assert job["status"] == "Failed"
+    assert job["current_stage"] == "Storage error"
 
 
 def test_run_ilo_real_fails_when_ilo_reset_cannot_be_verified(monkeypatch):
@@ -6104,6 +6193,16 @@ def test_run_storage_as_part_of_real_run_fails_early_when_only_read_only_hpe_inv
     main.save_job(cfg["site"]["name"], job)
 
     class FakeClient:
+        def get_systems(self):
+            return ["/redfish/v1/Systems/1"]
+
+        def get_system(self, system_path):
+            assert system_path == "/redfish/v1/Systems/1"
+            return {"PowerState": "On"}
+
+        def power_reset(self, reset_type="ForceRestart", system_path=None):
+            return {"reset_type": reset_type, "system_path": system_path, "path": f"{system_path}/Actions/ComputerSystem.Reset"}
+
         def get_storage_discovery(self, deep_smart_storage_scan=False):
             return discovery
 
@@ -6121,8 +6220,7 @@ def test_run_storage_as_part_of_real_run_fails_early_when_only_read_only_hpe_inv
         )
 
     text = str(exc.value)
-    assert "HPE Smart Storage inventory only" in text
-    assert "no writable SmartStorageConfig settings URI was verified" in text
+    assert "Storage apply requires server power On and a writable Redfish Volumes path. Current path is inventory-only." in text
     failed_job = main.load_job(cfg["site"]["name"])
     assert failed_job["status"] == "Failed"
     assert failed_job["current_stage"] == "Choose storage apply path"
@@ -6691,6 +6789,7 @@ class RecordingGen10SmartStorageWriteClient(ILOClient):
     def __init__(self):
         super().__init__(ILOConfig(host="ilo-gen10.example.test", username="Administrator", password="secret"))
         self.calls = []
+        self.system_power_state = "On"
         self.settings_doc = {"@odata.id": "/redfish/v1/Systems/1/SmartStorageConfig/Settings", "LogicalDrives": []}
         self.volume_doc = {
             "@odata.id": "/redfish/v1/Systems/1/SmartStorage/ArrayControllers/0/LogicalDrives/1",
@@ -6722,6 +6821,25 @@ class RecordingGen10SmartStorageWriteClient(ILOClient):
         if self.fail_method == "PATCH":
             raise ILOError(f"PATCH {path} failed with HTTP 400: simulated write failure")
         return {"Messages": [{"MessageId": "SmartStorage.ResetRequired"}], "reboot_required": self.reboot_required}
+
+    def get_systems(self):
+        return ["/redfish/v1/Systems/1"]
+
+    def get_system(self, system_path):
+        assert system_path == "/redfish/v1/Systems/1"
+        return {"PowerState": self.system_power_state}
+
+    def power_reset(self, reset_type="ForceRestart", system_path=None):
+        self.calls.append(("POWER_RESET", reset_type, system_path))
+        if reset_type == "On":
+            self.system_power_state = "On"
+        if reset_type in {"ForceOff", "GracefulShutdown"}:
+            self.system_power_state = "Off"
+        return {
+            "reset_type": reset_type,
+            "system_path": system_path,
+            "path": f"{system_path}/Actions/ComputerSystem.Reset" if system_path else "/redfish/v1/Systems/1/Actions/ComputerSystem.Reset",
+        }
 
 
 class RecordingStandardRedfishStorageWriteClient(ILOClient):
@@ -6826,9 +6944,29 @@ class RecordingStandardRedfishApplyClient(RecordingStandardRedfishStorageWriteCl
     def __init__(self, discovery: dict[str, Any]):
         super().__init__()
         self.discovery = discovery
+        self.system_power_state = "On"
 
     def get_storage_discovery(self, deep_smart_storage_scan=False):
         return self.discovery
+
+    def get_systems(self):
+        return ["/redfish/v1/Systems/1"]
+
+    def get_system(self, system_path):
+        assert system_path == "/redfish/v1/Systems/1"
+        return {"PowerState": self.system_power_state}
+
+    def power_reset(self, reset_type="ForceRestart", system_path=None):
+        self.calls.append(("POWER_RESET", reset_type, system_path))
+        if reset_type == "On":
+            self.system_power_state = "On"
+        if reset_type in {"ForceOff", "GracefulShutdown"}:
+            self.system_power_state = "Off"
+        return {
+            "reset_type": reset_type,
+            "system_path": system_path,
+            "path": f"{system_path}/Actions/ComputerSystem.Reset" if system_path else "/redfish/v1/Systems/1/Actions/ComputerSystem.Reset",
+        }
 
 
 def test_delete_storage_logical_drive_uses_settings_put_payload():
@@ -7248,6 +7386,52 @@ def test_run_storage_as_part_of_real_run_supports_standard_redfish_volumes_backe
             },
         ),
     ]
+
+
+def test_run_storage_as_part_of_real_run_powers_on_when_server_starts_off():
+    cfg = main.default_config()
+    cfg["site"]["name"] = "Std-Storage-Off-Boot"
+    main.save_kit_config(cfg)
+
+    discovery = planner_standard_redfish_apply_discovery(existing_volumes=True, generation="Gen11", ilo_version="iLO 6")
+    export_paths = main.export_storage_discovery_snapshot(cfg, discovery, host="10.122.142.13")
+    plan = main.build_raid_plan(discovery, export_paths)
+    plan_paths = main.export_raid_plan_snapshot(cfg, plan, export_paths)
+    storage_execution = {
+        "discovery_raw_path": str(export_paths["raw"]),
+        "plan_path": str(plan_paths["plan"]),
+        "approved_host": "10.122.142.13",
+    }
+    job = {
+        "status": "Running",
+        "scope": "multi__ilo__storage__esxi",
+        "current_stage": "",
+        "progress_percent": 0,
+        "completed_steps": 0,
+        "total_steps": 32,
+        "logs": [],
+    }
+    main.save_job(cfg["site"]["name"], job)
+    client = RecordingStandardRedfishApplyClient(discovery)
+    client.system_power_state = "Off"
+
+    main.run_storage_as_part_of_real_run(
+        cfg,
+        client,
+        "10.122.142.13",
+        "10.122.142.13",
+        storage_execution,
+        cfg["site"]["name"],
+        job,
+        17,
+        32,
+    )
+
+    assert ("POWER_RESET", "On", "/redfish/v1/Systems/1") in client.calls
+    finished_job = main.load_job(cfg["site"]["name"])
+    joined_logs = "\n".join(finished_job["logs"])
+    assert "Storage stage initial PowerState=Off" in joined_logs
+    assert "Storage stage confirmed server PowerState=On" in joined_logs
 
 
 def test_dashboard_shows_recommended_next_step_and_workflow_cards(client):

@@ -5191,6 +5191,40 @@ def run_storage_apply(
         validate_storage_apply_request(plan, apply_mode, storage_apply_confirmation_for_mode(apply_mode), True)
         apply_state["controller"] = plan.get("source_discovery", {}).get("controller", {}) or {}
         client = ILOClient(ILOConfig(host=host, username=username, password=password, verify_tls=False, timeout=15))
+        system_path, initial_power_state = read_current_power_state(client)
+        record_storage_apply_step(
+            kit_name,
+            job,
+            apply_state,
+            apply_paths,
+            "Validate controller and plan",
+            1,
+            apply_steps,
+            "running",
+            "Validate controller and plan",
+            targets={"controller": apply_state["controller"].get("name") or apply_state["controller"].get("model") or ""},
+            details=f"Storage apply initial PowerState={initial_power_state or 'unknown'} on {system_path}.",
+        )
+        if str(initial_power_state).strip().lower() != "on":
+            power_on_result = client.power_reset(reset_type="On", system_path=system_path)
+            record_storage_apply_step(
+                kit_name,
+                job,
+                apply_state,
+                apply_paths,
+                "Validate controller and plan",
+                1,
+                apply_steps,
+                "running",
+                "Validate controller and plan",
+                targets={"controller": apply_state["controller"].get("name") or apply_state["controller"].get("model") or ""},
+                details=(
+                    "Storage apply power-on request sent: "
+                    f"ResetType={power_on_result.get('reset_type') or 'On'} "
+                    f"endpoint={power_on_result.get('path') or '(unknown)'}"
+                ),
+            )
+            wait_for_power_state(client, "On", timeout_seconds=300, poll_interval=5)
         record_storage_apply_step(
             kit_name,
             job,
@@ -5218,7 +5252,31 @@ def run_storage_apply(
             targets={"controller": apply_state["controller"].get("name") or apply_state["controller"].get("model") or ""},
             details=f"Connecting to {host} and reading current storage state before apply.",
         )
-        pre_change_discovery = client.get_storage_discovery(deep_smart_storage_scan=False)
+        pre_change_discovery = {}
+        platform = {}
+        for attempt in range(1, 7):
+            pre_change_discovery = client.get_storage_discovery(deep_smart_storage_scan=False)
+            platform = choose_storage_apply_platform(pre_change_discovery, plan)
+            platform_id = str(platform.get("id") or "")
+            if platform_id in {"gen10_hpe_smartstorageconfig", "standard_redfish_volumes"}:
+                break
+            if platform_id == "hpe_smart_storage_read_only" and attempt < 6:
+                record_storage_apply_step(
+                    kit_name,
+                    job,
+                    apply_state,
+                    apply_paths,
+                    "Choose storage apply path",
+                    3,
+                    apply_steps,
+                    "running",
+                    "Choose storage apply path",
+                    targets={"controller": apply_state["controller"].get("name") or apply_state["controller"].get("model") or ""},
+                    details=f"Writable storage apply path not ready yet (attempt {attempt}/6). Rechecking discovery.",
+                )
+                time.sleep(5)
+                continue
+            break
         write_storage_discovery_snapshot_files(
             apply_paths["pre_change_summary"],
             apply_paths["pre_change_raw"],
@@ -5240,13 +5298,18 @@ def run_storage_apply(
             details=f"Saved {apply_paths['pre_change_summary'].name} and {apply_paths['pre_change_raw'].name}.",
         )
 
-        platform = choose_storage_apply_platform(pre_change_discovery, plan)
         apply_state["apply_path"] = platform.get("label", "")
         platform_supported = platform.get("id") in {"gen10_hpe_smartstorageconfig", "standard_redfish_volumes"}
         if not platform_supported:
             apply_state["status"] = "Failed"
             apply_state["workflow_state"] = "apply_failed"
             apply_state["finished_at"] = time.strftime("%Y-%m-%d %H:%M:%S")
+        platform_error = ""
+        if not platform_supported:
+            if str(platform.get("id") or "") == "hpe_smart_storage_read_only":
+                platform_error = "Storage apply requires server power On and a writable Redfish Volumes path. Current path is inventory-only."
+            else:
+                platform_error = str(platform.get("reason") or "").strip() or "No writable storage apply path is available."
         record_storage_apply_step(
             kit_name,
             job,
@@ -5259,7 +5322,7 @@ def run_storage_apply(
             "Choose storage apply path",
             targets={"controller": apply_state["controller"].get("name") or apply_state["controller"].get("model") or "", "path": platform.get("settings_path", "")},
             details=f"Selected {platform.get('label')} ({platform.get('id')}).",
-            error="" if platform_supported else (str(platform.get("reason") or "").strip() or "No writable storage apply path is available."),
+            error="" if platform_supported else platform_error,
         )
 
         current_step = 4
@@ -5294,11 +5357,7 @@ def run_storage_apply(
             apply_state["responses"].extend({"step": "platform_apply", "response": storage_apply_response_excerpt(item)} for item in responses)
             combined_response = {"responses": [storage_apply_response_excerpt(item) for item in responses]}
         else:
-            reason = str(platform.get("reason") or "").strip()
-            detail = f"Storage apply path {platform.get('label')} is not implemented yet."
-            if reason:
-                detail += f" {reason}"
-            raise ILOError(detail)
+            raise ILOError(platform_error or "No writable storage apply path is available.")
 
         record_storage_apply_step(
             kit_name,
@@ -6001,6 +6060,41 @@ def run_storage_as_part_of_real_run(
     save_job(kit_name, job)
 
     current_step = start_step
+    system_path, initial_power_state = read_current_power_state(client)
+    update_job(
+        kit_name,
+        job,
+        "Running",
+        "Run storage stage",
+        current_step,
+        total_steps,
+        f"[INFO] Storage stage initial PowerState={initial_power_state or 'unknown'} on {system_path}.",
+    )
+    if str(initial_power_state).strip().lower() != "on":
+        power_on_result = client.power_reset(reset_type="On", system_path=system_path)
+        update_job(
+            kit_name,
+            job,
+            "Running",
+            "Run storage stage",
+            current_step,
+            total_steps,
+            (
+                "[INFO] Storage stage power-on request sent: "
+                f"ResetType={power_on_result.get('reset_type') or 'On'} "
+                f"endpoint={power_on_result.get('path') or '(unknown)'}"
+            ),
+        )
+        wait_for_power_state(client, "On", timeout_seconds=300, poll_interval=5)
+        update_job(
+            kit_name,
+            job,
+            "Running",
+            "Run storage stage",
+            current_step,
+            total_steps,
+            "[OK] Storage stage confirmed server PowerState=On.",
+        )
 
     record_storage_apply_step(
         kit_name,
@@ -6048,7 +6142,30 @@ def run_storage_as_part_of_real_run(
         details=f"Reading current storage state from active iLO endpoint {active_host} before the real storage apply.",
         progress_percent=combined_progress_percent(current_step, total_steps),
     )
-    pre_change_discovery = client.get_storage_discovery(deep_smart_storage_scan=False)
+    pre_change_discovery = {}
+    platform = {}
+    for attempt in range(1, 7):
+        pre_change_discovery = client.get_storage_discovery(deep_smart_storage_scan=False)
+        platform = choose_storage_apply_platform(pre_change_discovery, plan)
+        platform_id = str(platform.get("id") or "")
+        if platform_id in {"gen10_hpe_smartstorageconfig", "standard_redfish_volumes"}:
+            break
+        if platform_id == "hpe_smart_storage_read_only" and attempt < 6:
+            update_job(
+                kit_name,
+                job,
+                "Running",
+                "Choose storage apply path",
+                current_step,
+                total_steps,
+                (
+                    f"[WARN] Storage writable apply path not ready yet (attempt {attempt}/6). "
+                    "Rechecking storage discovery."
+                ),
+            )
+            time.sleep(5)
+            continue
+        break
     write_storage_discovery_snapshot_files(
         apply_paths["pre_change_summary"],
         apply_paths["pre_change_raw"],
@@ -6072,13 +6189,18 @@ def run_storage_as_part_of_real_run(
         progress_percent=combined_progress_percent(current_step, total_steps),
     )
 
-    platform = choose_storage_apply_platform(pre_change_discovery, plan)
     apply_state["apply_path"] = platform.get("label", "")
     platform_supported = platform.get("id") in {"gen10_hpe_smartstorageconfig", "standard_redfish_volumes"}
     if not platform_supported:
         apply_state["status"] = "Failed"
         apply_state["workflow_state"] = "apply_failed"
         apply_state["finished_at"] = time.strftime("%Y-%m-%d %H:%M:%S")
+    platform_error = ""
+    if not platform_supported:
+        if str(platform.get("id") or "") == "hpe_smart_storage_read_only":
+            platform_error = "Storage apply requires server power On and a writable Redfish Volumes path. Current path is inventory-only."
+        else:
+            platform_error = str(platform.get("reason") or "").strip() or "No writable storage apply path is available."
     current_step += 1
     record_storage_apply_step(
         kit_name,
@@ -6092,7 +6214,7 @@ def run_storage_as_part_of_real_run(
         "Choose storage apply path",
         targets={"controller": apply_state["controller"].get("name") or apply_state["controller"].get("model") or "", "path": platform.get("settings_path", "")},
         details=f"Selected {platform.get('label')} for the real storage stage.",
-        error="" if platform_supported else (str(platform.get("reason") or "").strip() or "No writable storage apply path is available."),
+        error="" if platform_supported else platform_error,
         progress_percent=combined_progress_percent(current_step, total_steps),
     )
 
@@ -6130,11 +6252,7 @@ def run_storage_as_part_of_real_run(
         apply_state["responses"].extend({"step": "platform_apply", "response": storage_apply_response_excerpt(item)} for item in responses)
         combined_response = {"responses": [storage_apply_response_excerpt(item) for item in responses]}
     else:
-        reason = str(platform.get("reason") or "").strip()
-        detail = f"Storage apply path {platform.get('label')} is not implemented yet."
-        if reason:
-            detail += f" {reason}"
-        raise ILOError(detail)
+        raise ILOError(platform_error or "No writable storage apply path is available.")
 
     record_storage_apply_step(
         kit_name,
@@ -8151,6 +8269,12 @@ def wait_for_power_state(
     raise ILOError(f"Timed out waiting for server power state {expected_state}. Last observed state: {last_seen or 'unknown'}.")
 
 
+def read_current_power_state(client: ILOClient) -> tuple[str, str]:
+    system_path = client.get_systems()[0]
+    system = client.get_system(system_path)
+    return system_path, str(system.get("PowerState") or "")
+
+
 def wait_for_esxi_management_ready(
     host: str,
     *,
@@ -8532,6 +8656,15 @@ def run_esxi_real(cfg: dict, run_stamp: str | None = None):
         system_path = run_with_session_refresh("Power off", lambda c: c.get_systems())[0]
         current_system = run_with_session_refresh("Power off", lambda c: c.get_system(system_path))
         current_power = str(current_system.get("PowerState") or "")
+        update_job(
+            kit_name,
+            job,
+            "Running",
+            "Power off",
+            4,
+            total,
+            f"[INFO] ESXi stage initial PowerState={current_power or 'unknown'} on {system_path}.",
+        )
         if current_power.lower() != "off":
             update_job(kit_name, job, "Running", "Power off", 4, total, "[RUNNING] Powering server off before setting one-time boot")
             trace_payload["steps"].append({"stage": "power_off", "status": "running", "from_state": current_power})
@@ -8562,7 +8695,7 @@ def run_esxi_real(cfg: dict, run_stamp: str | None = None):
                 )
             wait_for_power_state(client, "Off", timeout_seconds=180, poll_interval=5)
         else:
-            update_job(kit_name, job, "Running", "Power off", 4, total, "[OK] Server was already off; no shutdown request was needed before setting one-time boot")
+            update_job(kit_name, job, "Running", "Power off", 4, total, "[SKIP] Server already Off before ESXi boot preparation.")
             trace_payload["steps"].append({"stage": "power_off", "status": "already_off", "from_state": current_power})
             save_esxi_trace(trace_path, trace_payload)
         update_job(kit_name, job, "Running", "Power off", 5, total, "[OK] Server is off")
@@ -9007,7 +9140,7 @@ def run_esxi_real(cfg: dict, run_stamp: str | None = None):
                 "error": detail,
             }
             save_esxi_trace(trace_path, trace_payload)
-        update_job(kit_name, job, "Failed", job.get("current_stage") or "ESXi real run failed", job.get("completed_steps", 0), total, f"[FAILED] {detail}")
+        update_job(kit_name, job, "Failed", "ESXi error", job.get("completed_steps", 0), total, f"[FAILED] {detail}")
 
 
 def run_ilo_real(cfg: dict):
@@ -10399,7 +10532,13 @@ def run_ilo_real(cfg: dict):
             )
         )
     except ILOError as e:
-        update_job(kit_name, job, "Failed", "iLO error", job.get("completed_steps", 0), total, f"[FAILED] {e}")
+        current_stage_text = str(job.get("current_stage") or "").lower()
+        failed_stage = "iLO error"
+        if "storage" in current_stage_text:
+            failed_stage = "Storage error"
+        elif "esxi" in current_stage_text:
+            failed_stage = "ESXi error"
+        update_job(kit_name, job, "Failed", failed_stage, job.get("completed_steps", 0), total, f"[FAILED] {e}")
     except Exception as e:
         update_job(kit_name, job, "Failed", "Unexpected error", job.get("completed_steps", 0), total, f"[FAILED] Unexpected error: {e}")
 
