@@ -2943,13 +2943,27 @@ class ILOClient:
         except ILOError as e:
             if not self._is_power_reset_transport_disconnect(str(e)):
                 raise
-            return {
-                "reset_type": reset_type,
-                "path": target,
-                "http_status_code": None,
-                "message_ids": [],
-                "connection_dropped": True,
-            }
+            # Retry once using a fresh connection and explicit Connection: close.
+            self._reset_transport()
+            try:
+                response = self.http.request(
+                    "POST",
+                    url,
+                    json=payload,
+                    verify=self.cfg.verify_tls,
+                    timeout=self.cfg.timeout,
+                    headers={**self._request_headers(), "Connection": "close"},
+                    auth=self.auth if not self._redfish_session_token else None,
+                )
+            except requests.RequestException:
+                return {
+                    "reset_type": reset_type,
+                    "path": target,
+                    "http_status_code": None,
+                    "message_ids": [],
+                    "connection_dropped": True,
+                    "retried_after_disconnect": True,
+                }
         status_code = int(response.status_code)
         text = str(response.text or "")
         body = None
@@ -2967,6 +2981,7 @@ class ILOClient:
             "http_status_code": status_code,
             "message_ids": message_ids,
             "connection_dropped": False,
+            "retried_after_disconnect": False,
         }
 
     def _wait_for_power_state(
