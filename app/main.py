@@ -4809,6 +4809,103 @@ def power_reset_log_summary(result: dict[str, Any], *, default_action: str = "")
     )
 
 
+def ensure_client_power_state(
+    client: ILOClient,
+    expected_state: str,
+    *,
+    system_path: str | None = None,
+    timeout_seconds: int = 180,
+    poll_interval: int = 5,
+) -> dict[str, Any]:
+    if hasattr(client, "ensure_power_state"):
+        return client.ensure_power_state(
+            expected_state,
+            system_path=system_path,
+            timeout_seconds=timeout_seconds,
+            poll_interval=poll_interval,
+        )
+    path = system_path or (client.get_system_path() if hasattr(client, "get_system_path") else client.get_systems()[0])
+    current = client.get_power_state(system_path=path) if hasattr(client, "get_power_state") else str(client.get_system(path).get("PowerState") or "")
+    expected = str(expected_state or "").strip()
+    if current.lower() == expected.lower():
+        return {
+            "system_path": path,
+            "reset_target": "",
+            "allowed_reset_types": [],
+            "initial_power_state": current,
+            "final_power_state": current,
+            "changed": False,
+            "action": "skip",
+            "first_observed_power_state": current,
+            "last_observed_power_state": current,
+            "poll_timeout_seconds": timeout_seconds,
+            "poll_interval_seconds": poll_interval,
+            "retry_attempted": False,
+            "fallback_attempted": False,
+            "attempts": [],
+        }
+    reset_type = "On" if expected.lower() == "on" else "ForceOff"
+    result = client.power_reset(reset_type=reset_type, system_path=path) or {}
+    wait_for_power_state(client, expected, timeout_seconds=timeout_seconds, poll_interval=poll_interval)
+    return {
+        "system_path": path,
+        "reset_target": str(result.get("path") or ""),
+        "allowed_reset_types": list(result.get("allowed_reset_types") or []),
+        "initial_power_state": current,
+        "final_power_state": expected,
+        "changed": True,
+        "action": reset_type,
+        "result": result,
+        "first_observed_power_state": expected,
+        "last_observed_power_state": expected,
+        "poll_timeout_seconds": timeout_seconds,
+        "poll_interval_seconds": poll_interval,
+        "retry_attempted": False,
+        "fallback_attempted": False,
+        "attempts": [{"reset_type": reset_type, "result": result}],
+    }
+
+
+def power_manual_curl_command(details: dict[str, Any]) -> str:
+    target = str(details.get("reset_target") or "").strip()
+    reset_type = str(details.get("action") or details.get("selected_reset_type") or "On").strip() or "On"
+    if not target:
+        return ""
+    return f"curl -k -u '<user>:<password>' -H 'Content-Type: application/json' -X POST 'https://<ilo-host>{target}' -d '{{\"ResetType\":\"{reset_type}\"}}'"
+
+
+def power_failure_diagnosis(stage: str, expected_state: str, exc: Exception) -> dict[str, Any]:
+    details = dict(getattr(exc, "power_reset_details", {}) or {})
+    recommended = "Review live Redfish power state and retry the power action from the app."
+    curl = power_manual_curl_command(details)
+    if curl:
+        recommended = f"Verify iLO reachability, then retry from the app. Manual equivalent: {curl}"
+    return diagnostic_result(
+        status="failed",
+        desired_state={"stage": stage, "power_state": expected_state},
+        discovered_state={
+            "initial_power_state": details.get("initial_power_state", ""),
+            "final_power_state": details.get("last_observed_power_state") or details.get("final_power_state") or "",
+            "power_reset": details,
+        },
+        differences=[str(exc).splitlines()[0]],
+        safe_corrections_attempted=[
+            f"Attempted ResetType={details.get('action') or expected_state}.",
+            f"Retry attempted={'yes' if details.get('retry_attempted') else 'no'}.",
+            f"PushPowerButton fallback attempted={'yes' if details.get('fallback_attempted') else 'no'}.",
+        ],
+        options_discovered={
+            "reset_target": details.get("reset_target", ""),
+            "allowed_reset_types": details.get("allowed_reset_types", []),
+            "manual_curl_command": curl,
+        },
+        selected_action=str(details.get("action") or ""),
+        rejection_reasons=[str(exc).splitlines()[0]],
+        recommended_fix=recommended,
+        user_action_required=True,
+    )
+
+
 def attach_esxi_diagnosis(job: dict[str, Any], diagnosis: dict[str, Any]) -> None:
     job["esxi_diagnosis"] = diagnosis
     job["diagnosis"] = diagnosis
@@ -4851,6 +4948,7 @@ def esxi_failure_diagnosis(job: dict[str, Any], detail: str, exc: Exception | No
             f"retry={'yes' if power_details.get('retry_attempted') else 'no'} "
             f"push_button_fallback={'yes' if power_details.get('fallback_attempted') else 'no'}."
         )
+    manual_curl = power_manual_curl_command({**power_details, "action": power_details.get("action") or "On"})
     return diagnostic_result(
         status="failed",
         desired_state={
@@ -4877,12 +4975,14 @@ def esxi_failure_diagnosis(job: dict[str, Any], detail: str, exc: Exception | No
             "boot_option_inventory": boot_inventory,
             "virtual_media_device": virtual_media.get("device_path", ""),
             "virtual_media_insert_target": virtual_media.get("insert_target", ""),
+            "manual_curl_command": manual_curl,
         },
         selected_action="ESXi boot preparation succeeded through ISO mount and boot override; power-on did not reach On.",
         rejection_reasons=rejection_reasons,
         recommended_fix=(
             "Retry ResetType=On using a fresh connection or Connection: close. "
             "If ResetType=On still does not reach PowerState=On and PushPowerButton is allowed, try PushPowerButton fallback."
+            + (f" Manual equivalent: {manual_curl}" if manual_curl else "")
         ),
         user_action_required=True,
     )
@@ -5672,26 +5772,24 @@ def run_storage_apply(
             targets={"controller": apply_state["controller"].get("name") or apply_state["controller"].get("model") or ""},
             details=f"Storage apply initial PowerState={initial_power_state or 'unknown'} on {system_path}.",
         )
-        if str(initial_power_state).strip().lower() != "on":
-            power_on_result = client.power_reset(reset_type="On", system_path=system_path)
-            record_storage_apply_step(
-                kit_name,
-                job,
-                apply_state,
-                apply_paths,
-                "Validate controller and plan",
-                1,
-                apply_steps,
-                "running",
-                "Validate controller and plan",
-                targets={"controller": apply_state["controller"].get("name") or apply_state["controller"].get("model") or ""},
-                details=(
-                    "Storage apply power-on request sent: "
-                    f"ResetType={power_on_result.get('reset_type') or 'On'} "
-                    f"endpoint={power_on_result.get('path') or '(unknown)'}"
-                ),
-            )
-            wait_for_power_state(client, "On", timeout_seconds=300, poll_interval=5)
+        power_on_result = ensure_client_power_state(client, "On", system_path=system_path, timeout_seconds=300, poll_interval=5)
+        record_storage_apply_step(
+            kit_name,
+            job,
+            apply_state,
+            apply_paths,
+            "Validate controller and plan",
+            1,
+            apply_steps,
+            "skip" if str(power_on_result.get("action") or "") == "skip" else "running",
+            "Validate controller and plan",
+            targets={"controller": apply_state["controller"].get("name") or apply_state["controller"].get("model") or ""},
+            details=(
+                "[SKIP] Already On. "
+                if str(power_on_result.get("action") or "") == "skip"
+                else ""
+            ) + power_reset_log_summary(power_on_result, default_action="On"),
+        )
         record_storage_apply_step(
             kit_name,
             job,
@@ -5985,6 +6083,9 @@ def run_storage_apply(
             )
     except Exception as e:
         error_text = str(e).splitlines()[0]
+        if getattr(e, "power_reset_details", None):
+            diagnosis = power_failure_diagnosis("Storage apply", "On", e)
+            attach_storage_diagnosis(job, apply_state, diagnosis)
         apply_state["status"] = "Failed"
         apply_state["workflow_state"] = "apply_failed"
         apply_state["finished_at"] = time.strftime("%Y-%m-%d %H:%M:%S")
@@ -6364,7 +6465,7 @@ def watch_storage_manual_reboot_completion(
             return
 
         client = ILOClient(ILOConfig(host=host, username=username, password=password, verify_tls=False, timeout=15))
-        system_path = client.get_systems()[0]
+        system_path = client.get_system_path() if hasattr(client, "get_system_path") else client.get_systems()[0]
         job = load_job(kit_name)
 
         interruption_observed = False
@@ -6375,8 +6476,7 @@ def watch_storage_manual_reboot_completion(
             if apply_state.get("workflow_state") != "staged_reboot_required" or apply_state.get("reboot_requested"):
                 return
             try:
-                system = client.get_system(system_path)
-                power_state = str(system.get("PowerState") or "")
+                power_state = client.get_power_state(system_path=system_path) if hasattr(client, "get_power_state") else str(client.get_system(system_path).get("PowerState") or "")
                 if power_state and power_state.lower() != "on":
                     interruption_observed = True
                     last_detail = f"Observed PowerState={power_state}."
@@ -6584,8 +6684,8 @@ def run_storage_as_part_of_real_run(
         total_steps,
         f"[INFO] Storage stage initial PowerState={initial_power_state or 'unknown'} on {system_path}.",
     )
-    if str(initial_power_state).strip().lower() != "on":
-        ensure_on = client.ensure_power_state("On", system_path=system_path, timeout_seconds=300, poll_interval=5)
+    ensure_on = ensure_client_power_state(client, "On", system_path=system_path, timeout_seconds=300, poll_interval=5)
+    if str(ensure_on.get("action") or "") == "skip":
         update_job(
             kit_name,
             job,
@@ -6593,16 +6693,17 @@ def run_storage_as_part_of_real_run(
             "Run storage stage",
             current_step,
             total_steps,
-            (
-                "[INFO] Storage stage power-on request sent: "
-                f"ResetType={ensure_on.get('action') or 'On'} "
-                f"endpoint={ensure_on.get('reset_target') or '(unknown)'} "
-                f"allowed={','.join(ensure_on.get('allowed_reset_types') or []) or '(unknown)'} "
-                f"http={((ensure_on.get('result') or {}).get('http_status_code')) if isinstance(ensure_on.get('result'), dict) else '(none)'} "
-                f"message_ids={','.join(((ensure_on.get('result') or {}).get('message_ids') or [])) if isinstance(ensure_on.get('result'), dict) else '(none)'} "
-                f"first_observed={ensure_on.get('first_observed_power_state') or '(unknown)'} "
-                f"last_observed={ensure_on.get('last_observed_power_state') or '(unknown)'}"
-            ),
+            f"[SKIP] Already On. {power_reset_log_summary(ensure_on, default_action='On')}",
+        )
+    else:
+        update_job(
+            kit_name,
+            job,
+            "Running",
+            "Run storage stage",
+            current_step,
+            total_steps,
+            f"[INFO] Storage stage power-on request sent: {power_reset_log_summary(ensure_on, default_action='On')}",
         )
         update_job(
             kit_name,
@@ -6611,7 +6712,7 @@ def run_storage_as_part_of_real_run(
             "Run storage stage",
             current_step,
             total_steps,
-            "[OK] Storage stage confirmed server PowerState=On.",
+            f"[OK] Storage stage confirmed server PowerState={ensure_on.get('final_power_state') or ensure_on.get('last_observed_power_state') or 'On'}.",
         )
 
     record_storage_apply_step(
@@ -8822,20 +8923,21 @@ def wait_for_power_state(
     timeout_seconds: int = 180,
     poll_interval: int = 5,
 ) -> dict[str, Any]:
-    system_path = client.get_systems()[0]
+    system_path = client.get_system_path() if hasattr(client, "get_system_path") else client.get_systems()[0]
     deadline = time.time() + max(timeout_seconds, 1)
     last_seen = ""
     while time.time() < deadline:
-        current = client.get_system(system_path)
-        last_seen = str(current.get("PowerState") or "")
+        last_seen = client.get_power_state(system_path=system_path) if hasattr(client, "get_power_state") else str(client.get_system(system_path).get("PowerState") or "")
         if last_seen.lower() == expected_state.lower():
-            return current
+            return client.get_system(system_path)
         time.sleep(max(poll_interval, 1))
     raise ILOError(f"Timed out waiting for server power state {expected_state}. Last observed state: {last_seen or 'unknown'}.")
 
 
 def read_current_power_state(client: ILOClient) -> tuple[str, str]:
-    system_path = client.get_systems()[0]
+    system_path = client.get_system_path() if hasattr(client, "get_system_path") else client.get_systems()[0]
+    if hasattr(client, "get_power_state"):
+        return system_path, str(client.get_power_state(system_path=system_path) or "")
     system = client.get_system(system_path)
     return system_path, str(system.get("PowerState") or "")
 
@@ -9077,49 +9179,13 @@ def run_esxi_real(cfg: dict, run_stamp: str | None = None):
 
         def ensure_power_state_with_fallback(expected_state: str, *, system_path: str, timeout_seconds: int, poll_interval: int):
             def op(c):
-                if hasattr(c, "ensure_power_state"):
-                    return c.ensure_power_state(
-                        expected_state,
-                        system_path=system_path,
-                        timeout_seconds=timeout_seconds,
-                        poll_interval=poll_interval,
-                    )
-                current = str(c.get_system(system_path).get("PowerState") or "")
-                if current.lower() == str(expected_state).lower():
-                    return {
-                        "system_path": system_path,
-                        "reset_target": "",
-                        "allowed_reset_types": [],
-                        "initial_power_state": current,
-                        "final_power_state": current,
-                        "changed": False,
-                        "action": "skip",
-                        "poll_timeout_seconds": timeout_seconds,
-                        "poll_interval_seconds": poll_interval,
-                        "retry_attempted": False,
-                        "fallback_attempted": False,
-                        "attempts": [],
-                    }
-                reset_type = "On" if str(expected_state).lower() == "on" else "ForceOff"
-                result = c.power_reset(reset_type=reset_type, system_path=system_path) or {}
-                wait_for_power_state(c, expected_state, timeout_seconds=timeout_seconds, poll_interval=poll_interval)
-                return {
-                    "system_path": system_path,
-                    "reset_target": str(result.get("path") or ""),
-                    "allowed_reset_types": list(result.get("allowed_reset_types") or []),
-                    "initial_power_state": current,
-                    "final_power_state": str(expected_state),
-                    "changed": True,
-                    "action": reset_type,
-                    "result": result,
-                    "first_observed_power_state": str(expected_state),
-                    "last_observed_power_state": str(expected_state),
-                    "poll_timeout_seconds": timeout_seconds,
-                    "poll_interval_seconds": poll_interval,
-                    "retry_attempted": False,
-                    "fallback_attempted": False,
-                    "attempts": [{"reset_type": reset_type, "result": result}],
-                }
+                return ensure_client_power_state(
+                    c,
+                    expected_state,
+                    system_path=system_path,
+                    timeout_seconds=timeout_seconds,
+                    poll_interval=poll_interval,
+                )
 
             return run_with_session_refresh("Power off" if str(expected_state).lower() == "off" else "Power on", op)
 
@@ -9266,9 +9332,11 @@ def run_esxi_real(cfg: dict, run_stamp: str | None = None):
                         continue
                     raise
 
-        system_path = run_with_session_refresh("Power off", lambda c: c.get_systems())[0]
-        current_system = run_with_session_refresh("Power off", lambda c: c.get_system(system_path))
-        current_power = str(current_system.get("PowerState") or "")
+        system_path = run_with_session_refresh("Power off", lambda c: c.get_system_path() if hasattr(c, "get_system_path") else c.get_systems()[0])
+        current_power = run_with_session_refresh(
+            "Power off",
+            lambda c: c.get_power_state(system_path=system_path) if hasattr(c, "get_power_state") else str(c.get_system(system_path).get("PowerState") or ""),
+        )
         update_job(
             kit_name,
             job,
@@ -9280,9 +9348,23 @@ def run_esxi_real(cfg: dict, run_stamp: str | None = None):
         )
         if current_power.lower() != "off":
             update_job(kit_name, job, "Running", "Power off", 4, total, "[RUNNING] Powering server off before setting one-time boot")
-            trace_payload["steps"].append({"stage": "power_off", "status": "running", "from_state": current_power})
-            save_esxi_trace(trace_path, trace_payload)
-            power_off_result = ensure_power_state_with_fallback("Off", system_path=system_path, timeout_seconds=180, poll_interval=5)
+            trace_status = "running"
+        else:
+            update_job(kit_name, job, "Running", "Power off", 4, total, "[SKIP] Server already Off before ESXi boot preparation.")
+            trace_status = "already_off"
+        trace_payload["steps"].append({"stage": "power_off", "status": trace_status, "from_state": current_power})
+        save_esxi_trace(trace_path, trace_payload)
+        power_off_result = ensure_power_state_with_fallback("Off", system_path=system_path, timeout_seconds=180, poll_interval=5)
+        update_job(
+            kit_name,
+            job,
+            "Running",
+            "Power off",
+            4,
+            total,
+            f"[INFO] {power_reset_log_summary(power_off_result, default_action='ForceOff')}",
+        )
+        if str(power_off_result.get("action") or "") == "PushPowerButton":
             update_job(
                 kit_name,
                 job,
@@ -9290,22 +9372,8 @@ def run_esxi_real(cfg: dict, run_stamp: str | None = None):
                 "Power off",
                 4,
                 total,
-                f"[INFO] {power_reset_log_summary(power_off_result, default_action='ForceOff')}",
+                "[WARN] ForceOff did not reach Off; PushPowerButton fallback was used.",
             )
-            if str(power_off_result.get("action") or "") == "PushPowerButton":
-                update_job(
-                    kit_name,
-                    job,
-                    "Running",
-                    "Power off",
-                    4,
-                    total,
-                    "[WARN] ForceOff did not reach Off; PushPowerButton fallback was used.",
-                )
-        else:
-            update_job(kit_name, job, "Running", "Power off", 4, total, "[SKIP] Server already Off before ESXi boot preparation.")
-            trace_payload["steps"].append({"stage": "power_off", "status": "already_off", "from_state": current_power})
-            save_esxi_trace(trace_path, trace_payload)
         update_job(kit_name, job, "Running", "Power off", 5, total, "[OK] Server is off")
 
         vm = run_with_session_refresh("Mount ISO", lambda c: choose_virtual_media_device(c))
@@ -11118,6 +11186,10 @@ def run_ilo_real(cfg: dict):
             failed_stage = "Storage error"
         elif "esxi" in current_stage_text:
             failed_stage = "ESXi error"
+        if getattr(e, "power_reset_details", None):
+            expected_state = str((getattr(e, "power_reset_details", {}) or {}).get("expected_power_state") or "")
+            job["diagnosis"] = power_failure_diagnosis(failed_stage, expected_state or "unknown", e)
+            save_job(kit_name, job)
         update_job(kit_name, job, "Failed", failed_stage, job.get("completed_steps", 0), total, f"[FAILED] {e}")
     except Exception as e:
         update_job(kit_name, job, "Failed", "Unexpected error", job.get("completed_steps", 0), total, f"[FAILED] Unexpected error: {e}")

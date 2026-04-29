@@ -597,7 +597,7 @@ class ILOClient:
     def get_storage_discovery(self, deep_smart_storage_scan: bool = False) -> dict[str, Any]:
         service_root = self.get_service_root()
         manager_path = self.get_managers()[0]
-        system_path = self.get_systems()[0]
+        system_path = self.get_system_path()
         manager = self.get_manager(manager_path)
         system = self.get_system(system_path)
 
@@ -1894,6 +1894,12 @@ class ILOClient:
         data = self._get("/redfish/v1/Systems")
         return [m.get("@odata.id", "") for m in data.get("Members", [])]
 
+    def get_system_path(self) -> str:
+        systems = self.get_systems()
+        if not systems:
+            raise ILOError("No Redfish systems found.")
+        return systems[0]
+
     def get_manager(self, manager_path: str | None = None) -> dict[str, Any]:
         if not manager_path:
             managers = self.get_managers()
@@ -1904,10 +1910,7 @@ class ILOClient:
 
     def get_system(self, system_path: str | None = None) -> dict[str, Any]:
         if not system_path:
-            systems = self.get_systems()
-            if not systems:
-                raise ILOError("No Redfish systems found.")
-            system_path = systems[0]
+            system_path = self.get_system_path()
         return self._get(system_path)
 
     def get_network_protocol_path(self, manager_path: str | None = None) -> str:
@@ -2784,10 +2787,7 @@ class ILOClient:
 
     def get_reset_action_metadata(self, system_path: str | None = None) -> dict[str, Any]:
         if not system_path:
-            systems = self.get_systems()
-            if not systems:
-                raise ILOError("No Redfish systems found.")
-            system_path = systems[0]
+            system_path = self.get_system_path()
         system = self.get_system(system_path)
         reset_action = (system.get("Actions", {}) or {}).get("#ComputerSystem.Reset", {}) or {}
         target = str(reset_action.get("target") or "").strip()
@@ -2798,6 +2798,9 @@ class ILOClient:
             "target": target,
             "allowed_reset_types": allowed,
         }
+
+    def get_reset_metadata(self, system_path: str | None = None) -> dict[str, Any]:
+        return self.get_reset_action_metadata(system_path=system_path)
 
     def ensure_power_state(
         self,
@@ -3375,7 +3378,7 @@ class ILOClient:
         return_timeout: int = 600,
         poll_interval: int = 10,
     ) -> dict[str, Any]:
-        system_path = self.get_systems()[0]
+        system_path = self.get_system_path()
         baseline = self.get_system(system_path)
         baseline_power = str(baseline.get("PowerState") or "")
         baseline_post = str(((baseline.get("Oem") or {}).get("Hpe") or {}).get("PostState") or "")
