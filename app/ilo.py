@@ -1239,6 +1239,35 @@ class ILOClient:
             kwargs["auth"] = self.auth
         return self.http.request(method, url, **kwargs)
 
+    def _reset_transport(self) -> None:
+        self._clear_redfish_session()
+        try:
+            self.http.close()
+        except Exception:
+            pass
+        self.http = requests.Session()
+
+    def _request_with_transport_retry(
+        self,
+        method: str,
+        url: str,
+        *,
+        timeout: int | float | None = None,
+        json_payload: dict[str, Any] | None = None,
+        retry_on_transport_error: bool,
+    ):
+        try:
+            return self._request(method, url, timeout=timeout, json_payload=json_payload)
+        except requests.RequestException as e:
+            if not retry_on_transport_error:
+                raise ILOError(f"{method} {url} failed: {e}") from e
+            self._reset_transport()
+            time.sleep(0.2)
+            try:
+                return self._request(method, url, timeout=timeout, json_payload=json_payload)
+            except requests.RequestException as retry_error:
+                raise ILOError(f"{method} {url} failed after connection retry: {retry_error}") from retry_error
+
     def get_capability_dump(self) -> dict[str, Any]:
         manager_path = self.get_managers()[0]
         np_path = self.get_network_protocol_path(manager_path)
@@ -1304,7 +1333,7 @@ class ILOClient:
         
     def _get(self, path: str, timeout: int | float | None = None) -> dict[str, Any]:
         url = path if path.startswith("http") else f"{self.base}{path}"
-        r = self._request("GET", url, timeout=timeout)
+        r = self._request_with_transport_retry("GET", url, timeout=timeout, retry_on_transport_error=True)
         if self._looks_like_invalid_session(r.status_code, r.text):
             self._create_redfish_session()
             r = self._request("GET", url, timeout=timeout)
@@ -1317,7 +1346,8 @@ class ILOClient:
 
     def _post(self, path: str, payload: dict[str, Any] | None = None) -> dict[str, Any] | None:
         url = path if path.startswith("http") else f"{self.base}{path}"
-        r = self._request("POST", url, json_payload=payload or {})
+        # POST can create resources; avoid automatic transport retry to prevent duplicates.
+        r = self._request_with_transport_retry("POST", url, json_payload=payload or {}, retry_on_transport_error=False)
         if r.status_code >= 400:
             raise ILOError(f"POST {url} failed with HTTP {r.status_code}: {r.text[:300]}")
         if not r.text.strip():
@@ -1329,7 +1359,7 @@ class ILOClient:
 
     def _patch(self, path: str, payload: dict[str, Any]) -> dict[str, Any] | None:
         url = path if path.startswith("http") else f"{self.base}{path}"
-        r = self._request("PATCH", url, json_payload=payload)
+        r = self._request_with_transport_retry("PATCH", url, json_payload=payload, retry_on_transport_error=True)
         if r.status_code >= 400:
             raise ILOError(f"PATCH {url} failed with HTTP {r.status_code}: {r.text[:500]}")
         if not r.text.strip():
@@ -1341,7 +1371,7 @@ class ILOClient:
 
     def _delete(self, path: str) -> dict[str, Any] | None:
         url = path if path.startswith("http") else f"{self.base}{path}"
-        r = self._request("DELETE", url)
+        r = self._request_with_transport_retry("DELETE", url, retry_on_transport_error=True)
         if r.status_code >= 400:
             raise ILOError(f"DELETE {url} failed with HTTP {r.status_code}: {r.text[:500]}")
         if not r.text.strip():
@@ -1353,7 +1383,7 @@ class ILOClient:
 
     def _put(self, path: str, payload: dict[str, Any]) -> dict[str, Any] | None:
         url = path if path.startswith("http") else f"{self.base}{path}"
-        r = self._request("PUT", url, json_payload=payload)
+        r = self._request_with_transport_retry("PUT", url, json_payload=payload, retry_on_transport_error=True)
         if r.status_code >= 400:
             raise ILOError(f"PUT {url} failed with HTTP {r.status_code}: {r.text[:500]}")
         if not r.text.strip():
@@ -1456,6 +1486,38 @@ class ILOClient:
             payload["Links"]["DedicatedSpareDrives"] = [{"@odata.id": spare_path}]
         return payload
 
+    @staticmethod
+    def _standard_volume_drive_set_from_payload(payload: dict[str, Any]) -> set[str]:
+        links = payload.get("Links") or {}
+        drives = links.get("Drives") or []
+        return {str(item.get("@odata.id") or "").strip() for item in drives if str(item.get("@odata.id") or "").strip()}
+
+    @staticmethod
+    def _standard_volume_drive_set_from_doc(volume_doc: dict[str, Any]) -> set[str]:
+        links = volume_doc.get("Links") or {}
+        drives = links.get("Drives") or volume_doc.get("Drives") or []
+        result = set()
+        for item in drives:
+            if isinstance(item, dict):
+                value = str(item.get("@odata.id") or "").strip()
+                if value:
+                    result.add(value)
+        return result
+
+    def _find_matching_standard_volume(self, volumes_path: str, payload: dict[str, Any]) -> dict[str, Any]:
+        desired_raid = str(payload.get("RAIDType") or "").strip().upper()
+        desired_drives = self._standard_volume_drive_set_from_payload(payload)
+        volumes = self._expand_collection(volumes_path)
+        for volume in volumes:
+            raid_value = str(volume.get("RAIDType") or "").strip().upper()
+            drives = self._standard_volume_drive_set_from_doc(volume)
+            if desired_raid and raid_value != desired_raid:
+                continue
+            if desired_drives and drives != desired_drives:
+                continue
+            return volume
+        return {}
+
     def create_standard_storage_volume(
         self,
         volumes_path: str,
@@ -1464,19 +1526,76 @@ class ILOClient:
         capabilities: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         payload = self._standard_volume_payload(intent, spare_intent=spare_intent, capabilities=capabilities)
-        response = self._post(volumes_path, payload)
+        response: dict[str, Any] | None = None
+        recovered_after_transport_error = False
+        transport_error = ""
+        try:
+            response = self._post(volumes_path, payload)
+        except ILOError as e:
+            message = str(e)
+            if (
+                "Connection aborted" not in message
+                and "Remote end closed connection" not in message
+                and "Read timed out" not in message
+                and "ReadTimeout" not in message
+            ):
+                raise
+            transport_error = message
+            # If the POST likely reached iLO but the response dropped, verify by readback before retrying.
+            for _ in range(5):
+                matched = self._find_matching_standard_volume(volumes_path, payload)
+                if matched:
+                    recovered_after_transport_error = True
+                    response = {
+                        "Messages": [
+                            {
+                                "MessageId": "Storage.VolumeCreateRecoveredAfterTransportError",
+                                "Message": "POST response was dropped; matching volume was confirmed by readback.",
+                            }
+                        ],
+                        "created_volume_path": str(matched.get("@odata.id") or ""),
+                        "recovered_after_transport_error": True,
+                        "transport_error": transport_error,
+                    }
+                    break
+                time.sleep(0.5)
+            if response is None:
+                # Not observed yet; retry once with a fresh transport.
+                self._reset_transport()
+                response = self._post(volumes_path, payload)
         return {
             "volumes_path": volumes_path,
             "payload": payload,
             "response": response,
+            "recovered_after_transport_error": recovered_after_transport_error,
             "reboot_required": self._storage_reboot_required(response, default=False),
         }
 
     def delete_standard_storage_volume(self, volume_path: str) -> dict[str, Any]:
-        response = self._delete(volume_path)
+        try:
+            response = self._delete(volume_path)
+            missing_at_uri = False
+        except ILOError as e:
+            message = str(e)
+            # Deleting an already-missing volume is effectively successful for wipe flows.
+            if "failed with HTTP 404" in message and "ResourceMissingAtURI" in message:
+                response = {
+                    "Messages": [
+                        {
+                            "MessageId": "Base.1.18.ResourceMissingAtURI",
+                            "Message": "Volume was already absent when delete was attempted.",
+                        }
+                    ],
+                    "already_missing": True,
+                    "delete_error": message,
+                }
+                missing_at_uri = True
+            else:
+                raise
         return {
             "volume_path": volume_path,
             "response": response,
+            "already_missing": missing_at_uri,
             "reboot_required": self._storage_reboot_required(response, default=False),
         }
 

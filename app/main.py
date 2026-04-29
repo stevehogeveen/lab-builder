@@ -668,7 +668,7 @@ def load_job(kit_name: str):
     if path.exists():
         try:
             with open(path, "r", encoding="utf-8") as f:
-                return yaml.safe_load(f) or {}
+                return normalize_loaded_job_state(yaml.safe_load(f) or {})
         except yaml.YAMLError:
             # The websocket poller can race with a background writer.
             # Treat a partially-written job file as transient instead of crashing.
@@ -690,6 +690,29 @@ def load_job(kit_name: str):
         "total_steps": 0,
         "logs": [],
     }
+
+
+def normalize_loaded_job_state(job: dict[str, Any]) -> dict[str, Any]:
+    def as_int(value: Any) -> int:
+        try:
+            return int(value or 0)
+        except (TypeError, ValueError):
+            return 0
+
+    status = str(job.get("status") or "")
+    completed = as_int(job.get("completed_steps"))
+    total = as_int(job.get("total_steps"))
+    progress = as_int(job.get("progress_percent"))
+    if status == "Running" and total > 0 and completed >= total and progress >= 100:
+        normalized = dict(job)
+        normalized["status"] = "Completed"
+        normalized["current_stage"] = str(normalized.get("current_stage") or "Finished")
+        logs = list(normalized.get("logs") or [])
+        if not any(str(line).startswith("[DONE]") for line in logs):
+            logs.append("[DONE] Run reached all recorded steps; marking stale running state as completed.")
+        normalized["logs"] = logs
+        return normalized
+    return job
 
 
 def save_job(kit_name: str, job: dict):
@@ -5193,6 +5216,11 @@ def run_storage_apply(
 
         platform = choose_storage_apply_platform(pre_change_discovery, plan)
         apply_state["apply_path"] = platform.get("label", "")
+        platform_supported = platform.get("id") in {"gen10_hpe_smartstorageconfig", "standard_redfish_volumes"}
+        if not platform_supported:
+            apply_state["status"] = "Failed"
+            apply_state["workflow_state"] = "apply_failed"
+            apply_state["finished_at"] = time.strftime("%Y-%m-%d %H:%M:%S")
         record_storage_apply_step(
             kit_name,
             job,
@@ -5201,10 +5229,11 @@ def run_storage_apply(
             "Choose storage apply path",
             3,
             apply_steps,
-            "ok",
+            "ok" if platform_supported else "failed",
             "Choose storage apply path",
             targets={"controller": apply_state["controller"].get("name") or apply_state["controller"].get("model") or "", "path": platform.get("settings_path", "")},
             details=f"Selected {platform.get('label')} ({platform.get('id')}).",
+            error="" if platform_supported else (str(platform.get("reason") or "").strip() or "No writable storage apply path is available."),
         )
 
         current_step = 4
@@ -6019,6 +6048,11 @@ def run_storage_as_part_of_real_run(
 
     platform = choose_storage_apply_platform(pre_change_discovery, plan)
     apply_state["apply_path"] = platform.get("label", "")
+    platform_supported = platform.get("id") in {"gen10_hpe_smartstorageconfig", "standard_redfish_volumes"}
+    if not platform_supported:
+        apply_state["status"] = "Failed"
+        apply_state["workflow_state"] = "apply_failed"
+        apply_state["finished_at"] = time.strftime("%Y-%m-%d %H:%M:%S")
     current_step += 1
     record_storage_apply_step(
         kit_name,
@@ -6028,10 +6062,11 @@ def run_storage_as_part_of_real_run(
         "Choose storage apply path",
         current_step,
         total_steps,
-        "ok",
+        "ok" if platform_supported else "failed",
         "Choose storage apply path",
         targets={"controller": apply_state["controller"].get("name") or apply_state["controller"].get("model") or "", "path": platform.get("settings_path", "")},
         details=f"Selected {platform.get('label')} for the real storage stage.",
+        error="" if platform_supported else (str(platform.get("reason") or "").strip() or "No writable storage apply path is available."),
         progress_percent=combined_progress_percent(current_step, total_steps),
     )
 

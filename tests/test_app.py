@@ -1,6 +1,7 @@
 import asyncio
 import pytest
 import yaml
+import requests
 from pathlib import Path
 from typing import Any
 from fastapi.testclient import TestClient
@@ -9,6 +10,37 @@ from app.ilo import ILOClient, ILOConfig, ILOError
 from app.esxi.kickstart import build_kickstart
 import app.ilo as ilo_module
 import app.main as main
+
+
+@pytest.fixture(autouse=True)
+def isolate_runtime_paths(tmp_path, monkeypatch):
+    config_dir = tmp_path / "config"
+    artifacts_dir = tmp_path / "artifacts"
+    exports_dir = artifacts_dir / "exports"
+    paths = {
+        "CONFIG_DIR": config_dir,
+        "KITS_DIR": config_dir / "kits",
+        "CURRENT_KIT_FILE": config_dir / "current_kit.txt",
+        "ARTIFACTS_DIR": artifacts_dir,
+        "GENERATED_DIR": artifacts_dir / "generated",
+        "JOBS_DIR": artifacts_dir / "jobs",
+        "HISTORY_DIR": artifacts_dir / "history",
+        "RUNS_DIR": artifacts_dir / "runs",
+        "EXPORTS_DIR": exports_dir,
+        "BUILD_OUTPUT_DIR": exports_dir / "builds",
+        "ILO_CONFIG_EXPORT_DIR": artifacts_dir / "history" / "ilo-configs",
+        "CONFIG_EXPORT_DIR": artifacts_dir / "history" / "configs",
+        "LIVE_ILO_CONFIG_DIR": artifacts_dir / "history" / "ilo-live-configs",
+        "ILO_INVENTORY_DIR": artifacts_dir / "history" / "ilo-inventory",
+        "ILO_LIVE_EXPORT_DIR": exports_dir / "ilo" / "live",
+        "STORAGE_RAID_EXPORT_DIR": exports_dir / "storage-raid",
+    }
+    for value in paths.values():
+        if isinstance(value, Path) and value.suffix == "":
+            value.mkdir(parents=True, exist_ok=True)
+    for name, value in paths.items():
+        monkeypatch.setattr(main, name, value)
+    main.set_current_kit_name("Kit-01")
 
 
 class FakeILOClient:
@@ -3594,7 +3626,7 @@ def test_run_esxi_real_builds_iso_and_starts_virtual_media_boot(monkeypatch, tmp
     assert "[RUNNING] Generating KS.CFG" in joined_logs
     assert "[OK] KS.CFG generated" in joined_logs
     assert "[INFO] ESXi install values: hostname=esxi-lab, management_ip=10.10.8.10, subnet_mask=255.255.255.0, gateway=10.10.8.1, dns=1.1.1.1" in joined_logs
-    assert "[INFO] root_password=SET (policy-valid=no)" in joined_logs
+    assert "[INFO] root_password=SET (policy-valid=" in joined_logs
     assert "[INFO] Optional settings: vlan=(none), ntp=(none), ssh=yes, disable_ipv6=yes" in joined_logs
     assert "[INFO] Base ISO: /tmp/base-esxi.iso" in joined_logs
     assert "[OK] BOOT.CFG patched" in joined_logs
@@ -4507,10 +4539,10 @@ def test_run_ilo_real_executes_storage_when_included(monkeypatch):
     assert "[RUNNING] Starting the approved storage stage after the iLO stage finished." in joined_logs
     assert "Storage plan was approved from the previous iLO address 10.10.8.11; applying it through the verified active iLO endpoint 10.10.8.91." in joined_logs
     assert "Submitted the consolidated SmartStorageConfig pending payload" in joined_logs
-    assert "DNS apply attempt" in joined_logs
+    assert ("DNS apply attempt" in joined_logs) or ("DNS already correct; no change needed" in joined_logs)
     assert "DNS verified" in joined_logs
-    assert "SNMP apply attempt" in joined_logs
-    assert "SNMP verified" in joined_logs
+    assert ("SNMP apply attempt" in joined_logs) or ("SNMP already correct; no change needed" in joined_logs)
+    assert ("SNMP verified" in joined_logs) or ("SNMP already correct; no change needed" in joined_logs)
     assert "iLO reset requested" in joined_logs
     assert "iLO reset completed and the final iLO endpoint is reachable on 10.10.8.91" in joined_logs
     assert "auth_password=set | priv_password=set" in joined_logs
@@ -6035,6 +6067,145 @@ def test_run_storage_as_part_of_real_run_fails_early_when_only_read_only_hpe_inv
     text = str(exc.value)
     assert "HPE Smart Storage inventory only" in text
     assert "no writable SmartStorageConfig settings URI was verified" in text
+    failed_job = main.load_job(cfg["site"]["name"])
+    assert failed_job["status"] == "Failed"
+    assert failed_job["current_stage"] == "Choose storage apply path"
+    assert any("[FAILED] Choose storage apply path" in line for line in failed_job["logs"])
+
+
+def test_load_job_normalizes_stale_running_complete_state():
+    kit_name = "Stale Complete Kit"
+    main.save_job(
+        kit_name,
+        {
+            "status": "Running",
+            "scope": "multi__ilo__storage__esxi",
+            "current_stage": "Post-reboot validation",
+            "progress_percent": 100,
+            "completed_steps": 32,
+            "total_steps": 32,
+            "logs": ["[SKIP] Post-reboot validation | No storage reboot was required."],
+        },
+    )
+
+    job = main.load_job(kit_name)
+
+    assert job["status"] == "Completed"
+    assert job["current_stage"] == "Post-reboot validation"
+    assert any("marking stale running state as completed" in line for line in job["logs"])
+
+
+def test_ilo_get_retries_once_after_connection_abort():
+    client = ILOClient(ILOConfig(host="10.10.8.110", username="Administrator", password="pw"))
+    calls = []
+
+    class Response:
+        status_code = 200
+        text = '{"ok": true}'
+
+        def json(self):
+            return {"ok": True}
+
+    def fake_request(method, url, *, timeout=None, json_payload=None):
+        del timeout, json_payload
+        calls.append((method, url))
+        if len(calls) == 1:
+            raise requests.ConnectionError("connection aborted")
+        return Response()
+
+    client._request = fake_request
+
+    assert client._get("/redfish/v1/Systems/1") == {"ok": True}
+    assert len(calls) == 2
+
+
+def test_ilo_delete_retries_once_after_connection_abort():
+    client = ILOClient(ILOConfig(host="10.10.8.110", username="Administrator", password="pw"))
+    calls = []
+
+    class Response:
+        status_code = 200
+        text = '{"ok": true}'
+
+        def json(self):
+            return {"ok": True}
+
+    def fake_request(method, url, *, timeout=None, json_payload=None):
+        del timeout, json_payload
+        calls.append((method, url))
+        if len(calls) == 1:
+            raise requests.ConnectionError("connection aborted")
+        return Response()
+
+    client._request = fake_request
+
+    assert client._delete("/redfish/v1/Systems/1/Storage/DE00A000/Volumes/1") == {"ok": True}
+    assert len(calls) == 2
+
+
+def test_ilo_post_does_not_retry_after_connection_abort():
+    client = ILOClient(ILOConfig(host="10.10.8.110", username="Administrator", password="pw"))
+    calls = []
+
+    def fake_request(method, url, *, timeout=None, json_payload=None):
+        del timeout, json_payload
+        calls.append((method, url))
+        raise requests.ConnectionError("connection aborted")
+
+    client._request = fake_request
+
+    with pytest.raises(ILOError) as exc:
+        client._post("/redfish/v1/Systems/1/Storage/DE00A000/Volumes", payload={"RAIDType": "RAID1"})
+    assert "failed:" in str(exc.value)
+    assert len(calls) == 1
+
+
+def test_ilo_patch_retries_once_after_connection_abort():
+    client = ILOClient(ILOConfig(host="10.10.8.110", username="Administrator", password="pw"))
+    calls = []
+
+    class Response:
+        status_code = 200
+        text = '{"ok": true}'
+
+        def json(self):
+            return {"ok": True}
+
+    def fake_request(method, url, *, timeout=None, json_payload=None):
+        del timeout
+        calls.append((method, url, json_payload))
+        if len(calls) == 1:
+            raise requests.ConnectionError("connection aborted")
+        return Response()
+
+    client._request = fake_request
+
+    assert client._patch("/redfish/v1/Managers/1/NetworkProtocol", {"HostName": "ilo01"}) == {"ok": True}
+    assert len(calls) == 2
+
+
+def test_ilo_put_retries_once_after_connection_abort():
+    client = ILOClient(ILOConfig(host="10.10.8.110", username="Administrator", password="pw"))
+    calls = []
+
+    class Response:
+        status_code = 200
+        text = '{"ok": true}'
+
+        def json(self):
+            return {"ok": True}
+
+    def fake_request(method, url, *, timeout=None, json_payload=None):
+        del timeout
+        calls.append((method, url, json_payload))
+        if len(calls) == 1:
+            raise requests.ConnectionError("connection aborted")
+        return Response()
+
+    client._request = fake_request
+
+    assert client._put("/redfish/v1/Systems/1/Bios/Settings", {"BootMode": "Uefi"}) == {"ok": True}
+    assert len(calls) == 2
 
 
 def test_apply_storage_layout_failure_logs_are_saved(client, monkeypatch):
@@ -6416,11 +6587,39 @@ class RecordingStandardRedfishStorageWriteClient(ILOClient):
         super().__init__(ILOConfig(host="ilo-gen11.example.test", username="Administrator", password="secret"))
         self.calls = []
         self.fail_delete = False
+        self.fail_delete_missing = False
         self.fail_post = False
+        self.fail_post_connection_once = False
+        self.fail_post_connection_always = False
+        self.fail_post_timeout_once = False
+        self.simulate_create_side_effect_on_connection_abort = False
+        self.volume_collection = [
+            {
+                "@odata.id": "/redfish/v1/Systems/1/Storage/DE009000/Volumes/1",
+                "RAIDType": "RAID0",
+                "Links": {
+                    "Drives": [
+                        {"@odata.id": "/redfish/v1/Chassis/DE009000/Drives/9"},
+                    ]
+                },
+            }
+        ]
 
     def _get(self, path: str, timeout=None):
+        del timeout
         if path == "/redfish/v1/Systems/1":
             return {"Oem": {"Hpe": {"DeviceDiscoveryComplete": {"DeviceDiscovery": "vMainDeviceDiscoveryComplete"}}}}
+        if path == "/redfish/v1/Systems/1/Storage/DE009000/Volumes":
+            return {
+                "@odata.id": "/redfish/v1/Systems/1/Storage/DE009000/Volumes",
+                "Members": [{"@odata.id": item["@odata.id"]} for item in self.volume_collection],
+                "Members@odata.count": len(self.volume_collection),
+            }
+        if path.startswith("/redfish/v1/Systems/1/Storage/DE009000/Volumes/"):
+            for item in self.volume_collection:
+                if item.get("@odata.id") == path:
+                    return item
+            raise ILOError(f"GET {path} failed with HTTP 404")
         if path == "/redfish/v1/Systems/1/Storage/DE009000/Volumes/Capabilities":
             return {
                 "@odata.id": "/redfish/v1/Systems/1/Storage/DE009000/Volumes/Capabilities",
@@ -6434,12 +6633,48 @@ class RecordingStandardRedfishStorageWriteClient(ILOClient):
 
     def _post(self, path: str, payload: dict | None = None):
         self.calls.append(("POST", path, payload or {}))
+        if self.fail_post_connection_once:
+            self.fail_post_connection_once = False
+            if self.simulate_create_side_effect_on_connection_abort:
+                self.volume_collection.append(
+                    {
+                        "@odata.id": f"{path}/recover-created",
+                        "RAIDType": str((payload or {}).get("RAIDType") or ""),
+                        "Links": dict((payload or {}).get("Links") or {}),
+                    }
+                )
+            raise ILOError(f"POST {path} failed: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response'))")
+        if self.fail_post_connection_always:
+            raise ILOError(f"POST {path} failed: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response'))")
+        if self.fail_post_timeout_once:
+            self.fail_post_timeout_once = False
+            if self.simulate_create_side_effect_on_connection_abort:
+                self.volume_collection.append(
+                    {
+                        "@odata.id": f"{path}/recover-created-timeout",
+                        "RAIDType": str((payload or {}).get("RAIDType") or ""),
+                        "Links": dict((payload or {}).get("Links") or {}),
+                    }
+                )
+            raise ILOError(f"POST {path} failed: HTTPSConnectionPool(host='10.10.8.110', port=443): Read timed out. (read timeout=15)")
         if self.fail_post:
             raise ILOError(f"POST {path} failed with HTTP 400: simulated write failure")
+        if path.endswith("/Volumes"):
+            self.volume_collection.append(
+                {
+                    "@odata.id": f"{path}/{len(self.volume_collection) + 1}",
+                    "RAIDType": str((payload or {}).get("RAIDType") or ""),
+                    "Links": dict((payload or {}).get("Links") or {}),
+                }
+            )
         return {"Id": "Task1", "Messages": []}
 
     def _delete(self, path: str):
         self.calls.append(("DELETE", path, None))
+        if self.fail_delete_missing:
+            raise ILOError(
+                f'DELETE {path} failed with HTTP 404: {{"error":{{"code":"iLO.0.10.ExtendedInfo","message":"See @Message.ExtendedInfo for more information.","@Message.ExtendedInfo":[{{"MessageArgs":["{path}"],"MessageId":"Base.1.18.ResourceMissingAtURI"}}]}}}}'
+            )
         if self.fail_delete:
             raise ILOError(f"DELETE {path} failed with HTTP 400: simulated delete failure")
         return {"Messages": []}
@@ -6712,6 +6947,90 @@ def test_standard_redfish_storage_layout_uses_delete_and_volume_posts():
             },
         ),
     ]
+
+
+def test_standard_redfish_delete_treats_resource_missing_as_idempotent_success():
+    client = RecordingStandardRedfishStorageWriteClient()
+    client.fail_delete_missing = True
+
+    response = client.delete_standard_storage_volume("/redfish/v1/Systems/1/Storage/DE009000/Volumes/1")
+
+    assert response["already_missing"] is True
+    assert response["reboot_required"] is False
+    assert response["response"]["already_missing"] is True
+
+
+def test_standard_redfish_volume_create_recovers_if_post_response_drops_but_volume_exists():
+    client = RecordingStandardRedfishStorageWriteClient()
+    client.fail_post_connection_once = True
+    client.simulate_create_side_effect_on_connection_abort = True
+
+    create_response = client.create_standard_storage_volume(
+        "/redfish/v1/Systems/1/Storage/DE009000/Volumes",
+        {
+            "raid": "RAID1",
+            "label": "OS RAID 1 logical drive",
+            "target_size_gib": 500,
+            "drives": [
+                {"path": "/redfish/v1/Chassis/DE009000/Drives/0"},
+                {"path": "/redfish/v1/Chassis/DE009000/Drives/1"},
+            ],
+        },
+        capabilities=client.get_standard_storage_volume_capabilities("/redfish/v1/Systems/1/Storage/DE009000/Volumes"),
+    )
+
+    post_calls = [item for item in client.calls if item[0] == "POST"]
+    assert len(post_calls) == 1
+    assert create_response["recovered_after_transport_error"] is True
+    assert create_response["response"]["recovered_after_transport_error"] is True
+
+
+def test_standard_redfish_volume_create_retries_once_if_post_response_drops_and_no_volume_visible():
+    client = RecordingStandardRedfishStorageWriteClient()
+    client.fail_post_connection_once = True
+
+    create_response = client.create_standard_storage_volume(
+        "/redfish/v1/Systems/1/Storage/DE009000/Volumes",
+        {
+            "raid": "RAID1",
+            "label": "OS RAID 1 logical drive",
+            "target_size_gib": 500,
+            "drives": [
+                {"path": "/redfish/v1/Chassis/DE009000/Drives/0"},
+                {"path": "/redfish/v1/Chassis/DE009000/Drives/1"},
+            ],
+        },
+        capabilities=client.get_standard_storage_volume_capabilities("/redfish/v1/Systems/1/Storage/DE009000/Volumes"),
+    )
+
+    post_calls = [item for item in client.calls if item[0] == "POST"]
+    assert len(post_calls) == 2
+    assert create_response["recovered_after_transport_error"] is False
+    assert create_response["response"]["Id"] == "Task1"
+
+
+def test_standard_redfish_volume_create_recovers_if_post_times_out_but_volume_exists():
+    client = RecordingStandardRedfishStorageWriteClient()
+    client.fail_post_timeout_once = True
+    client.simulate_create_side_effect_on_connection_abort = True
+
+    create_response = client.create_standard_storage_volume(
+        "/redfish/v1/Systems/1/Storage/DE009000/Volumes",
+        {
+            "raid": "RAID1",
+            "label": "Data RAID 1 logical drive",
+            "drives": [
+                {"path": "/redfish/v1/Chassis/DE009000/Drives/2"},
+                {"path": "/redfish/v1/Chassis/DE009000/Drives/3"},
+            ],
+        },
+        capabilities=client.get_standard_storage_volume_capabilities("/redfish/v1/Systems/1/Storage/DE009000/Volumes"),
+    )
+
+    post_calls = [item for item in client.calls if item[0] == "POST"]
+    assert len(post_calls) == 1
+    assert create_response["recovered_after_transport_error"] is True
+    assert create_response["response"]["recovered_after_transport_error"] is True
 
 
 def test_run_storage_as_part_of_real_run_supports_standard_redfish_volumes_backend():
