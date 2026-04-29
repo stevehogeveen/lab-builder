@@ -3749,11 +3749,8 @@ def test_run_esxi_real_builds_iso_and_starts_virtual_media_boot(monkeypatch, tmp
     assert "[INFO] Boot override before: enabled=Disabled target=None" in joined_logs
     assert "[OK] One-time boot set to CD/DVD" in joined_logs
     assert "[INFO] Boot override after: enabled=Once target=UefiTarget" in joined_logs
-    assert "[INFO] BootOptions path: /redfish/v1/Systems/1/BootOptions" in joined_logs
-    assert "[INFO] BootOptions count: 2" in joined_logs
-    assert "[INFO] Matching UEFI virtual-media option: Boot0009" in joined_logs
-    assert "[INFO] HPE OEM boot keys: PostState" in joined_logs
-    assert "[INFO] HPE OEM boot values: PostState=Off" in joined_logs
+    assert "[INFO] Boot override decision: selected UEFI virtual-media option Boot0009 target=Boot0009." in joined_logs
+    assert "HPE OEM boot values:" not in joined_logs
     assert "[INFO] Boot override note: Verified one-time boot override." in joined_logs
     assert "[RUNNING] Powering server on" in joined_logs
     assert "[RUNNING] Waiting for ESXi management network on 10.10.8.10" in joined_logs
@@ -3805,7 +3802,7 @@ def test_run_esxi_real_builds_iso_and_starts_virtual_media_boot(monkeypatch, tmp
     assert summary["esxi_run_summary"]["management_network"]["attempts"] == 2
     assert ("eject", "/redfish/v1/Managers/1/VirtualMedia/2") in client.calls
     assert ("power_reset", "ForceOff", "/redfish/v1/Systems/1") in client.calls
-    assert "[INFO] Power reset request sent: ResetType=ForceOff endpoint=/redfish/v1/Systems/1/Actions/ComputerSystem.Reset" in joined_logs
+    assert "[INFO] Power reset request: ResetType=ForceOff endpoint=/redfish/v1/Systems/1/Actions/ComputerSystem.Reset" in joined_logs
     assert "allowed=" in joined_logs
     assert (
         "post",
@@ -5704,14 +5701,158 @@ def test_run_esxi_real_persists_boot_option_fallback_reason(monkeypatch, tmp_pat
     joined_logs = "\n".join(job["logs"])
     summary = yaml.safe_load(main.Path(job["run_summary_path"]).read_text(encoding="utf-8"))
 
-    assert "[INFO] BootOptions path: (none)" in joined_logs
-    assert "[INFO] BootOptions count: 0" in joined_logs
-    assert "[INFO] Matching UEFI virtual-media option: (none)" in joined_logs
-    assert "[WARN] No concrete UEFI boot option was found; falling back to generic Cd (System did not expose a Redfish BootOptions collection.)" in joined_logs
-    assert "[WARN] No concrete UEFI boot option was selected; continuing because mounted virtual media is verified on this hardware." in joined_logs
+    assert "No concrete UEFI virtual CD option found. Generic Cd override read back successfully, continuing." in joined_logs
+    assert "BootOptions path:" not in joined_logs
+    assert "HPE OEM boot values:" not in joined_logs
     assert summary["esxi_run_summary"]["boot_override"]["boot_option_selection_reason"] == "System did not expose a Redfish BootOptions collection."
     assert summary["esxi_run_summary"]["boot_override"]["boot_option_inventory"]["boot_options_count"] == 0
     assert job["status"] == "Completed"
+
+
+def test_run_esxi_real_power_on_failure_populates_debug_diagnosis(monkeypatch, tmp_path):
+    cfg = main.default_config()
+    cfg["site"]["name"] = "Real ESXi Power Failure Kit"
+    cfg["ilo"]["current_ip"] = "10.10.8.90"
+    cfg["ilo"]["host"] = "10.10.8.90"
+    cfg["ilo"]["username"] = "Administrator"
+    cfg["ilo"]["password"] = "secret"
+    cfg["esxi"]["hostname"] = "esxi-lab"
+    cfg["esxi"]["management_ip"] = "10.10.8.10"
+    cfg["esxi"]["subnet_mask"] = "255.255.255.0"
+    cfg["esxi"]["gateway"] = "10.10.8.1"
+    cfg["esxi"]["root_password"] = "Valid1Pass!"
+
+    built_iso = tmp_path / "esxi-power-failure.iso"
+    built_iso.write_text("iso", encoding="utf-8")
+
+    class FakeEsxiILOClient:
+        def __init__(self, cfg):
+            self.cfg = cfg
+            self.power_state = "Off"
+            self.virtual_media = {
+                "@odata.id": "/redfish/v1/Managers/1/VirtualMedia/2",
+                "Inserted": False,
+                "Image": "",
+                "MediaTypes": ["CD", "DVD"],
+                "Actions": {
+                    "#VirtualMedia.InsertMedia": {"target": "/redfish/v1/Managers/1/VirtualMedia/2/Actions/VirtualMedia.InsertMedia"},
+                },
+            }
+
+        def get_virtual_media(self):
+            return [dict(self.virtual_media)]
+
+        def get_systems(self):
+            return ["/redfish/v1/Systems/1"]
+
+        def get_system(self, system_path):
+            return {
+                "PowerState": self.power_state,
+                "Boot": {"BootSourceOverrideEnabled": "Once", "BootSourceOverrideTarget": "Cd"},
+                "BootProgress": {"LastState": "None"},
+                "Oem": {"Hpe": {"PostState": "Off"}},
+            }
+
+        def _post(self, target, payload):
+            self.virtual_media["Inserted"] = True
+            self.virtual_media["Image"] = payload["Image"]
+            self.virtual_media["WriteProtected"] = True
+
+        def set_one_time_boot_cd(self, system_path=None):
+            return {
+                "system_path": system_path or "/redfish/v1/Systems/1",
+                "before_enabled": "Disabled",
+                "before_target": "None",
+                "after_enabled": "Once",
+                "after_target": "Cd",
+                "selected_boot_option_reference": "",
+                "boot_option_selection_reason": "BootOptions were exposed, but none looked like a virtual CD/DVD boot option.",
+                "boot_option_inventory": {
+                    "system_path": system_path or "/redfish/v1/Systems/1",
+                    "boot_options_path": "/redfish/v1/Systems/1/BootOptions",
+                    "boot_options_count": 1,
+                    "boot_options": [{"boot_option_reference": "Boot0001", "display_name": "UEFI Hard Disk"}],
+                    "oem_hpe_keys": ["PostState", "VirtualInstallDisk"],
+                    "oem_hpe_values": {"PostState": "Off", "VirtualInstallDisk": "Disabled"},
+                },
+                "matched": True,
+                "notes": ["One-time boot override read back exactly as requested."],
+            }
+
+        def ensure_power_state(self, expected_state, *, system_path=None, timeout_seconds=300, poll_interval=5):
+            if expected_state == "Off":
+                return {"action": "skip", "changed": False, "final_power_state": "Off"}
+            details = {
+                "system_path": system_path or "/redfish/v1/Systems/1",
+                "reset_target": "/redfish/v1/Systems/1/Actions/ComputerSystem.Reset",
+                "allowed_reset_types": ["On", "ForceOff", "PushPowerButton"],
+                "initial_power_state": "Off",
+                "expected_power_state": "On",
+                "final_power_state": "Off",
+                "action": "On",
+                "result": {"http_status_code": None, "message_ids": [], "connection_dropped": True, "attempt": "retry"},
+                "first_observed_power_state": "Off",
+                "last_observed_power_state": "Off",
+                "poll_timeout_seconds": timeout_seconds,
+                "poll_interval_seconds": poll_interval,
+                "retry_attempted": True,
+                "fallback_attempted": True,
+                "attempts": [
+                    {
+                        "reset_type": "On",
+                        "result": {"http_status_code": None, "message_ids": [], "connection_dropped": True, "attempt": "first"},
+                        "poll": {"matched": False, "first_observed": "Off", "last_observed": "Off"},
+                    },
+                    {
+                        "reset_type": "On",
+                        "result": {"http_status_code": None, "message_ids": [], "connection_dropped": True, "attempt": "retry"},
+                        "poll": {"matched": False, "first_observed": "Off", "last_observed": "Off"},
+                        "retry": True,
+                    },
+                    {
+                        "reset_type": "PushPowerButton",
+                        "result": {"http_status_code": 200, "message_ids": ["Base.1.18.Success"], "connection_dropped": False},
+                        "poll": {"matched": False, "first_observed": "Off", "last_observed": "Off"},
+                        "fallback": True,
+                    },
+                ],
+            }
+            error = ILOError("Power reset connection dropped and expected PowerState was not reached after retry.")
+            error.power_reset_details = details
+            raise error
+
+    monkeypatch.setattr(main, "build_custom_iso", lambda spec: built_iso)
+    monkeypatch.setattr(main, "resolve_esxi_base_iso_path", lambda cfg_obj: main.Path("/tmp/base-esxi.iso"))
+    monkeypatch.setattr(main, "detect_public_base_url", lambda target_host="": "http://lab-builder.local:8000")
+    monkeypatch.setattr(main, "ILOClient", lambda cfg_obj: FakeEsxiILOClient(cfg_obj))
+
+    main.run_esxi_real(cfg, run_stamp="20260418-190000")
+    job = main.load_job("Real ESXi Power Failure Kit")
+    joined_logs = "\n".join(job["logs"])
+    bundle_text = (main.DEBUG_BUNDLES_DIR / "latest-failure.txt").read_text(encoding="utf-8")
+
+    assert job["status"] == "Failed"
+    assert "endpoint=/redfish/v1/Systems/1/Actions/ComputerSystem.Reset" in joined_logs
+    assert "ResetType=On" in joined_logs
+    assert "allowed=On,ForceOff,PushPowerButton" in joined_logs
+    assert "message_ids=Base.1.18.Success" in joined_logs
+    assert "connection_dropped=yes" in joined_logs
+    assert "retry=yes" in joined_logs
+    assert "push_button_fallback=yes" in joined_logs
+    assert "No concrete UEFI virtual CD option found. Generic Cd override read back successfully, continuing." in joined_logs
+    assert "HPE OEM boot values:" not in joined_logs
+    assert job["diagnosis"]["status"] == "failed"
+    assert job["diagnosis"]["discovered_state"]["virtual_media_image_matches"] is True
+    assert job["diagnosis"]["discovered_state"]["boot_override_enabled"] == "Once"
+    assert job["diagnosis"]["discovered_state"]["boot_override_target"] == "Cd"
+    assert job["diagnosis"]["discovered_state"]["power_reset"]["retry_attempted"] is True
+    assert job["diagnosis"]["discovered_state"]["power_reset"]["fallback_attempted"] is True
+    assert "Retry ResetType=On" in job["diagnosis"]["recommended_fix"]
+    assert "diagnosis:" in bundle_text
+    assert "recommended_next_steps" in bundle_text
+    assert "VirtualInstallDisk" in bundle_text
+    assert "Valid1Pass!" not in bundle_text
+    assert "secret" not in bundle_text
 
 
 def test_harden_snmp_best_effort_reports_mismatch_when_readback_differs(monkeypatch):

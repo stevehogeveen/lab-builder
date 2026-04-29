@@ -25,6 +25,12 @@ class ILOError(Exception):
     pass
 
 
+def power_state_error(message: str, details: dict[str, Any] | None = None) -> ILOError:
+    error = ILOError(message)
+    error.power_reset_details = dict(details or {})
+    return error
+
+
 class ILOClient:
     SMART_STORAGE_PROBE_TIMEOUT = 3
 
@@ -2810,6 +2816,18 @@ class ILOClient:
         allowed = list(metadata.get("allowed_reset_types") or [])
         target = str(metadata.get("target") or "")
         path = str(metadata.get("system_path") or "")
+        base_details = {
+            "system_path": path,
+            "reset_target": target,
+            "allowed_reset_types": allowed,
+            "initial_power_state": current,
+            "expected_power_state": "On" if expected == "on" else "Off",
+            "poll_timeout_seconds": timeout_seconds,
+            "poll_interval_seconds": poll_interval,
+            "retry_attempted": False,
+            "fallback_attempted": False,
+            "attempts": [],
+        }
         if current.lower() == expected:
             return {
                 "system_path": path,
@@ -2819,6 +2837,11 @@ class ILOClient:
                 "final_power_state": current,
                 "changed": False,
                 "action": "skip",
+                "poll_timeout_seconds": timeout_seconds,
+                "poll_interval_seconds": poll_interval,
+                "retry_attempted": False,
+                "fallback_attempted": False,
+                "attempts": [],
             }
 
         if expected == "on":
@@ -2826,31 +2849,79 @@ class ILOClient:
                 raise ILOError(f"Cannot power on system. Reset target={target} allowed={allowed}.")
             action_result = self._submit_reset_action(path, target, "On")
             poll = self._wait_for_power_state(path, "On", timeout_seconds=timeout_seconds, poll_interval=poll_interval)
+            attempts = [{"reset_type": "On", "result": action_result, "poll": poll}]
             if action_result.get("connection_dropped") and not poll.get("matched"):
                 retry_result = self._submit_reset_action(path, target, "On", retry_attempt=True)
                 retry_poll = self._wait_for_power_state(path, "On", timeout_seconds=timeout_seconds, poll_interval=poll_interval)
-                if not retry_poll.get("matched"):
-                    raise ILOError("Power reset connection dropped and expected PowerState was not reached after retry.")
+                attempts.append({"reset_type": "On", "result": retry_result, "poll": retry_poll, "retry": True})
+                if retry_poll.get("matched"):
+                    return {
+                        "system_path": path,
+                        "reset_target": target,
+                        "allowed_reset_types": allowed,
+                        "initial_power_state": current,
+                        "final_power_state": str(retry_poll.get("last_observed") or "On"),
+                        "changed": True,
+                        "action": "On",
+                        "result": retry_result,
+                        "first_observed_power_state": retry_poll.get("first_observed"),
+                        "last_observed_power_state": retry_poll.get("last_observed"),
+                        "poll_timeout_seconds": timeout_seconds,
+                        "poll_interval_seconds": poll_interval,
+                        "retry_attempted": True,
+                        "fallback_attempted": False,
+                        "attempts": attempts,
+                    }
+                if "PushPowerButton" not in allowed:
+                    details = {
+                        **base_details,
+                        "retry_attempted": True,
+                        "fallback_attempted": False,
+                        "action": "On",
+                        "result": retry_result,
+                        "first_observed_power_state": retry_poll.get("first_observed") or poll.get("first_observed"),
+                        "last_observed_power_state": retry_poll.get("last_observed") or poll.get("last_observed"),
+                        "attempts": attempts,
+                    }
+                    raise power_state_error("Power reset connection dropped and expected PowerState was not reached after retry.", details)
+            elif poll.get("matched"):
                 return {
                     "system_path": path,
                     "reset_target": target,
                     "allowed_reset_types": allowed,
                     "initial_power_state": current,
-                    "final_power_state": str(retry_poll.get("last_observed") or "On"),
+                    "final_power_state": str(poll.get("last_observed") or "On"),
                     "changed": True,
                     "action": "On",
-                    "result": retry_result,
-                    "first_observed_power_state": retry_poll.get("first_observed"),
-                    "last_observed_power_state": retry_poll.get("last_observed"),
+                    "result": action_result,
+                    "first_observed_power_state": poll.get("first_observed"),
+                    "last_observed_power_state": poll.get("last_observed"),
+                    "poll_timeout_seconds": timeout_seconds,
+                    "poll_interval_seconds": poll_interval,
+                    "retry_attempted": False,
+                    "fallback_attempted": False,
+                    "attempts": attempts,
                 }
             if not poll.get("matched") and "PushPowerButton" in allowed:
                 fallback_result = self._submit_reset_action(path, target, "PushPowerButton")
                 fallback_poll = self._wait_for_power_state(path, "On", timeout_seconds=timeout_seconds, poll_interval=poll_interval)
+                attempts.append({"reset_type": "PushPowerButton", "result": fallback_result, "poll": fallback_poll, "fallback": True})
                 if fallback_result.get("connection_dropped") and not fallback_poll.get("matched"):
                     fallback_retry = self._submit_reset_action(path, target, "PushPowerButton", retry_attempt=True)
                     fallback_retry_poll = self._wait_for_power_state(path, "On", timeout_seconds=timeout_seconds, poll_interval=poll_interval)
+                    attempts.append({"reset_type": "PushPowerButton", "result": fallback_retry, "poll": fallback_retry_poll, "fallback": True, "retry": True})
                     if not fallback_retry_poll.get("matched"):
-                        raise ILOError("Power reset connection dropped and expected PowerState was not reached after retry.")
+                        details = {
+                            **base_details,
+                            "retry_attempted": True,
+                            "fallback_attempted": True,
+                            "action": "PushPowerButton",
+                            "result": fallback_retry,
+                            "first_observed_power_state": fallback_retry_poll.get("first_observed") or fallback_poll.get("first_observed") or poll.get("first_observed"),
+                            "last_observed_power_state": fallback_retry_poll.get("last_observed") or fallback_poll.get("last_observed") or poll.get("last_observed"),
+                            "attempts": attempts,
+                        }
+                        raise power_state_error("Power reset connection dropped and expected PowerState was not reached after retry.", details)
                     return {
                         "system_path": path,
                         "reset_target": target,
@@ -2862,12 +2933,28 @@ class ILOClient:
                         "result": fallback_retry,
                         "first_observed_power_state": fallback_retry_poll.get("first_observed"),
                         "last_observed_power_state": fallback_retry_poll.get("last_observed"),
+                        "poll_timeout_seconds": timeout_seconds,
+                        "poll_interval_seconds": poll_interval,
+                        "retry_attempted": True,
+                        "fallback_attempted": True,
+                        "attempts": attempts,
                     }
                 if not fallback_poll.get("matched"):
-                    raise ILOError(
+                    details = {
+                        **base_details,
+                        "retry_attempted": any(bool(item.get("retry")) for item in attempts),
+                        "fallback_attempted": True,
+                        "action": "PushPowerButton",
+                        "result": fallback_result,
+                        "first_observed_power_state": fallback_poll.get("first_observed") or poll.get("first_observed"),
+                        "last_observed_power_state": fallback_poll.get("last_observed") or poll.get("last_observed"),
+                        "attempts": attempts,
+                    }
+                    raise power_state_error(
                         "Power reset command submission succeeded but expected power state was not reached within timeout. "
                         f"Expected=On first_observed={fallback_poll.get('first_observed') or poll.get('first_observed') or 'unknown'} "
-                        f"last_observed={fallback_poll.get('last_observed') or poll.get('last_observed') or 'unknown'}."
+                        f"last_observed={fallback_poll.get('last_observed') or poll.get('last_observed') or 'unknown'}.",
+                        details,
                     )
                 return {
                     "system_path": path,
@@ -2880,48 +2967,72 @@ class ILOClient:
                     "result": fallback_result,
                     "first_observed_power_state": fallback_poll.get("first_observed"),
                     "last_observed_power_state": fallback_poll.get("last_observed"),
+                    "poll_timeout_seconds": timeout_seconds,
+                    "poll_interval_seconds": poll_interval,
+                    "retry_attempted": any(bool(item.get("retry")) for item in attempts),
+                    "fallback_attempted": True,
+                    "attempts": attempts,
                 }
             if not poll.get("matched"):
-                raise ILOError(
+                details = {
+                    **base_details,
+                    "retry_attempted": any(bool(item.get("retry")) for item in attempts),
+                    "fallback_attempted": False,
+                    "action": "On",
+                    "result": action_result,
+                    "first_observed_power_state": poll.get("first_observed"),
+                    "last_observed_power_state": poll.get("last_observed"),
+                    "attempts": attempts,
+                }
+                raise power_state_error(
                     "Power reset command submission succeeded but expected power state was not reached within timeout. "
                     f"Expected=On first_observed={poll.get('first_observed') or 'unknown'} "
-                    f"last_observed={poll.get('last_observed') or 'unknown'}."
+                    f"last_observed={poll.get('last_observed') or 'unknown'}.",
+                    details,
                 )
-            return {
-                "system_path": path,
-                "reset_target": target,
-                "allowed_reset_types": allowed,
-                "initial_power_state": current,
-                "final_power_state": str(poll.get("last_observed") or "On"),
-                "changed": True,
-                "action": "On",
-                "result": action_result,
-                "first_observed_power_state": poll.get("first_observed"),
-                "last_observed_power_state": poll.get("last_observed"),
-            }
 
         if allowed and "ForceOff" not in allowed and "PushPowerButton" not in allowed:
             raise ILOError(f"Cannot power off system. Reset target={target} allowed={allowed}.")
         if (not allowed) or ("ForceOff" in allowed):
             action_result = self._submit_reset_action(path, target, "ForceOff")
             poll = self._wait_for_power_state(path, "Off", timeout_seconds=timeout_seconds, poll_interval=poll_interval)
+            attempts = [{"reset_type": "ForceOff", "result": action_result, "poll": poll}]
             if action_result.get("connection_dropped") and not poll.get("matched"):
                 retry_result = self._submit_reset_action(path, target, "ForceOff", retry_attempt=True)
                 retry_poll = self._wait_for_power_state(path, "Off", timeout_seconds=timeout_seconds, poll_interval=poll_interval)
-                if not retry_poll.get("matched"):
-                    raise ILOError("Power reset connection dropped and expected PowerState was not reached after retry.")
-                return {
-                    "system_path": path,
-                    "reset_target": target,
-                    "allowed_reset_types": allowed,
-                    "initial_power_state": current,
-                    "final_power_state": str(retry_poll.get("last_observed") or "Off"),
-                    "changed": True,
-                    "action": "ForceOff",
-                    "result": retry_result,
-                    "first_observed_power_state": retry_poll.get("first_observed"),
-                    "last_observed_power_state": retry_poll.get("last_observed"),
-                }
+                attempts.append({"reset_type": "ForceOff", "result": retry_result, "poll": retry_poll, "retry": True})
+                if retry_poll.get("matched"):
+                    return {
+                        "system_path": path,
+                        "reset_target": target,
+                        "allowed_reset_types": allowed,
+                        "initial_power_state": current,
+                        "final_power_state": str(retry_poll.get("last_observed") or "Off"),
+                        "changed": True,
+                        "action": "ForceOff",
+                        "result": retry_result,
+                        "first_observed_power_state": retry_poll.get("first_observed"),
+                        "last_observed_power_state": retry_poll.get("last_observed"),
+                        "poll_timeout_seconds": timeout_seconds,
+                        "poll_interval_seconds": poll_interval,
+                        "retry_attempted": True,
+                        "fallback_attempted": False,
+                        "attempts": attempts,
+                    }
+                if "PushPowerButton" not in allowed:
+                    details = {
+                        **base_details,
+                        "retry_attempted": True,
+                        "fallback_attempted": False,
+                        "action": "ForceOff",
+                        "result": retry_result,
+                        "first_observed_power_state": retry_poll.get("first_observed") or poll.get("first_observed"),
+                        "last_observed_power_state": retry_poll.get("last_observed") or poll.get("last_observed"),
+                        "attempts": attempts,
+                    }
+                    raise power_state_error("Power reset connection dropped and expected PowerState was not reached after retry.", details)
+            else:
+                attempts = [{"reset_type": "ForceOff", "result": action_result, "poll": poll}]
             if poll.get("matched"):
                 return {
                     "system_path": path,
@@ -2934,20 +3045,50 @@ class ILOClient:
                     "result": action_result,
                     "first_observed_power_state": poll.get("first_observed"),
                     "last_observed_power_state": poll.get("last_observed"),
+                    "poll_timeout_seconds": timeout_seconds,
+                    "poll_interval_seconds": poll_interval,
+                    "retry_attempted": False,
+                    "fallback_attempted": False,
+                    "attempts": attempts,
                 }
             if allowed and "PushPowerButton" not in allowed:
-                raise ILOError(
+                details = {
+                    **base_details,
+                    "retry_attempted": any(bool(item.get("retry")) for item in attempts),
+                    "fallback_attempted": False,
+                    "action": "ForceOff",
+                    "result": action_result,
+                    "first_observed_power_state": poll.get("first_observed"),
+                    "last_observed_power_state": poll.get("last_observed"),
+                    "attempts": attempts,
+                }
+                raise power_state_error(
                     "Power reset command submission succeeded but expected power state was not reached within timeout. "
                     f"Expected=Off first_observed={poll.get('first_observed') or 'unknown'} "
-                    f"last_observed={poll.get('last_observed') or 'unknown'}."
+                    f"last_observed={poll.get('last_observed') or 'unknown'}.",
+                    details,
                 )
+        else:
+            attempts = []
         action_result = self._submit_reset_action(path, target, "PushPowerButton")
         poll = self._wait_for_power_state(path, "Off", timeout_seconds=timeout_seconds, poll_interval=poll_interval)
+        attempts.append({"reset_type": "PushPowerButton", "result": action_result, "poll": poll, "fallback": True})
         if action_result.get("connection_dropped") and not poll.get("matched"):
             retry_result = self._submit_reset_action(path, target, "PushPowerButton", retry_attempt=True)
             retry_poll = self._wait_for_power_state(path, "Off", timeout_seconds=timeout_seconds, poll_interval=poll_interval)
+            attempts.append({"reset_type": "PushPowerButton", "result": retry_result, "poll": retry_poll, "fallback": True, "retry": True})
             if not retry_poll.get("matched"):
-                raise ILOError("Power reset connection dropped and expected PowerState was not reached after retry.")
+                details = {
+                    **base_details,
+                    "retry_attempted": True,
+                    "fallback_attempted": True,
+                    "action": "PushPowerButton",
+                    "result": retry_result,
+                    "first_observed_power_state": retry_poll.get("first_observed") or poll.get("first_observed"),
+                    "last_observed_power_state": retry_poll.get("last_observed") or poll.get("last_observed"),
+                    "attempts": attempts,
+                }
+                raise power_state_error("Power reset connection dropped and expected PowerState was not reached after retry.", details)
             return {
                 "system_path": path,
                 "reset_target": target,
@@ -2959,12 +3100,28 @@ class ILOClient:
                 "result": retry_result,
                 "first_observed_power_state": retry_poll.get("first_observed"),
                 "last_observed_power_state": retry_poll.get("last_observed"),
+                "poll_timeout_seconds": timeout_seconds,
+                "poll_interval_seconds": poll_interval,
+                "retry_attempted": True,
+                "fallback_attempted": True,
+                "attempts": attempts,
             }
         if not poll.get("matched"):
-            raise ILOError(
+            details = {
+                **base_details,
+                "retry_attempted": any(bool(item.get("retry")) for item in attempts),
+                "fallback_attempted": True,
+                "action": "PushPowerButton",
+                "result": action_result,
+                "first_observed_power_state": poll.get("first_observed"),
+                "last_observed_power_state": poll.get("last_observed"),
+                "attempts": attempts,
+            }
+            raise power_state_error(
                 "Power reset command submission succeeded but expected power state was not reached within timeout. "
                 f"Expected=Off first_observed={poll.get('first_observed') or 'unknown'} "
-                f"last_observed={poll.get('last_observed') or 'unknown'}."
+                f"last_observed={poll.get('last_observed') or 'unknown'}.",
+                details,
             )
         return {
             "system_path": path,
@@ -2977,6 +3134,11 @@ class ILOClient:
             "result": action_result,
             "first_observed_power_state": poll.get("first_observed"),
             "last_observed_power_state": poll.get("last_observed"),
+            "poll_timeout_seconds": timeout_seconds,
+            "poll_interval_seconds": poll_interval,
+            "retry_attempted": any(bool(item.get("retry")) for item in attempts),
+            "fallback_attempted": True,
+            "attempts": attempts,
         }
 
     @staticmethod

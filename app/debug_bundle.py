@@ -80,6 +80,18 @@ def create_debug_bundle(
     diagnosis = redact_value(safe_context.get("diagnosis") or {})
     if not isinstance(diagnosis, dict):
         diagnosis = {"status": str(diagnosis)}
+    if not diagnosis:
+        diagnosis = {
+            "status": "failed",
+            "selected_action": str(error_message or "Failure captured from job logs."),
+            "desired_state": {},
+            "discovered_state": {},
+            "options_discovered": {},
+            "safe_corrections_attempted": [],
+            "rejection_reasons": [str(error_message)] if error_message else [],
+            "recommended_fix": "Review the failed stage and last job log lines, then rerun the failed stage after correcting the reported condition.",
+            "user_action_required": True,
+        }
 
     payload = {
         "debug_bundle_version": 1,

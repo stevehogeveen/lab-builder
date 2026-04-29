@@ -4748,6 +4748,146 @@ def attach_storage_diagnosis(job: dict[str, Any], apply_state: dict[str, Any] | 
         apply_state["diagnosis"] = diagnosis
 
 
+def _power_attempt_message_ids(result: dict[str, Any]) -> list[str]:
+    message_ids: list[str] = []
+    for attempt in result.get("attempts") or []:
+        item_result = attempt.get("result") if isinstance(attempt, dict) else {}
+        if not isinstance(item_result, dict):
+            continue
+        for message_id in item_result.get("message_ids") or []:
+            text = str(message_id or "").strip()
+            if text and text not in message_ids:
+                message_ids.append(text)
+    direct_result = result.get("result") if isinstance(result, dict) else {}
+    if isinstance(direct_result, dict):
+        for message_id in direct_result.get("message_ids") or []:
+            text = str(message_id or "").strip()
+            if text and text not in message_ids:
+                message_ids.append(text)
+    return message_ids
+
+
+def _power_connection_dropped(result: dict[str, Any]) -> bool:
+    direct_result = result.get("result") if isinstance(result, dict) else {}
+    if isinstance(direct_result, dict) and direct_result.get("connection_dropped"):
+        return True
+    for attempt in result.get("attempts") or []:
+        item_result = attempt.get("result") if isinstance(attempt, dict) else {}
+        if isinstance(item_result, dict) and item_result.get("connection_dropped"):
+            return True
+    return False
+
+
+def _power_http_status(result: dict[str, Any]) -> str:
+    direct_result = result.get("result") if isinstance(result, dict) else {}
+    if isinstance(direct_result, dict) and direct_result.get("http_status_code") is not None:
+        return str(direct_result.get("http_status_code"))
+    for attempt in result.get("attempts") or []:
+        item_result = attempt.get("result") if isinstance(attempt, dict) else {}
+        if isinstance(item_result, dict) and item_result.get("http_status_code") is not None:
+            return str(item_result.get("http_status_code"))
+    return "(none)"
+
+
+def power_reset_log_summary(result: dict[str, Any], *, default_action: str = "") -> str:
+    result = result or {}
+    message_ids = _power_attempt_message_ids(result)
+    return (
+        "Power reset request: "
+        f"ResetType={result.get('action') or default_action or '(unknown)'} "
+        f"endpoint={result.get('reset_target') or '(unknown)'} "
+        f"allowed={','.join(result.get('allowed_reset_types') or []) or '(unknown)'} "
+        f"http={_power_http_status(result)} "
+        f"message_ids={','.join(message_ids) or '(none)'} "
+        f"connection_dropped={'yes' if _power_connection_dropped(result) else 'no'} "
+        f"retry={'yes' if result.get('retry_attempted') else 'no'} "
+        f"push_button_fallback={'yes' if result.get('fallback_attempted') or result.get('action') == 'PushPowerButton' else 'no'} "
+        f"first_observed={result.get('first_observed_power_state') or '(unknown)'} "
+        f"last_observed={result.get('last_observed_power_state') or result.get('final_power_state') or '(unknown)'} "
+        f"timeout={result.get('poll_timeout_seconds') or '(unknown)'}s "
+        f"interval={result.get('poll_interval_seconds') or '(unknown)'}s"
+    )
+
+
+def attach_esxi_diagnosis(job: dict[str, Any], diagnosis: dict[str, Any]) -> None:
+    job["esxi_diagnosis"] = diagnosis
+    job["diagnosis"] = diagnosis
+
+
+def esxi_failure_diagnosis(job: dict[str, Any], detail: str, exc: Exception | None = None) -> dict[str, Any]:
+    power_details = dict(getattr(exc, "power_reset_details", {}) or {})
+    if not power_details:
+        power_details = dict((job.get("esxi_power_transitions") or {}).get("power_on_result") or {})
+    virtual_media = dict(job.get("esxi_virtual_media") or {})
+    boot_override = dict(job.get("esxi_boot_override") or {})
+    boot_inventory = dict(boot_override.get("boot_option_inventory") or {})
+    desired_iso = str(job.get("esxi_iso_url") or "")
+    media_matches = bool(virtual_media.get("post_mount_image_matches")) or (
+        desired_iso and str(virtual_media.get("post_mount_image") or "") == desired_iso
+    )
+    after_enabled = str(boot_override.get("after_enabled") or "")
+    after_target = str(boot_override.get("after_target") or "")
+    boot_matched = bool(boot_override.get("matched")) or (after_enabled.lower() == "once" and after_target.lower() in {"cd", "uefitarget"})
+    rejection_reasons = [str(detail or "ESXi stage failed.").strip()]
+    if power_details:
+        rejection_reasons.append(
+            "Power-on failed after server was Off. "
+            f"Expected={power_details.get('expected_power_state') or 'On'} "
+            f"last_observed={power_details.get('last_observed_power_state') or power_details.get('final_power_state') or 'unknown'}."
+        )
+    attempted = [
+        "Built custom ESXi ISO.",
+        "Mounted virtual media and verified readback." if media_matches else "Mounted virtual media but readback did not fully match expected ISO.",
+        (
+            f"Set one-time boot override and read back Enabled={after_enabled or '(empty)'} Target={after_target or '(empty)'}."
+            if boot_override
+            else "Boot override was not completed."
+        ),
+    ]
+    if power_details:
+        attempted.append(
+            "Submitted power-on reset "
+            f"ResetType={power_details.get('action') or 'On'} "
+            f"retry={'yes' if power_details.get('retry_attempted') else 'no'} "
+            f"push_button_fallback={'yes' if power_details.get('fallback_attempted') else 'no'}."
+        )
+    return diagnostic_result(
+        status="failed",
+        desired_state={
+            "stage": "ESXi install boot",
+            "iso_url": desired_iso,
+            "power_state_before_boot": "Off",
+            "boot_override": {"enabled": "Once", "target": "Cd"},
+        },
+        discovered_state={
+            "virtual_media_inserted": bool(virtual_media.get("post_mount_inserted")),
+            "virtual_media_image": str(virtual_media.get("post_mount_image") or ""),
+            "virtual_media_image_matches": bool(media_matches),
+            "boot_override_enabled": after_enabled,
+            "boot_override_target": after_target,
+            "boot_override_matched": bool(boot_matched),
+            "power_reset": power_details,
+        },
+        differences=rejection_reasons,
+        safe_corrections_attempted=attempted,
+        options_discovered={
+            "reset_target": power_details.get("reset_target", ""),
+            "allowed_reset_types": power_details.get("allowed_reset_types", []),
+            "boot_option_selection_reason": boot_override.get("boot_option_selection_reason", ""),
+            "boot_option_inventory": boot_inventory,
+            "virtual_media_device": virtual_media.get("device_path", ""),
+            "virtual_media_insert_target": virtual_media.get("insert_target", ""),
+        },
+        selected_action="ESXi boot preparation succeeded through ISO mount and boot override; power-on did not reach On.",
+        rejection_reasons=rejection_reasons,
+        recommended_fix=(
+            "Retry ResetType=On using a fresh connection or Connection: close. "
+            "If ResetType=On still does not reach PowerState=On and PushPowerButton is allowed, try PushPowerButton fallback."
+        ),
+        user_action_required=True,
+    )
+
+
 def storage_blocked_diagnosis(plan: dict[str, Any], discovery: dict[str, Any], apply_mode: str, platform: dict[str, Any], error: str) -> dict[str, Any]:
     controller = (plan.get("source_discovery", {}) or {}).get("controller", {}) or {}
     selected_drives = storage_selected_plan_drives(plan)
@@ -8954,6 +9094,11 @@ def run_esxi_real(cfg: dict, run_stamp: str | None = None):
                         "final_power_state": current,
                         "changed": False,
                         "action": "skip",
+                        "poll_timeout_seconds": timeout_seconds,
+                        "poll_interval_seconds": poll_interval,
+                        "retry_attempted": False,
+                        "fallback_attempted": False,
+                        "attempts": [],
                     }
                 reset_type = "On" if str(expected_state).lower() == "on" else "ForceOff"
                 result = c.power_reset(reset_type=reset_type, system_path=system_path) or {}
@@ -8967,6 +9112,13 @@ def run_esxi_real(cfg: dict, run_stamp: str | None = None):
                     "changed": True,
                     "action": reset_type,
                     "result": result,
+                    "first_observed_power_state": str(expected_state),
+                    "last_observed_power_state": str(expected_state),
+                    "poll_timeout_seconds": timeout_seconds,
+                    "poll_interval_seconds": poll_interval,
+                    "retry_attempted": False,
+                    "fallback_attempted": False,
+                    "attempts": [{"reset_type": reset_type, "result": result}],
                 }
 
             return run_with_session_refresh("Power off" if str(expected_state).lower() == "off" else "Power on", op)
@@ -9138,12 +9290,7 @@ def run_esxi_real(cfg: dict, run_stamp: str | None = None):
                 "Power off",
                 4,
                 total,
-                (
-                    "[INFO] Power reset request sent: "
-                    f"ResetType={power_off_result.get('action') or 'ForceOff'} "
-                    f"endpoint={power_off_result.get('reset_target') or '(unknown)'} "
-                    f"allowed={','.join(power_off_result.get('allowed_reset_types') or []) or '(unknown)'}"
-                ),
+                f"[INFO] {power_reset_log_summary(power_off_result, default_action='ForceOff')}",
             )
             if str(power_off_result.get("action") or "") == "PushPowerButton":
                 update_job(
@@ -9258,8 +9405,9 @@ def run_esxi_real(cfg: dict, run_stamp: str | None = None):
             trace_payload["steps"].append({"stage": "set_one_time_boot", "status": "warning_mismatch", **boot_override})
             save_esxi_trace(trace_path, trace_payload)
         update_job(kit_name, job, "Running", "Set boot override", 8, total, f"[INFO] Boot override after: enabled={after_enabled} target={after_target}")
-        boot_inventory = dict(boot_override.get("boot_option_inventory") or {})
-        if boot_inventory:
+        selected_ref = str(boot_override.get("selected_boot_option_reference") or "")
+        selected_target = str(boot_override.get("selected_uefi_target") or "")
+        if selected_ref:
             update_job(
                 kit_name,
                 job,
@@ -9267,8 +9415,9 @@ def run_esxi_real(cfg: dict, run_stamp: str | None = None):
                 "Set boot override",
                 8,
                 total,
-                f"[INFO] BootOptions path: {boot_inventory.get('boot_options_path') or '(none)'}",
+                f"[INFO] Boot override decision: selected UEFI virtual-media option {selected_ref} target={selected_target or selected_ref}.",
             )
+        elif boot_override.get("matched"):
             update_job(
                 kit_name,
                 job,
@@ -9276,86 +9425,18 @@ def run_esxi_real(cfg: dict, run_stamp: str | None = None):
                 "Set boot override",
                 8,
                 total,
-                f"[INFO] BootOptions count: {boot_inventory.get('boot_options_count', 0)}",
+                "[INFO] Boot override decision: No concrete UEFI virtual CD option found. Generic Cd override read back successfully, continuing.",
             )
-            selected_ref = str(boot_override.get("selected_boot_option_reference") or "")
-            selected_target = str(boot_override.get("selected_uefi_target") or "")
-            if selected_ref:
-                update_job(
-                    kit_name,
-                    job,
-                    "Running",
-                    "Set boot override",
-                    8,
-                    total,
-                    f"[INFO] Matching UEFI virtual-media option: {selected_ref}",
-                )
-                if selected_target and selected_target != selected_ref:
-                    update_job(
-                        kit_name,
-                        job,
-                        "Running",
-                        "Set boot override",
-                        8,
-                        total,
-                        f"[INFO] UEFI target override value: {selected_target}",
-                    )
-            else:
-                update_job(
-                    kit_name,
-                    job,
-                    "Running",
-                    "Set boot override",
-                    8,
-                    total,
-                    "[INFO] Matching UEFI virtual-media option: (none)",
-                )
-                update_job(
-                    kit_name,
-                    job,
-                    "Running",
-                    "Set boot override",
-                    8,
-                    total,
-                    "[WARN] No concrete UEFI boot option was found; falling back to generic Cd"
-                    + (
-                        f" ({boot_override.get('boot_option_selection_reason')})"
-                        if boot_override.get("boot_option_selection_reason")
-                        else ""
-                    ),
-                )
-                update_job(
-                    kit_name,
-                    job,
-                    "Running",
-                    "Set boot override",
-                    8,
-                    total,
-                    "[WARN] No concrete UEFI boot option was selected; continuing because mounted virtual media is verified on this hardware.",
-                )
-            oem_keys = list(boot_inventory.get("oem_hpe_keys") or [])
-            oem_values = dict(boot_inventory.get("oem_hpe_values") or {})
-            if oem_keys:
-                update_job(
-                    kit_name,
-                    job,
-                    "Running",
-                    "Set boot override",
-                    8,
-                    total,
-                    f"[INFO] HPE OEM boot keys: {', '.join(oem_keys)}",
-                )
-            if oem_values:
-                update_job(
-                    kit_name,
-                    job,
-                    "Running",
-                    "Set boot override",
-                    8,
-                    total,
-                    "[INFO] HPE OEM boot values: "
-                    + ", ".join(f"{key}={value}" for key, value in oem_values.items()),
-                )
+        else:
+            update_job(
+                kit_name,
+                job,
+                "Running",
+                "Set boot override",
+                8,
+                total,
+                "[WARN] Boot override decision: no concrete UEFI virtual CD option found and generic Cd did not read back cleanly.",
+            )
         for note in boot_override.get("notes", []) or []:
             update_job(kit_name, job, "Running", "Set boot override", 8, total, f"[INFO] Boot override note: {note}")
         if str(after_target).strip().lower() != "cd":
@@ -9380,8 +9461,22 @@ def run_esxi_real(cfg: dict, run_stamp: str | None = None):
         }
         save_job(kit_name, job)
         save_esxi_trace(trace_path, trace_payload)
-        power_on_result = run_with_session_refresh("Power on", lambda c: c.power_reset(reset_type="On", system_path=system_path))
-        if power_on_result.get("recovered_after_transport_disconnect"):
+        power_on_result = ensure_power_state_with_fallback("On", system_path=system_path, timeout_seconds=300, poll_interval=5)
+        job["esxi_power_transitions"] = {
+            **dict(job.get("esxi_power_transitions") or {}),
+            "power_on_result": power_on_result,
+        }
+        save_job(kit_name, job)
+        update_job(
+            kit_name,
+            job,
+            "Running",
+            "Power on",
+            9,
+            total,
+            f"[INFO] {power_reset_log_summary(power_on_result, default_action='On')}",
+        )
+        if _power_connection_dropped(power_on_result):
             update_job(
                 kit_name,
                 job,
@@ -9389,10 +9484,9 @@ def run_esxi_real(cfg: dict, run_stamp: str | None = None):
                 "Power on",
                 9,
                 total,
-                "[WARN] iLO closed the reset connection without a response, but the server reached expected PowerState=On, treating as success.",
+                "[WARN] iLO closed the reset connection during power-on, but PowerState=On was verified.",
             )
         update_job(kit_name, job, "Running", "Wait for server power", 10, total, "[RUNNING] Waiting for the server to power back on")
-        wait_for_power_state(client, "On", timeout_seconds=300, poll_interval=5)
         job["esxi_power_transitions"] = {
             **dict(job.get("esxi_power_transitions") or {}),
             "power_on_confirmed": True,
@@ -9554,6 +9648,17 @@ def run_esxi_real(cfg: dict, run_stamp: str | None = None):
         )
     except Exception as e:
         detail = str(e).splitlines()[0]
+        power_failure_details = dict(getattr(e, "power_reset_details", {}) or {})
+        if power_failure_details:
+            update_job(
+                kit_name,
+                job,
+                "Running",
+                "Power on" if str(power_failure_details.get("expected_power_state") or "").lower() == "on" else "Power off",
+                job.get("completed_steps", 0),
+                total,
+                f"[INFO] {power_reset_log_summary(power_failure_details, default_action=power_failure_details.get('action') or 'On')}",
+            )
         if "configured IP" in detail and "ESXi did not answer" in detail:
             try:
                 if "client" in locals() and client:
@@ -9600,7 +9705,12 @@ def run_esxi_real(cfg: dict, run_stamp: str | None = None):
                 "status": "Failed",
                 "error": detail,
             }
+            diagnosis = esxi_failure_diagnosis(job, detail, e)
+            trace_payload["diagnosis"] = diagnosis
             save_esxi_trace(trace_path, trace_payload)
+        else:
+            diagnosis = esxi_failure_diagnosis(job, detail, e)
+        attach_esxi_diagnosis(job, diagnosis)
         update_job(kit_name, job, "Failed", "ESXi error", job.get("completed_steps", 0), total, f"[FAILED] {detail}")
 
 
