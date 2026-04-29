@@ -1,5 +1,6 @@
 from pathlib import Path
 import asyncio
+import copy
 from datetime import datetime
 import ipaddress
 import json
@@ -21,6 +22,7 @@ from app.ilo import ILOClient, ILOConfig, ILOError
 from app.esxi.builder import build_custom_iso
 from app.esxi.models import EsxiBuildSpec
 from app.debug_bundle import create_debug_bundle
+from app.diagnostics import diagnostic_log_lines, diagnostic_result
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 TEMPLATES_DIR = BASE_DIR / "templates"
@@ -746,6 +748,7 @@ def save_job(kit_name: str, job: dict):
                     "current_stage": job.get("current_stage"),
                     "job_logs": logs,
                     "error_message": str(logs[-1] if logs else ""),
+                    "diagnosis": job.get("diagnosis") or job.get("storage_preflight") or {},
                     "kit_config": load_kit_config(kit_name),
                 },
             )
@@ -4447,6 +4450,330 @@ def build_storage_apply_intent(plan: dict, apply_mode: str) -> dict[str, Any]:
     }
 
 
+def storage_discovery_sources(discovery: dict[str, Any]) -> dict[str, list[dict[str, Any]]]:
+    summary = discovery.get("summary", {}) or {}
+    standard = summary.get("standard_redfish_storage", {}) or {}
+    hpe = summary.get("hpe_smart_storage", {}) or {}
+    controllers = []
+    drives = []
+    volumes = []
+    for source, section in (("hpe_smart_storage", hpe), ("standard_redfish_storage", standard)):
+        for controller in section.get("controllers", []) or []:
+            controllers.append({**controller, "source": source})
+        for drive in section.get("drives", []) or []:
+            drives.append({**drive, "source": source})
+        for volume in section.get("volumes", []) or []:
+            volumes.append({**volume, "source": source})
+    return {"controllers": controllers, "drives": drives, "volumes": volumes}
+
+
+def storage_discovered_options(discovery: dict[str, Any]) -> dict[str, Any]:
+    sources = storage_discovery_sources(discovery)
+    raw_storage = ((discovery.get("raw") or {}).get("standard_storage") or [])
+    writable_volume_paths = [
+        str(((item.get("Volumes") or {}).get("@odata.id")) or "").rstrip("/")
+        for item in raw_storage
+        if str(((item.get("Volumes") or {}).get("@odata.id")) or "").strip()
+    ]
+    capabilities = ((discovery.get("summary") or {}).get("capabilities") or {})
+    settings_path, settings_reason = _verified_hpe_smartstorage_settings_path(capabilities)
+    return {
+        "controllers": [
+            {
+                "path": item.get("path", ""),
+                "name": item.get("name", ""),
+                "model": item.get("model", ""),
+                "source": item.get("source", ""),
+            }
+            for item in sources["controllers"]
+        ],
+        "writable_volume_paths": writable_volume_paths,
+        "hpe_smartstorage_settings_path": settings_path,
+        "inventory_only_reason": settings_reason if capabilities.get("hpe_smart_storage") and not settings_path else "",
+    }
+
+
+def storage_controller_signature(controller: dict[str, Any]) -> tuple[str, str, str, str]:
+    return (
+        str(controller.get("source") or "").strip().lower(),
+        str(controller.get("model") or "").strip().lower(),
+        str(controller.get("name") or "").strip().lower(),
+        str(controller.get("manufacturer") or "").strip().lower(),
+    )
+
+
+def storage_selected_plan_drives(plan: dict[str, Any]) -> list[dict[str, Any]]:
+    drives: list[dict[str, Any]] = []
+    for section in ("os_raid1", "data_raid6"):
+        for drive in (plan.get(section, {}) or {}).get("drives", []) or []:
+            if drive:
+                drives.append({**drive, "_section": section})
+    spare = (plan.get("hot_spare", {}) or {}).get("drive", {}) or {}
+    if spare:
+        drives.append({**spare, "_section": "hot_spare"})
+    return drives
+
+
+def _drive_identity_matches(saved: dict[str, Any], live: dict[str, Any]) -> tuple[bool, str]:
+    bay = str(saved.get("bay") or "").strip()
+    live_bay = str(live.get("bay") or "").strip()
+    if bay and live_bay and bay != live_bay:
+        return False, f"Bay changed from {bay} to {live_bay}."
+
+    saved_serial = str(saved.get("serial_number") or "").strip()
+    live_serial = str(live.get("serial_number") or "").strip()
+    if saved_serial and live_serial and saved_serial != live_serial:
+        return False, f"Bay {bay or live_bay or '?'} drive serial changed from {saved_serial} to {live_serial}."
+    if saved_serial and not live_serial:
+        return False, f"Bay {bay or live_bay or '?'} approved drive serial {saved_serial} is not visible in live discovery."
+
+    saved_model = str(saved.get("model") or "").strip()
+    live_model = str(live.get("model") or "").strip()
+    if saved_model and live_model and saved_model != live_model:
+        return False, f"Bay {bay or live_bay or '?'} drive model changed from {saved_model} to {live_model}."
+
+    try:
+        saved_size = float(saved.get("size_gib") or 0)
+        live_size = float(live.get("size_gib") or 0)
+    except Exception:
+        saved_size = 0
+        live_size = 0
+    if saved_size and live_size and abs(saved_size - live_size) > 1:
+        return False, f"Bay {bay or live_bay or '?'} drive size changed from {saved_size:g} GiB to {live_size:g} GiB."
+    return True, ""
+
+
+def _candidate_drives_for_controller(discovery: dict[str, Any], controller: dict[str, Any]) -> list[dict[str, Any]]:
+    path = str(controller.get("path") or "").rstrip("/")
+    source = str(controller.get("source") or "").strip()
+    drives = []
+    for drive in storage_discovery_sources(discovery)["drives"]:
+        if source and str(drive.get("source") or "").strip() != source:
+            continue
+        if path and not storage_item_matches_controller(drive, {"path": path, "source": source}):
+            continue
+        drives.append(drive)
+    return drives
+
+
+def _find_live_drive(saved_drive: dict[str, Any], live_drives: list[dict[str, Any]]) -> dict[str, Any]:
+    saved_bay = str(saved_drive.get("bay") or "").strip()
+    saved_serial = str(saved_drive.get("serial_number") or "").strip()
+    bay_match = {}
+    for drive in live_drives:
+        if saved_bay and str(drive.get("bay") or "").strip() != saved_bay:
+            continue
+        if not bay_match:
+            bay_match = drive
+        if not saved_serial or str(drive.get("serial_number") or "").strip() == saved_serial:
+            return drive
+    return bay_match
+
+
+def _storage_controller_candidates(plan: dict[str, Any], discovery: dict[str, Any]) -> list[dict[str, Any]]:
+    saved_controller = (plan.get("source_discovery", {}) or {}).get("controller", {}) or {}
+    saved_path = str(saved_controller.get("path") or "").rstrip("/")
+    controllers = storage_discovery_sources(discovery)["controllers"]
+    for controller in controllers:
+        if saved_path and str(controller.get("path") or "").rstrip("/") == saved_path:
+            return [controller]
+
+    saved_signature = storage_controller_signature(saved_controller)
+    model_matches = [
+        controller
+        for controller in controllers
+        if storage_controller_signature(controller)[0] == saved_signature[0]
+        and storage_controller_signature(controller)[1]
+        and storage_controller_signature(controller)[1] == saved_signature[1]
+    ]
+    if model_matches:
+        return model_matches
+
+    source = str(saved_controller.get("source") or "").strip()
+    same_source = [controller for controller in controllers if not source or str(controller.get("source") or "").strip() == source]
+    return same_source or controllers
+
+
+def storage_preflight_compare_and_remap(plan: dict[str, Any], live_discovery: dict[str, Any], apply_mode: str) -> tuple[dict[str, Any], dict[str, Any]]:
+    remapped_plan = copy.deepcopy(plan)
+    saved_controller = (plan.get("source_discovery", {}) or {}).get("controller", {}) or {}
+    saved_controller_path = str(saved_controller.get("path") or "").rstrip("/")
+    selected_drives = storage_selected_plan_drives(plan)
+    differences: list[str] = []
+    corrections: list[str] = []
+    rejection_reasons: list[str] = []
+    saved_server = plan.get("source_discovery", {}) or {}
+    live_server = ((live_discovery.get("summary") or {}).get("server") or {})
+    saved_serial = str(saved_server.get("serial_number") or "").strip()
+    live_serial = str(live_server.get("serial_number") or "").strip()
+    saved_model = str(saved_server.get("server_model") or "").strip()
+    live_model = str(live_server.get("model") or "").strip()
+    if saved_serial and live_serial and saved_serial != live_serial:
+        rejection_reasons.append(f"Server serial changed from {saved_serial} to {live_serial}.")
+    if saved_model and live_model and saved_model != live_model:
+        rejection_reasons.append(f"Server model changed from {saved_model} to {live_model}.")
+    if rejection_reasons:
+        result = diagnostic_result(
+            status="blocked",
+            desired_state={
+                "server_serial": saved_serial,
+                "server_model": saved_model,
+                "controller_path": saved_controller_path,
+                "selected_bays": [drive.get("bay") for drive in selected_drives],
+                "mode": apply_mode,
+            },
+            discovered_state={
+                "server_serial": live_serial,
+                "server_model": live_model,
+                "controllers": storage_discovered_options(live_discovery).get("controllers", []),
+            },
+            differences=rejection_reasons,
+            options_discovered=storage_discovered_options(live_discovery),
+            selected_action="Block destructive storage apply",
+            rejection_reasons=rejection_reasons,
+            recommended_fix="Run storage discovery against the intended server, review the detected hardware identity, and re-approve storage before applying.",
+            user_action_required=True,
+        )
+        return remapped_plan, result
+
+    candidates = _storage_controller_candidates(plan, live_discovery)
+    live_controller: dict[str, Any] = {}
+    live_drive_map: dict[str, dict[str, Any]] = {}
+
+    for candidate in candidates:
+        candidate_drives = _candidate_drives_for_controller(live_discovery, candidate)
+        candidate_map: dict[str, dict[str, Any]] = {}
+        candidate_rejections: list[str] = []
+        for saved_drive in selected_drives:
+            live_drive = _find_live_drive(saved_drive, candidate_drives)
+            if not live_drive:
+                candidate_rejections.append(f"Approved bay {saved_drive.get('bay') or '?'} was not found on live controller {candidate.get('path') or '(unknown)'}.")
+                continue
+            matched, reason = _drive_identity_matches(saved_drive, live_drive)
+            if not matched:
+                candidate_rejections.append(reason)
+                continue
+            candidate_map[str(saved_drive.get("path") or saved_drive.get("bay") or len(candidate_map))] = live_drive
+        if not candidate_rejections:
+            live_controller = candidate
+            live_drive_map = candidate_map
+            break
+        if not rejection_reasons:
+            rejection_reasons = candidate_rejections
+
+    if not live_controller:
+        if not rejection_reasons:
+            rejection_reasons.append("The approved storage controller was not found in live discovery.")
+        result = diagnostic_result(
+            status="blocked",
+            desired_state={
+                "controller_path": saved_controller_path,
+                "selected_bays": [drive.get("bay") for drive in selected_drives],
+                "mode": apply_mode,
+            },
+            discovered_state={"controllers": storage_discovered_options(live_discovery).get("controllers", [])},
+            differences=rejection_reasons,
+            options_discovered=storage_discovered_options(live_discovery),
+            selected_action="Block destructive storage apply",
+            rejection_reasons=rejection_reasons,
+            recommended_fix="Run storage discovery again, review the new controller/drive layout, and re-approve storage before applying.",
+            user_action_required=True,
+        )
+        return remapped_plan, result
+
+    live_controller_path = str(live_controller.get("path") or "").rstrip("/")
+    if saved_controller_path and live_controller_path and saved_controller_path != live_controller_path:
+        differences.append(f"Controller Redfish path changed from {saved_controller_path} to {live_controller_path}.")
+        corrections.append(f"Remapped controller path to {live_controller_path}.")
+    remapped_plan.setdefault("source_discovery", {})["controller"] = dict(live_controller)
+
+    def remap_drive(drive: dict[str, Any]) -> dict[str, Any]:
+        key = str(drive.get("path") or drive.get("bay") or "")
+        live_drive = live_drive_map.get(key) or _find_live_drive(drive, _candidate_drives_for_controller(live_discovery, live_controller))
+        if not live_drive:
+            return drive
+        normalized = normalized_plan_drive(live_drive, str(live_controller.get("source") or live_drive.get("source") or ""))
+        if str(drive.get("path") or "").strip() and normalized.get("path") and str(drive.get("path")) != str(normalized.get("path")):
+            corrections.append(f"Remapped bay {drive.get('bay') or normalized.get('bay')} drive path to {normalized.get('path')}.")
+        return {**drive, **normalized}
+
+    for section in ("os_raid1", "data_raid6"):
+        section_state = remapped_plan.get(section, {}) or {}
+        section_state["drives"] = [remap_drive(drive) for drive in section_state.get("drives", []) or []]
+        remapped_plan[section] = section_state
+    spare = (remapped_plan.get("hot_spare", {}) or {}).get("drive", {}) or {}
+    if spare:
+        remapped_plan.setdefault("hot_spare", {})["drive"] = remap_drive(spare)
+
+    live_volumes = [
+        volume
+        for volume in storage_discovery_sources(live_discovery)["volumes"]
+        if storage_item_matches_controller(volume, live_controller)
+    ]
+    if apply_mode == "wipe_rebuild":
+        remapped_plan["existing_logical_volumes"] = live_volumes
+        if live_volumes:
+            corrections.append("Refreshed destructive volume targets from live discovery.")
+
+    result_status = "remapped" if corrections else "pass"
+    result = diagnostic_result(
+        status=result_status,
+        desired_state={
+            "server_serial": (plan.get("source_discovery", {}) or {}).get("serial_number", ""),
+            "server_model": (plan.get("source_discovery", {}) or {}).get("server_model", ""),
+            "controller_path": saved_controller_path,
+            "controller_model": saved_controller.get("model") or saved_controller.get("name") or "",
+            "selected_bays": [drive.get("bay") for drive in selected_drives],
+            "mode": apply_mode,
+        },
+        discovered_state={
+            "controller_path": live_controller_path,
+            "controller_model": live_controller.get("model") or live_controller.get("name") or "",
+            "selected_bays": [drive.get("bay") for drive in selected_drives],
+        },
+        differences=differences,
+        safe_corrections_attempted=corrections,
+        options_discovered=storage_discovered_options(live_discovery),
+        selected_action=f"Use live controller path {live_controller_path or '(unknown)'} for storage apply.",
+        recommended_fix="" if result_status != "blocked" else "Run storage discovery again and re-approve storage.",
+        user_action_required=False,
+    )
+    return remapped_plan, result
+
+
+def attach_storage_diagnosis(job: dict[str, Any], apply_state: dict[str, Any] | None, diagnosis: dict[str, Any]) -> None:
+    job["storage_preflight"] = diagnosis
+    job["diagnosis"] = diagnosis
+    if apply_state is not None:
+        apply_state["diagnosis"] = diagnosis
+
+
+def storage_blocked_diagnosis(plan: dict[str, Any], discovery: dict[str, Any], apply_mode: str, platform: dict[str, Any], error: str) -> dict[str, Any]:
+    controller = (plan.get("source_discovery", {}) or {}).get("controller", {}) or {}
+    selected_drives = storage_selected_plan_drives(plan)
+    reason = str(error or platform.get("reason") or "No writable storage apply path is available.").strip()
+    return diagnostic_result(
+        status="blocked",
+        desired_state={
+            "controller_path": controller.get("path", ""),
+            "controller_model": controller.get("model") or controller.get("name") or "",
+            "selected_bays": [drive.get("bay") for drive in selected_drives],
+            "mode": apply_mode,
+        },
+        discovered_state={
+            "selected_platform": platform.get("label", ""),
+            "platform_id": platform.get("id", ""),
+            "controller_path": platform.get("controller_path", ""),
+        },
+        differences=[reason],
+        options_discovered=storage_discovered_options(discovery),
+        selected_action="Block destructive storage apply",
+        rejection_reasons=[reason],
+        recommended_fix="Run storage discovery again while the server is powered On, review the writable Redfish Volumes options, and re-approve storage before applying.",
+        user_action_required=True,
+    )
+
+
 def storage_apply_mode_for_plan(plan: dict[str, Any]) -> str:
     next_action = str((plan.get("apply_readiness", {}) or {}).get("next_action") or "").strip().lower()
     default_recommendation = str(plan.get("default_recommendation") or "").strip().lower()
@@ -4526,9 +4853,9 @@ def _standard_redfish_storage_apply_surface(discovery: dict[str, Any], controlle
     if (discovery.get("summary", {}) or {}).get("capabilities", {}).get("standard_redfish_storage"):
         return {
             "storage_path": controller_path,
-            "volumes_path": f"{controller_path}/Volumes",
+            "volumes_path": "",
             "reset_target": "",
-            "reason": "",
+            "reason": "Standard Redfish storage was detected, but the selected controller path was not present in live discovery.",
         }
     return {
         "storage_path": controller_path,
@@ -5254,8 +5581,21 @@ def run_storage_apply(
         )
         pre_change_discovery = {}
         platform = {}
+        storage_diagnosis = {}
         for attempt in range(1, 7):
             pre_change_discovery = client.get_storage_discovery(deep_smart_storage_scan=False)
+            plan, storage_diagnosis = storage_preflight_compare_and_remap(plan, pre_change_discovery, apply_mode)
+            attach_storage_diagnosis(job, apply_state, storage_diagnosis)
+            apply_state["controller"] = plan.get("source_discovery", {}).get("controller", {}) or apply_state["controller"]
+            if storage_diagnosis.get("status") == "blocked":
+                platform = {
+                    "id": "storage_preflight_blocked",
+                    "label": "Storage preflight blocked",
+                    "supported": False,
+                    "controller_path": (apply_state.get("controller") or {}).get("path", ""),
+                    "reason": "; ".join(storage_diagnosis.get("rejection_reasons") or []) or "Storage preflight blocked destructive apply.",
+                }
+                break
             platform = choose_storage_apply_platform(pre_change_discovery, plan)
             platform_id = str(platform.get("id") or "")
             if platform_id in {"gen10_hpe_smartstorageconfig", "standard_redfish_volumes"}:
@@ -5277,6 +5617,19 @@ def run_storage_apply(
                 time.sleep(5)
                 continue
             break
+        attach_storage_diagnosis(job, apply_state, storage_diagnosis)
+        for line in diagnostic_log_lines("Storage preflight", storage_diagnosis):
+            update_job(
+                kit_name,
+                job,
+                "Running",
+                "Choose storage apply path",
+                3,
+                apply_steps,
+                line,
+                progress_percent=storage_workflow_progress_percent("running_apply", 3, apply_steps),
+            )
+        save_storage_apply_state(apply_state, apply_paths)
         write_storage_discovery_snapshot_files(
             apply_paths["pre_change_summary"],
             apply_paths["pre_change_raw"],
@@ -5308,8 +5661,29 @@ def run_storage_apply(
         if not platform_supported:
             if str(platform.get("id") or "") == "hpe_smart_storage_read_only":
                 platform_error = "Storage apply requires server power On and a writable Redfish Volumes path. Current path is inventory-only."
+                platform_error += " Recommended fix: run storage discovery again while the server is powered On, review the writable Redfish Volumes options, and re-approve storage before applying."
+            elif str(platform.get("id") or "") == "storage_preflight_blocked":
+                recommended = str((storage_diagnosis or {}).get("recommended_fix") or "").strip()
+                platform_error = str(platform.get("reason") or "").strip() or "Storage preflight blocked destructive apply."
+                if recommended:
+                    platform_error += f" Recommended fix: {recommended}"
             else:
                 platform_error = str(platform.get("reason") or "").strip() or "No writable storage apply path is available."
+            if str(platform.get("id") or "") != "storage_preflight_blocked":
+                storage_diagnosis = storage_blocked_diagnosis(plan, pre_change_discovery, apply_mode, platform, platform_error)
+                attach_storage_diagnosis(job, apply_state, storage_diagnosis)
+                for line in diagnostic_log_lines("Storage preflight", storage_diagnosis):
+                    update_job(
+                        kit_name,
+                        job,
+                        "Running",
+                        "Choose storage apply path",
+                        3,
+                        apply_steps,
+                        line,
+                        progress_percent=storage_workflow_progress_percent("running_apply", 3, apply_steps),
+                    )
+                save_storage_apply_state(apply_state, apply_paths)
         record_storage_apply_step(
             kit_name,
             job,
@@ -6148,8 +6522,21 @@ def run_storage_as_part_of_real_run(
     )
     pre_change_discovery = {}
     platform = {}
+    storage_diagnosis = {}
     for attempt in range(1, 7):
         pre_change_discovery = client.get_storage_discovery(deep_smart_storage_scan=False)
+        plan, storage_diagnosis = storage_preflight_compare_and_remap(plan, pre_change_discovery, apply_mode)
+        attach_storage_diagnosis(job, apply_state, storage_diagnosis)
+        apply_state["controller"] = plan.get("source_discovery", {}).get("controller", {}) or apply_state["controller"]
+        if storage_diagnosis.get("status") == "blocked":
+            platform = {
+                "id": "storage_preflight_blocked",
+                "label": "Storage preflight blocked",
+                "supported": False,
+                "controller_path": (apply_state.get("controller") or {}).get("path", ""),
+                "reason": "; ".join(storage_diagnosis.get("rejection_reasons") or []) or "Storage preflight blocked destructive apply.",
+            }
+            break
         platform = choose_storage_apply_platform(pre_change_discovery, plan)
         platform_id = str(platform.get("id") or "")
         if platform_id in {"gen10_hpe_smartstorageconfig", "standard_redfish_volumes"}:
@@ -6170,6 +6557,19 @@ def run_storage_as_part_of_real_run(
             time.sleep(5)
             continue
         break
+    attach_storage_diagnosis(job, apply_state, storage_diagnosis)
+    for line in diagnostic_log_lines("Storage preflight", storage_diagnosis):
+        update_job(
+            kit_name,
+            job,
+            "Running",
+            "Choose storage apply path",
+            current_step,
+            total_steps,
+            line,
+            progress_percent=combined_progress_percent(current_step, total_steps),
+        )
+    save_storage_apply_state(apply_state, apply_paths)
     write_storage_discovery_snapshot_files(
         apply_paths["pre_change_summary"],
         apply_paths["pre_change_raw"],
@@ -6203,8 +6603,29 @@ def run_storage_as_part_of_real_run(
     if not platform_supported:
         if str(platform.get("id") or "") == "hpe_smart_storage_read_only":
             platform_error = "Storage apply requires server power On and a writable Redfish Volumes path. Current path is inventory-only."
+            platform_error += " Recommended fix: run storage discovery again while the server is powered On, review the writable Redfish Volumes options, and re-approve storage before applying."
+        elif str(platform.get("id") or "") == "storage_preflight_blocked":
+            recommended = str((storage_diagnosis or {}).get("recommended_fix") or "").strip()
+            platform_error = str(platform.get("reason") or "").strip() or "Storage preflight blocked destructive apply."
+            if recommended:
+                platform_error += f" Recommended fix: {recommended}"
         else:
             platform_error = str(platform.get("reason") or "").strip() or "No writable storage apply path is available."
+        if str(platform.get("id") or "") != "storage_preflight_blocked":
+            storage_diagnosis = storage_blocked_diagnosis(plan, pre_change_discovery, apply_mode, platform, platform_error)
+            attach_storage_diagnosis(job, apply_state, storage_diagnosis)
+            for line in diagnostic_log_lines("Storage preflight", storage_diagnosis):
+                update_job(
+                    kit_name,
+                    job,
+                    "Running",
+                    "Choose storage apply path",
+                    current_step,
+                    total_steps,
+                    line,
+                    progress_percent=combined_progress_percent(current_step, total_steps),
+                )
+            save_storage_apply_state(apply_state, apply_paths)
     current_step += 1
     record_storage_apply_step(
         kit_name,

@@ -77,6 +77,9 @@ def create_debug_bundle(
     safe_kit = redact_value(safe_context.get("kit_config") or {})
     safe_logs = redact_job_logs(safe_context.get("job_logs") or [])
     error_message = str(safe_context.get("error_message") or "").strip()
+    diagnosis = redact_value(safe_context.get("diagnosis") or {})
+    if not isinstance(diagnosis, dict):
+        diagnosis = {"status": str(diagnosis)}
 
     payload = {
         "debug_bundle_version": 1,
@@ -92,6 +95,17 @@ def create_debug_bundle(
             "scope": str(safe_context.get("job_scope") or ""),
             "current_stage": str(safe_context.get("current_stage") or ""),
             "error_message": str(redact_value(error_message)),
+        },
+        "diagnosis": {
+            "summary": str(diagnosis.get("selected_action") or diagnosis.get("status") or ""),
+            "failed_stage": str(safe_context.get("current_stage") or ""),
+            "desired_intent": diagnosis.get("desired_state") or {},
+            "discovered_state": diagnosis.get("discovered_state") or {},
+            "available_actions_options": diagnosis.get("options_discovered") or {},
+            "attempted_corrections": diagnosis.get("safe_corrections_attempted") or [],
+            "rejection_reasons": diagnosis.get("rejection_reasons") or [],
+            "recommended_next_steps": str(diagnosis.get("recommended_fix") or ""),
+            "user_action_required": bool(diagnosis.get("user_action_required")),
         },
         "environment": {
             "python_version": sys.version.replace("\n", " "),

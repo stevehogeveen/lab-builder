@@ -1,4 +1,5 @@
 import asyncio
+import copy
 import pytest
 import yaml
 import requests
@@ -1655,6 +1656,16 @@ def test_save_job_failed_real_generates_redacted_debug_bundle(client):
                 "Authorization: Bearer topsecret",
                 "[FAILED] simulated failure",
             ],
+            "diagnosis": {
+                "status": "blocked",
+                "desired_state": {"controller_path": "/old"},
+                "discovered_state": {"controller_path": "/new"},
+                "options_discovered": {"writable_volume_paths": ["/new/Volumes"]},
+                "safe_corrections_attempted": ["checked live storage"],
+                "rejection_reasons": ["Bay 3 drive serial changed"],
+                "recommended_fix": "Run storage discovery again and re-approve storage.",
+                "user_action_required": True,
+            },
         },
     )
     latest = main.DEBUG_BUNDLES_DIR / "latest-failure.txt"
@@ -1662,6 +1673,9 @@ def test_save_job_failed_real_generates_redacted_debug_bundle(client):
     text = latest.read_text(encoding="utf-8")
     assert "topsecret" not in text
     assert "Authorization=[REDACTED]" in text
+    assert "recommended_next_steps" in text
+    assert "Run storage discovery again and re-approve storage." in text
+    assert "Bay 3 drive serial changed" in text
     response = client.get("/debug-bundles/latest")
     assert response.status_code == 200
 
@@ -2300,6 +2314,21 @@ def planner_standard_redfish_apply_discovery(
             "hpe_smart_storage_diagnostics": {"probed_paths": [], "collections": [], "warnings": [], "deep_scan_requested": False, "deep_fallback_ran": False},
         },
     }
+
+
+def remap_standard_redfish_discovery_path(discovery: dict, old_path: str, new_path: str) -> dict:
+    remapped = copy.deepcopy(discovery)
+
+    def replace_value(value):
+        if isinstance(value, str):
+            return value.replace(old_path, new_path).replace("DE009000", "DE00A000")
+        if isinstance(value, dict):
+            return {key: replace_value(item) for key, item in value.items()}
+        if isinstance(value, list):
+            return [replace_value(item) for item in value]
+        return value
+
+    return replace_value(remapped)
 
 
 def planner_gen10_plus_hpe_inventory_without_settings_path() -> dict:
@@ -6333,10 +6362,13 @@ def test_run_storage_as_part_of_real_run_fails_early_when_only_read_only_hpe_inv
 
     text = str(exc.value)
     assert "Storage apply requires server power On and a writable Redfish Volumes path. Current path is inventory-only." in text
+    assert "Recommended fix" in text
     failed_job = main.load_job(cfg["site"]["name"])
     assert failed_job["status"] == "Failed"
     assert failed_job["current_stage"] == "Choose storage apply path"
     assert any("[FAILED] Choose storage apply path" in line for line in failed_job["logs"])
+    assert any("[DISCOVER] Storage preflight options discovered" in line for line in failed_job["logs"])
+    assert any("[BLOCKED] Storage preflight rejected" in line for line in failed_job["logs"])
 
 
 def test_load_job_normalizes_stale_running_complete_state():
@@ -7460,6 +7492,50 @@ def test_choose_storage_apply_platform_supports_standard_redfish_volumes_backend
     assert platform["reset_target"] == "/redfish/v1/Systems/1/Storage/DE009000/Actions/Storage.ResetToDefaults"
 
 
+def test_storage_preflight_remaps_controller_path_when_hardware_intent_matches():
+    approved = planner_standard_redfish_apply_discovery(existing_volumes=True, generation="Gen11", ilo_version="iLO 6")
+    live = remap_standard_redfish_discovery_path(
+        approved,
+        "/redfish/v1/Systems/1/Storage/DE009000",
+        "/redfish/v1/Systems/1/Storage/DE00A000",
+    )
+    export_paths = {
+        "directory": Path("/tmp"),
+        "summary": Path("/tmp/summary.yml"),
+        "raw": Path("/tmp/raw.json"),
+    }
+    plan = main.build_raid_plan(approved, export_paths)
+
+    remapped_plan, diagnosis = main.storage_preflight_compare_and_remap(plan, live, "wipe_rebuild")
+
+    assert diagnosis["status"] == "remapped"
+    assert remapped_plan["source_discovery"]["controller"]["path"] == "/redfish/v1/Systems/1/Storage/DE00A000"
+    assert remapped_plan["existing_logical_volumes"][0]["path"] == "/redfish/v1/Systems/1/Storage/DE00A000/Volumes/1"
+    assert any("Controller Redfish path changed" in item for item in diagnosis["differences"])
+    assert any("Remapped controller path" in item for item in diagnosis["safe_corrections_attempted"])
+
+
+def test_storage_preflight_blocks_when_approved_drive_serial_changes():
+    approved = planner_standard_redfish_apply_discovery(existing_volumes=False, generation="Gen11", ilo_version="iLO 6")
+    for drive in approved["summary"]["standard_redfish_storage"]["drives"]:
+        drive["serial_number"] = f"SERIAL-{drive['bay']}"
+    live = copy.deepcopy(approved)
+    live["summary"]["standard_redfish_storage"]["drives"][2]["serial_number"] = "DIFFERENT-SERIAL"
+    export_paths = {
+        "directory": Path("/tmp"),
+        "summary": Path("/tmp/summary.yml"),
+        "raw": Path("/tmp/raw.json"),
+    }
+    plan = main.build_raid_plan(approved, export_paths)
+
+    _remapped_plan, diagnosis = main.storage_preflight_compare_and_remap(plan, live, "wipe_rebuild")
+
+    assert diagnosis["status"] == "blocked"
+    assert diagnosis["user_action_required"] is True
+    assert any("drive serial changed" in item for item in diagnosis["rejection_reasons"])
+    assert "re-approve storage" in diagnosis["recommended_fix"]
+
+
 def test_build_raid_plan_scopes_drives_to_selected_controller_when_multiple_are_detected():
     discovery = planner_standard_redfish_apply_discovery(existing_volumes=False, generation="Gen11", ilo_version="iLO 6", include_second_controller=True)
     export_paths = {
@@ -7692,6 +7768,57 @@ def test_run_storage_as_part_of_real_run_supports_standard_redfish_volumes_backe
             },
         ),
     ]
+
+
+def test_run_storage_as_part_of_real_run_remaps_stale_controller_path_before_apply():
+    cfg = main.default_config()
+    cfg["site"]["name"] = "Std-Storage-Remap-Kit"
+    main.save_kit_config(cfg)
+
+    approved = planner_standard_redfish_apply_discovery(existing_volumes=True, generation="Gen11", ilo_version="iLO 6")
+    live = remap_standard_redfish_discovery_path(
+        approved,
+        "/redfish/v1/Systems/1/Storage/DE009000",
+        "/redfish/v1/Systems/1/Storage/DE00A000",
+    )
+    export_paths = main.export_storage_discovery_snapshot(cfg, approved, host="10.122.142.13")
+    plan = main.build_raid_plan(approved, export_paths)
+    plan_paths = main.export_raid_plan_snapshot(cfg, plan, export_paths)
+    storage_execution = {
+        "discovery_raw_path": str(export_paths["raw"]),
+        "plan_path": str(plan_paths["plan"]),
+        "approved_host": "10.122.142.13",
+    }
+    job = {
+        "status": "Running",
+        "scope": "multi__ilo__storage__esxi",
+        "current_stage": "",
+        "progress_percent": 0,
+        "completed_steps": 0,
+        "total_steps": 32,
+        "logs": [],
+    }
+    main.save_job(cfg["site"]["name"], job)
+    client = RecordingStandardRedfishApplyClient(live)
+
+    result = main.run_storage_as_part_of_real_run(
+        cfg,
+        client,
+        "10.122.142.13",
+        "10.122.142.13",
+        storage_execution,
+        cfg["site"]["name"],
+        job,
+        17,
+        32,
+    )
+
+    assert result["apply_state"]["apply_path"] == "Standard Redfish Storage Volumes"
+    assert client.calls[0] == ("DELETE", "/redfish/v1/Systems/1/Storage/DE00A000/Volumes/1", None)
+    assert client.calls[1][1] == "/redfish/v1/Systems/1/Storage/DE00A000/Volumes"
+    finished_job = main.load_job(cfg["site"]["name"])
+    assert any("[REMAP] Storage preflight" in line for line in finished_job["logs"])
+    assert finished_job["storage_preflight"]["status"] == "remapped"
 
 
 def test_run_storage_as_part_of_real_run_powers_on_when_server_starts_off():
