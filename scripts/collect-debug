@@ -1,0 +1,47 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+cd "$ROOT_DIR"
+
+KIT_NAME="${1:-$(cat config/current_kit.txt 2>/dev/null || echo Kit-01)}"
+export KIT_NAME
+
+.venv/bin/python - <<'PY'
+from app.debug_bundle import create_debug_bundle
+import os
+from app.main import (
+    BASE_DIR,
+    ARTIFACTS_DIR,
+    CONFIG_DIR,
+    JOBS_DIR,
+    RUNS_DIR,
+    GENERATED_DIR,
+    EXPORTS_DIR,
+    load_job,
+    load_kit_config,
+)
+
+kit = os.environ.get("KIT_NAME", "Kit-01")
+job = load_job(kit)
+cfg = load_kit_config(kit)
+path = create_debug_bundle(
+    base_dir=BASE_DIR,
+    artifacts_dir=ARTIFACTS_DIR,
+    config_dir=CONFIG_DIR,
+    jobs_dir=JOBS_DIR,
+    runs_dir=RUNS_DIR,
+    generated_dir=GENERATED_DIR,
+    exports_dir=EXPORTS_DIR,
+    kit_name=kit,
+    failure_context={
+        "job_status": job.get("status"),
+        "job_scope": job.get("scope"),
+        "current_stage": job.get("current_stage"),
+        "job_logs": list(job.get("logs") or []),
+        "error_message": str((list(job.get("logs") or [])[-1] if list(job.get("logs") or []) else "")),
+        "kit_config": cfg,
+    },
+)
+print(path)
+PY

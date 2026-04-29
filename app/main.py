@@ -20,6 +20,7 @@ from fastapi.templating import Jinja2Templates
 from app.ilo import ILOClient, ILOConfig, ILOError
 from app.esxi.builder import build_custom_iso
 from app.esxi.models import EsxiBuildSpec
+from app.debug_bundle import create_debug_bundle
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 TEMPLATES_DIR = BASE_DIR / "templates"
@@ -40,6 +41,7 @@ EXPORTS_DIR = ARTIFACTS_DIR / "exports"
 ILO_LIVE_EXPORT_DIR = EXPORTS_DIR / "ilo" / "live"
 STORAGE_RAID_EXPORT_DIR = EXPORTS_DIR / "storage-raid"
 BUILD_OUTPUT_DIR = EXPORTS_DIR / "builds"
+DEBUG_BUNDLES_DIR = ARTIFACTS_DIR / "debug-bundles"
 STORAGE_APPLY_CONFIRM_CREATE = "CREATE STORAGE"
 STORAGE_APPLY_CONFIRM_WIPE = "WIPE STORAGE"
 
@@ -59,6 +61,7 @@ ILO_INVENTORY_DIR.mkdir(parents=True, exist_ok=True)
 ILO_LIVE_EXPORT_DIR.mkdir(parents=True, exist_ok=True)
 STORAGE_RAID_EXPORT_DIR.mkdir(parents=True, exist_ok=True)
 BUILD_OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+DEBUG_BUNDLES_DIR.mkdir(parents=True, exist_ok=True)
 
 app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
 templates = Jinja2Templates(directory=str(TEMPLATES_DIR))
@@ -725,6 +728,29 @@ def save_job(kit_name: str, job: dict):
         yaml.safe_dump(job, f, sort_keys=False)
     os.replace(tmp_path, path)
     write_run_bundle_files(kit_name, job)
+    if str(job.get("status") or "").strip() == "Failed" and str(job.get("execution_mode") or "").strip() == "real":
+        try:
+            logs = list(job.get("logs") or [])
+            create_debug_bundle(
+                base_dir=BASE_DIR,
+                artifacts_dir=ARTIFACTS_DIR,
+                config_dir=CONFIG_DIR,
+                jobs_dir=JOBS_DIR,
+                runs_dir=RUNS_DIR,
+                generated_dir=GENERATED_DIR,
+                exports_dir=EXPORTS_DIR,
+                kit_name=sanitize_kit_name(kit_name),
+                failure_context={
+                    "job_status": job.get("status"),
+                    "job_scope": job.get("scope"),
+                    "current_stage": job.get("current_stage"),
+                    "job_logs": logs,
+                    "error_message": str(logs[-1] if logs else ""),
+                    "kit_config": load_kit_config(kit_name),
+                },
+            )
+        except Exception:
+            pass
 
 def history_path(kit_name: str) -> Path:
     return HISTORY_DIR / f"{sanitize_kit_name(kit_name)}_history.yml"
@@ -12219,6 +12245,14 @@ async def download_run_summary(scope: str = Form(...)):
     cfg = load_kit_config()
     path = write_run_summary_artifact(cfg, scope)
     return FileResponse(path=path, filename=path.name, media_type="application/x-yaml")
+
+
+@app.get("/debug-bundles/latest")
+async def download_latest_debug_bundle():
+    path = DEBUG_BUNDLES_DIR / "latest-failure.txt"
+    if not path.exists():
+        return HTMLResponse("No debug bundle has been generated yet.", status_code=404)
+    return FileResponse(path=path, filename="latest-failure.txt", media_type="text/plain")
 
 
 def resolve_built_esxi_iso_path(kit_name: str, output_name: str) -> Path:

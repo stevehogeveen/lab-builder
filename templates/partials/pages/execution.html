@@ -94,6 +94,11 @@
             <div class="codeblock max-h-96 overflow-y-auto mt-3" id="execution-live-logs">{% if job.get('logs') %}{% for line in job.get('logs', []) %}{{ line }}
 {% endfor %}{% else %}Nothing is running right now. Start a preview or a real run to see live updates here.{% endif %}</div>
         </details>
+        {% if job.get('status') == 'Failed' %}
+        <div class="actions mt-4">
+            <a class="btn btn-danger" href="/debug-bundles/latest">Download latest debug bundle</a>
+        </div>
+        {% endif %}
     </section>
 
     <section class="card execution-controls-card workflow-hero-card">

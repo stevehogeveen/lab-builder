@@ -10,6 +10,7 @@ from app.ilo import ILOClient, ILOConfig, ILOError
 from app.esxi.kickstart import build_kickstart
 import app.ilo as ilo_module
 import app.main as main
+from app.debug_bundle import redact_value
 
 
 @pytest.fixture(autouse=True)
@@ -34,6 +35,7 @@ def isolate_runtime_paths(tmp_path, monkeypatch):
         "ILO_INVENTORY_DIR": artifacts_dir / "history" / "ilo-inventory",
         "ILO_LIVE_EXPORT_DIR": exports_dir / "ilo" / "live",
         "STORAGE_RAID_EXPORT_DIR": exports_dir / "storage-raid",
+        "DEBUG_BUNDLES_DIR": artifacts_dir / "debug-bundles",
     }
     for value in paths.values():
         if isinstance(value, Path) and value.suffix == "":
@@ -923,6 +925,7 @@ def client(tmp_path, monkeypatch):
     exports_dir = artifacts_dir / "exports"
     ilo_live_export_dir = exports_dir / "ilo" / "live"
     storage_raid_export_dir = exports_dir / "storage-raid"
+    debug_bundles_dir = artifacts_dir / "debug-bundles"
 
     for path in (
         config_dir,
@@ -936,6 +939,7 @@ def client(tmp_path, monkeypatch):
         ilo_inventory_dir,
         ilo_live_export_dir,
         storage_raid_export_dir,
+        debug_bundles_dir,
     ):
         path.mkdir(parents=True, exist_ok=True)
 
@@ -953,6 +957,7 @@ def client(tmp_path, monkeypatch):
     monkeypatch.setattr(main, "EXPORTS_DIR", exports_dir)
     monkeypatch.setattr(main, "ILO_LIVE_EXPORT_DIR", ilo_live_export_dir)
     monkeypatch.setattr(main, "STORAGE_RAID_EXPORT_DIR", storage_raid_export_dir)
+    monkeypatch.setattr(main, "DEBUG_BUNDLES_DIR", debug_bundles_dir)
     main.set_current_kit_name("Kit-01")
 
     with TestClient(main.app) as test_client:
@@ -1592,6 +1597,53 @@ def test_latest_live_summary_and_raw_downloads_use_new_export_layout(client, mon
     assert raw_download.headers["content-type"].startswith("application/json")
     assert raw_download.headers["x-live-inventory-summary-path"].endswith("summary.yml")
     assert raw_download.headers["x-live-inventory-raw-path"].endswith("raw.json")
+
+
+def test_debug_bundle_redaction_masks_sensitive_fields():
+    value = {
+        "password": "abc",
+        "nested": {"Authorization": "Bearer token", "ok": "value"},
+        "list": [{"session_id": "123"}, {"note": "safe"}],
+    }
+    redacted = redact_value(value)
+    assert redacted["password"] == "[REDACTED]"
+    assert redacted["nested"]["Authorization"] == "[REDACTED]"
+    assert redacted["nested"]["ok"] == "value"
+    assert redacted["list"][0]["session_id"] == "[REDACTED]"
+
+
+def test_debug_bundle_latest_route_404_when_missing(client):
+    response = client.get("/debug-bundles/latest")
+    assert response.status_code == 404
+
+
+def test_save_job_failed_real_generates_redacted_debug_bundle(client):
+    kit_name = "Debug Bundle Kit"
+    main.save_job(
+        kit_name,
+        {
+            "status": "Failed",
+            "scope": "multi__ilo__storage__esxi",
+            "execution_mode": "real",
+            "execution_mode_label": "Real execution",
+            "current_stage": "Storage apply",
+            "progress_percent": 50,
+            "completed_steps": 5,
+            "total_steps": 10,
+            "logs": [
+                "[RUNNING] storage stage",
+                "Authorization: Bearer topsecret",
+                "[FAILED] simulated failure",
+            ],
+        },
+    )
+    latest = main.DEBUG_BUNDLES_DIR / "latest-failure.txt"
+    assert latest.exists()
+    text = latest.read_text(encoding="utf-8")
+    assert "topsecret" not in text
+    assert "Authorization=[REDACTED]" in text
+    response = client.get("/debug-bundles/latest")
+    assert response.status_code == 200
 
 
 def test_load_latest_live_inventory_snapshot_for_cfg_does_not_leak_other_kits(monkeypatch):

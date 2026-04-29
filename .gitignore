@@ -8,6 +8,7 @@ artifacts/generated/
 artifacts/history/
 artifacts/jobs/
 artifacts/runs/
+artifacts/debug-bundles/
 config/current_kit.txt
 config/kits/*.yml
 offline-wheels/
