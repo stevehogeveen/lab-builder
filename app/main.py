@@ -8536,10 +8536,20 @@ def run_esxi_real(cfg: dict, run_stamp: str | None = None):
             update_job(kit_name, job, "Running", "Power off", 4, total, "[RUNNING] Powering server off before setting one-time boot")
             trace_payload["steps"].append({"stage": "power_off", "status": "running", "from_state": current_power})
             save_esxi_trace(trace_path, trace_payload)
-            try:
-                power_off_result = run_with_session_refresh("Power off", lambda c: c.power_reset(reset_type="GracefulShutdown", system_path=system_path))
-            except Exception:
-                power_off_result = run_with_session_refresh("Power off", lambda c: c.power_reset(reset_type="ForceOff", system_path=system_path))
+            power_off_result = run_with_session_refresh("Power off", lambda c: c.power_reset(reset_type="ForceOff", system_path=system_path))
+            update_job(
+                kit_name,
+                job,
+                "Running",
+                "Power off",
+                4,
+                total,
+                (
+                    "[INFO] Power reset request sent: "
+                    f"ResetType={power_off_result.get('reset_type') or 'ForceOff'} "
+                    f"endpoint={power_off_result.get('path') or '(unknown)'}"
+                ),
+            )
             if power_off_result.get("recovered_after_transport_disconnect"):
                 update_job(
                     kit_name,

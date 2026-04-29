@@ -3583,7 +3583,11 @@ def test_run_esxi_real_builds_iso_and_starts_virtual_media_boot(monkeypatch, tmp
                 self.power_state = "Off"
             elif reset_type == "On":
                 self.power_state = "On"
-            return {"reset_type": reset_type, "system_path": system_path}
+            return {
+                "reset_type": reset_type,
+                "system_path": system_path,
+                "path": f"{system_path}/Actions/ComputerSystem.Reset" if system_path else "/redfish/v1/Systems/1/Actions/ComputerSystem.Reset",
+            }
 
         def _post(self, target, payload):
             self.calls.append(("post", target, payload))
@@ -3751,7 +3755,8 @@ def test_run_esxi_real_builds_iso_and_starts_virtual_media_boot(monkeypatch, tmp
     assert summary["esxi_run_summary"]["management_network"]["host"] == "10.10.8.10"
     assert summary["esxi_run_summary"]["management_network"]["attempts"] == 2
     assert ("eject", "/redfish/v1/Managers/1/VirtualMedia/2") in client.calls
-    assert ("power_reset", "GracefulShutdown", "/redfish/v1/Systems/1") in client.calls
+    assert ("power_reset", "ForceOff", "/redfish/v1/Systems/1") in client.calls
+    assert "[INFO] Power reset request sent: ResetType=ForceOff endpoint=/redfish/v1/Systems/1/Actions/ComputerSystem.Reset" in joined_logs
     assert (
         "post",
         "/redfish/v1/Managers/1/VirtualMedia/2/Actions/VirtualMedia.InsertMedia",
@@ -3773,7 +3778,6 @@ def test_run_esxi_real_builds_iso_and_starts_virtual_media_boot(monkeypatch, tmp
     off_client = created_clients[-1]
 
     assert "[OK] Server was already off; no shutdown request was needed before setting one-time boot" in off_logs
-    assert ("power_reset", "GracefulShutdown", "/redfish/v1/Systems/1") not in off_client.calls
     assert ("power_reset", "ForceOff", "/redfish/v1/Systems/1") not in off_client.calls
     assert ("power_reset", "On", "/redfish/v1/Systems/1") in off_client.calls
 
