@@ -6355,6 +6355,208 @@ def test_build_raid_plan_allows_single_os_array_only():
     assert plan["planned_layout"]["data_raid6"]["bays"] == ""
 
 
+def duplicate_bay_gen11_storage_discovery() -> dict:
+    controller_path = "/redfish/v1/Systems/1/Storage/DE009001"
+    drives = [
+        ("4", "1", "VK000240GXNWU", "254854A5AC8C", 223.57),
+        ("1", "1", "VO001920RXUKC", "LARGE-BAY1", 1788.5),
+        ("3", "2", "VK000240GXNWU", "254854A5AB49", 223.57),
+        ("2", "2", "VO001920RXUKC", "LARGE-BAY2", 1788.5),
+        ("5", "3", "VO001920RXUKC", "LARGE-BAY3", 1788.5),
+        ("6", "4", "VO001920RXUKC", "LARGE-BAY4", 1788.5),
+        ("7", "5", "VO001920RXUKC", "LARGE-BAY5", 1788.5),
+        ("8", "6", "VO001920RXUKC", "LARGE-BAY6", 1788.5),
+        ("9", "7", "VO001920RXUKC", "LARGE-BAY7", 1788.5),
+        ("10", "8", "VO001920RXUKC", "LARGE-BAY8", 1788.5),
+    ]
+    return {
+        "summary": {
+            "server": {"serial_number": "ABC123"},
+            "standard_redfish_storage": {
+                "controllers": [
+                    {"path": controller_path, "name": "MR416i-o", "model": "MR416i-o"},
+                ],
+                "volumes": [],
+                "drives": [
+                    {
+                        "path": f"/redfish/v1/Chassis/DE009001/Drives/{drive_id}",
+                        "controller_path": controller_path,
+                        "bay": bay,
+                        "name": model,
+                        "model": model,
+                        "serial_number": serial,
+                        "size_gib": size_gib,
+                        "media_type": "SSD",
+                        "protocol": "NVMe",
+                        "status": "OK / Enabled",
+                    }
+                    for drive_id, bay, model, serial, size_gib in drives
+                ],
+            },
+            "hpe_smart_storage": {"controllers": [], "volumes": [], "drives": []},
+        },
+        "raw": {"source_host": "10.10.8.80"},
+    }
+
+
+def test_build_raid_plan_uses_drive_identities_when_bays_are_duplicated():
+    discovery = duplicate_bay_gen11_storage_discovery()
+    discovery_paths = {
+        "directory": main.Path("/tmp/storage-plan-test"),
+        "summary": main.Path("/tmp/storage-plan-test/summary.yml"),
+        "raw": main.Path("/tmp/storage-plan-test/raw.json"),
+    }
+
+    plan = main.build_raid_plan(
+        discovery,
+        discovery_paths,
+        overrides={
+            "controller_path": "/redfish/v1/Systems/1/Storage/DE009001",
+            "os_raid_level": "RAID1",
+            "data_raid_level": "RAID6",
+            "os_drive_ids": [
+                "/redfish/v1/Chassis/DE009001/Drives/4",
+                "/redfish/v1/Chassis/DE009001/Drives/3",
+            ],
+            "data_drive_ids": [
+                "/redfish/v1/Chassis/DE009001/Drives/5",
+                "/redfish/v1/Chassis/DE009001/Drives/6",
+                "/redfish/v1/Chassis/DE009001/Drives/7",
+                "/redfish/v1/Chassis/DE009001/Drives/8",
+                "/redfish/v1/Chassis/DE009001/Drives/9",
+                "/redfish/v1/Chassis/DE009001/Drives/10",
+            ],
+            "hot_spare_drive_id": "",
+        },
+    )
+
+    assert plan["valid"] is True
+    assert plan["customization"]["selected_controller_path"] == "/redfish/v1/Systems/1/Storage/DE009001"
+    assert plan["customization"]["selected_os_drive_ids"] == [
+        "/redfish/v1/Chassis/DE009001/Drives/4",
+        "/redfish/v1/Chassis/DE009001/Drives/3",
+    ]
+    assert plan["planned_layout"]["os_raid1"]["bays"] == "1, 2"
+    assert plan["os_raid1"]["drives"][0]["model"] == "VK000240GXNWU"
+    assert plan["os_raid1"]["drives"][1]["model"] == "VK000240GXNWU"
+    assert plan["planned_layout"]["data_raid6"]["bays"] == "3, 4, 5, 6, 7, 8"
+    assert plan["hot_spare"]["reserved"] is False
+    assert any("Duplicate bay numbers detected" in warning for warning in plan["warnings"])
+
+
+def test_build_raid_plan_blocks_reused_drive_identity():
+    discovery = duplicate_bay_gen11_storage_discovery()
+    discovery_paths = {
+        "directory": main.Path("/tmp/storage-plan-test"),
+        "summary": main.Path("/tmp/storage-plan-test/summary.yml"),
+        "raw": main.Path("/tmp/storage-plan-test/raw.json"),
+    }
+
+    plan = main.build_raid_plan(
+        discovery,
+        discovery_paths,
+        overrides={
+            "controller_path": "/redfish/v1/Systems/1/Storage/DE009001",
+            "os_raid_level": "RAID1",
+            "data_raid_level": "RAID6",
+            "os_drive_ids": [
+                "/redfish/v1/Chassis/DE009001/Drives/4",
+                "/redfish/v1/Chassis/DE009001/Drives/3",
+            ],
+            "data_drive_ids": [
+                "/redfish/v1/Chassis/DE009001/Drives/3",
+                "/redfish/v1/Chassis/DE009001/Drives/5",
+                "/redfish/v1/Chassis/DE009001/Drives/6",
+                "/redfish/v1/Chassis/DE009001/Drives/7",
+            ],
+        },
+    )
+
+    assert plan["valid"] is False
+    assert any("same drive" in blocker.lower() or "same drive identity" in blocker.lower() for blocker in plan["blockers"])
+
+
+def test_storage_approval_preserves_selected_drive_identities(client, monkeypatch):
+    def fake_strftime(fmt):
+        if fmt == "%Y%m%d-%H%M%S":
+            return "20260430-120000"
+        if fmt == "%Y-%m-%d %H:%M:%S":
+            return "2026-04-30 12:00:00"
+        raise AssertionError(f"unexpected strftime format: {fmt}")
+
+    monkeypatch.setattr(main.time, "strftime", fake_strftime)
+    cfg = main.default_config()
+    cfg["site"]["name"] = "Duplicate Bay Kit"
+    cfg["ilo"]["target_ip"] = "10.10.8.80"
+    cfg["ip_plan"]["ilo"] = "10.10.8.80"
+    cfg["ilo"]["current_ip"] = "10.10.8.80"
+    cfg["ilo"]["host"] = "10.10.8.80"
+    main.save_kit_config(cfg)
+    discovery = duplicate_bay_gen11_storage_discovery()
+    export_paths = main.export_storage_discovery_snapshot(cfg, discovery, host="10.10.8.80")
+
+    plan_response = client.post(
+        "/plan-raid-layout",
+        data={
+            "return_page": "storage",
+            "discovery_raw_path": str(export_paths["raw"]),
+            "controller_path": "/redfish/v1/Systems/1/Storage/DE009001",
+            "os_raid_level": "RAID1",
+            "data_raid_level": "RAID6",
+            "os_drive_ids": [
+                "/redfish/v1/Chassis/DE009001/Drives/4",
+                "/redfish/v1/Chassis/DE009001/Drives/3",
+            ],
+            "data_drive_ids": [
+                "/redfish/v1/Chassis/DE009001/Drives/5",
+                "/redfish/v1/Chassis/DE009001/Drives/6",
+                "/redfish/v1/Chassis/DE009001/Drives/7",
+                "/redfish/v1/Chassis/DE009001/Drives/8",
+                "/redfish/v1/Chassis/DE009001/Drives/9",
+                "/redfish/v1/Chassis/DE009001/Drives/10",
+            ],
+            "hot_spare_drive_id": "",
+        },
+    )
+
+    assert plan_response.status_code == 200
+    plan_path = export_paths["directory"] / "raid-plan.yml"
+    plan = yaml.safe_load(plan_path.read_text(encoding="utf-8"))["plan"]
+    assert plan["customization"]["selected_os_drive_ids"] == [
+        "/redfish/v1/Chassis/DE009001/Drives/4",
+        "/redfish/v1/Chassis/DE009001/Drives/3",
+    ]
+
+    approve_response = client.post(
+        "/approve-storage-plan",
+        data={
+            "return_page": "storage",
+            "discovery_raw_path": str(export_paths["raw"]),
+            "raid_plan_path": str(plan_path),
+            "include_in_ilo_run": "on",
+        },
+    )
+
+    assert approve_response.status_code == 200
+    assert "Storage approved" in approve_response.text
+    approved_cfg = main.load_kit_config("Duplicate-Bay-Kit")
+    approved_plan_path = main.Path(approved_cfg["storage"]["approval"]["plan_path"])
+    approved_plan = yaml.safe_load(approved_plan_path.read_text(encoding="utf-8"))["plan"]
+    assert approved_plan["customization"]["selected_os_drive_ids"] == [
+        "/redfish/v1/Chassis/DE009001/Drives/4",
+        "/redfish/v1/Chassis/DE009001/Drives/3",
+    ]
+    assert approved_plan["customization"]["selected_data_drive_ids"] == [
+        "/redfish/v1/Chassis/DE009001/Drives/5",
+        "/redfish/v1/Chassis/DE009001/Drives/6",
+        "/redfish/v1/Chassis/DE009001/Drives/7",
+        "/redfish/v1/Chassis/DE009001/Drives/8",
+        "/redfish/v1/Chassis/DE009001/Drives/9",
+        "/redfish/v1/Chassis/DE009001/Drives/10",
+    ]
+    assert approved_plan["hot_spare"]["drive"] == {}
+
+
 def test_plan_raid_layout_rejects_discovery_from_different_host(client):
     cfg = main.default_config()
     cfg["site"]["name"] = "Plan Kit"

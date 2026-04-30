@@ -3662,6 +3662,13 @@ def storage_drive_sort_key(drive: dict) -> tuple:
     return (bay_num, bay, drive.get("serial_number", ""), drive.get("model", ""), drive.get("path", ""))
 
 
+def storage_drive_identity(drive: dict[str, Any]) -> str:
+    path = str(drive.get("path") or "").strip()
+    if path:
+        return path
+    return str(drive.get("serial_number") or "").strip()
+
+
 def infer_smart_storage_location(drive: dict, source: str) -> tuple[str, str]:
     location = str(drive.get("smart_storage_location") or drive.get("location") or "").strip()
     location_format = str(drive.get("smart_storage_location_format") or drive.get("location_format") or "").strip()
@@ -3680,7 +3687,7 @@ def normalized_plan_drive(drive: dict, source: str) -> dict:
     except Exception:
         size_gib = 0.0
     smart_storage_location, smart_storage_location_format = infer_smart_storage_location(drive, source)
-    return {
+    normalized = {
         "source": source,
         "path": drive.get("path", ""),
         "controller_path": drive.get("controller_path", ""),
@@ -3696,6 +3703,8 @@ def normalized_plan_drive(drive: dict, source: str) -> dict:
         "smart_storage_location": smart_storage_location,
         "smart_storage_location_format": smart_storage_location_format,
     }
+    normalized["drive_identity"] = storage_drive_identity(normalized)
+    return normalized
 
 
 def storage_item_matches_controller(item: dict[str, Any], controller: dict[str, Any]) -> bool:
@@ -4024,7 +4033,31 @@ def build_raid_plan(discovery: dict, discovery_paths: dict[str, Path], overrides
         default_data_raid,
     )
 
+    eligible_by_identity = {storage_drive_identity(drive): drive for drive in eligible_drives if storage_drive_identity(drive)}
     eligible_by_bay = {str(drive.get("bay") or ""): drive for drive in eligible_drives}
+    bay_counts: dict[str, int] = {}
+    for drive in eligible_drives:
+        bay = str(drive.get("bay") or "").strip()
+        if bay:
+            bay_counts[bay] = bay_counts.get(bay, 0) + 1
+    duplicate_bays = sorted([bay for bay, count in bay_counts.items() if count > 1], key=lambda item: (int(item) if item.isdigit() else 999999, item))
+    if duplicate_bays:
+        warnings.append(
+            "Duplicate bay numbers detected in this storage discovery: "
+            f"{', '.join(duplicate_bays)}. Drive selections use Redfish path or serial number, not bay number."
+        )
+    selected_os_ids = [str(item).strip() for item in list(overrides.get("os_drive_ids") or []) if str(item).strip()]
+    selected_data_ids = [str(item).strip() for item in list(overrides.get("data_drive_ids") or []) if str(item).strip()]
+    selected_spare_id = str(overrides.get("hot_spare_drive_id") or "").strip()
+    selected_os_paths = [str(item).strip() for item in list(overrides.get("os_drive_paths") or []) if str(item).strip()]
+    selected_data_paths = [str(item).strip() for item in list(overrides.get("data_drive_paths") or []) if str(item).strip()]
+    selected_spare_path = str(overrides.get("hot_spare_path") or "").strip()
+    if not selected_os_ids:
+        selected_os_ids = selected_os_paths
+    if not selected_data_ids:
+        selected_data_ids = selected_data_paths
+    if not selected_spare_id:
+        selected_spare_id = selected_spare_path
     selected_os_bays = [str(item).strip() for item in list(overrides.get("os_bays") or []) if str(item).strip()]
     selected_data_bays = [str(item).strip() for item in list(overrides.get("data_bays") or []) if str(item).strip()]
     selected_spare_bay = str(overrides.get("hot_spare_bay") or "").strip()
@@ -4036,7 +4069,10 @@ def build_raid_plan(discovery: dict, discovery_paths: dict[str, Path], overrides
     selected_data_raid = normalize_raid_choice("data", str(raw_data_raid or ""), allow_empty=True)
 
     customization_active = bool(
-        selected_os_bays
+        selected_os_ids
+        or selected_data_ids
+        or selected_spare_id
+        or selected_os_bays
         or selected_data_bays
         or selected_spare_bay
         or selected_os_raid != "RAID1"
@@ -4052,33 +4088,55 @@ def build_raid_plan(discovery: dict, discovery_paths: dict[str, Path], overrides
     if customization_active:
         custom_blockers = []
         overlap_blockers = []
-        if not selected_data_raid and not selected_data_bays:
+        if not selected_data_raid and not selected_data_ids and not selected_data_bays:
             data_set = []
             hot_spare = {}
             data_explanation = "This section is not used in the current plan."
-        if selected_os_bays:
+        if selected_os_ids:
+            os_pair = [eligible_by_identity[drive_id] for drive_id in selected_os_ids if drive_id in eligible_by_identity]
+            missing_os = [drive_id for drive_id in selected_os_ids if drive_id not in eligible_by_identity]
+            if missing_os:
+                custom_blockers.append(f"Selected OS drives are not eligible or were not found by drive identity: {', '.join(missing_os)}.")
+            os_explanation = "Using the drives chosen below for the OS mirror."
+        elif selected_os_bays:
             os_pair = [eligible_by_bay[bay] for bay in selected_os_bays if bay in eligible_by_bay]
             missing_os = [bay for bay in selected_os_bays if bay not in eligible_by_bay]
             if missing_os:
                 custom_blockers.append(f"Selected OS drives are not eligible or were not found: {', '.join(missing_os)}.")
             os_explanation = "Using the drives chosen below for the OS mirror."
-        if selected_data_bays:
+        if selected_data_ids:
+            data_set = [eligible_by_identity[drive_id] for drive_id in selected_data_ids if drive_id in eligible_by_identity]
+            missing_data = [drive_id for drive_id in selected_data_ids if drive_id not in eligible_by_identity]
+            if missing_data:
+                custom_blockers.append(f"Selected data drives are not eligible or were not found by drive identity: {', '.join(missing_data)}.")
+            data_explanation = "Using the drives chosen below for the data array."
+        elif selected_data_bays:
             data_set = [eligible_by_bay[bay] for bay in selected_data_bays if bay in eligible_by_bay]
             missing_data = [bay for bay in selected_data_bays if bay not in eligible_by_bay]
             if missing_data:
                 custom_blockers.append(f"Selected data drives are not eligible or were not found: {', '.join(missing_data)}.")
             data_explanation = "Using the drives chosen below for the data array."
-        if selected_spare_bay:
+        if selected_spare_id:
+            hot_spare = dict(eligible_by_identity.get(selected_spare_id) or {})
+            if not hot_spare:
+                custom_blockers.append(f"Selected hot spare drive identity was not eligible or was not found: {selected_spare_id}.")
+        elif selected_spare_bay:
             hot_spare = dict(eligible_by_bay.get(selected_spare_bay) or {})
             if not hot_spare:
                 custom_blockers.append(f"Selected hot spare bay was not eligible or was not found: {selected_spare_bay}.")
-        os_bays_set = {drive.get("bay") for drive in os_pair}
-        data_bays_set = {drive.get("bay") for drive in data_set}
-        if os_bays_set & data_bays_set:
+        os_identity_set = {storage_drive_identity(drive) for drive in os_pair if storage_drive_identity(drive)}
+        data_identity_set = {storage_drive_identity(drive) for drive in data_set if storage_drive_identity(drive)}
+        spare_identity = storage_drive_identity(hot_spare) if hot_spare else ""
+        if len(os_identity_set) != len(os_pair) or len(data_identity_set) != len(data_set) or (hot_spare and not spare_identity):
+            custom_blockers.append("Every selected drive must have a Redfish path or serial number before it can be approved.")
+        selected_identities = [storage_drive_identity(drive) for drive in os_pair + data_set + ([hot_spare] if hot_spare else []) if storage_drive_identity(drive)]
+        if len(selected_identities) != len(set(selected_identities)):
+            overlap_blockers.append("The same drive identity cannot be reused in the OS, data, or hot spare selections.")
+        if os_identity_set and data_identity_set and (os_identity_set & data_identity_set):
             overlap_blockers.append("The same drive cannot be used for both the OS mirror and the data array.")
-        if selected_spare_bay and (selected_spare_bay in os_bays_set or selected_spare_bay in data_bays_set):
+        if spare_identity and spare_identity in (os_identity_set | data_identity_set):
             overlap_blockers.append("The hot spare must be different from the OS and data drives.")
-        if selected_spare_bay and not data_set:
+        if (selected_spare_id or selected_spare_bay) and not data_set:
             custom_blockers.append("Choose data drives before assigning a dedicated hot spare.")
         custom_blockers.extend(validate_raid_drive_count(selected_os_raid, os_pair, section="os"))
         custom_blockers.extend(validate_raid_drive_count(selected_data_raid, data_set, section="data"))
@@ -4180,6 +4238,12 @@ def build_raid_plan(discovery: dict, discovery_paths: dict[str, Path], overrides
             "selected_controller_path": str(controller.get("path") or ""),
             "selected_os_raid_level": selected_os_raid,
             "selected_data_raid_level": selected_data_raid,
+            "selected_os_drive_ids": [storage_drive_identity(drive) for drive in os_pair if storage_drive_identity(drive)],
+            "selected_data_drive_ids": [storage_drive_identity(drive) for drive in data_set if storage_drive_identity(drive)],
+            "selected_hot_spare_drive_id": storage_drive_identity(hot_spare) if hot_spare else "",
+            "selected_os_drive_paths": [str(drive.get("path") or "") for drive in os_pair if str(drive.get("path") or "")],
+            "selected_data_drive_paths": [str(drive.get("path") or "") for drive in data_set if str(drive.get("path") or "")],
+            "selected_hot_spare_path": str((hot_spare or {}).get("path") or ""),
             "selected_os_bays": [str(drive.get("bay") or "") for drive in os_pair],
             "selected_data_bays": [str(drive.get("bay") or "") for drive in data_set],
             "selected_hot_spare_bay": str((hot_spare or {}).get("bay") or ""),
@@ -12586,6 +12650,12 @@ async def plan_raid_layout(
     controller_path: str = Form(""),
     os_raid_level: str | None = Form(None),
     data_raid_level: str | None = Form(None),
+    os_drive_ids: list[str] = Form([]),
+    data_drive_ids: list[str] = Form([]),
+    hot_spare_drive_id: str = Form(""),
+    os_drive_paths: list[str] = Form([]),
+    data_drive_paths: list[str] = Form([]),
+    hot_spare_path: str = Form(""),
     os_bays: list[str] = Form([]),
     data_bays: list[str] = Form([]),
     hot_spare_bay: str = Form(""),
@@ -12605,6 +12675,12 @@ async def plan_raid_layout(
         discovery, discovery_paths = load_storage_discovery_artifact(discovery_raw_path, expected_host=host)
         overrides = {
             "controller_path": controller_path,
+            "os_drive_ids": os_drive_ids,
+            "data_drive_ids": data_drive_ids,
+            "hot_spare_drive_id": hot_spare_drive_id,
+            "os_drive_paths": os_drive_paths,
+            "data_drive_paths": data_drive_paths,
+            "hot_spare_path": hot_spare_path,
             "os_bays": os_bays,
             "data_bays": data_bays,
             "hot_spare_bay": hot_spare_bay,
