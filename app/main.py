@@ -3762,18 +3762,17 @@ def choose_os_drive_pair(eligible_drives: list[dict]) -> tuple[list[dict], str]:
         for right in eligible_drives[idx + 1:]:
             same_media = left["media_type"].lower() == right["media_type"].lower()
             same_protocol = left["protocol"].lower() == right["protocol"].lower()
+            same_controller = str(left.get("controller_path") or "") == str(right.get("controller_path") or "")
             capacity_delta = abs(left["size_gib"] - right["size_gib"])
             usable_size = min(left["size_gib"], right["size_gib"])
-            acceptable_for_target = usable_size >= 450
-            target_distance = abs(usable_size - 500) if acceptable_for_target else 500 - usable_size
             pair = sorted([left, right], key=storage_drive_sort_key)
             candidates.append((
                 (
+                    0 if same_controller else 1,
                     0 if same_media else 1,
                     0 if same_protocol else 1,
                     capacity_delta,
-                    0 if acceptable_for_target else 1,
-                    target_distance,
+                    usable_size,
                     storage_drive_sort_key(pair[0]),
                     storage_drive_sort_key(pair[1]),
                 ),
@@ -3785,8 +3784,8 @@ def choose_os_drive_pair(eligible_drives: list[dict]) -> tuple[list[dict], str]:
 
     _, pair = sorted(candidates, key=lambda item: item[0])[0]
     return pair, (
-        "Selected the best matched pair by media type, protocol, capacity, and deterministic bay/order. "
-        f"Usable mirror size is about {min(d['size_gib'] for d in pair):.0f} GiB before applying the 500 GiB target."
+        "Selected the smallest healthy matched pair by controller, media type, protocol, capacity, and deterministic bay/order. "
+        f"Usable mirror size is about {min(d['size_gib'] for d in pair):.0f} GiB."
     )
 
 
@@ -3909,10 +3908,17 @@ def build_storage_planning_drives(summary: dict[str, Any] | None) -> list[dict[s
     summary = summary or {}
     standard = summary.get("standard_redfish_storage", {}) or {}
     hpe = summary.get("hpe_smart_storage", {}) or {}
+    controller_by_path = {
+        str(controller.get("path") or "").strip(): controller
+        for controller in list(hpe.get("controllers", []) or []) + list(standard.get("controllers", []) or [])
+        if str(controller.get("path") or "").strip()
+    }
     planning_drives = []
     for source, items in (("hpe_smart_storage", hpe.get("drives", [])), ("standard_redfish_storage", standard.get("drives", []))):
         for item in items or []:
             drive = normalized_plan_drive(item, source)
+            controller = controller_by_path.get(str(drive.get("controller_path") or "").strip(), {})
+            drive["controller_name"] = storage_controller_label(controller) if controller else str(drive.get("controller_path") or "")
             drive["eligible"] = bool(drive["size_gib"] > 0 and storage_status_is_eligible(drive["status"]))
             planning_drives.append(drive)
     return sorted(planning_drives, key=storage_drive_sort_key)
@@ -3956,6 +3962,15 @@ def build_storage_controller_choices(summary: dict[str, Any] | None) -> list[dic
                 }
             )
     return controllers
+
+
+def storage_controller_label(controller: dict[str, Any]) -> str:
+    if not controller:
+        return ""
+    name = str(controller.get("name") or "").strip()
+    model = str(controller.get("model") or "").strip()
+    label_bits = [bit for bit in [name, model] if bit]
+    return " / ".join(dict.fromkeys(label_bits)) or str(controller.get("path") or "").rsplit("/", 1)[-1]
 
 
 def build_storage_display_drives(summary: dict[str, Any] | None) -> list[dict[str, Any]]:
@@ -4002,30 +4017,33 @@ def build_raid_plan(discovery: dict, discovery_paths: dict[str, Path], overrides
     controllers = []
     for source, items in (("hpe_smart_storage", hpe.get("controllers", [])), ("standard_redfish_storage", standard.get("controllers", []))):
         for item in items or []:
-            controllers.append({**item, "source": source})
+            controller_item = {**item, "source": source}
+            if controller_item.get("firmware_version") is not None:
+                controller_item = {**controller_item, "firmware_version": storage_firmware_display(controller_item.get("firmware_version"))}
+            controller_item["label"] = storage_controller_label(controller_item)
+            controllers.append(controller_item)
+    controller_by_path = {str(item.get("path") or "").strip(): item for item in controllers if str(item.get("path") or "").strip()}
     requested_controller_path = str(overrides.get("controller_path") or "").strip()
-    controller = {}
-    if requested_controller_path:
-        controller = next((item for item in controllers if str(item.get("path") or "").strip() == requested_controller_path), {})
-        if not controller:
-            warnings.append("The previously selected storage controller is no longer available. Using the first detected controller instead.")
-    if not controller:
-        controller = controllers[0] if controllers else {}
-    if not controller:
+    requested_os_controller_path = str(overrides.get("os_controller_path") or requested_controller_path or "").strip()
+    requested_data_controller_path = str(overrides.get("data_controller_path") or requested_controller_path or "").strip()
+    if not controllers:
         blockers.append("No detected storage controller is available for planning.")
-    elif controller.get("firmware_version") is not None:
-        controller = {**controller, "firmware_version": storage_firmware_display(controller.get("firmware_version"))}
-    if len(controllers) > 1 and controller:
+    if requested_os_controller_path and requested_os_controller_path not in controller_by_path:
+        warnings.append("The previously selected OS storage controller is no longer available. Using the best detected controller instead.")
+        requested_os_controller_path = ""
+    if requested_data_controller_path and requested_data_controller_path not in controller_by_path:
+        warnings.append("The previously selected data storage controller is no longer available. Using the best detected controller instead.")
+        requested_data_controller_path = ""
+    controller = controller_by_path.get(requested_data_controller_path or requested_os_controller_path, controllers[0] if controllers else {})
+    if len(controllers) > 1:
         warnings.append(
-            "More than one storage controller was detected. Planning is scoped to the controller selected below."
+            "More than one storage controller was detected. OS and data arrays can be planned on different controllers."
         )
 
     existing_volumes = []
     for source, items in (("hpe_smart_storage", hpe.get("volumes", [])), ("standard_redfish_storage", standard.get("volumes", []))):
         for item in items or []:
             existing_volumes.append({**item, "source": source})
-    if controller:
-        existing_volumes = [item for item in existing_volumes if storage_item_matches_controller(item, controller)]
     if existing_volumes:
         warnings.append("Existing logical volumes detected; default recommendation is wipe and rebuild before applying this target layout.")
 
@@ -4033,9 +4051,9 @@ def build_raid_plan(discovery: dict, discovery_paths: dict[str, Path], overrides
     excluded_drives = []
     for source, items in (("hpe_smart_storage", hpe.get("drives", [])), ("standard_redfish_storage", standard.get("drives", []))):
         for item in items or []:
-            if controller and not storage_item_matches_controller({**item, "source": source}, controller):
-                continue
             drive = normalized_plan_drive(item, source)
+            drive_controller = controller_by_path.get(str(drive.get("controller_path") or "").strip(), {})
+            drive["controller_name"] = storage_controller_label(drive_controller) if drive_controller else str(drive.get("controller_path") or "")
             if drive["size_gib"] <= 0:
                 excluded_drives.append({**drive, "exclude_reason": "Missing or zero drive size."})
             elif not storage_status_is_eligible(drive["status"]):
@@ -4043,18 +4061,34 @@ def build_raid_plan(discovery: dict, discovery_paths: dict[str, Path], overrides
             else:
                 eligible_drives.append(drive)
 
-    default_os_pair, default_os_explanation = choose_os_drive_pair(sorted(eligible_drives, key=storage_drive_sort_key))
+    os_default_pool = [
+        drive for drive in eligible_drives
+        if not requested_os_controller_path or str(drive.get("controller_path") or "").strip() == requested_os_controller_path
+    ]
+    default_os_pair, default_os_explanation = choose_os_drive_pair(sorted(os_default_pool, key=storage_drive_sort_key))
+    if requested_os_controller_path and not default_os_pair:
+        warnings.append("No eligible OS drive pair was found on the selected OS controller.")
 
-    default_os_paths = {drive["path"] for drive in default_os_pair}
-    default_remaining = [drive for drive in eligible_drives if drive["path"] not in default_os_paths]
-    default_data_raid = choose_default_data_raid(default_remaining)
+    default_os_ids = {storage_drive_identity(drive) for drive in default_os_pair}
+    default_data_pool = [drive for drive in eligible_drives if storage_drive_identity(drive) not in default_os_ids]
+    if requested_data_controller_path:
+        default_data_pool = [
+            drive for drive in default_data_pool
+            if str(drive.get("controller_path") or "").strip() == requested_data_controller_path
+        ]
+    default_data_raid = choose_default_data_raid(default_data_pool)
     default_data_set, default_hot_spare, default_raid_excluded, default_data_explanation, default_data_blockers = choose_data_layout(
-        sorted(default_remaining, key=storage_drive_sort_key),
+        sorted(default_data_pool, key=storage_drive_sort_key),
         default_data_raid,
     )
 
     eligible_by_identity = {storage_drive_identity(drive): drive for drive in eligible_drives if storage_drive_identity(drive)}
     eligible_by_bay = {str(drive.get("bay") or ""): drive for drive in eligible_drives}
+    eligible_by_bay_by_controller: dict[str, dict[str, dict[str, Any]]] = {}
+    for drive in eligible_drives:
+        controller_path = str(drive.get("controller_path") or "").strip()
+        bay = str(drive.get("bay") or "")
+        eligible_by_bay_by_controller.setdefault(controller_path, {})[bay] = drive
     bay_counts: dict[str, int] = {}
     for drive in eligible_drives:
         bay = str(drive.get("bay") or "").strip()
@@ -4078,6 +4112,8 @@ def build_raid_plan(discovery: dict, discovery_paths: dict[str, Path], overrides
         selected_data_ids = selected_data_paths
     if not selected_spare_id:
         selected_spare_id = selected_spare_path
+    selected_os_controller_path = requested_os_controller_path
+    selected_data_controller_path = requested_data_controller_path
     selected_os_bays = [str(item).strip() for item in list(overrides.get("os_bays") or []) if str(item).strip()]
     selected_data_bays = [str(item).strip() for item in list(overrides.get("data_bays") or []) if str(item).strip()]
     selected_spare_bay = str(overrides.get("hot_spare_bay") or "").strip()
@@ -4119,8 +4155,9 @@ def build_raid_plan(discovery: dict, discovery_paths: dict[str, Path], overrides
                 custom_blockers.append(f"Selected OS drives are not eligible or were not found by drive identity: {', '.join(missing_os)}.")
             os_explanation = "Using the drives chosen below for the OS mirror."
         elif selected_os_bays:
-            os_pair = [eligible_by_bay[bay] for bay in selected_os_bays if bay in eligible_by_bay]
-            missing_os = [bay for bay in selected_os_bays if bay not in eligible_by_bay]
+            os_bay_lookup = eligible_by_bay_by_controller.get(selected_os_controller_path, eligible_by_bay) if selected_os_controller_path else eligible_by_bay
+            os_pair = [os_bay_lookup[bay] for bay in selected_os_bays if bay in os_bay_lookup]
+            missing_os = [bay for bay in selected_os_bays if bay not in os_bay_lookup]
             if missing_os:
                 custom_blockers.append(f"Selected OS drives are not eligible or were not found: {', '.join(missing_os)}.")
             os_explanation = "Using the drives chosen below for the OS mirror."
@@ -4131,8 +4168,9 @@ def build_raid_plan(discovery: dict, discovery_paths: dict[str, Path], overrides
                 custom_blockers.append(f"Selected data drives are not eligible or were not found by drive identity: {', '.join(missing_data)}.")
             data_explanation = "Using the drives chosen below for the data array."
         elif selected_data_bays:
-            data_set = [eligible_by_bay[bay] for bay in selected_data_bays if bay in eligible_by_bay]
-            missing_data = [bay for bay in selected_data_bays if bay not in eligible_by_bay]
+            data_bay_lookup = eligible_by_bay_by_controller.get(selected_data_controller_path, eligible_by_bay) if selected_data_controller_path else eligible_by_bay
+            data_set = [data_bay_lookup[bay] for bay in selected_data_bays if bay in data_bay_lookup]
+            missing_data = [bay for bay in selected_data_bays if bay not in data_bay_lookup]
             if missing_data:
                 custom_blockers.append(f"Selected data drives are not eligible or were not found: {', '.join(missing_data)}.")
             data_explanation = "Using the drives chosen below for the data array."
@@ -4141,17 +4179,28 @@ def build_raid_plan(discovery: dict, discovery_paths: dict[str, Path], overrides
             if not hot_spare:
                 custom_blockers.append(f"Selected hot spare drive identity was not eligible or was not found: {selected_spare_id}.")
         elif selected_spare_bay:
-            hot_spare = dict(eligible_by_bay.get(selected_spare_bay) or {})
+            spare_bay_lookup = eligible_by_bay_by_controller.get(selected_data_controller_path, eligible_by_bay) if selected_data_controller_path else eligible_by_bay
+            hot_spare = dict(spare_bay_lookup.get(selected_spare_bay) or {})
             if not hot_spare:
                 custom_blockers.append(f"Selected hot spare bay was not eligible or was not found: {selected_spare_bay}.")
         os_identity_set = {storage_drive_identity(drive) for drive in os_pair if storage_drive_identity(drive)}
         data_identity_set = {storage_drive_identity(drive) for drive in data_set if storage_drive_identity(drive)}
         spare_identity = storage_drive_identity(hot_spare) if hot_spare else ""
         if len(os_identity_set) != len(os_pair) or len(data_identity_set) != len(data_set) or (hot_spare and not spare_identity):
-            custom_blockers.append("Every selected drive must have a Redfish path or serial number before it can be approved.")
+            custom_blockers.append("Every selected drive must have a stable drive identity before it can be approved.")
         selected_identities = [storage_drive_identity(drive) for drive in os_pair + data_set + ([hot_spare] if hot_spare else []) if storage_drive_identity(drive)]
         if len(selected_identities) != len(set(selected_identities)):
             overlap_blockers.append("The same drive identity cannot be reused in the OS, data, or hot spare selections.")
+        os_controller_set = {str(drive.get("controller_path") or "").strip() for drive in os_pair if str(drive.get("controller_path") or "").strip()}
+        data_controller_set = {str(drive.get("controller_path") or "").strip() for drive in data_set if str(drive.get("controller_path") or "").strip()}
+        if len(os_controller_set) > 1:
+            custom_blockers.append("The OS array cannot span multiple storage controllers.")
+        if len(data_controller_set) > 1:
+            custom_blockers.append("The data array cannot span multiple storage controllers.")
+        if selected_os_controller_path and os_controller_set and os_controller_set != {selected_os_controller_path}:
+            custom_blockers.append("Selected OS drives do not belong to the selected OS controller.")
+        if selected_data_controller_path and data_controller_set and data_controller_set != {selected_data_controller_path}:
+            custom_blockers.append("Selected data drives do not belong to the selected data controller.")
         if os_identity_set and data_identity_set and (os_identity_set & data_identity_set):
             overlap_blockers.append("The same drive cannot be used for both the OS mirror and the data array.")
         if spare_identity and spare_identity in (os_identity_set | data_identity_set):
@@ -4165,12 +4214,13 @@ def build_raid_plan(discovery: dict, discovery_paths: dict[str, Path], overrides
         else:
             compatibility_group = {drive_group_key(drive) for drive in data_set}
         if data_set and len(compatibility_group) > 1:
-            custom_blockers.append("The selected data drives and hot spare must use the same media type, protocol, and size.")
+            warnings.append("The selected data drives and hot spare differ by media type, protocol, or size. Review the layout before approving.")
         blockers.extend(custom_blockers + overlap_blockers)
+        selected_identity_set = set(selected_identities)
         raid_excluded = [
             {**drive, "exclude_reason": "Not selected for the custom data layout."}
             for drive in eligible_drives
-            if drive.get("bay") not in {*(drive.get("bay") for drive in os_pair), *(drive.get("bay") for drive in data_set), selected_spare_bay}
+            if storage_drive_identity(drive) not in selected_identity_set
         ]
         warnings.append("This plan was customized from the default drive selection.")
 
@@ -4182,6 +4232,21 @@ def build_raid_plan(discovery: dict, discovery_paths: dict[str, Path], overrides
         blockers.extend(default_data_blockers)
     blockers.extend(validate_raid_drive_count(selected_os_raid, os_pair, section="os"))
     blockers.extend(validate_raid_drive_count(selected_data_raid, data_set, section="data"))
+    os_controller_paths = sorted({str(drive.get("controller_path") or "").strip() for drive in os_pair if str(drive.get("controller_path") or "").strip()})
+    data_controller_paths = sorted({str(drive.get("controller_path") or "").strip() for drive in data_set if str(drive.get("controller_path") or "").strip()})
+    if len(os_controller_paths) > 1:
+        blockers.append("The OS array cannot span multiple storage controllers.")
+    if len(data_controller_paths) > 1:
+        blockers.append("The data array cannot span multiple storage controllers.")
+    if os_pair and len({drive_group_key(drive) for drive in os_pair}) > 1:
+        warnings.append("The selected OS drives differ by media type, protocol, or size. Review the layout before approving.")
+    if data_set and len({drive_group_key(drive) for drive in data_set}) > 1:
+        warnings.append("The selected data drives differ by media type, protocol, or size. Review the layout before approving.")
+    selected_os_controller_path = selected_os_controller_path or (os_controller_paths[0] if os_controller_paths else "")
+    selected_data_controller_path = selected_data_controller_path or (data_controller_paths[0] if data_controller_paths else "")
+    os_controller = controller_by_path.get(selected_os_controller_path, {})
+    data_controller = controller_by_path.get(selected_data_controller_path, {})
+    controller = data_controller or os_controller or controller
     if not os_pair and not data_set:
         blockers.append("Choose drives for at least one array.")
 
@@ -4211,11 +4276,15 @@ def build_raid_plan(discovery: dict, discovery_paths: dict[str, Path], overrides
         "os_raid1": {
             "raid": raid_label(selected_os_raid),
             "target_size_gib": 500,
+            "controller_path": selected_os_controller_path,
+            "controller": os_controller,
             "bays": plan_drive_bays(os_pair),
             "drives": os_pair,
         },
         "data_raid6": {
             "raid": raid_label(selected_data_raid),
+            "controller_path": selected_data_controller_path,
+            "controller": data_controller,
             "bays": plan_drive_bays(data_set),
             "capacity_intent": "Use the selected compatible eligible drives for the data array.",
             "drives": data_set,
@@ -4241,6 +4310,9 @@ def build_raid_plan(discovery: dict, discovery_paths: dict[str, Path], overrides
             "serial_number": server.get("serial_number", ""),
             "server_model": server.get("model", ""),
             "controller": controller,
+            "controllers": controllers,
+            "os_controller": os_controller,
+            "data_controller": data_controller,
             "directory": str(discovery_paths["directory"]),
             "summary": str(discovery_paths["summary"]),
             "raw": str(discovery_paths["raw"]),
@@ -4256,6 +4328,8 @@ def build_raid_plan(discovery: dict, discovery_paths: dict[str, Path], overrides
         "customization": {
             "active": customization_active,
             "selected_controller_path": str(controller.get("path") or ""),
+            "selected_os_controller_path": selected_os_controller_path,
+            "selected_data_controller_path": selected_data_controller_path,
             "selected_os_raid_level": selected_os_raid,
             "selected_data_raid_level": selected_data_raid,
             "selected_os_drive_ids": [storage_drive_identity(drive) for drive in os_pair if storage_drive_identity(drive)],
@@ -12668,6 +12742,8 @@ async def plan_raid_layout(
     return_page: str = Form("storage"),
     discovery_raw_path: str = Form(""),
     controller_path: str = Form(""),
+    os_controller_path: str = Form(""),
+    data_controller_path: str = Form(""),
     os_raid_level: str | None = Form(None),
     data_raid_level: str | None = Form(None),
     os_drive_ids: list[str] = Form([]),
@@ -12695,6 +12771,8 @@ async def plan_raid_layout(
         discovery, discovery_paths = load_storage_discovery_artifact(discovery_raw_path, expected_host=host)
         overrides = {
             "controller_path": controller_path,
+            "os_controller_path": os_controller_path,
+            "data_controller_path": data_controller_path,
             "os_drive_ids": os_drive_ids,
             "data_drive_ids": data_drive_ids,
             "hot_spare_drive_id": hot_spare_drive_id,

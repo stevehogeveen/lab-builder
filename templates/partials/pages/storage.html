@@ -309,6 +309,8 @@
                 {% set selected_data_drive_paths = storage_plan_defaults.customization.selected_data_drive_paths if storage_plan_defaults and storage_plan_defaults.customization else [] %}
                 {% set selected_hot_spare_path = storage_plan_defaults.customization.selected_hot_spare_path if storage_plan_defaults and storage_plan_defaults.customization else '' %}
                 {% set selected_controller_path = storage_plan_defaults.customization.selected_controller_path if storage_plan_defaults and storage_plan_defaults.customization else '' %}
+                {% set selected_os_controller_path = storage_plan_defaults.customization.selected_os_controller_path if storage_plan_defaults and storage_plan_defaults.customization else selected_controller_path %}
+                {% set selected_data_controller_path = storage_plan_defaults.customization.selected_data_controller_path if storage_plan_defaults and storage_plan_defaults.customization else selected_controller_path %}
                 {% set selected_os_raid_level = storage_plan_defaults.customization.selected_os_raid_level if storage_plan_defaults and storage_plan_defaults.customization else 'RAID1' %}
                 {% set selected_data_raid_level = storage_plan_defaults.customization.selected_data_raid_level if storage_plan_defaults and storage_plan_defaults.customization else 'RAID6' %}
                 {% if not selected_os_drive_paths and storage_plan_defaults %}
@@ -341,29 +343,33 @@
                 {% if not selected_controller_path and storage_plan_defaults and storage_plan_defaults.source_discovery and storage_plan_defaults.source_discovery.controller %}
                     {% set selected_controller_path = storage_plan_defaults.source_discovery.controller.path %}
                 {% endif %}
+                {% if not selected_os_controller_path and storage_controller_choices and storage_controller_choices|length == 1 %}
+                    {% set selected_os_controller_path = storage_controller_choices[0].path %}
+                {% endif %}
+                {% if not selected_data_controller_path and storage_controller_choices and storage_controller_choices|length == 1 %}
+                    {% set selected_data_controller_path = storage_controller_choices[0].path %}
+                {% endif %}
                 {% if planning_drives %}
-                {% if storage_controller_choices and storage_controller_choices|length > 1 %}
-                <div class="card mb-4">
-                    <div class="text-sm font-semibold mb-2">Storage controller</div>
-                    <div class="text-xs text-slate-400 mb-3">This server has more than one controller. Pick the one you want this storage plan to use.</div>
-                    <label>
-                        <div class="text-sm text-slate-300 mb-1">Detected controllers</div>
-                        <select class="input" name="controller_path">
-                            {% for choice in storage_controller_choices %}
-                            <option value="{{ choice.path }}" {% if choice.path == selected_controller_path %}selected{% endif %}>
-                                {{ choice.label }}{% if choice.details %} | {{ choice.details }}{% endif %}
-                            </option>
-                            {% endfor %}
-                        </select>
-                    </label>
-                </div>
-                {% elif selected_controller_path %}
-                <input type="hidden" name="controller_path" value="{{ selected_controller_path }}">
+                {% if storage_controller_choices and storage_controller_choices|length == 1 %}
+                <input type="hidden" name="os_controller_path" value="{{ storage_controller_choices[0].path }}">
+                <input type="hidden" name="data_controller_path" value="{{ storage_controller_choices[0].path }}">
                 {% endif %}
                 <div class="grid grid-cols-1 xl:grid-cols-3 gap-4 mb-4">
                     <div class="card">
                         <div class="text-sm font-semibold mb-2">OS mirror drives</div>
                         <div class="text-xs text-slate-400 mb-3">Pick the OS RAID level first, then choose the drives for that section.</div>
+                        {% if storage_controller_choices and storage_controller_choices|length > 1 %}
+                        <label class="block mb-3">
+                            <div class="text-sm text-slate-300 mb-1">OS array controller</div>
+                            <select class="input storage-controller-filter" name="os_controller_path" data-target-role="os">
+                                {% for choice in storage_controller_choices %}
+                                <option value="{{ choice.path }}" {% if choice.path == selected_os_controller_path %}selected{% endif %}>
+                                    {{ choice.label }}{% if choice.details %} | {{ choice.details }}{% endif %}
+                                </option>
+                                {% endfor %}
+                            </select>
+                        </label>
+                        {% endif %}
                         <label class="block mb-3">
                             <div class="text-sm text-slate-300 mb-1">OS RAID level</div>
                             <select class="input" name="os_raid_level">
@@ -376,10 +382,10 @@
                             </select>
                         </label>
                         <div class="space-y-2">
-                            {% for drive in planning_drives if drive.eligible and (not selected_controller_path or not drive.controller_path or drive.controller_path == selected_controller_path) %}
-                            <label class="check">
+                            {% for drive in planning_drives if drive.eligible %}
+                            <label class="check storage-drive-choice" data-role="os" data-controller-path="{{ drive.controller_path }}" style="{% if selected_os_controller_path and drive.controller_path and drive.controller_path != selected_os_controller_path %}display:none;{% endif %}">
                                 <input type="checkbox" name="os_drive_ids" value="{{ drive.drive_identity }}" {% if drive.drive_identity in selected_os_drive_ids %}checked{% elif drive.path and drive.path in selected_os_drive_paths %}checked{% elif not selected_os_drive_ids and not selected_os_drive_paths and drive.bay in selected_os_bays %}checked{% endif %}>
-                                <span>Bay {{ drive.bay }} | {{ drive.model or drive.name }} | {{ drive.size_gib|round|int }} GiB</span>
+                                <span>Bay {{ drive.bay }} | {{ drive.model or drive.name }} | {{ drive.size_gib|round|int }} GiB | {{ drive.serial_number or 'no serial' }} | {{ drive.controller_name or drive.controller_path or 'controller unknown' }}</span>
                             </label>
                             {% endfor %}
                         </div>
@@ -387,6 +393,18 @@
                     <div class="card">
                         <div class="text-sm font-semibold mb-2">Data array drives</div>
                         <div class="text-xs text-slate-400 mb-3">Pick the data RAID level first, then choose matching drives for that section.</div>
+                        {% if storage_controller_choices and storage_controller_choices|length > 1 %}
+                        <label class="block mb-3">
+                            <div class="text-sm text-slate-300 mb-1">Data array controller</div>
+                            <select class="input storage-controller-filter" name="data_controller_path" data-target-role="data">
+                                {% for choice in storage_controller_choices %}
+                                <option value="{{ choice.path }}" {% if choice.path == selected_data_controller_path %}selected{% endif %}>
+                                    {{ choice.label }}{% if choice.details %} | {{ choice.details }}{% endif %}
+                                </option>
+                                {% endfor %}
+                            </select>
+                        </label>
+                        {% endif %}
                         <label class="block mb-3">
                             <div class="text-sm text-slate-300 mb-1">Data RAID level</div>
                             <select class="input" name="data_raid_level">
@@ -399,10 +417,10 @@
                             </select>
                         </label>
                         <div class="space-y-2">
-                            {% for drive in planning_drives if drive.eligible and (not selected_controller_path or not drive.controller_path or drive.controller_path == selected_controller_path) %}
-                            <label class="check">
+                            {% for drive in planning_drives if drive.eligible %}
+                            <label class="check storage-drive-choice" data-role="data" data-controller-path="{{ drive.controller_path }}" style="{% if selected_data_controller_path and drive.controller_path and drive.controller_path != selected_data_controller_path %}display:none;{% endif %}">
                                 <input type="checkbox" name="data_drive_ids" value="{{ drive.drive_identity }}" {% if drive.drive_identity in selected_data_drive_ids %}checked{% elif drive.path and drive.path in selected_data_drive_paths %}checked{% elif not selected_data_drive_ids and not selected_data_drive_paths and drive.bay in selected_data_bays %}checked{% endif %}>
-                                <span>Bay {{ drive.bay }} | {{ drive.model or drive.name }} | {{ drive.size_gib|round|int }} GiB</span>
+                                <span>Bay {{ drive.bay }} | {{ drive.model or drive.name }} | {{ drive.size_gib|round|int }} GiB | {{ drive.serial_number or 'no serial' }} | {{ drive.controller_name or drive.controller_path or 'controller unknown' }}</span>
                             </label>
                             {% endfor %}
                         </div>
@@ -414,8 +432,8 @@
                             <div class="text-sm text-slate-300 mb-1">Spare bay</div>
                             <select class="input" name="hot_spare_drive_id">
                                 <option value="">No dedicated hot spare</option>
-                                {% for drive in planning_drives if drive.eligible and (not selected_controller_path or not drive.controller_path or drive.controller_path == selected_controller_path) %}
-                                <option value="{{ drive.drive_identity }}" {% if drive.drive_identity == selected_hot_spare_drive_id %}selected{% elif drive.path and drive.path == selected_hot_spare_path %}selected{% elif not selected_hot_spare_drive_id and not selected_hot_spare_path and drive.bay == selected_hot_spare_bay %}selected{% endif %}>Bay {{ drive.bay }} | {{ drive.model or drive.name }} | {{ drive.size_gib|round|int }} GiB</option>
+                                {% for drive in planning_drives if drive.eligible %}
+                                <option value="{{ drive.drive_identity }}" {% if drive.drive_identity == selected_hot_spare_drive_id %}selected{% elif drive.path and drive.path == selected_hot_spare_path %}selected{% elif not selected_hot_spare_drive_id and not selected_hot_spare_path and drive.bay == selected_hot_spare_bay %}selected{% endif %}>Bay {{ drive.bay }} | {{ drive.model or drive.name }} | {{ drive.size_gib|round|int }} GiB | {{ drive.serial_number or 'no serial' }} | {{ drive.controller_name or drive.controller_path or 'controller unknown' }}</option>
                                 {% endfor %}
                             </select>
                         </label>
@@ -429,6 +447,22 @@
                 <div class="text-sm text-amber-300 mt-2">Disabled because the target server is not set yet.</div>
                 {% endif %}
             </form>
+            <script>
+                (function () {
+                    document.querySelectorAll('.storage-controller-filter').forEach(function (select) {
+                        function updateChoices() {
+                            var role = select.getAttribute('data-target-role');
+                            var selected = select.value;
+                            document.querySelectorAll('.storage-drive-choice[data-role="' + role + '"]').forEach(function (choice) {
+                                var driveController = choice.getAttribute('data-controller-path') || '';
+                                choice.style.display = (!selected || !driveController || driveController === selected) ? '' : 'none';
+                            });
+                        }
+                        select.addEventListener('change', updateChoices);
+                        updateChoices();
+                    });
+                })();
+            </script>
         </div>
         {% endif %}
 

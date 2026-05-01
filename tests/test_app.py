@@ -2672,8 +2672,8 @@ def test_storage_page_only_shows_controller_selector_when_multiple_exist(client,
     )
 
     assert response.status_code == 200
-    assert "This server has more than one controller." in response.text
-    assert "Detected controllers" in response.text
+    assert "OS array controller" in response.text
+    assert "Data array controller" in response.text
     plan_payload = yaml.safe_load((export_paths["directory"] / "raid-plan.yml").read_text(encoding="utf-8"))
     plan = plan_payload["plan"]
     assert plan["source_discovery"]["controller"]["path"] == "/redfish/v1/Systems/1/Storage/DE009001"
@@ -6431,6 +6431,150 @@ def duplicate_bay_gen11_storage_discovery() -> dict:
         },
         "raw": {"source_host": "10.10.8.80"},
     }
+
+
+def two_controller_gen11_storage_discovery() -> dict:
+    os_controller = "/redfish/v1/Systems/1/Storage/BOOT"
+    data_controller = "/redfish/v1/Systems/1/Storage/DATA"
+    return {
+        "summary": {
+            "server": {"serial_number": "ABC123"},
+            "standard_redfish_storage": {
+                "controllers": [
+                    {"path": os_controller, "name": "HPE boot NVMe controller", "model": "Boot NVMe"},
+                    {"path": data_controller, "name": "HPE MR416i-o Gen11", "model": "MR416i-o Gen11"},
+                ],
+                "volumes": [],
+                "drives": [
+                    {
+                        "path": f"/redfish/v1/Chassis/BOOT/Drives/{drive_id}",
+                        "controller_path": os_controller,
+                        "bay": bay,
+                        "name": "VK000240GXNWU",
+                        "model": "VK000240GXNWU",
+                        "serial_number": serial,
+                        "size_gib": 223.57,
+                        "media_type": "SSD",
+                        "protocol": "NVMe",
+                        "status": "OK / Enabled",
+                    }
+                    for drive_id, bay, serial in [("1", "1", "OS-SERIAL-1"), ("2", "2", "OS-SERIAL-2")]
+                ] + [
+                    {
+                        "path": f"/redfish/v1/Chassis/DATA/Drives/{drive_id}",
+                        "controller_path": data_controller,
+                        "bay": bay,
+                        "name": "VO001920RXUKC",
+                        "model": "VO001920RXUKC",
+                        "serial_number": f"DATA-SERIAL-{bay}",
+                        "size_gib": 1788.5,
+                        "media_type": "SSD",
+                        "protocol": "SAS",
+                        "status": "OK / Enabled",
+                    }
+                    for drive_id, bay in [("3", "3"), ("4", "4"), ("5", "5"), ("6", "6"), ("7", "7"), ("8", "8")]
+                ],
+            },
+            "hpe_smart_storage": {"controllers": [], "volumes": [], "drives": []},
+        },
+        "raw": {"source_host": "10.10.8.80"},
+    }
+
+
+def test_build_raid_plan_supports_os_and_data_on_different_controllers():
+    discovery = two_controller_gen11_storage_discovery()
+    discovery_paths = {
+        "directory": main.Path("/tmp/storage-plan-test"),
+        "summary": main.Path("/tmp/storage-plan-test/summary.yml"),
+        "raw": main.Path("/tmp/storage-plan-test/raw.json"),
+    }
+
+    plan = main.build_raid_plan(
+        discovery,
+        discovery_paths,
+        overrides={
+            "os_controller_path": "/redfish/v1/Systems/1/Storage/BOOT",
+            "data_controller_path": "/redfish/v1/Systems/1/Storage/DATA",
+            "os_raid_level": "RAID1",
+            "data_raid_level": "RAID6",
+            "os_drive_ids": [
+                "/redfish/v1/Chassis/BOOT/Drives/1",
+                "/redfish/v1/Chassis/BOOT/Drives/2",
+            ],
+            "data_drive_ids": [
+                "/redfish/v1/Chassis/DATA/Drives/3",
+                "/redfish/v1/Chassis/DATA/Drives/4",
+                "/redfish/v1/Chassis/DATA/Drives/5",
+                "/redfish/v1/Chassis/DATA/Drives/6",
+                "/redfish/v1/Chassis/DATA/Drives/7",
+                "/redfish/v1/Chassis/DATA/Drives/8",
+            ],
+            "hot_spare_drive_id": "",
+        },
+    )
+
+    assert plan["valid"] is True
+    assert plan["customization"]["selected_os_controller_path"] == "/redfish/v1/Systems/1/Storage/BOOT"
+    assert plan["customization"]["selected_data_controller_path"] == "/redfish/v1/Systems/1/Storage/DATA"
+    assert {drive["controller_path"] for drive in plan["os_raid1"]["drives"]} == {"/redfish/v1/Systems/1/Storage/BOOT"}
+    assert {drive["controller_path"] for drive in plan["data_raid6"]["drives"]} == {"/redfish/v1/Systems/1/Storage/DATA"}
+    assert plan["hot_spare"]["reserved"] is False
+
+
+def test_build_raid_plan_blocks_array_spanning_multiple_controllers():
+    discovery = two_controller_gen11_storage_discovery()
+    discovery_paths = {
+        "directory": main.Path("/tmp/storage-plan-test"),
+        "summary": main.Path("/tmp/storage-plan-test/summary.yml"),
+        "raw": main.Path("/tmp/storage-plan-test/raw.json"),
+    }
+
+    plan = main.build_raid_plan(
+        discovery,
+        discovery_paths,
+        overrides={
+            "os_raid_level": "RAID1",
+            "data_raid_level": "",
+            "os_drive_ids": [
+                "/redfish/v1/Chassis/BOOT/Drives/1",
+                "/redfish/v1/Chassis/DATA/Drives/3",
+            ],
+        },
+    )
+
+    assert plan["valid"] is False
+    assert any("OS array cannot span multiple storage controllers" in blocker for blocker in plan["blockers"])
+
+
+def test_storage_page_hides_controller_selectors_for_single_controller(client, monkeypatch):
+    def fake_strftime(fmt):
+        if fmt == "%Y%m%d-%H%M%S":
+            return "20260430-121000"
+        if fmt == "%Y-%m-%d %H:%M:%S":
+            return "2026-04-30 12:10:00"
+        raise AssertionError(f"unexpected strftime format: {fmt}")
+
+    monkeypatch.setattr(main.time, "strftime", fake_strftime)
+    cfg = main.default_config()
+    cfg["site"]["name"] = "Single Controller Kit"
+    cfg["ilo"]["target_ip"] = "10.10.8.80"
+    cfg["ip_plan"]["ilo"] = "10.10.8.80"
+    cfg["ilo"]["current_ip"] = "10.10.8.80"
+    cfg["ilo"]["host"] = "10.10.8.80"
+    main.save_kit_config(cfg)
+    discovery = duplicate_bay_gen11_storage_discovery()
+    export_paths = main.export_storage_discovery_snapshot(cfg, discovery, host="10.10.8.80")
+
+    response = client.post(
+        "/plan-raid-layout",
+        data={"return_page": "storage", "discovery_raw_path": str(export_paths["raw"])},
+    )
+
+    assert response.status_code == 200
+    assert "OS array controller" not in response.text
+    assert "Data array controller" not in response.text
+    assert 'name="os_controller_path"' in response.text
+    assert 'name="data_controller_path"' in response.text
 
 
 def test_build_raid_plan_uses_drive_identities_when_bays_are_duplicated():
