@@ -9726,10 +9726,70 @@ def run_esxi_real(cfg: dict, run_stamp: str | None = None):
                     3,
                     total,
                     (
-                        "[WARN] EjectMedia did not verify as ejected before timeout; continuing because InsertMedia readback will verify replacement. "
+                        "[WARN] EjectMedia did not verify as ejected before timeout; retrying once with a fresh iLO connection. "
                         f"inserted={'yes' if last.get('Inserted') else 'no'} image={last.get('Image') or '(none)'}"
                     ),
                 )
+                result["retry_attempted"] = True
+                reconnect_esxi_ilo_after_transport_drop("Eject media", "EjectMedia did not verify as ejected before timeout.")
+                try:
+                    run_with_session_refresh("Eject media", lambda c, vm_path=vm_path: c.eject_virtual_media(vm_path))
+                    result["retry_status"] = "requested"
+                except Exception as exc:
+                    retry_error = str(exc).splitlines()[0]
+                    result["retry_error"] = retry_error
+                    if "iLO.2.25.UnsupportedOperation" in retry_error or "UnsupportedOperation" in retry_error:
+                        result["retry_status"] = "unsupported"
+                        update_job(
+                            kit_name,
+                            job,
+                            "Running",
+                            "Eject media",
+                            3,
+                            total,
+                            "[WARN] iLO did not support the retry eject. Continuing only if the selected media already matches the generated ISO.",
+                        )
+                        return result
+                    if not is_transport_disconnect_error(exc):
+                        raise
+                    result["retry_connection_dropped"] = True
+                    result["retry_status"] = "transport_disconnect"
+                    reconnect_esxi_ilo_after_transport_drop("Eject media", retry_error)
+
+                retry_poll = poll_virtual_media_state(
+                    vm_path,
+                    lambda item: not bool(item.get("Inserted")),
+                    stage_label="Eject media",
+                    timeout_seconds=30,
+                    poll_interval=2,
+                )
+                result["retry_readback"] = retry_poll
+                if retry_poll.get("matched"):
+                    result["status"] = "ejected_after_retry"
+                    update_job(
+                        kit_name,
+                        job,
+                        "Running",
+                        "Eject media",
+                        3,
+                        total,
+                        "[OK] Previous virtual media ejected after retry.",
+                    )
+                else:
+                    retry_last = dict(retry_poll.get("last_seen") or {})
+                    result["status"] = "still_inserted_after_eject_retry"
+                    update_job(
+                        kit_name,
+                        job,
+                        "Running",
+                        "Eject media",
+                        3,
+                        total,
+                        (
+                            "[WARN] EjectMedia still did not verify as ejected after retry. "
+                            f"inserted={'yes' if retry_last.get('Inserted') else 'no'} image={retry_last.get('Image') or '(none)'}"
+                        ),
+                    )
             return result
 
         def insert_virtual_media_with_readback(insert_target: str, vm_path: str, image_url: str) -> dict[str, Any]:
@@ -9750,11 +9810,48 @@ def run_esxi_real(cfg: dict, run_stamp: str | None = None):
             except Exception as exc:
                 error_text = str(exc).splitlines()[0]
                 result["error"] = error_text
-                if not is_transport_disconnect_error(exc):
+                if "MaxVirtualMediaConnectionEstablished" in error_text:
+                    result["status"] = "max_connection_retry"
+                    update_job(
+                        kit_name,
+                        job,
+                        "Running",
+                        "Mount ISO",
+                        6,
+                        total,
+                        "[WARN] iLO reports the maximum virtual media connection is already established; ejecting stale media and retrying InsertMedia once.",
+                    )
+                    current_vm = read_virtual_media_item(vm_path, stage_label="Mount ISO")
+                    eject_result = eject_existing_virtual_media(current_vm or {"@odata.id": vm_path, "Inserted": True})
+                    result["eject_before_retry"] = eject_result
+                    current_vm = read_virtual_media_item(vm_path, stage_label="Mount ISO")
+                    best_effort_replace = eject_result.get("status") == "unsupported" or eject_result.get("retry_status") == "unsupported"
+                    if current_vm and bool(current_vm.get("Inserted")) and str(current_vm.get("Image") or "") != image_url and not best_effort_replace:
+                        raise ILOError(
+                            "Virtual media device still has an active image after eject retry; cannot mount generated ESXi ISO safely. "
+                            f"current_image={current_vm.get('Image') or '(none)'}"
+                        )
+                    reconnect_esxi_ilo_after_transport_drop("Mount ISO", "Retrying InsertMedia after stale virtual media eject.")
+                    try:
+                        run_with_session_refresh(
+                            "Mount ISO",
+                            lambda c: c._post(insert_target, {"Image": image_url, "Inserted": True, "WriteProtected": True}),
+                        )
+                        result["retry_status"] = "requested"
+                    except Exception as retry_exc:
+                        retry_error = str(retry_exc).splitlines()[0]
+                        result["retry_error"] = retry_error
+                        if not is_transport_disconnect_error(retry_exc):
+                            raise
+                        result["connection_dropped"] = True
+                        result["retry_status"] = "transport_disconnect"
+                        reconnect_esxi_ilo_after_transport_drop("Mount ISO", retry_error)
+                elif is_transport_disconnect_error(exc):
+                    result["connection_dropped"] = True
+                    result["status"] = "transport_disconnect"
+                    reconnect_esxi_ilo_after_transport_drop("Mount ISO", error_text)
+                else:
                     raise
-                result["connection_dropped"] = True
-                result["status"] = "transport_disconnect"
-                reconnect_esxi_ilo_after_transport_drop("Mount ISO", error_text)
 
             if result.get("connection_dropped"):
                 poll = poll_virtual_media_state(
@@ -10026,7 +10123,46 @@ def run_esxi_real(cfg: dict, run_stamp: str | None = None):
         update_job(kit_name, job, "Running", "Mount ISO", 6, total, "[RUNNING] Mounting custom ESXi ISO")
         trace_payload["steps"].append({"stage": "mount_virtual_media", "status": "running", "target": insert_target, "image": iso_url})
         save_esxi_trace(trace_path, trace_payload)
-        insert_result = insert_virtual_media_with_readback(insert_target, str(vm.get("@odata.id") or ""), iso_url)
+        vm_path = str(vm.get("@odata.id") or "")
+        if vm.get("Inserted") and str(vm.get("Image") or "") != iso_url:
+            update_job(
+                kit_name,
+                job,
+                "Running",
+                "Mount ISO",
+                6,
+                total,
+                "[WARN] Selected virtual media device still has a previous image mounted; ejecting it before mounting the generated ISO.",
+            )
+            pre_mount_eject = eject_existing_virtual_media(vm)
+            trace_payload["steps"].append(pre_mount_eject)
+            save_esxi_trace(trace_path, trace_payload)
+            vm = read_virtual_media_item(vm_path, stage_label="Mount ISO")
+            best_effort_replace = pre_mount_eject.get("status") == "unsupported" or pre_mount_eject.get("retry_status") == "unsupported"
+            if vm.get("Inserted") and str(vm.get("Image") or "") != iso_url and not best_effort_replace:
+                raise ILOError(
+                    "Virtual media device still has an active image after eject retry; cannot mount generated ESXi ISO safely. "
+                    f"current_image={vm.get('Image') or '(none)'}"
+                )
+        if vm.get("Inserted") and str(vm.get("Image") or "") == iso_url:
+            insert_result = {
+                "stage": "mount_virtual_media",
+                "device_path": vm_path,
+                "insert_target": str(insert_target or ""),
+                "image": iso_url,
+                "connection_dropped": False,
+                "status": "already_mounted",
+                "readback": {
+                    "matched": True,
+                    "first_seen": vm,
+                    "last_seen": vm,
+                    "timeout_seconds": 0,
+                    "poll_interval_seconds": 0,
+                },
+            }
+            update_job(kit_name, job, "Running", "Mount ISO", 6, total, "[SKIP] Generated ESXi ISO is already mounted on virtual media.")
+        else:
+            insert_result = insert_virtual_media_with_readback(insert_target, vm_path, iso_url)
         trace_payload["steps"].append(insert_result)
         save_esxi_trace(trace_path, trace_payload)
         readback_item = dict((insert_result.get("readback") or {}).get("last_seen") or {})

@@ -104,17 +104,22 @@ What users saw:
 - Error looked like:
   - `Connection aborted`
   - `RemoteDisconnected('Remote end closed connection without response')`
+- Follow-on error after continuing too early:
+  - `iLO.2.25.MaxVirtualMediaConnectionEstablished`
 
 Root cause:
 - Some iLO virtual media actions can accept the Redfish POST and close the HTTP connection before returning a normal response.
 - The app treated the transport disconnect as a hard failure before checking live virtual media state.
+- If eject did not actually remove the previous image, a later `InsertMedia` could fail because iLO still had an active virtual media connection.
 
 Fix:
 - ESXi virtual media eject/insert now treats transport disconnects as uncertain, not immediately fatal.
 - After a disconnect, the app reconnects to iLO and reads back virtual media state.
 - If eject readback shows media removed, eject is treated as successful.
 - If insert readback shows the generated ISO mounted, mount is treated as successful.
-- If state still does not match, the normal readback validation blocks the run with a clear error.
+- If eject readback still shows inserted media, the app retries eject once with a fresh iLO connection.
+- If `InsertMedia` returns `MaxVirtualMediaConnectionEstablished`, the app ejects stale media and retries `InsertMedia` once.
+- If state still does not match, readback validation blocks the run with a clear error.
 
 Where fixed:
 - `app/main.py` (ESXi real-run virtual media orchestration).
@@ -124,6 +129,7 @@ How to detect:
   - `iLO closed the Eject media connection without a response`
   - `iLO closed EjectMedia without a response, but virtual media readback shows it ejected`
   - `iLO closed InsertMedia without a response, but virtual media readback matches the generated ISO`
+  - `maximum virtual media connection is already established`
 
 
 ## D. WebSocket crashes on partial job YAML writes
