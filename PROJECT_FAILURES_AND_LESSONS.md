@@ -97,6 +97,35 @@ How to detect:
 - Validate URL manually with `curl` GET (not only `HEAD`, since some routes allow only GET).
 
 
+## C2. ESXi virtual media POST disconnects
+
+What users saw:
+- ESXi run stopped at `EjectMedia` or `InsertMedia`.
+- Error looked like:
+  - `Connection aborted`
+  - `RemoteDisconnected('Remote end closed connection without response')`
+
+Root cause:
+- Some iLO virtual media actions can accept the Redfish POST and close the HTTP connection before returning a normal response.
+- The app treated the transport disconnect as a hard failure before checking live virtual media state.
+
+Fix:
+- ESXi virtual media eject/insert now treats transport disconnects as uncertain, not immediately fatal.
+- After a disconnect, the app reconnects to iLO and reads back virtual media state.
+- If eject readback shows media removed, eject is treated as successful.
+- If insert readback shows the generated ISO mounted, mount is treated as successful.
+- If state still does not match, the normal readback validation blocks the run with a clear error.
+
+Where fixed:
+- `app/main.py` (ESXi real-run virtual media orchestration).
+
+How to detect:
+- In live logs, look for:
+  - `iLO closed the Eject media connection without a response`
+  - `iLO closed EjectMedia without a response, but virtual media readback shows it ejected`
+  - `iLO closed InsertMedia without a response, but virtual media readback matches the generated ISO`
+
+
 ## D. WebSocket crashes on partial job YAML writes
 
 What users saw:

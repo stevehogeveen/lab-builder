@@ -5012,6 +5012,22 @@ def _power_connection_dropped(result: dict[str, Any]) -> bool:
     return False
 
 
+def is_transport_disconnect_error(exc: Exception | str) -> bool:
+    text = str(exc or "")
+    return any(
+        marker in text
+        for marker in (
+            "Connection aborted",
+            "Remote end closed connection",
+            "RemoteDisconnected",
+            "ConnectionError",
+            "connection reset",
+            "Connection reset",
+            "Broken pipe",
+        )
+    )
+
+
 def _power_http_status(result: dict[str, Any]) -> str:
     direct_result = result.get("result") if isinstance(result, dict) else {}
     if isinstance(direct_result, dict) and direct_result.get("http_status_code") is not None:
@@ -9580,6 +9596,207 @@ def run_esxi_real(cfg: dict, run_stamp: str | None = None):
 
             return run_with_session_refresh("Power off" if str(expected_state).lower() == "off" else "Power on", op)
 
+        def reconnect_esxi_ilo_after_transport_drop(stage_label: str, message: str) -> None:
+            nonlocal client
+            update_job(
+                kit_name,
+                job,
+                "Running",
+                stage_label,
+                job.get("completed_steps", 0),
+                total,
+                f"[WARN] iLO closed the {stage_label} connection without a response; reconnecting and reading back live state. {message}",
+            )
+            client = build_esxi_ilo_client()
+
+        def read_virtual_media_item(vm_path: str, *, stage_label: str) -> dict[str, Any]:
+            for item in run_with_session_refresh(stage_label, lambda c: c.get_virtual_media()):
+                if str(item.get("@odata.id") or "") == str(vm_path):
+                    return dict(item)
+            return {}
+
+        def poll_virtual_media_state(vm_path: str, predicate, *, stage_label: str, timeout_seconds: int = 20, poll_interval: int = 2) -> dict[str, Any]:
+            deadline = time.time() + max(timeout_seconds, 1)
+            first_seen: dict[str, Any] = {}
+            last_seen: dict[str, Any] = {}
+            while time.time() < deadline:
+                try:
+                    last_seen = read_virtual_media_item(vm_path, stage_label=stage_label)
+                except Exception as exc:
+                    last_seen = {"@error": str(exc).splitlines()[0], "@odata.id": vm_path}
+                if last_seen and not first_seen:
+                    first_seen = dict(last_seen)
+                try:
+                    if last_seen and predicate(last_seen):
+                        return {
+                            "matched": True,
+                            "first_seen": first_seen,
+                            "last_seen": last_seen,
+                            "timeout_seconds": timeout_seconds,
+                            "poll_interval_seconds": poll_interval,
+                        }
+                except Exception:
+                    pass
+                time.sleep(max(poll_interval, 1))
+            return {
+                "matched": False,
+                "first_seen": first_seen,
+                "last_seen": last_seen,
+                "timeout_seconds": timeout_seconds,
+                "poll_interval_seconds": poll_interval,
+            }
+
+        def eject_existing_virtual_media(vm: dict[str, Any]) -> dict[str, Any]:
+            vm_path = str(vm.get("@odata.id") or "").strip()
+            result = {
+                "stage": "eject_virtual_media",
+                "device_path": vm_path,
+                "initial_inserted": bool(vm.get("Inserted")),
+                "initial_image": str(vm.get("Image") or ""),
+                "connection_dropped": False,
+                "status": "not_needed",
+                "readback": {},
+            }
+            if not vm_path or not vm.get("Inserted"):
+                return result
+            try:
+                run_with_session_refresh("Eject media", lambda c, vm_path=vm_path: c.eject_virtual_media(vm_path))
+                result["status"] = "requested"
+            except Exception as exc:
+                error_text = str(exc).splitlines()[0]
+                result["error"] = error_text
+                if "iLO.2.25.UnsupportedOperation" in error_text or "UnsupportedOperation" in error_text:
+                    result["status"] = "unsupported"
+                    update_job(
+                        kit_name,
+                        job,
+                        "Running",
+                        "Eject media",
+                        3,
+                        total,
+                        "[WARN] iLO did not support ejecting the current virtual media. Continuing with best-effort media replacement.",
+                    )
+                    return result
+                if not is_transport_disconnect_error(exc):
+                    raise
+                result["connection_dropped"] = True
+                result["status"] = "transport_disconnect"
+                reconnect_esxi_ilo_after_transport_drop("Eject media", error_text)
+
+            if result.get("connection_dropped"):
+                poll = poll_virtual_media_state(
+                    vm_path,
+                    lambda item: not bool(item.get("Inserted")),
+                    stage_label="Eject media",
+                    timeout_seconds=20,
+                    poll_interval=2,
+                )
+            else:
+                readback = read_virtual_media_item(vm_path, stage_label="Eject media")
+                poll = {
+                    "matched": bool(readback) and not bool(readback.get("Inserted")),
+                    "first_seen": readback,
+                    "last_seen": readback,
+                    "timeout_seconds": 0,
+                    "poll_interval_seconds": 0,
+                }
+            result["readback"] = poll
+            if poll.get("matched"):
+                result["status"] = "ejected_after_disconnect" if result.get("connection_dropped") else "ejected"
+                if result.get("connection_dropped"):
+                    update_job(
+                        kit_name,
+                        job,
+                        "Running",
+                        "Eject media",
+                        3,
+                        total,
+                        "[WARN] iLO closed EjectMedia without a response, but virtual media readback shows it ejected; treating eject as successful.",
+                    )
+                else:
+                    update_job(kit_name, job, "Running", "Eject media", 3, total, f"[OK] Previous virtual media ejected: {vm_path}")
+            else:
+                last = dict(poll.get("last_seen") or {})
+                result["status"] = "still_inserted_after_eject"
+                update_job(
+                    kit_name,
+                    job,
+                    "Running",
+                    "Eject media",
+                    3,
+                    total,
+                    (
+                        "[WARN] EjectMedia did not verify as ejected before timeout; continuing because InsertMedia readback will verify replacement. "
+                        f"inserted={'yes' if last.get('Inserted') else 'no'} image={last.get('Image') or '(none)'}"
+                    ),
+                )
+            return result
+
+        def insert_virtual_media_with_readback(insert_target: str, vm_path: str, image_url: str) -> dict[str, Any]:
+            result = {
+                "stage": "mount_virtual_media",
+                "device_path": vm_path,
+                "insert_target": insert_target,
+                "image": image_url,
+                "connection_dropped": False,
+                "status": "requested",
+                "readback": {},
+            }
+            try:
+                run_with_session_refresh(
+                    "Mount ISO",
+                    lambda c: c._post(insert_target, {"Image": image_url, "Inserted": True, "WriteProtected": True}),
+                )
+            except Exception as exc:
+                error_text = str(exc).splitlines()[0]
+                result["error"] = error_text
+                if not is_transport_disconnect_error(exc):
+                    raise
+                result["connection_dropped"] = True
+                result["status"] = "transport_disconnect"
+                reconnect_esxi_ilo_after_transport_drop("Mount ISO", error_text)
+
+            if result.get("connection_dropped"):
+                poll = poll_virtual_media_state(
+                    vm_path,
+                    lambda item: bool(item.get("Inserted")) and str(item.get("Image") or "") == image_url,
+                    stage_label="Mount ISO",
+                    timeout_seconds=30,
+                    poll_interval=2,
+                )
+            else:
+                readback = read_virtual_media_item(vm_path, stage_label="Mount ISO")
+                poll = {
+                    "matched": bool(readback) and bool(readback.get("Inserted")) and str(readback.get("Image") or "") == image_url,
+                    "first_seen": readback,
+                    "last_seen": readback,
+                    "timeout_seconds": 0,
+                    "poll_interval_seconds": 0,
+                }
+            result["readback"] = poll
+            if result.get("connection_dropped") and poll.get("matched"):
+                update_job(
+                    kit_name,
+                    job,
+                    "Running",
+                    "Mount ISO",
+                    6,
+                    total,
+                    "[WARN] iLO closed InsertMedia without a response, but virtual media readback matches the generated ISO; treating mount as successful.",
+                )
+            elif result.get("connection_dropped"):
+                update_job(
+                    kit_name,
+                    job,
+                    "Running",
+                    "Mount ISO",
+                    6,
+                    total,
+                    "[WARN] iLO closed InsertMedia without a response and readback has not matched the generated ISO yet.",
+                )
+            result["status"] = "mounted" if poll.get("matched") else result["status"]
+            return result
+
         update_job(kit_name, job, "Running", "Generate KS.CFG", 1, total, "[RUNNING] Generating KS.CFG")
         trace_payload["steps"].append({"stage": "generate_ks_cfg", "status": "running"})
         save_esxi_trace(trace_path, trace_payload)
@@ -9747,31 +9964,9 @@ def run_esxi_real(cfg: dict, run_stamp: str | None = None):
         save_esxi_trace(trace_path, trace_payload)
         for vm in run_with_session_refresh("Eject media", lambda c: c.get_virtual_media()):
             if vm.get("Inserted") and vm.get("@odata.id"):
-                try:
-                    run_with_session_refresh("Eject media", lambda c, vm_path=vm["@odata.id"]: c.eject_virtual_media(vm_path))
-                except Exception as e:
-                    error_text = str(e)
-                    if "iLO.2.25.UnsupportedOperation" in error_text or "UnsupportedOperation" in error_text:
-                        update_job(
-                            kit_name,
-                            job,
-                            "Running",
-                            "Eject media",
-                            3,
-                            total,
-                            "[WARN] iLO did not support ejecting the current virtual media. Continuing with best-effort media replacement.",
-                        )
-                        trace_payload["steps"].append(
-                            {
-                                "stage": "eject_virtual_media",
-                                "status": "warning_unsupported",
-                                "device_path": str(vm.get("@odata.id") or ""),
-                                "error": error_text,
-                            }
-                        )
-                        save_esxi_trace(trace_path, trace_payload)
-                        continue
-                    raise
+                eject_result = eject_existing_virtual_media(vm)
+                trace_payload["steps"].append(eject_result)
+                save_esxi_trace(trace_path, trace_payload)
 
         system_path = run_with_session_refresh("Power off", lambda c: c.get_system_path() if hasattr(c, "get_system_path") else c.get_systems()[0])
         current_power = run_with_session_refresh(
@@ -9831,20 +10026,20 @@ def run_esxi_real(cfg: dict, run_stamp: str | None = None):
         update_job(kit_name, job, "Running", "Mount ISO", 6, total, "[RUNNING] Mounting custom ESXi ISO")
         trace_payload["steps"].append({"stage": "mount_virtual_media", "status": "running", "target": insert_target, "image": iso_url})
         save_esxi_trace(trace_path, trace_payload)
-        run_with_session_refresh(
-            "Mount ISO",
-            lambda c: c._post(insert_target, {"Image": iso_url, "Inserted": True, "WriteProtected": True}),
-        )
+        insert_result = insert_virtual_media_with_readback(insert_target, str(vm.get("@odata.id") or ""), iso_url)
+        trace_payload["steps"].append(insert_result)
+        save_esxi_trace(trace_path, trace_payload)
+        readback_item = dict((insert_result.get("readback") or {}).get("last_seen") or {})
         mount_readback = {}
-        for item in run_with_session_refresh("Mount ISO", lambda c: c.get_virtual_media()):
-            if str(item.get("@odata.id") or "") == str(vm.get("@odata.id") or ""):
-                mount_readback = {
-                    "device_path": str(item.get("@odata.id") or ""),
-                    "inserted": bool(item.get("Inserted")),
-                    "image": str(item.get("Image") or ""),
-                    "write_protected": item.get("WriteProtected"),
-                }
-                break
+        if readback_item:
+            mount_readback = {
+                "device_path": str(readback_item.get("@odata.id") or readback_item.get("device_path") or ""),
+                "inserted": bool(readback_item.get("Inserted")),
+                "image": str(readback_item.get("Image") or ""),
+                "write_protected": readback_item.get("WriteProtected"),
+                "connection_dropped": bool(insert_result.get("connection_dropped")),
+                "readback_matched": bool((insert_result.get("readback") or {}).get("matched")),
+            }
         if mount_readback:
             image_matches = mount_readback.get("image") == iso_url
             job["esxi_virtual_media"] = {
