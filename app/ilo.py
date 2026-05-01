@@ -2759,6 +2759,10 @@ class ILOClient:
                 "path": target,
                 "reset_type": reset_type,
                 "allowed_reset_types": allowed_reset_types,
+                "expected_final_power_state": self._expected_power_state_for_reset(reset_type, baseline_power) or "On",
+                "first_observed_power_state": baseline_power,
+                "final_power_state": "",
+                "final_state_matched_expected": False,
                 "recovered_after_transport_disconnect": False,
                 "recovery_note": "",
             }
@@ -2776,6 +2780,10 @@ class ILOClient:
                 "path": target,
                 "reset_type": reset_type,
                 "allowed_reset_types": allowed_reset_types,
+                "expected_final_power_state": self._expected_power_state_for_reset(reset_type, baseline_power) or "On",
+                "first_observed_power_state": recovery.get("first_observed_power_state") or baseline_power,
+                "final_power_state": recovery.get("recovery_power_state") or "",
+                "final_state_matched_expected": bool(recovery.get("recovery_power_state")),
                 "recovered_after_transport_disconnect": True,
                 "recovery_note": recovery.get("recovery_note") or "",
                 "recovery_power_state": recovery.get("recovery_power_state") or "",
@@ -3320,6 +3328,7 @@ class ILOClient:
         expected = self._expected_power_state_for_reset(reset_type, baseline_power)
         deadline = time.time() + max(timeout_seconds, 1)
         last_seen = baseline_power
+        first_seen = ""
         observed_transition = False
         while time.time() < deadline:
             try:
@@ -3328,12 +3337,15 @@ class ILOClient:
                 time.sleep(max(poll_interval, 1))
                 continue
             last_seen = str(current.get("PowerState") or "")
+            if not first_seen and last_seen:
+                first_seen = last_seen
             if baseline_power and last_seen and last_seen.lower() != baseline_power.lower():
                 observed_transition = True
             if expected:
                 if last_seen.lower() == expected.lower():
                     return {
                         "recovery_power_state": last_seen,
+                        "first_observed_power_state": first_seen or last_seen,
                         "recovery_note": (
                             "iLO closed the reset connection without a response, "
                             f"but the server reached expected PowerState={expected}."
@@ -3343,6 +3355,7 @@ class ILOClient:
                 if last_seen.lower() == "on" and (observed_transition or baseline_power.lower() != "on"):
                     return {
                         "recovery_power_state": last_seen,
+                        "first_observed_power_state": first_seen or last_seen,
                         "recovery_note": (
                             "iLO closed the reset connection without a response, "
                             "but the server reached final PowerState=On during ForceRestart recovery."
@@ -3365,7 +3378,7 @@ class ILOClient:
         value = str(reset_type or "").strip()
         if value in {"GracefulShutdown", "ForceOff"}:
             return "Off"
-        if value == "On":
+        if value in {"On", "ForceRestart", "GracefulRestart"}:
             return "On"
         if value == "PushPowerButton":
             return "On" if str(baseline_power or "").strip().lower() == "off" else "Off"
@@ -3438,6 +3451,9 @@ class ILOClient:
             "reboot_start_detail": reboot_start_detail,
             "system_returned": system_returned,
             "return_detail": return_detail,
+            "final_power_state": str((final_system or {}).get("PowerState") or reset_result.get("final_power_state") or ""),
+            "expected_final_power_state": str(reset_result.get("expected_final_power_state") or "On"),
+            "final_state_matched_expected": str((final_system or {}).get("PowerState") or "").lower() == "on",
             "service_root": service_root or {},
             "final_system": final_system or {},
         }

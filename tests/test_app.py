@@ -926,10 +926,17 @@ class FakeGen10StorageApplyClient:
         del reboot_start_timeout, return_timeout, poll_interval
         if self.fail_on == "reboot":
             raise ILOError("simulated reboot failure")
+        recovered = self.fail_on == "reboot_disconnect_success"
         return {
             "path": "/redfish/v1/Systems/1/Actions/ComputerSystem.Reset",
             "system_path": "/redfish/v1/Systems/1",
             "reset_type": reset_type,
+            "allowed_reset_types": ["GracefulRestart", "ForceRestart", "On"],
+            "expected_final_power_state": "On",
+            "first_observed_power_state": "On",
+            "final_power_state": "On",
+            "final_state_matched_expected": True,
+            "recovered_after_transport_disconnect": recovered,
             "reboot_start_observed": True,
             "reboot_start_detail": "Observed BootProgress state after reset request: POST.",
             "system_returned": True,
@@ -5005,6 +5012,84 @@ def test_run_ilo_real_marks_storage_failures_as_storage_error(monkeypatch):
     assert job["current_stage"] == "Storage error"
 
 
+def test_run_ilo_real_marks_storage_reboot_failures_with_specific_stage(monkeypatch):
+    cfg = main.default_config()
+    cfg["site"]["name"] = "Real Storage Reboot Error Label Kit"
+    cfg["ilo"]["current_ip"] = "10.10.8.90"
+    cfg["ilo"]["host"] = "10.10.8.90"
+    cfg["ilo"]["target_ip"] = "10.10.8.90"
+    cfg["ilo"]["username"] = "Administrator"
+    cfg["ilo"]["password"] = "secret"
+    cfg["ilo"]["hostname"] = "Home-Test-01"
+    cfg["shared_network"]["dns_servers"] = ["1.1.1.1", "", "", ""]
+    cfg["shared_snmp"]["v3_username"] = "snmpuser"
+    cfg["shared_snmp"]["v3_auth_password"] = "authpass"
+    cfg["shared_snmp"]["v3_priv_password"] = "privpass"
+
+    discovery = planner_gen10_apply_discovery(existing_volumes=True)
+    export_paths = main.export_storage_discovery_snapshot(cfg, discovery, host="10.10.8.90")
+    plan = main.build_raid_plan(discovery, export_paths)
+    plan_paths = main.export_raid_plan_snapshot(cfg, plan, export_paths)
+    main.approve_storage_plan_for_cfg(cfg, discovery, export_paths, plan, plan_paths, include_in_ilo_run=True)
+
+    class FakeRunILOClient(RecordingGen10SmartStorageWriteClient):
+        def __init__(self, cfg):
+            super().__init__()
+            self.cfg = cfg
+
+        def get_summary(self):
+            return {"redfish_version": "1.16.0", "system_manufacturer": "HPE", "system_model": "DL360 Gen10", "power_state": "On"}
+
+        def get_active_manager_interface(self):
+            return {
+                "@odata.id": "/redfish/v1/Managers/1/EthernetInterfaces/1",
+                "DHCPv4": {"DHCPEnabled": False},
+                "IPv4Addresses": [{"Address": self.cfg.host}],
+                "StaticNameServers": ["1.1.1.1"],
+                "NameServers": ["1.1.1.1"],
+                "HostName": "Home-Test-01",
+            }
+
+        def get_network_protocol(self):
+            return (
+                "/redfish/v1/Managers/1/NetworkProtocol",
+                {
+                    "HostName": "Home-Test-01",
+                    "SNMP": {
+                        "ProtocolEnabled": True,
+                        "UserName": "snmpuser",
+                        "AuthProtocol": "SHA",
+                        "PrivacyProtocol": "AES",
+                    },
+                },
+            )
+
+        def disable_ipv6_best_effort(self):
+            return {"method": "patch", "path": "/redfish/v1/Managers/1/EthernetInterfaces/1"}
+
+        def get_storage_discovery(self, deep_smart_storage_scan=False):
+            del deep_smart_storage_scan
+            return discovery
+
+    def fake_storage_run(*args, **kwargs):
+        del kwargs
+        kit_name = args[5]
+        job = args[6]
+        job["storage_run_directory"] = "/tmp/storage-run"
+        main.update_job(kit_name, job, "Running", "Request server reboot", 15, 20, "[RUNNING] Request server reboot")
+        error = ILOError("Power reset connection dropped and expected power state was not reached within timeout. Expected=On last_observed=Off.")
+        error.power_reset_details = {"expected_power_state": "On"}
+        raise error
+
+    monkeypatch.setattr(main, "ILOClient", lambda cfg_obj: FakeRunILOClient(cfg_obj))
+    monkeypatch.setattr(main, "run_storage_as_part_of_real_run", fake_storage_run)
+
+    main.run_ilo_real(cfg)
+    job = main.load_job(cfg["site"]["name"])
+    assert job["status"] == "Failed"
+    assert job["current_stage"] == "Storage reboot wait failed"
+
+
 def test_run_ilo_real_fails_when_ilo_reset_cannot_be_verified(monkeypatch):
     fake_clock = {"now": 0.0}
 
@@ -7310,6 +7395,68 @@ def test_ilo_power_reset_rejects_disallowed_reset_type():
         client.power_reset(reset_type="GracefulShutdown", system_path="/redfish/v1/Systems/1")
 
 
+def test_ilo_power_reset_graceful_restart_disconnect_recovers_when_final_on(monkeypatch):
+    client = ILOClient(ILOConfig(host="10.10.8.110", username="Administrator", password="pw"))
+    calls = {"get": 0}
+
+    def fake_get(path: str, timeout=None):
+        del timeout
+        if path == "/redfish/v1/Systems/1":
+            calls["get"] += 1
+            return {
+                "PowerState": "On",
+                "Actions": {
+                    "#ComputerSystem.Reset": {
+                        "target": "/redfish/v1/Systems/1/Actions/ComputerSystem.Reset",
+                        "ResetType@Redfish.AllowableValues": ["GracefulRestart", "ForceRestart", "On"],
+                    }
+                },
+            }
+        raise AssertionError(path)
+
+    def fake_post(path: str, payload: dict | None = None):
+        assert path == "/redfish/v1/Systems/1/Actions/ComputerSystem.Reset"
+        assert payload == {"ResetType": "GracefulRestart"}
+        raise ILOError("Connection aborted: RemoteDisconnected('Remote end closed connection without response')")
+
+    client._get = fake_get
+    client._post = fake_post
+    monkeypatch.setattr(ilo_module.time, "sleep", lambda _: None)
+
+    result = client.power_reset(reset_type="GracefulRestart", system_path="/redfish/v1/Systems/1")
+
+    assert result["expected_final_power_state"] == "On"
+    assert result["recovered_after_transport_disconnect"] is True
+    assert result["first_observed_power_state"] == "On"
+    assert result["final_power_state"] == "On"
+    assert result["final_state_matched_expected"] is True
+
+
+def test_ilo_power_reset_graceful_restart_expected_state_is_never_unknown():
+    client = ILOClient(ILOConfig(host="10.10.8.110", username="Administrator", password="pw"))
+
+    def fake_get(path: str, timeout=None):
+        del timeout
+        if path == "/redfish/v1/Systems/1":
+            return {
+                "PowerState": "On",
+                "Actions": {
+                    "#ComputerSystem.Reset": {
+                        "target": "/redfish/v1/Systems/1/Actions/ComputerSystem.Reset",
+                        "ResetType@Redfish.AllowableValues": ["GracefulRestart"],
+                    }
+                },
+            }
+        raise AssertionError(path)
+
+    client._get = fake_get
+    client._post = lambda path, payload=None: {"ok": True}
+
+    result = client.power_reset(reset_type="GracefulRestart", system_path="/redfish/v1/Systems/1")
+    assert result["expected_final_power_state"] == "On"
+    assert "unknown" not in str(result.get("expected_final_power_state", "")).lower()
+
+
 def test_ensure_power_state_off_skips_when_already_off():
     client = ILOClient(ILOConfig(host="10.10.8.110", username="Administrator", password="pw"))
 
@@ -7563,6 +7710,12 @@ def test_reboot_storage_now_creates_reboot_artifacts_and_logs_success(client, mo
     assert any("Request server reboot" in line for line in job["logs"])
     assert any("Wait for reboot start" in line for line in job["logs"])
     assert any("Wait for server to return" in line for line in job["logs"])
+    assert any("ResetType=GracefulRestart" in line for line in job["logs"])
+    assert any("allowed=GracefulRestart, ForceRestart, On" in line for line in job["logs"])
+    assert any("first PowerState=On" in line for line in job["logs"])
+    assert any("connection_dropped=no" in line for line in job["logs"])
+    assert any("final PowerState=On" in line for line in job["logs"])
+    assert any("matched=yes" in line for line in job["logs"])
     assert any("Export post-reboot storage" in line for line in job["logs"])
     assert "\"status\": \"Completed\"" in reboot_results_text
     assert "\"workflow_state\": \"post_reboot_validation_complete\"" in apply_results_text

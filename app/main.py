@@ -4397,6 +4397,21 @@ def storage_apply_step_targets_text(targets: dict[str, Any] | None) -> str:
     return " | ".join(bits)
 
 
+def storage_reboot_result_summary(result: dict[str, Any]) -> str:
+    allowed = ", ".join(str(item) for item in list(result.get("allowed_reset_types") or [])) or "unknown"
+    expected = str(result.get("expected_final_power_state") or "On")
+    final_state = str(result.get("final_power_state") or result.get("recovery_power_state") or "unknown")
+    first_state = str(result.get("first_observed_power_state") or result.get("initial_power_state") or "unknown")
+    connection_dropped = bool(result.get("recovered_after_transport_disconnect") or result.get("connection_dropped"))
+    matched = bool(result.get("final_state_matched_expected") or final_state.lower() == expected.lower())
+    return (
+        f"ResetType={result.get('reset_type') or 'GracefulRestart'}; "
+        f"allowed={allowed}; first PowerState={first_state}; "
+        f"connection_dropped={'yes' if connection_dropped else 'no'}; "
+        f"final PowerState={final_state}; expected={expected}; matched={'yes' if matched else 'no'}"
+    )
+
+
 def storage_apply_response_excerpt(response: Any) -> Any:
     if response is None:
         return None
@@ -6453,7 +6468,7 @@ def run_storage_reboot(
             "ok",
             "Wait for reboot start",
             targets={"path": reboot_result.get("path", "")},
-            details="Reboot request accepted by iLO.",
+            details=f"Reboot request accepted by iLO. {storage_reboot_result_summary(reboot_result)}",
             response=reboot_result,
         )
 
@@ -6492,7 +6507,7 @@ def run_storage_reboot(
             "ok",
             "Wait for server to return",
             targets={"path": reboot_result.get("path", "")},
-            details=reboot_result.get("return_detail", ""),
+            details=f"{reboot_result.get('return_detail', '')} {storage_reboot_result_summary(reboot_result)}",
         )
 
         record_storage_apply_step(
@@ -7210,7 +7225,7 @@ def run_storage_as_part_of_real_run(
             "ok",
             "Wait for server return",
             targets={"controller": apply_state["controller"].get("name") or apply_state["controller"].get("model") or ""},
-            details=str(reboot_result.get("return_detail") or reboot_result.get("reboot_start_detail") or "Server returned after reboot."),
+            details=f"{reboot_result.get('return_detail') or reboot_result.get('reboot_start_detail') or 'Server returned after reboot.'} {storage_reboot_result_summary(reboot_result)}",
             response=reboot_result,
             progress_percent=combined_progress_percent(current_step, total_steps),
         )
@@ -11431,7 +11446,9 @@ def run_ilo_real(cfg: dict):
     except ILOError as e:
         current_stage_text = str(job.get("current_stage") or "").lower()
         failed_stage = "iLO error"
-        if "storage" in current_stage_text:
+        if "reboot" in current_stage_text and ("storage" in str(job.get("scope") or "").lower() or job.get("storage_run_directory") or job.get("apply_path")):
+            failed_stage = "Storage reboot wait failed"
+        elif "storage" in current_stage_text:
             failed_stage = "Storage error"
         elif "esxi" in current_stage_text:
             failed_stage = "ESXi error"
