@@ -94,6 +94,16 @@
             <div class="codeblock max-h-96 overflow-y-auto mt-3" id="execution-live-logs">{% if job.get('logs') %}{% for line in job.get('logs', []) %}{{ line }}
 {% endfor %}{% else %}Nothing is running right now. Start a preview or a real run to see live updates here.{% endif %}</div>
         </details>
+        {% if job.get('esxi_ks_cfg', {}).get('preview_redacted') %}
+        <details class="execution-live-log mt-4">
+            <summary class="summary-row">
+                <span class="text-sm font-bold text-slate-300">Generated KS.CFG preview</span>
+                <span class="status progress">redacted</span>
+            </summary>
+            <div class="text-xs text-slate-400 mt-3">Path: {{ job.get('esxi_ks_cfg', {}).get('inspection_path') or job.get('esxi_ks_cfg', {}).get('iso_path') or '/KS.CFG' }}</div>
+            <div class="codeblock max-h-96 overflow-y-auto mt-3">{{ job.get('esxi_ks_cfg', {}).get('preview_redacted') }}</div>
+        </details>
+        {% endif %}
         {% if job.get('status') == 'Failed' %}
         <div class="actions mt-4">
             <a class="btn btn-danger" href="/debug-bundles/latest">Download latest debug bundle</a>
@@ -345,7 +355,9 @@
                         <div class="result" style="margin-top: 0;">NTP server: {{ execution_review.esxi_install_review.ntp_server or 'Not set' }}</div>
                         <div class="result" style="margin-top: 0;">Enable SSH: {{ 'Yes' if execution_review.esxi_install_review.enable_ssh else 'No' }}</div>
                         <div class="result" style="margin-top: 0;">Disable IPv6: {{ 'Yes' if execution_review.esxi_install_review.disable_ipv6 else 'No' }}</div>
+                        <div class="result" style="margin-top: 0;">Debug no reboot: {{ 'Yes' if execution_review.esxi_install_review.debug_no_reboot else 'No' }}</div>
                         <div class="result md:col-span-2" style="margin-top: 0;">ESXi version: {{ execution_review.esxi_install_review.version or '7' }}</div>
+                        <div class="result md:col-span-2" style="margin-top: 0;">KS.CFG install target: {{ execution_review.esxi_install_review.install_target.kickstart_line }} | {{ execution_review.esxi_install_review.install_target.preferred_target }}</div>
                         <div class="result md:col-span-2" style="margin-top: 0;">Base ISO path: {{ execution_review.esxi_install_review.base_iso_path }}</div>
                         <div class="result md:col-span-2" style="margin-top: 0;">Built ISO path: {{ execution_review.esxi_install_review.output_iso_path }}</div>
                         <div class="result md:col-span-2" style="margin-top: 0;">Virtual media URL: {{ execution_review.esxi_install_review.virtual_media_url }}</div>

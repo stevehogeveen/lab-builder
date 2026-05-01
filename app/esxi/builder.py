@@ -5,7 +5,7 @@ import tempfile
 import yaml
 
 from .models import EsxiBuildSpec
-from .kickstart import build_kickstart
+from .kickstart import build_kickstart, kickstart_install_target_summary, redact_kickstart_text
 from .bootcfg import patch_boot_cfg
 
 
@@ -77,8 +77,10 @@ def build_custom_iso(spec: EsxiBuildSpec) -> Path:
         stage_dir.mkdir(parents=True, exist_ok=True)
 
         ks_path = stage_dir / "KS.CFG"
-        ks_path.write_text(build_kickstart(spec, esxi_version=spec.esxi_version), encoding="utf-8")
+        ks_text = build_kickstart(spec, esxi_version=spec.esxi_version)
+        ks_path.write_text(ks_text, encoding="utf-8")
         ks_generated = ks_path.exists()
+        redacted_ks_text = redact_kickstart_text(ks_text)
 
         boot_cfg = stage_dir / "BOOT.CFG"
         efi_boot_cfg = stage_dir / "EFI" / "BOOT" / "BOOT.CFG"
@@ -98,6 +100,8 @@ def build_custom_iso(spec: EsxiBuildSpec) -> Path:
         output_iso = run_dir / f"{spec.output_name}.iso"
         if output_iso.exists():
             output_iso.unlink()
+        redacted_ks_preview_path = run_dir / "KS.CFG.redacted.txt"
+        redacted_ks_preview_path.write_text(redacted_ks_text, encoding="utf-8")
 
         base_boot_report = run_dir / "base-boot-report.txt"
         output_boot_report = run_dir / "output-boot-report.txt"
@@ -163,11 +167,17 @@ def build_custom_iso(spec: EsxiBuildSpec) -> Path:
                 "ntp_server": spec.ntp_server,
                 "enable_ssh": spec.enable_ssh,
                 "disable_ipv6": spec.disable_ipv6,
+                "debug_no_reboot": bool(spec.debug_no_reboot),
             },
             "generation": {
                 "ks_cfg": {
                     "path": str(ks_path),
+                    "iso_path": "/KS.CFG",
+                    "inspection_path": str(extracted_ks_cfg) if output_ks_present else "",
+                    "redacted_preview_path": str(redacted_ks_preview_path),
+                    "preview_redacted": redacted_ks_text,
                     "generated": ks_generated,
+                    "debug_no_reboot": bool(spec.debug_no_reboot),
                 },
                 "boot_cfg": {
                     "path": str(boot_cfg),
@@ -184,6 +194,7 @@ def build_custom_iso(spec: EsxiBuildSpec) -> Path:
                 "/BOOT.CFG",
                 *([] if not efi_present else ["/EFI/BOOT/BOOT.CFG"]),
             ],
+            "install_target": kickstart_install_target_summary(),
             "boot_reports": {
                 "base": str(base_boot_report),
                 "output": str(output_boot_report),

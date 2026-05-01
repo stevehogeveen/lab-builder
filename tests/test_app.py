@@ -8,7 +8,7 @@ from typing import Any
 from fastapi.testclient import TestClient
 
 from app.ilo import ILOClient, ILOConfig, ILOError
-from app.esxi.kickstart import build_kickstart
+from app.esxi.kickstart import build_kickstart, redact_kickstart_text
 import app.ilo as ilo_module
 import app.main as main
 from app.debug_bundle import redact_value
@@ -3632,7 +3632,14 @@ def test_run_esxi_real_builds_iso_and_starts_virtual_media_boot(monkeypatch, tmp
             yaml.safe_dump(
                 {
                     "generation": {
-                        "ks_cfg": {"generated": True},
+                        "ks_cfg": {
+                            "generated": True,
+                            "iso_path": "/KS.CFG",
+                            "inspection_path": str(built_iso.parent / "inspection" / "KS.CFG"),
+                            "redacted_preview_path": str(built_iso.parent / "KS.CFG.redacted.txt"),
+                            "preview_redacted": "rootpw [REDACTED]\nreboot\n",
+                            "debug_no_reboot": False,
+                        },
                         "boot_cfg": {"patched": True},
                         "efi_boot_cfg": {"present": True, "patched": True},
                     },
@@ -3803,8 +3810,10 @@ def test_run_esxi_real_builds_iso_and_starts_virtual_media_boot(monkeypatch, tmp
     assert "[OK] KS.CFG generated" in joined_logs
     assert "[INFO] ESXi install values: hostname=esxi-lab, management_ip=10.10.8.10, subnet_mask=255.255.255.0, gateway=10.10.8.1, dns=1.1.1.1" in joined_logs
     assert "[INFO] root_password=SET (policy-valid=" in joined_logs
-    assert "[INFO] Optional settings: vlan=(none), ntp=(none), ssh=yes, disable_ipv6=yes" in joined_logs
+    assert "[INFO] Optional settings: vlan=(none), ntp=(none), ssh=yes, disable_ipv6=yes, debug_no_reboot=no" in joined_logs
     assert f"[INFO] Base ISO: {spec.base_iso_path}" in joined_logs
+    assert "[INFO] KS.CFG install target: install --firstdisk --overwritevmfs" in joined_logs
+    assert "[INFO] KS.CFG path: iso=/KS.CFG" in joined_logs
     assert "[OK] BOOT.CFG patched" in joined_logs
     assert "[OK] EFI/BOOT/BOOT.CFG patched" in joined_logs
     assert "[INFO] ISO self-check: bios_boot=yes, uefi_boot=yes, ks_cfg=yes, boot_cfg=yes, efi_boot_cfg=yes" in joined_logs
@@ -3841,6 +3850,7 @@ def test_run_esxi_real_builds_iso_and_starts_virtual_media_boot(monkeypatch, tmp
     assert spec.root_password == "Valid1Pass!"
     assert spec.output_name == "esxi-20260416-120000"
     assert spec.esxi_version == "7"
+    assert spec.debug_no_reboot is False
     assert "[INFO] Selected ESXi version: 7" in joined_logs
     assert "[OK] KS.CFG generated for ESXi 7" in joined_logs
     trace_path = main.Path(job["esxi_trace_path"])
@@ -3850,6 +3860,7 @@ def test_run_esxi_real_builds_iso_and_starts_virtual_media_boot(monkeypatch, tmp
     assert trace["install_values"]["hostname"] == "esxi-lab"
     assert trace["install_values"]["root_password_saved"] is True
     assert trace["install_values"]["root_password_policy_valid"] is True
+    assert trace["install_values"]["debug_no_reboot"] is False
     assert trace["artifacts"]["base_iso_path"] == str(spec.base_iso_path)
     assert trace["artifacts"]["output_iso_path"] == str(built_iso)
     assert trace["artifacts"]["virtual_media_url"].endswith("/esxi-built-iso/Real-ESXi-Run-Kit/esxi-20260416-120000.iso")
@@ -3859,6 +3870,8 @@ def test_run_esxi_real_builds_iso_and_starts_virtual_media_boot(monkeypatch, tmp
     assert summary["esxi_run_summary"]["artifacts"]["built_iso_path"] == str(built_iso)
     assert summary["esxi_run_summary"]["artifacts"]["virtual_media_url"].endswith("/esxi-built-iso/Real-ESXi-Run-Kit/esxi-20260416-120000.iso")
     assert summary["esxi_run_summary"]["builder_generation"]["boot_cfg"]["patched"] is True
+    assert summary["esxi_run_summary"]["ks_cfg"]["preview_redacted"] == "rootpw [REDACTED]\nreboot\n"
+    assert summary["esxi_run_summary"]["install_target"]["kickstart_line"] == "install --firstdisk --overwritevmfs"
     assert summary["esxi_run_summary"]["builder_self_check"]["output_boot_report"]["uefi_entry_present"] is True
     assert summary["esxi_run_summary"]["boot_override"]["matched"] is True
     assert summary["esxi_run_summary"]["boot_override"]["selected_boot_option_reference"] == "Boot0009"
@@ -3912,6 +3925,7 @@ def test_run_esxi_real_passes_selected_esxi8_iso_to_builder(monkeypatch, tmp_pat
     cfg["ilo"]["password"] = "secret"
     cfg["esxi"]["version"] = "8"
     cfg["esxi"]["base_iso_path"] = str(tmp_path / "VMware-ESXi-8.iso")
+    cfg["esxi"]["debug_no_reboot"] = True
     cfg["esxi"]["hostname"] = "esxi8-lab"
     cfg["esxi"]["management_ip"] = "10.10.8.10"
     cfg["esxi"]["subnet_mask"] = "255.255.255.0"
@@ -3959,7 +3973,20 @@ def test_run_esxi_real_passes_selected_esxi8_iso_to_builder(monkeypatch, tmp_pat
     def fake_build(spec):
         built["spec"] = spec
         (built_iso.parent / "build-summary.yml").write_text(
-            yaml.safe_dump({"generation": {"ks_cfg": {"generated": True}}, "self_check": {"output_boot_report": {}, "output_files_present": {}}}),
+            yaml.safe_dump(
+                {
+                    "generation": {
+                        "ks_cfg": {
+                            "generated": True,
+                            "iso_path": "/KS.CFG",
+                            "redacted_preview_path": str(built_iso.parent / "KS.CFG.redacted.txt"),
+                            "preview_redacted": "rootpw [REDACTED]\n# debug_no_reboot enabled\n",
+                            "debug_no_reboot": True,
+                        }
+                    },
+                    "self_check": {"output_boot_report": {}, "output_files_present": {}},
+                }
+            ),
             encoding="utf-8",
         )
         return built_iso
@@ -3975,7 +4002,10 @@ def test_run_esxi_real_passes_selected_esxi8_iso_to_builder(monkeypatch, tmp_pat
 
     assert built["spec"].esxi_version == "8"
     assert built["spec"].base_iso_path == Path(cfg["esxi"]["base_iso_path"])
+    assert built["spec"].debug_no_reboot is True
     assert "[INFO] Selected ESXi version: 8" in logs
+    assert "ESXi debug_no_reboot is enabled" in logs
+    assert "KS.CFG debug_no_reboot confirmed" in logs
 
 
 def test_run_esxi_real_reconnects_after_build_when_ilo_session_has_expired(monkeypatch, tmp_path):
@@ -4062,7 +4092,30 @@ def test_run_esxi_real_reconnects_after_build_when_ilo_session_has_expired(monke
                 "notes": ["Verified one-time boot override."],
             }
 
-    monkeypatch.setattr(main, "build_custom_iso", lambda spec: built_iso)
+    def fake_build(spec):
+        (built_iso.parent / "build-summary.yml").write_text(
+            yaml.safe_dump(
+                {
+                    "generation": {
+                        "ks_cfg": {
+                            "generated": True,
+                            "iso_path": "/KS.CFG",
+                            "inspection_path": str(built_iso.parent / "inspection" / "KS.CFG"),
+                            "redacted_preview_path": str(built_iso.parent / "KS.CFG.redacted.txt"),
+                            "preview_redacted": "rootpw [REDACTED]\nreboot\n",
+                            "debug_no_reboot": False,
+                        }
+                    },
+                    "install_target": {"kickstart_line": "install --firstdisk --overwritevmfs", "mode": "firstdisk"},
+                    "self_check": {"output_boot_report": {}, "output_files_present": {"ks_cfg": True}},
+                },
+                sort_keys=False,
+            ),
+            encoding="utf-8",
+        )
+        return built_iso
+
+    monkeypatch.setattr(main, "build_custom_iso", fake_build)
     monkeypatch.setattr(main, "resolve_esxi_base_iso_path", lambda cfg_obj: fake_esxi_base_iso(tmp_path))
     monkeypatch.setattr(main, "detect_public_base_url", lambda target_host="": "http://lab-builder.local:8000")
     monkeypatch.setattr(main, "wait_for_esxi_management_ready", lambda host, **kwargs: {"host": host, "port": 443, "attempts": 1})
@@ -4171,7 +4224,30 @@ def test_run_esxi_real_uses_push_power_button_fallback_when_forceoff_does_not_po
             self.calls.append(("set_one_time_boot_cd", system_path))
             return {"system_path": system_path or "/redfish/v1/Systems/1", "before_enabled": "Disabled", "before_target": "None", "after_enabled": "Once", "after_target": "Cd", "matched": True, "notes": ["Verified one-time boot override."]}
 
-    monkeypatch.setattr(main, "build_custom_iso", lambda spec: built_iso)
+    def fake_build_power_failure(spec):
+        (built_iso.parent / "build-summary.yml").write_text(
+            yaml.safe_dump(
+                {
+                    "generation": {
+                        "ks_cfg": {
+                            "generated": True,
+                            "iso_path": "/KS.CFG",
+                            "inspection_path": str(built_iso.parent / "inspection" / "KS.CFG"),
+                            "redacted_preview_path": str(built_iso.parent / "KS.CFG.redacted.txt"),
+                            "preview_redacted": "rootpw [REDACTED]\nreboot\n",
+                            "debug_no_reboot": False,
+                        }
+                    },
+                    "install_target": {"kickstart_line": "install --firstdisk --overwritevmfs", "mode": "firstdisk"},
+                    "self_check": {"output_boot_report": {}, "output_files_present": {"ks_cfg": True}},
+                },
+                sort_keys=False,
+            ),
+            encoding="utf-8",
+        )
+        return built_iso
+
+    monkeypatch.setattr(main, "build_custom_iso", fake_build_power_failure)
     monkeypatch.setattr(main, "resolve_esxi_base_iso_path", lambda cfg_obj: fake_esxi_base_iso(tmp_path))
     monkeypatch.setattr(main, "detect_public_base_url", lambda target_host="": "http://lab-builder.local:8000")
     monkeypatch.setattr(main, "wait_for_esxi_management_ready", lambda host, **kwargs: {"host": host, "port": 443, "attempts": 2})
@@ -4720,9 +4796,9 @@ def test_run_esxi_real_fails_early_when_stuck_in_post(monkeypatch, tmp_path):
     assert "Server appears stuck in firmware/POST with the virtual CD/DVD still mounted and the one-time CD/DVD boot override still pending." in joined_logs
 
 
-def test_run_esxi_real_rearms_virtual_media_boot_when_override_is_consumed(monkeypatch, tmp_path):
+def test_run_esxi_real_does_not_rearm_virtual_media_after_override_is_consumed(monkeypatch, tmp_path):
     cfg = main.default_config()
-    cfg["site"]["name"] = "Real ESXi Rearm Boot Kit"
+    cfg["site"]["name"] = "Real ESXi No Rearm Boot Kit"
     cfg["ilo"]["current_ip"] = "10.10.8.90"
     cfg["ilo"]["host"] = "10.10.8.90"
     cfg["ilo"]["username"] = "Administrator"
@@ -4741,6 +4817,7 @@ def test_run_esxi_real_rearms_virtual_media_boot_when_override_is_consumed(monke
             self.cfg = cfg
             self.power_state = "On"
             self.boot_set_count = 0
+            self.eject_count = 0
             self.wait_evidence_count = 0
             self.boot_state = {
                 "Boot": {
@@ -4762,16 +4839,22 @@ def test_run_esxi_real_rearms_virtual_media_boot_when_override_is_consumed(monke
             return [dict(self.vm)]
 
         def eject_virtual_media(self, vm_path):
+            self.eject_count += 1
+            self.vm["Inserted"] = False
+            self.vm["Image"] = ""
             return None
 
         def get_systems(self):
             return ["/redfish/v1/Systems/1"]
 
         def get_system(self, system_path):
+            post_state = "InPost" if self.power_state == "On" else "Off"
+            if self.wait_evidence_count == 4:
+                post_state = "InPostDiscoveryComplete"
             return {
                 "PowerState": self.power_state,
                 "BootProgress": {"LastState": ""},
-                "Oem": {"Hpe": {"PostState": "InPostDiscoveryComplete" if self.power_state == "On" else "Off"}},
+                "Oem": {"Hpe": {"PostState": post_state}},
                 **self.boot_state,
             }
 
@@ -4837,6 +4920,7 @@ def test_run_esxi_real_rearms_virtual_media_boot_when_override_is_consumed(monke
             "boot_override_enabled": boot.get("BootSourceOverrideEnabled", ""),
             "boot_override_target": boot.get("BootSourceOverrideTarget", ""),
             "mounted_virtual_media": {
+                "device_path": client.vm.get("@odata.id"),
                 "inserted": client.vm.get("Inserted"),
                 "image": client.vm.get("Image"),
             },
@@ -4864,15 +4948,21 @@ def test_run_esxi_real_rearms_virtual_media_boot_when_override_is_consumed(monke
     monkeypatch.setattr(main, "ILOClient", make_client)
 
     main.run_esxi_real(cfg)
-    job = main.load_job("Real ESXi Rearm Boot Kit")
+    job = main.load_job("Real ESXi No Rearm Boot Kit")
     joined_logs = "\n".join(job["logs"])
 
     assert job["status"] == "Failed"
-    assert "[WARN] One-time CD/DVD boot override was consumed before ESXi became reachable; re-arming virtual media boot once." in joined_logs
-    assert "Retry boot power-off" in joined_logs
-    assert "Retry boot override after: enabled=Once target=Cd" in joined_logs
-    assert "Retry boot power-on" in joined_logs
-    assert created_clients[0].boot_set_count == 2
+    assert "[INFO] One-time CD/DVD boot override was consumed; treating ESXi installer boot as started and not re-arming virtual media automatically." in joined_logs
+    assert "Retry boot power-off" not in joined_logs
+    assert "Retry boot override after" not in joined_logs
+    assert "Retry boot power-on" not in joined_logs
+    assert created_clients[0].boot_set_count == 1
+    assert created_clients[0].eject_count == 1
+    assert job["esxi_installer_boot_observed"] is True
+    assert job["esxi_installer_reboot_detected"] is True
+    assert job["esxi_post_install_boot_guard"]["eject_status"] == "ejected"
+    assert "Post-install boot guard ejected virtual media" in joined_logs
+    assert any("Possible kickstart failure" in item for item in job["diagnosis"]["rejection_reasons"])
 
 
 def test_build_kickstart_uses_explicit_management_network_fields():
@@ -4903,6 +4993,29 @@ def test_build_kickstart_uses_explicit_management_network_fields():
     assert "UPLINK=$(esxcli network nic list | awk 'NR>2 && $5 == \"Up\" {print $1; exit}')" in kickstart
     assert "esxcli network vswitch standard uplink add --uplink-name=\"$UPLINK\" --vswitch-name=vSwitch0" in kickstart
     assert "esxcli network ip interface ipv4 set --interface-name=vmk0 --ipv4=10.10.8.10 --netmask=255.255.255.0 --type=static" in kickstart
+
+
+def test_build_kickstart_debug_no_reboot_omits_reboot_and_redacts_preview():
+    spec = main.EsxiBuildSpec(
+        kit_name="Test-Kit",
+        base_iso_path=main.Path("/tmp/base.iso"),
+        output_name="esxi-test",
+        hostname="esxi-lab",
+        management_ip="10.10.8.10",
+        subnet_mask="255.255.255.0",
+        gateway="10.10.8.1",
+        dns_servers=["1.1.1.1"],
+        root_password="Valid1Pass!",
+        debug_no_reboot=True,
+    )
+
+    kickstart = build_kickstart(spec)
+    redacted = redact_kickstart_text(kickstart)
+
+    assert "\nreboot\n" not in kickstart
+    assert "debug_no_reboot enabled" in kickstart
+    assert "rootpw [REDACTED]" in redacted
+    assert "Valid1Pass!" not in redacted
 
 
 def test_run_ilo_real_executes_storage_when_included(monkeypatch):
@@ -6203,7 +6316,30 @@ def test_run_esxi_real_power_on_failure_populates_debug_diagnosis(monkeypatch, t
             error.power_reset_details = details
             raise error
 
-    monkeypatch.setattr(main, "build_custom_iso", lambda spec: built_iso)
+    def fake_build_power_failure(spec):
+        (built_iso.parent / "build-summary.yml").write_text(
+            yaml.safe_dump(
+                {
+                    "generation": {
+                        "ks_cfg": {
+                            "generated": True,
+                            "iso_path": "/KS.CFG",
+                            "inspection_path": str(built_iso.parent / "inspection" / "KS.CFG"),
+                            "redacted_preview_path": str(built_iso.parent / "KS.CFG.redacted.txt"),
+                            "preview_redacted": "rootpw [REDACTED]\nreboot\n",
+                            "debug_no_reboot": False,
+                        }
+                    },
+                    "install_target": {"kickstart_line": "install --firstdisk --overwritevmfs", "mode": "firstdisk"},
+                    "self_check": {"output_boot_report": {}, "output_files_present": {"ks_cfg": True}},
+                },
+                sort_keys=False,
+            ),
+            encoding="utf-8",
+        )
+        return built_iso
+
+    monkeypatch.setattr(main, "build_custom_iso", fake_build_power_failure)
     monkeypatch.setattr(main, "resolve_esxi_base_iso_path", lambda cfg_obj: fake_esxi_base_iso(tmp_path))
     monkeypatch.setattr(main, "detect_public_base_url", lambda target_host="": "http://lab-builder.local:8000")
     monkeypatch.setattr(main, "ILOClient", lambda cfg_obj: FakeEsxiILOClient(cfg_obj))
@@ -6233,6 +6369,8 @@ def test_run_esxi_real_power_on_failure_populates_debug_diagnosis(monkeypatch, t
     assert "diagnosis:" in bundle_text
     assert "recommended_next_steps" in bundle_text
     assert "VirtualInstallDisk" in bundle_text
+    assert "rootpw [REDACTED]" in bundle_text
+    assert "install --firstdisk --overwritevmfs" in bundle_text
     assert "Valid1Pass!" not in bundle_text
     assert "secret" not in bundle_text
 
@@ -9175,6 +9313,28 @@ def test_save_esxi_settings_preserves_disabled_inclusion_when_page_has_no_toggle
     cfg = main.load_kit_config("ESXi-Preserve-Kit")
     assert cfg["esxi"]["hostname"] == "esxi-preserve"
     assert cfg["included"]["esxi"] is False
+    assert cfg["esxi"]["debug_no_reboot"] is False
+
+
+def test_save_esxi_settings_persists_debug_no_reboot(client):
+    cfg = main.default_config()
+    cfg["site"]["name"] = "ESXi Debug Mode Kit"
+    main.save_kit_config(cfg)
+
+    response = client.post(
+        "/save-esxi-settings",
+        data={
+            "return_page": "esxi",
+            "esxi_hostname": "esxi-debug",
+            "esxi_root_password": "Valid1Pass!",
+            "esxi_debug_no_reboot": "on",
+        },
+    )
+
+    assert response.status_code == 200
+    saved = main.load_kit_config("ESXi-Debug-Mode-Kit")
+    assert saved["esxi"]["debug_no_reboot"] is True
+    assert "Debug no reboot: Yes" in response.text
 
 
 def test_save_esxi_settings_rejects_invalid_hostname_and_password(client):

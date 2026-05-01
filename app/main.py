@@ -630,10 +630,15 @@ def write_run_bundle_files(kit_name: str, job: dict[str, Any]) -> None:
             },
             "builder_generation": dict(job.get("esxi_builder_generation") or {}),
             "builder_self_check": dict(job.get("esxi_builder_self_check") or {}),
+            "ks_cfg": dict(job.get("esxi_ks_cfg") or {}),
+            "install_target": dict(job.get("esxi_install_target") or {}),
             "virtual_media": dict(job.get("esxi_virtual_media") or {}),
             "boot_override": dict(job.get("esxi_boot_override") or {}),
             "boot_evidence": dict(job.get("esxi_boot_evidence") or {}),
             "boot_evidence_samples": list(job.get("esxi_boot_evidence_samples") or []),
+            "installer_boot_observed": bool(job.get("esxi_installer_boot_observed")),
+            "installer_reboot_detected": bool(job.get("esxi_installer_reboot_detected")),
+            "post_install_boot_guard": dict(job.get("esxi_post_install_boot_guard") or {}),
             "power_transitions": dict(job.get("esxi_power_transitions") or {}),
             "management_network": dict(job.get("esxi_management_network") or {}),
         }
@@ -2411,6 +2416,52 @@ def build_storage_change_summary(storage_review: dict[str, Any], storage_plan: d
     ]
 
 
+def build_esxi_install_target_review(cfg: dict[str, Any]) -> dict[str, Any]:
+    storage_cfg = cfg.get("storage", {}) or {}
+    approval = storage_cfg.get("approval", {}) or {}
+    plan_summary = approval.get("plan_summary") or storage_cfg.get("latest_plan_summary") or {}
+    plan_path = str(approval.get("plan_path") or storage_cfg.get("latest_plan_path") or "").strip()
+    os_drives: list[dict[str, Any]] = []
+    data_drives: list[dict[str, Any]] = []
+    if plan_path:
+        try:
+            path = Path(plan_path)
+            if path.exists():
+                plan = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+                os_drives = list(plan.get("os_drives") or [])
+                data_drives = list(plan.get("data_drives") or [])
+        except Exception:
+            os_drives = []
+            data_drives = []
+
+    os_bays = str(plan_summary.get("os_bays") or ", ".join(str(d.get("bay") or "") for d in os_drives if d.get("bay")) or "unknown")
+    data_bays = str(plan_summary.get("data_bays") or ", ".join(str(d.get("bay") or "") for d in data_drives if d.get("bay")) or "unknown")
+    approved = str(approval.get("state") or storage_cfg.get("state") or "").lower() == "approved"
+    preferred_target = (
+        f"Approved OS RAID logical drive ({plan_summary.get('controller') or 'selected controller'}, bays {os_bays})"
+        if approved and os_bays != "unknown"
+        else "First eligible local disk selected by the ESXi installer"
+    )
+    safety_note = (
+        "KS.CFG currently uses install --firstdisk --overwritevmfs. Lab Builder cannot yet bind a Redfish "
+        "logical drive to an ESXi disk identifier, so verify the approved OS RAID logical drive is presented "
+        "before any data RAID volume."
+    )
+    return {
+        "mode": "firstdisk",
+        "kickstart_line": "install --firstdisk --overwritevmfs",
+        "preferred_target": preferred_target,
+        "storage_approval_state": approval.get("state") or storage_cfg.get("state") or "not approved",
+        "os_bays": os_bays,
+        "data_bays": data_bays,
+        "os_drive_count": len(os_drives),
+        "data_drive_count": len(data_drives),
+        "plan_path": plan_path,
+        "safety_note": safety_note,
+        "recommended_fix": "If the installer still misses the OS volume, set controller/boot order so the OS RAID logical drive is first, then rerun ESXi only.",
+    }
+
+
 def build_esxi_page_review(cfg: dict[str, Any]) -> dict[str, Any]:
     kit_name = sanitize_kit_name(cfg.get("site", {}).get("name", "Kit-01"))
     login_ip = resolve_ilo_control_host(cfg)
@@ -2446,6 +2497,8 @@ def build_esxi_page_review(cfg: dict[str, Any]) -> dict[str, Any]:
         "ntp_server": values["ntp_server"],
         "enable_ssh": values["enable_ssh"],
         "disable_ipv6": values["disable_ipv6"],
+        "debug_no_reboot": values["debug_no_reboot"],
+        "install_target": build_esxi_install_target_review(cfg),
         "missing_fields": list(values["missing_fields"]),
         "validation_errors": list(values["validation_errors"]),
         "validation_notes": list(values["validation_notes"]),
@@ -2514,6 +2567,7 @@ def build_esxi_advanced_profile(cfg: dict[str, Any], review: dict[str, Any] | No
                 {"label": "NTP server", "value": str(review.get("ntp_server") or "Not set")},
                 {"label": "Enable SSH", "value": yes_no(bool(review.get("enable_ssh")))},
                 {"label": "Disable IPv6", "value": yes_no(bool(review.get("disable_ipv6")))},
+                {"label": "Debug no reboot", "value": yes_no(bool(review.get("debug_no_reboot")))},
             ],
             detail_rows=[
                 {"label": "Password checks", "value": "; ".join(review.get("root_password_errors") or []) or "Passed"},
@@ -5105,6 +5159,15 @@ def esxi_failure_diagnosis(job: dict[str, Any], detail: str, exc: Exception | No
     after_enabled = str(boot_override.get("after_enabled") or "")
     after_target = str(boot_override.get("after_target") or "")
     boot_matched = bool(boot_override.get("matched")) or (after_enabled.lower() == "once" and after_target.lower() in {"cd", "uefitarget"})
+    ks_cfg = dict(job.get("esxi_ks_cfg") or {})
+    install_target = dict(job.get("esxi_install_target") or {})
+    install_values = dict(job.get("esxi_install_values") or {})
+    boot_samples = list(job.get("esxi_boot_evidence_samples") or [])
+    final_boot_evidence = dict(job.get("esxi_boot_evidence") or {})
+    installer_boot_observed = bool(job.get("esxi_installer_boot_observed"))
+    installer_reboot_detected = bool(job.get("esxi_installer_reboot_detected"))
+    post_install_guard = dict(job.get("esxi_post_install_boot_guard") or {})
+    management_timeout = "ESXi did not answer on configured IP" in str(detail or "")
     rejection_reasons = [str(detail or "ESXi stage failed.").strip()]
     if power_details:
         rejection_reasons.append(
@@ -5112,6 +5175,17 @@ def esxi_failure_diagnosis(job: dict[str, Any], detail: str, exc: Exception | No
             f"Expected={power_details.get('expected_power_state') or 'On'} "
             f"last_observed={power_details.get('last_observed_power_state') or power_details.get('final_power_state') or 'unknown'}."
         )
+    if management_timeout:
+        rejection_reasons.extend(
+            [
+                "ESXi installer boot was observed but the configured management IP never answered." if installer_boot_observed else "ESXi management IP never answered after boot preparation.",
+                "Possible kickstart failure.",
+                "Possible install target failure.",
+                "Possible management NIC mismatch.",
+            ]
+        )
+        if installer_reboot_detected:
+            rejection_reasons.append("Possible early installer reboot before the management network became reachable.")
     attempted = [
         "Built custom ESXi ISO.",
         "Mounted virtual media and verified readback." if media_matches else "Mounted virtual media but readback did not fully match expected ISO.",
@@ -5128,7 +5202,37 @@ def esxi_failure_diagnosis(job: dict[str, Any], detail: str, exc: Exception | No
             f"retry={'yes' if power_details.get('retry_attempted') else 'no'} "
             f"push_button_fallback={'yes' if power_details.get('fallback_attempted') else 'no'}."
         )
+    if installer_boot_observed:
+        attempted.append("Observed the one-time virtual CD boot override being consumed; treated the ESXi installer as started.")
+    if post_install_guard:
+        attempted.append(
+            f"Post-install boot guard action={post_install_guard.get('action') or 'none'} "
+            f"eject_status={post_install_guard.get('eject_status') or 'unknown'}."
+        )
+    if ks_cfg:
+        attempted.append(f"Generated KS.CFG and saved a redacted preview at {ks_cfg.get('redacted_preview_path') or '(not written)'}.")
     manual_curl = power_manual_curl_command({**power_details, "action": power_details.get("action") or "On"})
+    if power_details:
+        selected_action = "ESXi boot preparation succeeded through ISO mount and boot override; power-on did not reach On."
+        recommended_fix = (
+            "Retry ResetType=On using a fresh connection or Connection: close. "
+            "If ResetType=On still does not reach PowerState=On and PushPowerButton is allowed, try PushPowerButton fallback."
+            + (f" Manual equivalent: {manual_curl}" if manual_curl else "")
+        )
+    elif management_timeout:
+        selected_action = (
+            "ESXi installer booted or the one-time CD/DVD boot override was consumed, but the management IP never became reachable."
+            if installer_boot_observed
+            else "ESXi boot preparation completed, but the management IP never became reachable."
+        )
+        recommended_fix = (
+            "Rerun ESXi with esxi.debug_no_reboot=true so the iLO console keeps the installer screen visible. "
+            "Check KS.CFG syntax, confirm the firstdisk target is the OS RAID logical drive, and verify the management cable/NIC mapping. "
+            "If the installer rebooted, let the post-install boot guard leave virtual media unarmed so local disk can boot."
+        )
+    else:
+        selected_action = "ESXi stage failed after collecting boot/install diagnostics."
+        recommended_fix = "Review the ESXi boot evidence, KS.CFG preview, install target summary, and iLO console before rerunning ESXi only."
     return diagnostic_result(
         status="failed",
         desired_state={
@@ -5136,6 +5240,9 @@ def esxi_failure_diagnosis(job: dict[str, Any], detail: str, exc: Exception | No
             "iso_url": desired_iso,
             "power_state_before_boot": "Off",
             "boot_override": {"enabled": "Once", "target": "Cd"},
+            "management_ip": install_values.get("management_ip") or job.get("esxi_expected_ip") or "",
+            "debug_no_reboot": bool(install_values.get("debug_no_reboot")),
+            "install_target": install_target,
         },
         discovered_state={
             "virtual_media_inserted": bool(virtual_media.get("post_mount_inserted")),
@@ -5145,6 +5252,11 @@ def esxi_failure_diagnosis(job: dict[str, Any], detail: str, exc: Exception | No
             "boot_override_target": after_target,
             "boot_override_matched": bool(boot_matched),
             "power_reset": power_details,
+            "installer_boot_observed": installer_boot_observed,
+            "installer_reboot_detected": installer_reboot_detected,
+            "final_boot_evidence": final_boot_evidence,
+            "boot_evidence_samples": boot_samples[-12:],
+            "post_install_boot_guard": post_install_guard,
         },
         differences=rejection_reasons,
         safe_corrections_attempted=attempted,
@@ -5156,14 +5268,12 @@ def esxi_failure_diagnosis(job: dict[str, Any], detail: str, exc: Exception | No
             "virtual_media_device": virtual_media.get("device_path", ""),
             "virtual_media_insert_target": virtual_media.get("insert_target", ""),
             "manual_curl_command": manual_curl,
+            "ks_cfg": ks_cfg,
+            "install_target": install_target,
         },
-        selected_action="ESXi boot preparation succeeded through ISO mount and boot override; power-on did not reach On.",
+        selected_action=selected_action,
         rejection_reasons=rejection_reasons,
-        recommended_fix=(
-            "Retry ResetType=On using a fresh connection or Connection: close. "
-            "If ResetType=On still does not reach PowerState=On and PushPowerButton is allowed, try PushPowerButton fallback."
-            + (f" Manual equivalent: {manual_curl}" if manual_curl else "")
-        ),
+        recommended_fix=recommended_fix,
         user_action_required=True,
     )
 
@@ -7398,6 +7508,7 @@ def default_config():
             "gateway": "",
             "dns_servers": [],
             "root_password": "",
+            "debug_no_reboot": False,
         },
         "windows": {
             "vm_name": "win2022-01",
@@ -7964,6 +8075,10 @@ def build_execution_review(cfg: dict, scope: str):
                 values.append(f"NTP server: {esxi_install_review.get('ntp_server')}")
             values.append(f"Enable SSH: {'Yes' if esxi_install_review.get('enable_ssh') else 'No'}")
             values.append(f"Disable IPv6: {'Yes' if esxi_install_review.get('disable_ipv6') else 'No'}")
+            values.append(f"Debug no reboot: {'Yes' if esxi_install_review.get('debug_no_reboot') else 'No'}")
+            install_target = dict(esxi_install_review.get("install_target") or {})
+            values.append(f"KS.CFG install target: {install_target.get('kickstart_line') or 'Not set'}")
+            values.append(f"Preferred install target: {install_target.get('preferred_target') or 'Not set'}")
             if esxi_install_review.get("missing_fields"):
                 values.append(f"Missing required values: {', '.join(esxi_install_review.get('missing_fields') or [])}")
             if esxi_install_review.get("validation_errors"):
@@ -8050,6 +8165,9 @@ def build_execution_review(cfg: dict, scope: str):
                 {"label": "Manual test defaults", "value": esxi_install_review.get("manual_defaults_label") or "Not set"},
                 {"label": "Enable SSH", "value": "Yes" if esxi_install_review.get("enable_ssh") else "No"},
                 {"label": "Disable IPv6", "value": "Yes" if esxi_install_review.get("disable_ipv6") else "No"},
+                {"label": "Debug no reboot", "value": "Yes" if esxi_install_review.get("debug_no_reboot") else "No"},
+                {"label": "KS.CFG install target", "value": (esxi_install_review.get("install_target") or {}).get("kickstart_line") or "Not set"},
+                {"label": "Preferred install target", "value": (esxi_install_review.get("install_target") or {}).get("preferred_target") or "Not set"},
             ]
             if esxi_install_review.get("vlan_id"):
                 rows.append({"label": "VLAN ID", "value": str(esxi_install_review.get("vlan_id"))})
@@ -9075,6 +9193,7 @@ def get_esxi_effective_values(cfg: dict[str, Any]) -> dict[str, Any]:
         "ntp_server": str(esxi_cfg.get("ntp_server") or "").strip(),
         "enable_ssh": bool(esxi_cfg.get("enable_ssh", True)),
         "disable_ipv6": bool(esxi_cfg.get("disable_ipv6", True)),
+        "debug_no_reboot": bool(esxi_cfg.get("debug_no_reboot", False)),
     }
     missing: list[str] = []
     if not values["hostname"]:
@@ -9147,6 +9266,8 @@ def build_esxi_install_review(cfg: dict, *, run_stamp: str | None = None) -> dic
         "ntp_server": values["ntp_server"],
         "enable_ssh": values["enable_ssh"],
         "disable_ipv6": values["disable_ipv6"],
+        "debug_no_reboot": values["debug_no_reboot"],
+        "install_target": build_esxi_install_target_review(cfg),
         "missing_fields": list(values["missing_fields"]),
         "validation_errors": list(values["validation_errors"]),
         "validation_notes": list(values["validation_notes"]),
@@ -9308,11 +9429,16 @@ def run_esxi_real(cfg: dict, run_stamp: str | None = None):
         "esxi_base_iso_path": "",
         "esxi_builder_summary_path": "",
         "esxi_builder_generation": {},
+        "esxi_ks_cfg": {},
+        "esxi_install_target": {},
         "esxi_install_values": {},
         "esxi_virtual_media": {},
         "esxi_boot_override": {},
         "esxi_boot_evidence": {},
         "esxi_boot_evidence_samples": [],
+        "esxi_installer_boot_observed": False,
+        "esxi_installer_reboot_detected": False,
+        "esxi_post_install_boot_guard": {},
         "esxi_power_transitions": {},
         "esxi_management_network": {},
     }
@@ -9377,6 +9503,8 @@ def run_esxi_real(cfg: dict, run_stamp: str | None = None):
                 "ntp_server": esxi_review.get("ntp_server"),
                 "enable_ssh": bool(esxi_review.get("enable_ssh")),
                 "disable_ipv6": bool(esxi_review.get("disable_ipv6")),
+                "debug_no_reboot": bool(esxi_review.get("debug_no_reboot")),
+                "install_target": dict(esxi_review.get("install_target") or {}),
             },
             "artifacts": {
                 "selected_esxi_version": esxi_review.get("version"),
@@ -9407,6 +9535,7 @@ def run_esxi_real(cfg: dict, run_stamp: str | None = None):
             ntp_server=esxi_review["ntp_server"],
             enable_ssh=bool(esxi_review["enable_ssh"]),
             disable_ipv6=bool(esxi_review["disable_ipv6"]),
+            debug_no_reboot=bool(esxi_review.get("debug_no_reboot")),
         )
 
         def build_esxi_ilo_client() -> ILOClient:
@@ -9493,9 +9622,20 @@ def run_esxi_real(cfg: dict, run_stamp: str | None = None):
                 f"vlan={esxi_review['vlan_id'] or '(none)'}, "
                 f"ntp={esxi_review['ntp_server'] or '(none)'}, "
                 f"ssh={'yes' if esxi_review['enable_ssh'] else 'no'}, "
-                f"disable_ipv6={'yes' if esxi_review['disable_ipv6'] else 'no'}"
+                f"disable_ipv6={'yes' if esxi_review['disable_ipv6'] else 'no'}, "
+                f"debug_no_reboot={'yes' if esxi_review.get('debug_no_reboot') else 'no'}"
             ),
         )
+        if esxi_review.get("debug_no_reboot"):
+            update_job(
+                kit_name,
+                job,
+                "Running",
+                "Review install values",
+                1,
+                total,
+                "[INFO] ESXi debug_no_reboot is enabled; KS.CFG will not auto-reboot so the iLO console keeps the installer result visible.",
+            )
         update_job(
             kit_name,
             job,
@@ -9507,6 +9647,27 @@ def run_esxi_real(cfg: dict, run_stamp: str | None = None):
         )
         update_job(kit_name, job, "Running", "Review install values", 1, total, f"[INFO] Base ISO: {base_iso_path}")
         update_job(kit_name, job, "Running", "Review install values", 1, total, f"[INFO] Selected ESXi version: {esxi_review.get('version') or '7'}")
+        install_target = dict(esxi_review.get("install_target") or {})
+        job["esxi_install_target"] = install_target
+        save_job(kit_name, job)
+        update_job(
+            kit_name,
+            job,
+            "Running",
+            "Review install values",
+            1,
+            total,
+            f"[INFO] KS.CFG install target: {install_target.get('kickstart_line') or 'install target not set'} | preferred={install_target.get('preferred_target') or 'unknown'}",
+        )
+        update_job(
+            kit_name,
+            job,
+            "Running",
+            "Review install values",
+            1,
+            total,
+            f"[WARN] Install target guard: {install_target.get('safety_note') or 'Verify the OS RAID logical drive is first before installing.'}",
+        )
         update_job(kit_name, job, "Running", "Review install values", 1, total, "[INFO] Boot mode assumptions: preserve vendor BIOS/UEFI boot entries and patch BOOT.CFG plus EFI/BOOT/BOOT.CFG when present")
 
         update_job(kit_name, job, "Running", "Building custom ESXi ISO", 1, total, "[RUNNING] Building custom ESXi ISO")
@@ -9528,12 +9689,28 @@ def run_esxi_real(cfg: dict, run_stamp: str | None = None):
             job["esxi_builder_summary_path"] = str(build_summary_path)
             job["esxi_builder_generation"] = dict(build_summary.get("generation", {}) or {})
             job["esxi_builder_self_check"] = dict(build_summary.get("self_check", {}) or {})
+            job["esxi_ks_cfg"] = dict((build_summary.get("generation", {}) or {}).get("ks_cfg", {}) or {})
+            if build_summary.get("install_target"):
+                job["esxi_install_target"] = dict(build_summary.get("install_target") or {})
             save_job(kit_name, job)
             save_esxi_trace(trace_path, trace_payload)
             generation = build_summary.get("generation", {}) or {}
             self_check = build_summary.get("self_check", {}) or {}
             if (generation.get("ks_cfg", {}) or {}).get("generated"):
                 update_job(kit_name, job, "Running", "Build complete", 2, total, f"[OK] KS.CFG generated for ESXi {esxi_review.get('version') or '7'}")
+                ks_meta = dict((generation.get("ks_cfg", {}) or {}))
+                if ks_meta.get("iso_path") or ks_meta.get("inspection_path"):
+                    update_job(
+                        kit_name,
+                        job,
+                        "Running",
+                        "Build complete",
+                        2,
+                        total,
+                        f"[INFO] KS.CFG path: iso={ks_meta.get('iso_path') or '/KS.CFG'} inspection={ks_meta.get('inspection_path') or '(not extracted)'} redacted_preview={ks_meta.get('redacted_preview_path') or '(not written)'}",
+                    )
+                if ks_meta.get("debug_no_reboot"):
+                    update_job(kit_name, job, "Running", "Build complete", 2, total, "[INFO] KS.CFG debug_no_reboot confirmed: no automatic reboot command is present.")
             if (generation.get("boot_cfg", {}) or {}).get("patched"):
                 update_job(kit_name, job, "Running", "Build complete", 2, total, "[OK] BOOT.CFG patched")
             efi_meta = generation.get("efi_boot_cfg", {}) or {}
@@ -9876,10 +10053,23 @@ def run_esxi_real(cfg: dict, run_stamp: str | None = None):
         boot_evidence_samples: list[dict[str, Any]] = list(job.get("esxi_boot_evidence_samples") or [])
         last_boot_signature: tuple[Any, ...] | None = None
         stuck_post_polls = 0
-        esxi_boot_rearm_attempted = False
+        installer_boot_observed = False
+        installer_boot_consumption_logged = False
+        post_completed_seen = str(boot_evidence.get("post_state") or "").strip().lower() in {"finishedpost", "inpostdiscoverycomplete"}
+        post_install_media_guard_attempted = False
+
+        def cd_boot_override_enabled(enabled: Any, target: Any) -> bool:
+            return str(enabled or "").strip().lower() == "once" and str(target or "").strip().lower() in {"cd", "uefitarget"}
+
+        boot_override_seen_after_power_on = cd_boot_override_enabled(
+            boot_evidence.get("boot_override_enabled"),
+            boot_evidence.get("boot_override_target"),
+        )
 
         def on_esxi_wait_poll(state: dict[str, Any]) -> None:
-            nonlocal last_boot_signature, stuck_post_polls, esxi_boot_rearm_attempted
+            nonlocal last_boot_signature, stuck_post_polls, installer_boot_observed
+            nonlocal installer_boot_consumption_logged, post_completed_seen, post_install_media_guard_attempted
+            nonlocal boot_override_seen_after_power_on
             attempts = int(state.get("attempts") or 0)
             if attempts != 1 and attempts % 2 != 0:
                 return
@@ -9899,6 +10089,7 @@ def run_esxi_real(cfg: dict, run_stamp: str | None = None):
                 "boot_override_target": str(evidence.get("boot_override_target") or ""),
                 "virtual_media_inserted": bool(mounted_vm.get("inserted")),
                 "virtual_media_image": str(mounted_vm.get("image") or ""),
+                "virtual_media_device_path": str(mounted_vm.get("device_path") or ""),
             }
             boot_evidence_samples.append(sample)
             job["esxi_boot_evidence_samples"] = list(boot_evidence_samples[-12:])
@@ -9934,11 +10125,13 @@ def run_esxi_real(cfg: dict, run_stamp: str | None = None):
                 )
                 last_boot_signature = signature
 
+            if cd_boot_override_enabled(sample["boot_override_enabled"], sample["boot_override_target"]):
+                boot_override_seen_after_power_on = True
+
             stuck_in_post = (
                 sample["power_state"] == "On"
                 and sample["post_state"] == "InPost"
-                and sample["boot_override_enabled"] == "Once"
-                and sample["boot_override_target"] == "Cd"
+                and cd_boot_override_enabled(sample["boot_override_enabled"], sample["boot_override_target"])
                 and sample["virtual_media_inserted"]
             )
             if stuck_in_post:
@@ -9950,103 +10143,99 @@ def run_esxi_real(cfg: dict, run_stamp: str | None = None):
                     "Server appears stuck in firmware/POST with the virtual CD/DVD still mounted "
                     "and the one-time CD/DVD boot override still pending."
                 )
-            boot_consumed_without_network = (
-                not esxi_boot_rearm_attempted
-                and attempts >= 6
+
+            boot_override_consumed = (
+                boot_override_seen_after_power_on
                 and sample["power_state"] == "On"
                 and str(sample["boot_override_enabled"]).lower() in {"", "disabled"}
                 and not str(sample["boot_override_target"]).strip().lower().replace("none", "")
                 and sample["virtual_media_inserted"]
             )
-            if boot_consumed_without_network:
-                esxi_boot_rearm_attempted = True
-                update_job(
-                    kit_name,
-                    job,
-                    "Running",
-                    "Retry ESXi virtual media boot",
-                    12,
-                    total,
-                    "[WARN] One-time CD/DVD boot override was consumed before ESXi became reachable; re-arming virtual media boot once.",
-                )
-                trace_payload.setdefault("boot_retry", []).append(
-                    {
-                        "reason": "boot_override_consumed_before_esxi_network",
-                        "attempt": attempts,
-                        "evidence": sample,
-                    }
-                )
+            if boot_override_consumed and not installer_boot_observed:
+                installer_boot_observed = True
+                job["esxi_installer_boot_observed"] = True
+                save_job(kit_name, job)
+                trace_payload["installer_boot_observed"] = {
+                    "reason": "one_time_boot_override_consumed",
+                    "attempt": attempts,
+                    "evidence": sample,
+                }
                 save_esxi_trace(trace_path, trace_payload)
-                power_off_retry = ensure_power_state_with_fallback("Off", system_path=system_path, timeout_seconds=180, poll_interval=5)
+            if boot_override_consumed and not installer_boot_consumption_logged:
+                installer_boot_consumption_logged = True
                 update_job(
                     kit_name,
                     job,
                     "Running",
-                    "Retry ESXi virtual media boot",
+                    "Wait for ESXi network",
                     12,
                     total,
-                    f"[INFO] Retry boot power-off: {power_reset_log_summary(power_off_retry, default_action='ForceOff')}",
+                    "[INFO] One-time CD/DVD boot override was consumed; treating ESXi installer boot as started and not re-arming virtual media automatically.",
                 )
-                retry_boot_override = run_with_session_refresh("Retry ESXi virtual media boot", lambda c: c.set_one_time_boot_cd(system_path=system_path))
+
+            if str(sample["post_state"]).strip().lower() in {"finishedpost", "inpostdiscoverycomplete"}:
+                post_completed_seen = True
+            if installer_boot_observed and post_completed_seen and str(sample["post_state"]).strip().lower() == "inpost" and not post_install_media_guard_attempted:
+                post_install_media_guard_attempted = True
+                job["esxi_installer_reboot_detected"] = True
+                guard_result = {
+                    "reason": "installer_reboot_detected_before_management_ready",
+                    "attempt": attempts,
+                    "virtual_media_device_path": sample["virtual_media_device_path"],
+                    "action": "do_not_rearm_virtual_cd_boot",
+                    "eject_attempted": False,
+                    "eject_status": "not_attempted",
+                }
                 update_job(
                     kit_name,
                     job,
                     "Running",
-                    "Retry ESXi virtual media boot",
+                    "Post-install boot guard",
                     12,
                     total,
-                    (
-                        "[INFO] Retry boot override after: "
-                        f"enabled={retry_boot_override.get('after_enabled') or '(empty)'} "
-                        f"target={retry_boot_override.get('after_target') or '(empty)'}"
-                    ),
+                    "[WARN] ESXi installer appears to have rebooted before management became reachable; not re-arming virtual CD boot.",
                 )
-                if not retry_boot_override.get("matched"):
+                vm_path = sample["virtual_media_device_path"]
+                if vm_path:
+                    guard_result["eject_attempted"] = True
+                    try:
+                        run_with_session_refresh("Post-install boot guard", lambda c, path=vm_path: c.eject_virtual_media(path))
+                        guard_result["eject_status"] = "ejected"
+                        update_job(
+                            kit_name,
+                            job,
+                            "Running",
+                            "Post-install boot guard",
+                            12,
+                            total,
+                            "[INFO] Post-install boot guard ejected virtual media so the next boot can use local disk.",
+                        )
+                    except Exception as guard_exc:
+                        guard_result["eject_status"] = "failed"
+                        guard_result["error"] = str(guard_exc).splitlines()[0]
+                        update_job(
+                            kit_name,
+                            job,
+                            "Running",
+                            "Post-install boot guard",
+                            12,
+                            total,
+                            f"[WARN] Post-install boot guard could not eject virtual media: {guard_result['error']}",
+                        )
+                else:
                     update_job(
                         kit_name,
                         job,
                         "Running",
-                        "Retry ESXi virtual media boot",
+                        "Post-install boot guard",
                         12,
                         total,
-                        "[WARN] Retry boot override did not read back cleanly; continuing to power on and collect evidence.",
+                        "[WARN] Post-install boot guard could not eject virtual media because no mounted device path was discovered.",
                     )
-                power_on_retry = ensure_power_state_with_fallback("On", system_path=system_path, timeout_seconds=300, poll_interval=5)
-                update_job(
-                    kit_name,
-                    job,
-                    "Running",
-                    "Retry ESXi virtual media boot",
-                    12,
-                    total,
-                    f"[INFO] Retry boot power-on: {power_reset_log_summary(power_on_retry, default_action='On')}",
-                )
-                retry_evidence = run_with_session_refresh(
-                    "Retry ESXi virtual media boot",
-                    lambda c: collect_esxi_boot_evidence(c, system_path=system_path),
-                )
-                job["esxi_boot_evidence"] = dict(retry_evidence or {})
+                job["esxi_post_install_boot_guard"] = guard_result
                 save_job(kit_name, job)
-                trace_payload.setdefault("boot_retry", [])[-1]["post_retry_evidence"] = dict(retry_evidence or {})
+                trace_payload["post_install_boot_guard"] = guard_result
                 save_esxi_trace(trace_path, trace_payload)
-                mounted_retry_vm = dict((retry_evidence or {}).get("mounted_virtual_media") or {})
-                update_job(
-                    kit_name,
-                    job,
-                    "Running",
-                    "Retry ESXi virtual media boot",
-                    12,
-                    total,
-                    (
-                        "[INFO] Retry post-power boot evidence: "
-                        f"power={retry_evidence.get('power_state') or '(unknown)'}, "
-                        f"post_state={retry_evidence.get('post_state') or '(unknown)'}, "
-                        f"boot_progress={retry_evidence.get('boot_progress_state') or '(unknown)'}, "
-                        f"boot_override={retry_evidence.get('boot_override_enabled') or '(empty)'}/"
-                        f"{retry_evidence.get('boot_override_target') or '(empty)'}, "
-                        f"virtual_media={'yes' if mounted_retry_vm.get('inserted') else 'no'}"
-                    ),
-                )
 
         ready_result = wait_for_esxi_management_ready(management_ip, on_poll=on_esxi_wait_poll)
         job["esxi_management_network"] = dict(ready_result or {})
@@ -10129,7 +10318,13 @@ def run_esxi_real(cfg: dict, run_stamp: str | None = None):
                     )
             except Exception:
                 pass
-            detail += " This usually means the kickstart network settings did not apply or the installer did not finish."
+            if job.get("esxi_installer_boot_observed"):
+                detail += (
+                    " The one-time virtual CD boot was consumed, so the ESXi installer likely started. "
+                    "Possible causes: kickstart failure, install target failure, early installer reboot, or management NIC mismatch."
+                )
+            else:
+                detail += " This usually means the kickstart network settings did not apply or the installer did not finish."
         if 'trace_path' in locals():
             trace_payload["result"] = {
                 "status": "Failed",
@@ -12443,6 +12638,7 @@ async def save_esxi_settings_route(
     esxi_base_iso_path: str = Form(""),
     esxi_hostname: str = Form(""),
     esxi_root_password: str = Form(""),
+    esxi_debug_no_reboot: str | None = Form(None),
     included_esxi: str | None = Form(None),
 ):
     cfg = load_kit_config()
@@ -12450,6 +12646,7 @@ async def save_esxi_settings_route(
     cfg["esxi"]["base_iso_path"] = esxi_base_iso_path.strip()
     cfg["esxi"]["hostname"] = esxi_hostname
     cfg["esxi"]["root_password"] = esxi_root_password
+    cfg["esxi"]["debug_no_reboot"] = esxi_debug_no_reboot == "on"
     if included_esxi is not None:
         cfg["included"]["esxi"] = included_esxi == "on"
     cfg = apply_ip_plan(cfg)
@@ -12494,6 +12691,7 @@ async def save_esxi_settings_route(
                 f"Hostname: {cfg['esxi'].get('hostname', '') or 'Not set'}",
                 f"Target: {cfg['esxi'].get('management_ip', '') or cfg.get('ip_plan', {}).get('esxi', '') or 'Not set'}",
                 f"ESXi version: {cfg['esxi'].get('version') or '7'}",
+                f"Debug no reboot: {'Yes' if cfg['esxi'].get('debug_no_reboot') else 'No'}",
                 f"Gateway: {effective_values.get('gateway') or 'Not set'}",
                 f"DNS: {', '.join(effective_values.get('dns_servers') or []) or 'Not set'}",
                 f"Root password saved: {'Yes' if effective_values.get('root_password') else 'No'}",

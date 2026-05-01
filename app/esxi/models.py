@@ -18,3 +18,4 @@ class EsxiBuildSpec:
     enable_ssh: bool = True
     disable_ipv6: bool = True
     esxi_version: str = "7"
+    debug_no_reboot: bool = False

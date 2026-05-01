@@ -3,6 +3,33 @@ from shlex import quote
 from .models import EsxiBuildSpec
 
 
+def redact_kickstart_text(text: str) -> str:
+    lines: list[str] = []
+    for line in str(text or "").splitlines():
+        stripped = line.lstrip()
+        if stripped.lower().startswith("rootpw "):
+            prefix = line[: len(line) - len(stripped)]
+            parts = stripped.split()
+            flags = [part for part in parts[1:] if part.startswith("--")]
+            suffix = (" " + " ".join(flags)) if flags else ""
+            lines.append(f"{prefix}rootpw{suffix} [REDACTED]")
+            continue
+        lines.append(line)
+    return "\n".join(lines) + ("\n" if text.endswith("\n") else "")
+
+
+def kickstart_install_target_summary() -> dict[str, str]:
+    return {
+        "mode": "firstdisk",
+        "kickstart_line": "install --firstdisk --overwritevmfs",
+        "description": "ESXi chooses the first eligible local install disk at installer runtime.",
+        "safety_note": (
+            "Lab Builder cannot yet map a Redfish storage logical drive to an ESXi disk identifier. "
+            "Keep the OS RAID logical drive first in controller/boot order so firstdisk does not select a data volume."
+        ),
+    }
+
+
 def build_kickstart(spec: EsxiBuildSpec, esxi_version: str | None = None) -> str:
     esxi_version = str(esxi_version or getattr(spec, "esxi_version", "7") or "7").strip()
     dns = ",".join(spec.dns_servers)
@@ -25,8 +52,19 @@ def build_kickstart(spec: EsxiBuildSpec, esxi_version: str | None = None) -> str
         f"rootpw {spec.root_password}",
         "install --firstdisk --overwritevmfs",
         " ".join(network_parts),
-        "reboot",
-        "",
+    ]
+    if getattr(spec, "debug_no_reboot", False):
+        lines.extend(
+            [
+                "# debug_no_reboot enabled: automatic reboot intentionally omitted.",
+                "# Leave the installer result visible on the iLO console for troubleshooting.",
+                "",
+            ]
+        )
+    else:
+        lines.extend(["reboot", ""])
+    lines.extend(
+        [
         "%firstboot --interpreter=busybox",
         "# vmnic numbering can differ by HPE model/firmware; repair management to the first linked NIC.",
         "LOG=/var/log/lab-builder-firstboot.log",
@@ -46,7 +84,8 @@ def build_kickstart(spec: EsxiBuildSpec, esxi_version: str | None = None) -> str
         "else",
         "  echo 'No linked physical NIC found for management network repair.' >> $LOG",
         "fi",
-    ]
+        ]
+    )
     if spec.enable_ssh:
         lines.append("vim-cmd hostsvc/enable_ssh")
         lines.append("vim-cmd hostsvc/start_ssh")

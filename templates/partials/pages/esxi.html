@@ -50,6 +50,19 @@
                 <div class="field-error mt-2">{{ esxi_page_review.base_iso_error }}</div>
                 {% endif %}
             </div>
+            <label class="check card card-compact">
+                <input type="checkbox" name="esxi_debug_no_reboot" {% if esxi_page_review.debug_no_reboot %}checked{% endif %}>
+                <span>
+                    <span class="font-semibold">ESXi debug/install-safe mode</span>
+                    <span class="block text-xs text-slate-400 mt-1">Do not auto-reboot from KS.CFG. Use this when you need the installer result to stay visible on the iLO console.</span>
+                </span>
+            </label>
+            <div class="card card-compact">
+                <div class="font-semibold mb-2">Install target guard</div>
+                <div class="result" style="margin-top: 0;">Kickstart target: {{ esxi_page_review.install_target.kickstart_line }}</div>
+                <div class="result" style="margin-top: .5rem;">Preferred target: {{ esxi_page_review.install_target.preferred_target }}</div>
+                <div class="text-xs text-slate-400 mt-2">{{ esxi_page_review.install_target.safety_note }}</div>
+            </div>
             <div>
                 <label class="block text-sm font-bold text-slate-300 mb-2">Server name</label>
                 {% if esxi_field_errors.hostname %}
