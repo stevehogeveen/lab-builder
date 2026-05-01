@@ -4781,6 +4781,112 @@ def test_run_esxi_real_recovers_from_virtual_media_max_connection(monkeypatch, t
     assert "[OK] Virtual media mounted" in joined_logs
 
 
+def test_run_esxi_real_clears_stuck_virtual_media_with_patch_fallback(monkeypatch, tmp_path):
+    cfg = main.default_config()
+    cfg["site"]["name"] = "Real ESXi Patch Clear Media Kit"
+    cfg["ilo"]["current_ip"] = "10.10.8.90"
+    cfg["ilo"]["host"] = "10.10.8.90"
+    cfg["ilo"]["username"] = "Administrator"
+    cfg["ilo"]["password"] = "secret"
+    cfg["esxi"]["hostname"] = "esxi-lab"
+    cfg["esxi"]["management_ip"] = "10.10.8.10"
+    cfg["esxi"]["subnet_mask"] = "255.255.255.0"
+    cfg["esxi"]["gateway"] = "10.10.8.1"
+    cfg["esxi"]["root_password"] = "Valid1Pass!"
+
+    built_iso = tmp_path / "esxi-patch-clear.iso"
+    built_iso.write_text("iso", encoding="utf-8")
+    state = {
+        "power": "Off",
+        "virtual_media": {
+            "@odata.id": "/redfish/v1/Managers/1/VirtualMedia/2",
+            "Inserted": True,
+            "Image": "http://lab-builder.local:8000/old.iso",
+            "WriteProtected": True,
+            "MediaTypes": ["CD", "DVD"],
+            "Actions": {
+                "#VirtualMedia.InsertMedia": {"target": "/redfish/v1/Managers/1/VirtualMedia/2/Actions/VirtualMedia.InsertMedia"},
+                "#VirtualMedia.EjectMedia": {"target": "/redfish/v1/Managers/1/VirtualMedia/2/Actions/VirtualMedia.EjectMedia"},
+            },
+        },
+        "eject_calls": 0,
+        "patch_calls": 0,
+    }
+
+    class FakeEsxiILOClient:
+        def __init__(self, cfg_obj):
+            self.cfg = cfg_obj
+            self.boot_state = {"Boot": {"BootSourceOverrideEnabled": "Disabled", "BootSourceOverrideTarget": "None"}}
+
+        def get_virtual_media(self):
+            return [dict(state["virtual_media"])]
+
+        def eject_virtual_media(self, vm_path):
+            state["eject_calls"] += 1
+
+        def _patch(self, path, payload):
+            state["patch_calls"] += 1
+            if payload == {"Image": None, "Inserted": False}:
+                state["virtual_media"]["Inserted"] = False
+                state["virtual_media"]["Image"] = ""
+
+        def get_systems(self):
+            return ["/redfish/v1/Systems/1"]
+
+        def get_system(self, system_path):
+            return {
+                "PowerState": state["power"],
+                "BootProgress": {"LastState": "OSBootStarted" if state["power"] == "On" else "None"},
+                "Oem": {"Hpe": {"PostState": "FinishedPost" if state["power"] == "On" else "Off"}},
+                **self.boot_state,
+            }
+
+        def get_power_state(self, system_path=None):
+            return state["power"]
+
+        def power_reset(self, reset_type="ForceRestart", system_path=None):
+            if reset_type == "On":
+                state["power"] = "On"
+            elif reset_type in {"ForceOff", "GracefulShutdown"}:
+                state["power"] = "Off"
+            return {"reset_type": reset_type, "system_path": system_path}
+
+        def _post(self, target, payload):
+            state["virtual_media"]["Inserted"] = bool(payload.get("Inserted"))
+            state["virtual_media"]["Image"] = payload.get("Image", "")
+            state["virtual_media"]["WriteProtected"] = payload.get("WriteProtected")
+
+        def set_one_time_boot_cd(self, system_path=None):
+            self.boot_state["Boot"] = {"BootSourceOverrideEnabled": "Once", "BootSourceOverrideTarget": "Cd"}
+            return {
+                "system_path": system_path or "/redfish/v1/Systems/1",
+                "before_enabled": "Disabled",
+                "before_target": "None",
+                "after_enabled": "Once",
+                "after_target": "Cd",
+                "matched": True,
+                "notes": ["One-time boot override read back exactly as requested."],
+                "boot_option_inventory": {},
+            }
+
+    monkeypatch.setattr(main, "build_custom_iso", lambda spec: built_iso)
+    monkeypatch.setattr(main, "resolve_esxi_base_iso_path", lambda cfg_obj: fake_esxi_base_iso(tmp_path))
+    monkeypatch.setattr(main, "detect_public_base_url", lambda target_host="": "http://lab-builder.local:8000")
+    monkeypatch.setattr(main, "wait_for_esxi_management_ready", lambda host, **kwargs: {"host": host, "port": 443, "attempts": 1})
+    monkeypatch.setattr(main, "ILOClient", lambda cfg_obj: FakeEsxiILOClient(cfg_obj))
+
+    main.run_esxi_real(cfg, run_stamp="20260420-202500")
+    job = main.load_job("Real ESXi Patch Clear Media Kit")
+    joined_logs = "\n".join(job["logs"])
+
+    assert job["status"] == "Completed"
+    assert state["eject_calls"] == 2
+    assert state["patch_calls"] == 1
+    assert "trying Redfish PATCH Image=null, Inserted=false fallback" in joined_logs
+    assert "[OK] Previous virtual media cleared with Redfish PATCH fallback." in joined_logs
+    assert "[OK] Virtual media mounted" in joined_logs
+
+
 def test_run_esxi_real_fails_when_virtual_media_readback_does_not_match(monkeypatch, tmp_path):
     cfg = main.default_config()
     cfg["site"]["name"] = "Real ESXi Mount Readback Failure Kit"

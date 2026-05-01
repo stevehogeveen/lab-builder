@@ -9732,6 +9732,7 @@ def run_esxi_real(cfg: dict, run_stamp: str | None = None):
                 )
                 result["retry_attempted"] = True
                 reconnect_esxi_ilo_after_transport_drop("Eject media", "EjectMedia did not verify as ejected before timeout.")
+                retry_connection_dropped = False
                 try:
                     run_with_session_refresh("Eject media", lambda c, vm_path=vm_path: c.eject_virtual_media(vm_path))
                     result["retry_status"] = "requested"
@@ -9753,16 +9754,27 @@ def run_esxi_real(cfg: dict, run_stamp: str | None = None):
                     if not is_transport_disconnect_error(exc):
                         raise
                     result["retry_connection_dropped"] = True
+                    retry_connection_dropped = True
                     result["retry_status"] = "transport_disconnect"
                     reconnect_esxi_ilo_after_transport_drop("Eject media", retry_error)
 
-                retry_poll = poll_virtual_media_state(
-                    vm_path,
-                    lambda item: not bool(item.get("Inserted")),
-                    stage_label="Eject media",
-                    timeout_seconds=30,
-                    poll_interval=2,
-                )
+                if retry_connection_dropped:
+                    retry_poll = poll_virtual_media_state(
+                        vm_path,
+                        lambda item: not bool(item.get("Inserted")),
+                        stage_label="Eject media",
+                        timeout_seconds=30,
+                        poll_interval=2,
+                    )
+                else:
+                    retry_readback = read_virtual_media_item(vm_path, stage_label="Eject media")
+                    retry_poll = {
+                        "matched": bool(retry_readback) and not bool(retry_readback.get("Inserted")),
+                        "first_seen": retry_readback,
+                        "last_seen": retry_readback,
+                        "timeout_seconds": 0,
+                        "poll_interval_seconds": 0,
+                    }
                 result["retry_readback"] = retry_poll
                 if retry_poll.get("matched"):
                     result["status"] = "ejected_after_retry"
@@ -9790,6 +9802,58 @@ def run_esxi_real(cfg: dict, run_stamp: str | None = None):
                             f"inserted={'yes' if retry_last.get('Inserted') else 'no'} image={retry_last.get('Image') or '(none)'}"
                         ),
                     )
+                    update_job(
+                        kit_name,
+                        job,
+                        "Running",
+                        "Eject media",
+                        3,
+                        total,
+                        "[WARN] Eject actions did not clear virtual media; trying Redfish PATCH Image=null, Inserted=false fallback.",
+                    )
+                    try:
+                        run_with_session_refresh("Eject media", lambda c, vm_path=vm_path: c._patch(vm_path, {"Image": None, "Inserted": False}))
+                        result["patch_clear_status"] = "requested"
+                    except Exception as exc:
+                        patch_error = str(exc).splitlines()[0]
+                        result["patch_clear_error"] = patch_error
+                        if not is_transport_disconnect_error(exc):
+                            raise
+                        result["patch_clear_connection_dropped"] = True
+                        reconnect_esxi_ilo_after_transport_drop("Eject media", patch_error)
+                    patch_poll = poll_virtual_media_state(
+                        vm_path,
+                        lambda item: not bool(item.get("Inserted")),
+                        stage_label="Eject media",
+                        timeout_seconds=20,
+                        poll_interval=2,
+                    )
+                    result["patch_clear_readback"] = patch_poll
+                    if patch_poll.get("matched"):
+                        result["status"] = "ejected_after_patch_clear"
+                        update_job(
+                            kit_name,
+                            job,
+                            "Running",
+                            "Eject media",
+                            3,
+                            total,
+                            "[OK] Previous virtual media cleared with Redfish PATCH fallback.",
+                        )
+                    else:
+                        patch_last = dict(patch_poll.get("last_seen") or {})
+                        update_job(
+                            kit_name,
+                            job,
+                            "Running",
+                            "Eject media",
+                            3,
+                            total,
+                            (
+                                "[WARN] Redfish PATCH fallback did not clear virtual media. "
+                                f"inserted={'yes' if patch_last.get('Inserted') else 'no'} image={patch_last.get('Image') or '(none)'}"
+                            ),
+                        )
             return result
 
         def insert_virtual_media_with_readback(insert_target: str, vm_path: str, image_url: str) -> dict[str, Any]:

@@ -119,6 +119,8 @@ Fix:
 - If insert readback shows the generated ISO mounted, mount is treated as successful.
 - If eject readback still shows inserted media, the app retries eject once with a fresh iLO connection.
 - If `InsertMedia` returns `MaxVirtualMediaConnectionEstablished`, the app ejects stale media and retries `InsertMedia` once.
+- If eject actions still leave media inserted, the app tries the observed iLO-compatible clear operation:
+  `PATCH VirtualMedia/N {"Image": null, "Inserted": false}`.
 - If state still does not match, readback validation blocks the run with a clear error.
 
 Where fixed:
@@ -130,6 +132,7 @@ How to detect:
   - `iLO closed EjectMedia without a response, but virtual media readback shows it ejected`
   - `iLO closed InsertMedia without a response, but virtual media readback matches the generated ISO`
   - `maximum virtual media connection is already established`
+  - `Previous virtual media cleared with Redfish PATCH fallback`
 
 
 ## D. WebSocket crashes on partial job YAML writes
