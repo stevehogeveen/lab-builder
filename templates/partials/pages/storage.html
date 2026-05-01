@@ -376,7 +376,7 @@
                             </select>
                         </label>
                         <div class="space-y-2">
-                            {% for drive in planning_drives if drive.eligible and (not selected_controller_path or drive.controller_path == selected_controller_path) %}
+                            {% for drive in planning_drives if drive.eligible and (not selected_controller_path or not drive.controller_path or drive.controller_path == selected_controller_path) %}
                             <label class="check">
                                 <input type="checkbox" name="os_drive_ids" value="{{ drive.drive_identity }}" {% if drive.drive_identity in selected_os_drive_ids %}checked{% elif drive.path and drive.path in selected_os_drive_paths %}checked{% elif not selected_os_drive_ids and not selected_os_drive_paths and drive.bay in selected_os_bays %}checked{% endif %}>
                                 <span>Bay {{ drive.bay }} | {{ drive.model or drive.name }} | {{ drive.size_gib|round|int }} GiB</span>
@@ -399,7 +399,7 @@
                             </select>
                         </label>
                         <div class="space-y-2">
-                            {% for drive in planning_drives if drive.eligible and (not selected_controller_path or drive.controller_path == selected_controller_path) %}
+                            {% for drive in planning_drives if drive.eligible and (not selected_controller_path or not drive.controller_path or drive.controller_path == selected_controller_path) %}
                             <label class="check">
                                 <input type="checkbox" name="data_drive_ids" value="{{ drive.drive_identity }}" {% if drive.drive_identity in selected_data_drive_ids %}checked{% elif drive.path and drive.path in selected_data_drive_paths %}checked{% elif not selected_data_drive_ids and not selected_data_drive_paths and drive.bay in selected_data_bays %}checked{% endif %}>
                                 <span>Bay {{ drive.bay }} | {{ drive.model or drive.name }} | {{ drive.size_gib|round|int }} GiB</span>
@@ -414,7 +414,7 @@
                             <div class="text-sm text-slate-300 mb-1">Spare bay</div>
                             <select class="input" name="hot_spare_drive_id">
                                 <option value="">No dedicated hot spare</option>
-                                {% for drive in planning_drives if drive.eligible and (not selected_controller_path or drive.controller_path == selected_controller_path) %}
+                                {% for drive in planning_drives if drive.eligible and (not selected_controller_path or not drive.controller_path or drive.controller_path == selected_controller_path) %}
                                 <option value="{{ drive.drive_identity }}" {% if drive.drive_identity == selected_hot_spare_drive_id %}selected{% elif drive.path and drive.path == selected_hot_spare_path %}selected{% elif not selected_hot_spare_drive_id and not selected_hot_spare_path and drive.bay == selected_hot_spare_bay %}selected{% endif %}>Bay {{ drive.bay }} | {{ drive.model or drive.name }} | {{ drive.size_gib|round|int }} GiB</option>
                                 {% endfor %}
                             </select>

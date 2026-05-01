@@ -3666,7 +3666,23 @@ def storage_drive_identity(drive: dict[str, Any]) -> str:
     path = str(drive.get("path") or "").strip()
     if path:
         return path
-    return str(drive.get("serial_number") or "").strip()
+    serial = str(drive.get("serial_number") or "").strip()
+    if serial:
+        return serial
+    source = str(drive.get("source") or "").strip()
+    controller_path = str(drive.get("controller_path") or "").strip()
+    smart_location = str(drive.get("smart_storage_location") or drive.get("location") or "").strip()
+    if smart_location:
+        return f"{source}|{controller_path}|loc:{smart_location}"
+    drive_id = str(drive.get("id") or "").strip()
+    if drive_id:
+        return f"{source}|{controller_path}|id:{drive_id}"
+    bay = str(drive.get("bay") or "").strip()
+    model = str(drive.get("model") or drive.get("name") or "").strip()
+    size = str(drive.get("size_gib") or "").strip()
+    if source or controller_path or bay or model or size:
+        return f"{source}|{controller_path}|bay:{bay}|model:{model}|size:{size}"
+    return ""
 
 
 def infer_smart_storage_location(drive: dict, source: str) -> tuple[str, str]:
@@ -3687,10 +3703,14 @@ def normalized_plan_drive(drive: dict, source: str) -> dict:
     except Exception:
         size_gib = 0.0
     smart_storage_location, smart_storage_location_format = infer_smart_storage_location(drive, source)
+    path = str(drive.get("path") or "")
+    controller_path = str(drive.get("controller_path") or "").strip()
+    if not controller_path and path and "/Drives/" in path:
+        controller_path = path.split("/Drives/", 1)[0]
     normalized = {
         "source": source,
-        "path": drive.get("path", ""),
-        "controller_path": drive.get("controller_path", ""),
+        "path": path,
+        "controller_path": controller_path,
         "id": str(drive.get("id") or ""),
         "bay": str(drive.get("bay") or drive.get("id") or ""),
         "name": drive.get("name", ""),

@@ -6355,6 +6355,40 @@ def test_build_raid_plan_allows_single_os_array_only():
     assert plan["planned_layout"]["data_raid6"]["bays"] == ""
 
 
+def test_storage_drive_identity_falls_back_when_path_and_serial_missing():
+    drive = {
+        "source": "standard_redfish_storage",
+        "controller_path": "/redfish/v1/Systems/1/Storage/DE009001",
+        "id": "Disk.Bay.1",
+        "bay": "1",
+        "model": "VO001920RXUKC",
+        "size_gib": 1788.5,
+        "smart_storage_location": "",
+    }
+    identity = main.storage_drive_identity(drive)
+    assert identity
+    assert "id:Disk.Bay.1" in identity
+
+
+def test_normalized_plan_drive_derives_controller_path_from_drive_path():
+    drive = {
+        "path": "/redfish/v1/Chassis/DE009001/Drives/4",
+        "controller_path": "",
+        "id": "4",
+        "bay": "1",
+        "name": "VK000240GXNWU",
+        "model": "VK000240GXNWU",
+        "serial_number": "254854A5AC8C",
+        "size_gib": 223.57,
+        "media_type": "SSD",
+        "protocol": "NVMe",
+        "status": "OK / Enabled",
+    }
+    normalized = main.normalized_plan_drive(drive, "standard_redfish_storage")
+    assert normalized["controller_path"] == "/redfish/v1/Chassis/DE009001"
+    assert normalized["drive_identity"] == "/redfish/v1/Chassis/DE009001/Drives/4"
+
+
 def duplicate_bay_gen11_storage_discovery() -> dict:
     controller_path = "/redfish/v1/Systems/1/Storage/DE009001"
     drives = [
