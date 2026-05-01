@@ -9876,9 +9876,10 @@ def run_esxi_real(cfg: dict, run_stamp: str | None = None):
         boot_evidence_samples: list[dict[str, Any]] = list(job.get("esxi_boot_evidence_samples") or [])
         last_boot_signature: tuple[Any, ...] | None = None
         stuck_post_polls = 0
+        esxi_boot_rearm_attempted = False
 
         def on_esxi_wait_poll(state: dict[str, Any]) -> None:
-            nonlocal last_boot_signature, stuck_post_polls
+            nonlocal last_boot_signature, stuck_post_polls, esxi_boot_rearm_attempted
             attempts = int(state.get("attempts") or 0)
             if attempts != 1 and attempts % 2 != 0:
                 return
@@ -9948,6 +9949,103 @@ def run_esxi_real(cfg: dict, run_stamp: str | None = None):
                 raise ILOError(
                     "Server appears stuck in firmware/POST with the virtual CD/DVD still mounted "
                     "and the one-time CD/DVD boot override still pending."
+                )
+            boot_consumed_without_network = (
+                not esxi_boot_rearm_attempted
+                and attempts >= 6
+                and sample["power_state"] == "On"
+                and str(sample["boot_override_enabled"]).lower() in {"", "disabled"}
+                and not str(sample["boot_override_target"]).strip().lower().replace("none", "")
+                and sample["virtual_media_inserted"]
+            )
+            if boot_consumed_without_network:
+                esxi_boot_rearm_attempted = True
+                update_job(
+                    kit_name,
+                    job,
+                    "Running",
+                    "Retry ESXi virtual media boot",
+                    12,
+                    total,
+                    "[WARN] One-time CD/DVD boot override was consumed before ESXi became reachable; re-arming virtual media boot once.",
+                )
+                trace_payload.setdefault("boot_retry", []).append(
+                    {
+                        "reason": "boot_override_consumed_before_esxi_network",
+                        "attempt": attempts,
+                        "evidence": sample,
+                    }
+                )
+                save_esxi_trace(trace_path, trace_payload)
+                power_off_retry = ensure_power_state_with_fallback("Off", system_path=system_path, timeout_seconds=180, poll_interval=5)
+                update_job(
+                    kit_name,
+                    job,
+                    "Running",
+                    "Retry ESXi virtual media boot",
+                    12,
+                    total,
+                    f"[INFO] Retry boot power-off: {power_reset_log_summary(power_off_retry, default_action='ForceOff')}",
+                )
+                retry_boot_override = run_with_session_refresh("Retry ESXi virtual media boot", lambda c: c.set_one_time_boot_cd(system_path=system_path))
+                update_job(
+                    kit_name,
+                    job,
+                    "Running",
+                    "Retry ESXi virtual media boot",
+                    12,
+                    total,
+                    (
+                        "[INFO] Retry boot override after: "
+                        f"enabled={retry_boot_override.get('after_enabled') or '(empty)'} "
+                        f"target={retry_boot_override.get('after_target') or '(empty)'}"
+                    ),
+                )
+                if not retry_boot_override.get("matched"):
+                    update_job(
+                        kit_name,
+                        job,
+                        "Running",
+                        "Retry ESXi virtual media boot",
+                        12,
+                        total,
+                        "[WARN] Retry boot override did not read back cleanly; continuing to power on and collect evidence.",
+                    )
+                power_on_retry = ensure_power_state_with_fallback("On", system_path=system_path, timeout_seconds=300, poll_interval=5)
+                update_job(
+                    kit_name,
+                    job,
+                    "Running",
+                    "Retry ESXi virtual media boot",
+                    12,
+                    total,
+                    f"[INFO] Retry boot power-on: {power_reset_log_summary(power_on_retry, default_action='On')}",
+                )
+                retry_evidence = run_with_session_refresh(
+                    "Retry ESXi virtual media boot",
+                    lambda c: collect_esxi_boot_evidence(c, system_path=system_path),
+                )
+                job["esxi_boot_evidence"] = dict(retry_evidence or {})
+                save_job(kit_name, job)
+                trace_payload.setdefault("boot_retry", [])[-1]["post_retry_evidence"] = dict(retry_evidence or {})
+                save_esxi_trace(trace_path, trace_payload)
+                mounted_retry_vm = dict((retry_evidence or {}).get("mounted_virtual_media") or {})
+                update_job(
+                    kit_name,
+                    job,
+                    "Running",
+                    "Retry ESXi virtual media boot",
+                    12,
+                    total,
+                    (
+                        "[INFO] Retry post-power boot evidence: "
+                        f"power={retry_evidence.get('power_state') or '(unknown)'}, "
+                        f"post_state={retry_evidence.get('post_state') or '(unknown)'}, "
+                        f"boot_progress={retry_evidence.get('boot_progress_state') or '(unknown)'}, "
+                        f"boot_override={retry_evidence.get('boot_override_enabled') or '(empty)'}/"
+                        f"{retry_evidence.get('boot_override_target') or '(empty)'}, "
+                        f"virtual_media={'yes' if mounted_retry_vm.get('inserted') else 'no'}"
+                    ),
                 )
 
         ready_result = wait_for_esxi_management_ready(management_ip, on_poll=on_esxi_wait_poll)
