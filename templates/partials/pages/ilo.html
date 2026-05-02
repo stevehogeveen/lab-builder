@@ -9,7 +9,7 @@
 <section class="panel space-y-6" x-data='{"tab":"basic","users": {{ cfg.get("ilo", {}).get("additional_users", [])|tojson }} }'>
     <div>
         <h2 class="text-2xl font-bold">iLO setup</h2>
-        <div class="text-sm text-slate-400">Save the current iLO address, the planned final address, and the sign-in details the app should use for this server.</div>
+        <div class="text-sm text-slate-400">Address and sign-in.</div>
         <div class="actions mt-4">
             <div class="workflow-tabs">
                 <button class="btn workflow-tab" type="button" :class="tab === 'basic' ? 'workflow-tab workflow-tab-active' : 'workflow-tab'" @click="tab = 'basic'">Basic setup</button>
@@ -20,19 +20,16 @@
 
     <section class="card" x-show="tab === 'basic'">
         <div class="text-lg font-semibold mb-3">Save iLO setup</div>
-        <div class="text-sm text-slate-400 mb-4">Start here. Save the details below, then use Read current iLO if you want to confirm what the server is using now.</div>
         <form hx-post="/save-ilo-settings" hx-target="#main-content" hx-swap="outerHTML" class="space-y-4" data-action-title="Saving iLO setup" data-action-start="Saving the latest iLO address and sign-in details.">
             <input type="hidden" name="return_page" value="ilo">
             <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
                 <div>
                     <label class="block text-sm font-bold text-slate-300 mb-2">Current iLO address</label>
                     <input type="text" name="ilo_current_ip" value="{{ cfg.get('ilo', {}).get('current_ip', cfg.get('ilo', {}).get('host', '')) }}" class="input">
-                    <div class="text-xs text-slate-400 mt-1">Use the address the server is answering on right now.</div>
                 </div>
                 <div>
                     <label class="block text-sm font-bold text-slate-300 mb-2">New iLO address</label>
                     <input type="text" name="ilo_target_ip" value="{{ cfg.get('ilo', {}).get('target_ip', cfg.get('ip_plan', {}).get('ilo', '')) }}" class="input">
-                    <div class="text-xs text-slate-400 mt-1">This is filled in from Global Settings unless you replace it here.</div>
                 </div>
                 <div>
                     <label class="block text-sm font-bold text-slate-300 mb-2">New server name</label>
@@ -41,7 +38,6 @@
                 <div>
                     <label class="block text-sm font-bold text-slate-300 mb-2">Gateway</label>
                     <input type="text" name="ilo_gateway" value="{{ cfg.get('ilo', {}).get('gateway', cfg.get('ip_plan', {}).get('gateway', '')) }}" class="input">
-                    <div class="text-xs text-slate-400 mt-1">This is filled in from Global Settings unless you replace it here.</div>
                 </div>
                 <div>
                     <label class="block text-sm font-bold text-slate-300 mb-2">Username</label>
@@ -120,24 +116,6 @@
                     </template>
                 </div>
             </details>
-
-            <div class="grid grid-cols-1 md:grid-cols-3 gap-3">
-                <div class="result" style="margin-top: 0;">
-                    <div class="font-semibold">Uses shared defaults</div>
-                    <div>Gateway {{ cfg.get('ilo', {}).get('gateway', cfg.get('ip_plan', {}).get('gateway', '')) or 'Not set' }}</div>
-                    <div class="text-slate-400 mt-1">Global Settings fills in the shared network details by default.</div>
-                </div>
-                <div class="result" style="margin-top: 0;">
-                    <div class="font-semibold">What to do next</div>
-                    <div>Save this page, then continue to Storage setup or Run Center.</div>
-                    <div class="text-slate-400 mt-1">Storage changes only run after you review and approve a storage plan. Use Read current iLO if you want a live check first.</div>
-                </div>
-                <div class="result" style="margin-top: 0;">
-                    <div class="font-semibold">Current target</div>
-                    <div>{{ cfg.get('ilo', {}).get('current_ip') or cfg.get('ilo', {}).get('host') or 'Not set' }}</div>
-                    <div class="text-slate-400 mt-1">This is the endpoint the app will try first.</div>
-                </div>
-            </div>
 
             <div class="actions">
                 <button class="btn btn-primary action-button" type="submit">Save iLO setup</button>

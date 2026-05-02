@@ -1,14 +1,13 @@
 <section class="panel space-y-6">
     <div>
         <h2 class="text-2xl font-bold">Run Center</h2>
-        <div class="text-sm text-slate-400">Watch the live run here, then start a preview or a real run when you are ready.</div>
+        <div class="text-sm text-slate-400">Watch and run.</div>
     </div>
 
     <section class="card execution-live-card" id="execution-live-card" data-kit-name="{{ current_kit }}">
         <div class="flex items-center justify-between gap-3 mb-4">
             <div>
                 <div class="text-lg font-semibold">Live job</div>
-                <div class="text-sm text-slate-400">This is the main place to watch what the app is doing right now.</div>
             </div>
             <span class="status {{ 'progress' if job.get('status') not in ['Idle', 'Complete', 'Preview complete', 'Completed'] else 'ready' }}" id="execution-live-status">{{ job.get('status', 'Idle') }}</span>
         </div>
@@ -52,7 +51,6 @@
             <div class="flex items-center justify-between gap-3 flex-wrap">
                 <div>
                     <div class="text-sm font-bold text-slate-300">Simple live log</div>
-                    <div class="text-xs text-slate-400 mt-1">Plain-language updates. Open the technical log only when you need exact raw output.</div>
                 </div>
                 <span class="status progress" id="execution-simple-log-count">{{ job.get('logs', [])|length }} raw lines</span>
             </div>
@@ -68,7 +66,6 @@
                 <span class="text-sm font-bold text-slate-300">Live stage details</span>
                 <span class="status progress">checks</span>
             </summary>
-            <div class="text-sm text-slate-400 mt-3 mb-3">Shows the last confirmed checks for each stage while the run is active.</div>
             <div class="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-3" id="execution-live-stage-details">
                 {% if live_stage_cards %}
                 {% for stage in live_stage_cards %}
@@ -108,7 +105,6 @@
                 <span class="text-sm font-bold text-slate-300">Technical log</span>
                 <span class="status progress">raw</span>
             </summary>
-            <div class="text-xs text-slate-400 mt-3">Detailed execution logs are saved with the run bundle and can also be reopened later from Reports.</div>
             <div class="codeblock max-h-96 overflow-y-auto mt-3" id="execution-live-logs">{% if job.get('logs') %}{% for line in job.get('logs', []) %}{{ line }}
 {% endfor %}{% else %}Nothing is running right now. Start a preview or a real run to see live updates here.{% endif %}</div>
         </details>
@@ -130,8 +126,7 @@
     </section>
 
     <section class="card execution-controls-card workflow-hero-card">
-        <div class="text-lg font-semibold mb-3">Review run before execution</div>
-        <div class="text-sm text-slate-400 mb-4">Choose what you want to run, then review the exact settings before you start.</div>
+        <div class="text-lg font-semibold mb-3">Choose run</div>
         <form
             hx-post="/prepare-execute"
             hx-target="#main-content"
@@ -144,7 +139,7 @@
             <input type="hidden" name="return_page" value="execution">
             <div class="space-y-4">
                 <div>
-                    <label class="block text-sm font-bold text-slate-300 mb-2">Choose what to run</label>
+                    <label class="block text-sm font-bold text-slate-300 mb-2">Stages</label>
                     <div class="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-3">
                         <label class="check card card-compact">
                             <input type="checkbox" name="selected_scopes" value="included" {% if 'included' in selected_values %}checked{% endif %}>
@@ -159,7 +154,7 @@
                     </div>
                 </div>
                 <div class="actions">
-                    <button class="btn btn-primary action-button" type="submit">Review run before execution</button>
+                    <button class="btn btn-primary action-button" type="submit">Review run</button>
                 </div>
             </div>
         </form>
@@ -169,130 +164,27 @@
     <section class="card space-y-4 review-shell">
         <div class="flex items-center justify-between gap-3">
             <div>
-                <div class="text-lg font-semibold">Run summary</div>
-                <div class="text-sm text-slate-400">Quick answer first. Expand the lower sections only when you need exact values or troubleshooting detail.</div>
+                <div class="text-lg font-semibold">Ready to run</div>
             </div>
             <span class="status {{ 'ready' if execution_review.execution_mode.key == 'real' else 'progress' }}">{{ execution_review.execution_mode.badge }}</span>
         </div>
 
-        <div class="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-3">
-            {% for item in execution_review.execution_mode_rows %}
-            <div class="card card-compact review-stat-tile">
-                <div class="text-xs font-bold uppercase text-slate-400 mb-1">{{ item.label }}</div>
-                <div class="text-sm font-semibold">{{ item.value }}</div>
+        {% if execution_review.confidence.blocked_checks %}
+        <div class="space-y-2">
+            {% for item in execution_review.confidence.blocked_checks %}
+            <div class="result" style="margin-top: 0; border-color: color-mix(in srgb, var(--warn) 45%, var(--border)); background: color-mix(in srgb, var(--warn) 10%, transparent);">
+                <div><strong>{{ item.label }}:</strong> {{ item.details }}</div>
+                {% if item.fix %}
+                <div class="mt-1">{{ item.fix }}</div>
+                {% endif %}
+                {% if item.href %}
+                <div class="actions mt-3">
+                    <a class="btn" href="{{ item.href }}">Open setup page</a>
+                </div>
+                {% endif %}
             </div>
             {% endfor %}
         </div>
-
-        <div class="execution-confidence-card">
-            <div class="flex items-start justify-between gap-3 flex-wrap">
-                <div>
-                    <div class="text-sm font-bold text-slate-300 mb-1">Run confidence</div>
-                    <div class="text-lg font-semibold">{{ execution_review.confidence.summary }}</div>
-                    <div class="text-sm text-slate-400 mt-1">{{ execution_review.confidence.ready_checks }} of {{ execution_review.confidence.total_checks }} checks are currently ready.</div>
-                </div>
-                <span class="status {{ execution_review.confidence.tone }}">{{ execution_review.confidence.label }}</span>
-            </div>
-            <div class="progress-shell mt-4">
-                <div class="progress-bar" style="width: {{ execution_review.confidence.score }}%;"></div>
-            </div>
-            <div class="grid grid-cols-1 md:grid-cols-3 gap-3 mt-4">
-                <div class="execution-story-card">
-                    <div class="dashboard-kicker">Confidence</div>
-                    <div class="font-semibold">{{ execution_review.confidence.score }}%</div>
-                </div>
-                <div class="execution-story-card">
-                    <div class="dashboard-kicker">Blocked checks</div>
-                    <div class="font-semibold">{{ execution_review.confidence.blocked_checks|length }}</div>
-                </div>
-                <div class="execution-story-card">
-                    <div class="dashboard-kicker">Needs fresh review</div>
-                    <div class="font-semibold">{{ execution_review.confidence.review_checks|length }}</div>
-                </div>
-            </div>
-            {% if execution_review.confidence.blocked_checks %}
-            <div class="space-y-2 mt-4">
-                {% for item in execution_review.confidence.blocked_checks %}
-                <div class="result" style="margin-top: 0; border-color: color-mix(in srgb, var(--warn) 45%, var(--border)); background: color-mix(in srgb, var(--warn) 10%, transparent);">
-                    <div><strong>{{ item.label }}:</strong> {{ item.details }}</div>
-                    {% if item.why %}
-                    <div class="text-slate-400 mt-1">{{ item.why }}</div>
-                    {% endif %}
-                    {% if item.fix %}
-                    <div class="mt-1">{{ item.fix }}</div>
-                    {% endif %}
-                    {% if item.href %}
-                    <div class="actions mt-3">
-                        <a class="btn" href="{{ item.href }}">Open setup page</a>
-                    </div>
-                    {% endif %}
-                </div>
-                {% endfor %}
-            </div>
-            {% endif %}
-        </div>
-
-        {% if execution_review.change_items %}
-        <details class="card card-compact">
-            <summary class="summary-row">
-                <span class="text-sm font-bold text-slate-300">Everything that will change</span>
-                <span class="status progress">{{ execution_review.change_items|length }} items</span>
-            </summary>
-            <div class="text-sm text-slate-400 mt-3 mb-3">This is the exact saved plan the app will try to apply during this run.</div>
-            <div class="space-y-2">
-                {% for item in execution_review.change_items %}
-                <div class="review-change-row">
-                    <div class="flex items-center justify-between gap-3 flex-wrap">
-                        <div class="font-semibold">{{ item.label }}</div>
-                        <span class="status progress">{{ item.stage }}</span>
-                    </div>
-                    <div class="grid grid-cols-1 md:grid-cols-2 gap-3 mt-3 text-sm">
-                        <div>
-                            <div class="dashboard-kicker">Current</div>
-                            <div>{{ item.before }}</div>
-                        </div>
-                        <div>
-                            <div class="dashboard-kicker">Planned</div>
-                            <div>{{ item.after }}</div>
-                        </div>
-                    </div>
-                </div>
-                {% endfor %}
-            </div>
-        </details>
-        {% endif %}
-
-        {% if execution_review.change_summary %}
-        <details class="card card-compact">
-            <summary class="summary-row">
-                <span class="text-sm font-bold text-slate-300">Before and after this run</span>
-                <span class="status progress">summary</span>
-            </summary>
-            <div class="grid grid-cols-1 xl:grid-cols-2 gap-3">
-                {% for item in execution_review.change_summary %}
-                <div class="card card-compact execution-change-card">
-                    <div class="flex items-center justify-between gap-3 mb-3">
-                        <div class="font-semibold">{{ item.name }}</div>
-                        <span class="status progress">planned</span>
-                    </div>
-                    <div class="space-y-3 text-sm">
-                        <div>
-                            <div class="dashboard-kicker">Before</div>
-                            <div>{{ item.before }}</div>
-                        </div>
-                        <div>
-                            <div class="dashboard-kicker">After</div>
-                            <div>{{ item.after }}</div>
-                        </div>
-                        <div>
-                            <div class="dashboard-kicker">How the app will confirm it</div>
-                            <div>{{ item.verify }}</div>
-                        </div>
-                    </div>
-                </div>
-                {% endfor %}
-            </div>
-        </details>
         {% endif %}
 
         <div>
@@ -305,7 +197,6 @@
                         <span class="status {{ stage.status_tone }}">{{ stage.status_label }}</span>
                     </div>
                     <div class="text-sm">{{ stage.summary }}</div>
-                    <div class="text-xs text-slate-400 mt-1">{{ stage.target }}</div>
                     {% if stage.blocked_reason and stage.status_label in ['Blocked', 'Needs review'] %}
                     <div class="result mt-3" style="border-color: color-mix(in srgb, var(--warn) 45%, var(--border)); background: color-mix(in srgb, var(--warn) 10%, transparent);">
                         <div><strong>Needs attention:</strong> {{ stage.blocked_reason }}</div>
@@ -322,35 +213,56 @@
                         {% endif %}
                     </div>
                     {% endif %}
-                    {% if stage.detail_rows %}
-                    <details class="card card-compact mt-3 review-stage-detail">
-                        <summary class="summary-row">
-                            <span class="text-sm font-bold text-slate-300">Show exact stage details</span>
-                            <span class="status progress">details</span>
-                        </summary>
-                        <div class="mt-3 grid grid-cols-1 md:grid-cols-2 gap-2 text-sm">
-                            {% for row in stage.detail_rows %}
-                            <div class="result" style="margin-top: 0;">
-                                <div class="dashboard-kicker">{{ row.label }}</div>
-                                <div>{{ row.value }}</div>
-                            </div>
-                            {% endfor %}
-                        </div>
-                    </details>
-                    {% endif %}
                 </div>
                 {% endfor %}
             </div>
         </div>
 
-        <div class="card card-compact review-warning-card">
-            <div class="text-sm font-bold text-slate-300 mb-3">{{ execution_review.warning_title }}</div>
-            <div class="space-y-2 text-sm">
+        <div class="card card-compact execute-confirm run-primary-action">
+            <form
+                hx-post="/execute"
+                hx-target="#main-content"
+                hx-swap="outerHTML"
+                data-action-title="Starting real run"
+                data-action-start="Starting the real run."
+            >
+                <input type="hidden" name="scope" value="{{ execution_review.launch_options.real.scope if execution_review.launch_options.real else confirm_scope }}">
+                <input type="hidden" name="return_page" value="execution">
+                {% if execution_review.esxi_install_review and execution_review.esxi_install_review.run_stamp %}
+                <input type="hidden" name="esxi_run_stamp" value="{{ execution_review.esxi_install_review.run_stamp }}">
+                {% endif %}
+                <div class="flex items-center justify-between gap-3 flex-wrap mb-3">
+                    <div class="text-lg font-semibold">Run for real</div>
+                    <span class="status {{ 'ready' if execution_review.launch_options.real else 'pending' }}">{{ 'available' if execution_review.launch_options.real else 'blocked' }}</span>
+                </div>
+                {% if execution_review.launch_options.real %}
+                <div class="text-sm mb-3">{{ execution_review.launch_options.real.summary }}</div>
+                {% else %}
+                <div class="text-sm mb-3">Fix the blocked items above first.</div>
+                {% endif %}
+                <label class="check mb-3">
+                    <input type="checkbox" name="confirm_checkbox" {% if not execution_review.launch_options.real %}disabled{% endif %}>
+                    <span>I understand this may restart systems and make real changes.</span>
+                </label>
+                <div class="max-w-sm mb-4">
+                    <label class="block text-sm font-bold text-slate-300 mb-2">Type EXECUTE</label>
+                    <input type="text" name="confirm_phrase" placeholder="EXECUTE" class="input" {% if not execution_review.launch_options.real %}disabled{% endif %}>
+                </div>
+                <button class="btn btn-danger action-button" type="submit" {% if not execution_review.launch_options.real %}disabled{% endif %}>Run for real</button>
+            </form>
+        </div>
+
+        <details class="card card-compact review-warning-card">
+            <summary class="summary-row">
+                <span class="text-sm font-bold text-slate-300">Safety notes</span>
+                <span class="status progress">{{ execution_review.warning_points|length }}</span>
+            </summary>
+            <div class="space-y-2 text-sm mt-3">
                 {% for point in execution_review.warning_points %}
                 <div class="result" style="margin-top: 0; border-color: color-mix(in srgb, var(--warn) 45%, var(--border)); background: color-mix(in srgb, var(--warn) 10%, transparent);">{{ point }}</div>
                 {% endfor %}
             </div>
-        </div>
+        </details>
 
         {% if execution_review.esxi_install_review or execution_review.storage_run_review %}
         <details class="card card-compact">
@@ -424,9 +336,12 @@
         </details>
         {% endif %}
 
-        <div class="card card-compact">
-            <div class="text-sm font-bold text-slate-300 mb-3">Start the run</div>
-            <div class="grid grid-cols-1 xl:grid-cols-2 gap-4">
+        <details class="card card-compact">
+            <summary class="summary-row">
+                <span class="text-sm font-bold text-slate-300">Preview only</span>
+                <span class="status progress">optional</span>
+            </summary>
+            <div class="mt-4">
                 <form
                     hx-post="/execute-preview"
                     hx-target="#main-content"
@@ -440,44 +355,10 @@
                     {% for item in execution_review.selected_scopes_for_form %}
                     <input type="hidden" name="selected_scopes" value="{{ item }}">
                     {% endfor %}
-                    <div class="font-semibold mb-2">Preview only</div>
-                    <div class="text-sm text-slate-400 mb-4">{{ execution_review.launch_options.preview.summary }}</div>
                     <button class="btn btn-primary action-button" type="submit">Start preview run</button>
                 </form>
-
-                <form
-                    hx-post="/execute"
-                    hx-target="#main-content"
-                    hx-swap="outerHTML"
-                    class="card card-compact execute-confirm"
-                    data-action-title="Starting real run"
-                    data-action-start="Starting the real run."
-                >
-                    <input type="hidden" name="scope" value="{{ execution_review.launch_options.real.scope if execution_review.launch_options.real else confirm_scope }}">
-                    <input type="hidden" name="return_page" value="execution">
-                    {% if execution_review.esxi_install_review and execution_review.esxi_install_review.run_stamp %}
-                    <input type="hidden" name="esxi_run_stamp" value="{{ execution_review.esxi_install_review.run_stamp }}">
-                    {% endif %}
-                    <div class="font-semibold mb-2">Run for real</div>
-                    <div class="text-sm text-slate-400 mb-3">
-                        {% if execution_review.launch_options.real %}
-                        {{ execution_review.launch_options.real.summary }}
-                        {% else %}
-                        A real run is not available for this review yet.
-                        {% endif %}
-                    </div>
-                    <label class="check mb-3">
-                        <input type="checkbox" name="confirm_checkbox" {% if not execution_review.launch_options.real %}disabled{% endif %}>
-                        <span>I understand this may restart systems and make real changes.</span>
-                    </label>
-                    <div class="max-w-sm mb-4">
-                        <label class="block text-sm font-bold text-slate-300 mb-2">Type EXECUTE to continue</label>
-                        <input type="text" name="confirm_phrase" placeholder="EXECUTE" class="input" {% if not execution_review.launch_options.real %}disabled{% endif %}>
-                    </div>
-                    <button class="btn btn-danger action-button" type="submit" {% if not execution_review.launch_options.real %}disabled{% endif %}>Run for real</button>
-                </form>
             </div>
-        </div>
+        </details>
 
         <details class="card card-compact">
             <summary class="summary-row">

@@ -301,6 +301,7 @@
     function buildSimpleLogItems(logs, data) {
         const items = [];
         const seen = new Set();
+        const hiddenLevels = new Set(["INFO", "CONFIG", "DISCOVER", "COMPARE", "DECISION", "REMAP"]);
         const skipPatterns = [
             /^\s*$/,
             /^endpoint=/i,
@@ -321,7 +322,9 @@
             if (skipPatterns.some(function (pattern) { return pattern.test(cleaned); })) return;
 
             const parts = logParts(cleaned);
+            if (hiddenLevels.has(parts.level)) return;
             if (!parts.message || parts.message === "Nothing is running right now. Start a preview or a real run to see live updates here.") return;
+            if (/BOOT\.CFG patched|EFI\/BOOT\/BOOT\.CFG patched|KS\.CFG generated/i.test(parts.message) && parts.level === "OK") return;
             const message = friendlyLogMessage(parts.message, parts.level);
             const key = `${parts.level}:${message}`;
             if (seen.has(key)) return;
@@ -332,7 +335,7 @@
         if (!items.length && data && data.current_stage) {
             items.push({ level: "INFO", tone: "simple-log-muted", message: `Waiting: ${data.current_stage}` });
         }
-        return items.slice(-12);
+        return items.slice(-7);
     }
 
     function renderSimpleLogItems(logs, data) {

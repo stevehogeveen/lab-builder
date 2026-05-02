@@ -1440,7 +1440,7 @@ def test_ilo_page_removes_old_controls_and_points_to_storage(client):
     assert "Include iLO setup in this kit" not in response.text
     assert "Open storage setup" in response.text
     assert "Read current iLO" in response.text
-    assert "This is filled in from Global Settings unless you replace it here." in response.text
+    assert "Address and sign-in." in response.text
     assert "Use a single printable login name, 39 characters or less." in response.text
 
 
@@ -1684,7 +1684,6 @@ def test_global_settings_and_workflow_pages_show_defaults_and_dependencies(clien
     assert global_response.status_code == 200
     assert "Use a single printable name, 32 characters or less." in global_response.text
     assert "Global Settings" in global_response.text
-    assert "Save the shared defaults here once." in global_response.text
     assert "Default addresses" in global_response.text
     assert "Shared DNS and alerts" in global_response.text
     assert "Advanced SNMPv3 users" in global_response.text
@@ -1695,14 +1694,13 @@ def test_global_settings_and_workflow_pages_show_defaults_and_dependencies(clien
     esxi_response = client.get("/esxi")
     assert esxi_response.status_code == 200
     assert "ESXi setup" in esxi_response.text
-    assert "The address, gateway, and DNS come from Global Settings." in esxi_response.text
+    assert "Installer version, ISO, name, and password." in esxi_response.text
     assert "Save ESXi setup" in esxi_response.text
     assert "Advanced ESXi installer view" in esxi_response.text
     assert "What happened last" in esxi_response.text
-    assert "Address to use" in esxi_response.text
-    assert "Gateway and DNS" in esxi_response.text
-    assert "Installer file paths and troubleshooting stay on Reports and Run Center." in esxi_response.text
-    assert "Build artifacts" in esxi_response.text
+    assert "Address" in esxi_response.text
+    assert "Gateway / DNS" in esxi_response.text
+    assert "Installer details" in esxi_response.text
     assert "Save ESXi setup" in esxi_response.text
     assert "Generate KS.CFG" not in esxi_response.text
 
@@ -2014,7 +2012,6 @@ def test_read_current_storage_saves_discovery_export_and_renders_summary(client,
     assert "OS Volume / RAID RAID1" in response.text
     assert "Spare for OS Volume / RAID RAID1" in response.text
     assert "storage-discovery-details" in response.text
-    assert "Storage setup uses the final iLO address from the iLO page by default." in response.text
     assert "Deep Smart Storage Scan" not in response.text
     assert "Build storage plan" in response.text
     assert "Open reports" in response.text
@@ -2971,14 +2968,9 @@ def test_prepare_execute_shows_combined_storage_review_using_exact_approved_arti
     )
 
     assert response.status_code == 200
-    assert "Run summary" in response.text
-    assert "Run confidence" in response.text
-    assert "Everything that will change" in response.text
-    assert "Controller login address" in response.text
+    assert "Ready to run" in response.text
     assert "Apply mode" in response.text
-    assert "Before and after this run" in response.text
     assert "Stages that will run" in response.text
-    assert "Show exact stage details" in response.text
     assert "Approved discovery path" in response.text
     assert "Technical details" in response.text
     assert "Settings that will be used" in response.text
@@ -3000,7 +2992,7 @@ def test_execution_page_warns_when_storage_is_not_approved(client):
 
     assert response.status_code == 200
     assert "Run Center" in response.text
-    assert "Review run before execution" in response.text
+    assert "Choose run" in response.text
     assert "Current focus" in response.text
     assert "Still waiting on" in response.text
     assert "Review one part" not in response.text
@@ -3040,7 +3032,6 @@ def test_prepare_execute_blocks_windows_when_saved_credentials_are_missing(clien
     assert response.status_code == 200
     assert "Saved credentials" in response.text
     assert "Administrator password is missing." in response.text
-    assert "The Windows workflow needs the saved administrator password before a real run." in response.text
     assert "Open the Windows page and save the administrator password." in response.text
     assert "/windows" in response.text
 
@@ -3055,7 +3046,6 @@ def test_ilo_page_warns_clearly_when_storage_is_not_approved(client):
     response = client.get("/ilo")
 
     assert response.status_code == 200
-    assert "Storage changes only run after you review and approve a storage plan." in response.text
     assert "Open storage setup" in response.text
 
 
@@ -3109,18 +3099,11 @@ def test_prepare_execute_marks_included_scope_as_preview_only(client):
     assert response.status_code == 200
     assert "Preview only" in response.text
     assert "Mode" in response.text
-    assert "What this does" in response.text
-    assert "Checks the run and prepares a preview." in response.text
-    assert "Real changes made" in response.text
-    assert "No" in response.text
-    assert "Next step" in response.text
-    assert "Run for real when everything looks ready." in response.text
     assert "Start preview run" in response.text
     assert "Run for real" in response.text
     assert "/execute-preview" in response.text
     assert "/execute" in response.text
-    assert "execution-layout" in response.text
-    assert "execution-matrix-item" in response.text
+    assert "Ready to run" in response.text
 
 
 def test_execute_preview_scope_reports_preview_started(client):
@@ -3399,7 +3382,7 @@ def test_prepare_execute_enables_real_launch_for_esxi_scope(client, monkeypatch,
     assert 'name="confirm_phrase"' in response.text
     assert 'name="confirm_phrase" placeholder="EXECUTE" class="input" disabled' not in response.text
     assert "Review one part" not in response.text
-    assert "Review run before execution" in response.text
+    assert "Review run" in response.text
     assert "Saved kit values from the ESXi Setup page and shared defaults" in response.text
     assert "Management IP: 10.10.8.10" in response.text
     assert "Root password: Saved" in response.text
@@ -3411,16 +3394,10 @@ def test_prepare_execute_enables_real_launch_for_esxi_scope(client, monkeypatch,
     assert "host=lab-builder.local port=8000" in response.text
     assert "Manual test defaults: Manual test script defaults are not used by Run Center" in response.text
     assert 'name="esxi_run_stamp" value="20260416-121500"' in response.text
-    assert "Run confidence" in response.text
-    assert "Everything that will change" in response.text
     assert "Management IP" in response.text
-    assert "Current installed ESXi IP" in response.text
     assert "10.10.8.10" in response.text
-    assert "Before and after this run" in response.text
-    assert "How the app will confirm it" in response.text
-    assert "Show exact stage details" in response.text
     assert "Base ISO path" in response.text
-    stage_section = response.text.split("Stages that will run", 1)[1].split("Review before you start", 1)[0]
+    stage_section = response.text.split("Stages that will run", 1)[1].split("Run for real", 1)[0]
     assert "iLO" not in stage_section
 
 
@@ -3591,11 +3568,11 @@ def test_prepare_execute_accepts_multiple_selected_runs(client):
     )
 
     assert response.status_code == 200
-    stage_section = response.text.split("Stages that will run", 1)[1].split("Review before you start", 1)[0]
+    stage_section = response.text.split("Stages that will run", 1)[1].split("Run for real", 1)[0]
     assert "ESXi" in stage_section
     assert "Windows" in stage_section
     assert "QNAP" not in stage_section
-    assert "A real run is not available for this review yet." in response.text
+    assert "Fix the blocked items above first." in response.text
 
 
 def test_prepare_execute_whole_run_launches_supported_included_stages(client):
@@ -7087,7 +7064,6 @@ def test_execution_page_no_longer_shows_view_live_log(client):
     assert "Simple live log" in response.text
     assert "Technical log" in response.text
     assert 'id="execution-simple-log"' in response.text
-    assert "Detailed execution logs are saved with the run" in response.text
 
 
 def test_execution_page_shows_live_stage_details_from_job_state(client):
@@ -9833,9 +9809,8 @@ def test_esxi_page_removes_duplicate_include_and_global_settings_prompt(client):
     response = client.get("/esxi")
 
     assert response.status_code == 200
-    assert "Save the ESXi name and root password here." in response.text
-    assert "Use only letters, numbers, hyphens, and optional dots." in response.text
-    assert "Use the common ESXi default rule" in response.text
+    assert "Installer version, ISO, name, and password." in response.text
+    assert "Installer details" in response.text
     assert "Include ESXi setup in this kit" not in response.text
     assert "Open global settings" not in response.text
 

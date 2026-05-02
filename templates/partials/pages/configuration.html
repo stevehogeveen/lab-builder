@@ -1,7 +1,6 @@
 <section class="panel space-y-6">
     <div>
         <h2 class="text-2xl font-bold">Global Settings</h2>
-        <div class="text-sm text-slate-400">Save the shared defaults here once. The other setup pages can reuse them automatically.</div>
     </div>
 
     <form hx-post="/save-global-settings" hx-target="#main-content" hx-swap="outerHTML" class="space-y-4" x-data='{"snmpUsers": {{ cfg.get("shared_snmp", {}).get("users", [])[1:]|tojson }} }'>
@@ -9,7 +8,6 @@
 
         <section class="card">
             <div class="text-lg font-semibold mb-3">Shared basics</div>
-            <div class="text-sm text-slate-400 mb-3">Set the kit name and the main network once. The setup pages reuse these values automatically.</div>
             <div class="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
                 <div>
                     <label class="block text-sm font-bold text-slate-300 mb-2">Kit name</label>
@@ -28,7 +26,6 @@
 
         <section class="card">
             <div class="text-lg font-semibold mb-3">Default addresses</div>
-            <div class="text-sm text-slate-400 mb-3">The setup pages will use these by default unless you change them on that page.</div>
             <div class="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
                 <div>
                     <label class="block text-sm font-bold text-slate-300 mb-2">iLO address</label>
@@ -59,7 +56,6 @@
 
         <section class="card">
             <div class="text-lg font-semibold mb-3">Shared DNS and alerts</div>
-            <div class="text-sm text-slate-400 mb-3">These defaults are reused when iLO and the other setup pages need DNS or SNMP details.</div>
             <div class="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
                 <div>
                     <label class="block text-sm font-bold text-slate-300 mb-2">DNS 1</label>
@@ -140,7 +136,6 @@
 
         <details class="card">
             <summary class="cursor-pointer text-lg font-semibold">Advanced SNMPv3 users</summary>
-            <div class="text-sm text-slate-400 mt-3">The current iLO Redfish path can apply one SNMPv3 profile directly. Extra profiles are saved here for later use.</div>
             <div class="space-y-3 mt-4">
                 <div class="flex items-center justify-between gap-3">
                     <div class="text-sm font-bold text-slate-300">Additional SNMPv3 users</div>
@@ -189,7 +184,6 @@
 
         <details class="card">
             <summary class="cursor-pointer text-lg font-semibold">Advanced kit pages</summary>
-            <div class="text-sm text-slate-400 mt-3">Turn optional setup pages on or off for this kit.</div>
             <div class="checks space-y-2 mt-4">
                 <label class="check"><input type="checkbox" name="included_ilo" {% if cfg.get('included', {}).get('ilo') %}checked{% endif %}> iLO setup</label>
                 <label class="check"><input type="checkbox" name="included_storage" {% if cfg.get('included', {}).get('storage') %}checked{% endif %}> Storage setup</label>

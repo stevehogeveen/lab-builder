@@ -8,7 +8,6 @@
         {% set storage_plan_defaults = storage_plan_defaults or storage_plan or {} %}
         <div class="card identity-soft-card">
             <div class="text-lg font-semibold mb-2">Readiness at a glance</div>
-            <div class="text-sm text-slate-400 mb-4">This is the fast check for whether storage is ready to read, approve, and hand off to the real run.</div>
             <div class="execution-story-grid">
                 {% for item in storage_page_readiness %}
                 <div class="execution-story-card">
@@ -121,7 +120,6 @@
 
         <div class="card" id="storage-review-start">
             <div class="text-lg font-semibold mb-2">Target server</div>
-            <div class="text-sm text-slate-400 mb-3">Storage setup uses the final iLO address from the iLO page by default. You can temporarily replace it here if needed.</div>
             <form hx-post="/save-storage-target" hx-target="#main-content" hx-swap="outerHTML" data-action-title="Saving storage target" data-action-start="Saving the storage target and sign-in details.">
                 <input type="hidden" name="return_page" value="storage">
                 <div class="grid grid-cols-1 md:grid-cols-3 gap-3">
@@ -221,7 +219,6 @@
 
         <div class="card">
             <div class="text-lg font-semibold mb-3">Current storage setup</div>
-            <div class="text-sm text-slate-400 mb-3">This shows the current controller, volumes, and drives that the next plan will use.</div>
             {% if not storage_target.valid %}
             <div class="text-sm text-amber-300">Current storage cannot be loaded yet because the target server is not set.</div>
             {% elif not storage_credentials.valid %}
@@ -302,7 +299,6 @@
         {% if storage_export_paths %}
         <div class="card" id="build-storage-plan">
             <div class="text-lg font-semibold mb-3">Build storage plan</div>
-            <div class="text-sm text-slate-400 mb-3">Start with the default layout below, then change the drive choices if you want a different setup. This is still read-only.</div>
             <form hx-post="/plan-raid-layout" hx-target="#main-content" hx-swap="outerHTML" data-action-title="Building storage plan" data-action-start="Reviewing the latest discovery and building a proposed layout." data-action-complete="Storage plan ready for review.">
                 <input type="hidden" name="return_page" value="storage">
                 <input type="hidden" name="discovery_raw_path" value="{{ storage_export_paths.raw }}">
@@ -365,7 +361,6 @@
                 <div class="grid grid-cols-1 xl:grid-cols-3 gap-4 mb-4">
                     <div class="card">
                         <div class="text-sm font-semibold mb-2">OS mirror drives</div>
-                        <div class="text-xs text-slate-400 mb-3">Pick the OS RAID level first, then choose the drives for that section.</div>
                         {% if storage_controller_choices and storage_controller_choices|length > 1 %}
                         <label class="block mb-3">
                             <div class="text-sm text-slate-300 mb-1">OS array controller</div>
@@ -400,7 +395,6 @@
                     </div>
                     <div class="card">
                         <div class="text-sm font-semibold mb-2">Data array drives</div>
-                        <div class="text-xs text-slate-400 mb-3">Pick the data RAID level first, then choose matching drives for that section.</div>
                         {% if storage_controller_choices and storage_controller_choices|length > 1 %}
                         <label class="block mb-3">
                             <div class="text-sm text-slate-300 mb-1">Data array controller</div>
@@ -435,7 +429,6 @@
                     </div>
                     <div class="card">
                         <div class="text-sm font-semibold mb-2">Hot spare</div>
-                        <div class="text-xs text-slate-400 mb-3">Optional. Leave this empty if you want every selected drive used in the arrays.</div>
                         <label>
                             <div class="text-sm text-slate-300 mb-1">Spare bay</div>
                             <select class="input" name="hot_spare_drive_id">

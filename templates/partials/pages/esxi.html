@@ -8,7 +8,7 @@
 <section class="panel space-y-6" x-data='{"tab":"basic"}'>
     <div>
         <h2 class="text-2xl font-bold">ESXi setup</h2>
-        <div class="text-sm text-slate-400">Save the ESXi name and root password here. The address, gateway, and DNS come from Global Settings.</div>
+        <div class="text-sm text-slate-400">Installer version, ISO, name, and password.</div>
         <div class="actions mt-4">
             <div class="workflow-tabs">
                 <button class="btn workflow-tab" type="button" :class="tab === 'basic' ? 'workflow-tab workflow-tab-active' : 'workflow-tab'" @click="tab = 'basic'">Basic setup</button>
@@ -19,7 +19,6 @@
 
     <section class="card workflow-hero-card" x-show="tab === 'basic'">
         <div class="text-lg font-semibold mb-3">Save ESXi setup</div>
-        <div class="text-sm text-slate-400 mb-4">This page is only for the ESXi details that belong to this kit. Run Center builds and launches the installer later.</div>
         <form hx-post="/save-esxi-settings" hx-target="#main-content" hx-swap="outerHTML" class="space-y-4">
             <input type="hidden" name="return_page" value="esxi">
             <div class="grid grid-cols-1 md:grid-cols-2 gap-3">
@@ -29,7 +28,6 @@
                         <option value="7" {% if esxi_page_review.version|string == "7" %}selected{% endif %}>ESXi 7</option>
                         <option value="8" {% if esxi_page_review.version|string == "8" %}selected{% endif %}>ESXi 8</option>
                     </select>
-                    <div class="text-xs text-slate-400 mt-1">Existing kits default to ESXi 7 unless changed here.</div>
                 </div>
                 <div>
                     <label class="block text-sm font-bold text-slate-300 mb-2">Base ISO</label>
@@ -39,37 +37,37 @@
                         <option value="{{ iso.path }}" {% if esxi_page_review.selected_base_iso_path == iso.path %}selected{% endif %}>ESXi {{ iso.version }} - {{ iso.name }}</option>
                         {% endfor %}
                     </select>
-                    <div class="text-xs text-slate-400 mt-1">Searches media/esxi/base, media/esxi/base/esxi7, and media/esxi/base/esxi8.</div>
                 </div>
             </div>
-            <div class="card card-compact">
-                <div class="font-semibold mb-2">Selected installer media</div>
-                <div class="result" style="margin-top: 0;">Version: ESXi {{ esxi_page_review.version or '7' }}</div>
-                <div class="result" style="margin-top: .5rem;">ISO path: {{ esxi_page_review.base_iso_path or esxi_page_review.selected_base_iso_path or 'Auto-select not resolved' }}</div>
-                {% if esxi_page_review.base_iso_error %}
-                <div class="field-error mt-2">{{ esxi_page_review.base_iso_error }}</div>
-                {% endif %}
-            </div>
+            <details class="card card-compact">
+                <summary class="summary-row">
+                    <span class="text-sm font-bold text-slate-300">Installer details</span>
+                    <span class="status progress">optional</span>
+                </summary>
+                <div class="mt-3">
+                    <div class="result" style="margin-top: 0;">Version: ESXi {{ esxi_page_review.version or '7' }}</div>
+                    <div class="result" style="margin-top: .5rem;">ISO path: {{ esxi_page_review.base_iso_path or esxi_page_review.selected_base_iso_path or 'Auto-select not resolved' }}</div>
+                    {% if esxi_page_review.base_iso_error %}
+                    <div class="field-error mt-2">{{ esxi_page_review.base_iso_error }}</div>
+                    {% endif %}
+                    <div class="result" style="margin-top: .5rem;">Kickstart target: {{ esxi_page_review.install_target.kickstart_line }}</div>
+                    <div class="result" style="margin-top: .5rem;">Preferred target: {{ esxi_page_review.install_target.preferred_target }}</div>
+                    <div class="text-xs text-slate-400 mt-2">{{ esxi_page_review.install_target.safety_note }}</div>
+                </div>
+            </details>
             <label class="check card card-compact">
                 <input type="checkbox" name="esxi_debug_no_reboot" {% if esxi_page_review.debug_no_reboot %}checked{% endif %}>
                 <span>
                     <span class="font-semibold">ESXi debug/install-safe mode</span>
-                    <span class="block text-xs text-slate-400 mt-1">Do not auto-reboot from KS.CFG. Use this when you need the installer result to stay visible on the iLO console.</span>
+                    <span class="block text-xs text-slate-400 mt-1">Leave the installer visible on the iLO console.</span>
                 </span>
             </label>
-            <div class="card card-compact">
-                <div class="font-semibold mb-2">Install target guard</div>
-                <div class="result" style="margin-top: 0;">Kickstart target: {{ esxi_page_review.install_target.kickstart_line }}</div>
-                <div class="result" style="margin-top: .5rem;">Preferred target: {{ esxi_page_review.install_target.preferred_target }}</div>
-                <div class="text-xs text-slate-400 mt-2">{{ esxi_page_review.install_target.safety_note }}</div>
-            </div>
             <div>
                 <label class="block text-sm font-bold text-slate-300 mb-2">Server name</label>
                 {% if esxi_field_errors.hostname %}
                 <div class="field-error">{{ esxi_field_errors.hostname|join(' ') }}</div>
                 {% endif %}
                 <input type="text" name="esxi_hostname" value="{{ cfg.get('esxi', {}).get('hostname', '') }}" class="input{% if esxi_field_errors.hostname %} input-invalid{% endif %}">
-                <div class="text-xs text-slate-400 mt-1">Use only letters, numbers, hyphens, and optional dots. Do not use underscores or other special characters.</div>
             </div>
             <div>
                 <label class="block text-sm font-bold text-slate-300 mb-2">Root password</label>
@@ -77,7 +75,6 @@
                 <div class="field-error">{{ esxi_field_errors.root_password|join(' ') }}</div>
                 {% endif %}
                 <input type="password" name="esxi_root_password" value="{{ cfg.get('esxi', {}).get('root_password', '') }}" class="input{% if esxi_field_errors.root_password %} input-invalid{% endif %}">
-                <div class="text-xs text-slate-400 mt-1">Use the common ESXi default rule: at least 7 characters and at least 3 character types. Avoid spaces. The app never shows the saved password back in logs.</div>
             </div>
 
             {% if esxi_page_review.validation_errors or esxi_page_review.validation_notes %}
@@ -100,21 +97,14 @@
             </div>
             {% endif %}
 
-            <div class="grid grid-cols-1 md:grid-cols-3 gap-3 workflow-hero-grid">
+            <div class="grid grid-cols-1 md:grid-cols-2 gap-3 workflow-hero-grid">
                 <div class="workflow-summary-tile">
-                    <div class="font-semibold">Address to use</div>
+                    <div class="font-semibold">Address</div>
                     <div>{{ esxi_page_review.management_ip or 'Not set' }}</div>
-                    <div class="text-slate-400 mt-1">This comes from Global Settings unless the kit overrides it.</div>
                 </div>
                 <div class="workflow-summary-tile">
-                    <div class="font-semibold">Gateway and DNS</div>
+                    <div class="font-semibold">Gateway / DNS</div>
                     <div>{{ esxi_page_review.gateway or 'Not set' }}{% if esxi_page_review.dns_servers %} | {{ esxi_page_review.dns_servers|join(', ') }}{% endif %}</div>
-                    <div class="text-slate-400 mt-1">The shared network defaults are reused automatically.</div>
-                </div>
-                <div class="workflow-summary-tile">
-                    <div class="font-semibold">What to do next</div>
-                    <div>Save this page, then open Run Center when you are ready to review and start the install.</div>
-                    <div class="text-slate-400 mt-1">Installer file paths and troubleshooting stay on Reports and Run Center.</div>
                 </div>
             </div>
 
