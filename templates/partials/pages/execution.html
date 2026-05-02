@@ -47,17 +47,16 @@
                 <div class="text-sm font-semibold">{{ live_job_story.waiting_on }}</div>
             </div>
         </div>
-        <div class="execution-simple-log-shell mt-4">
+        <div class="execution-stage-checklist-shell mt-4">
             <div class="flex items-center justify-between gap-3 flex-wrap">
-                <div>
-                    <div class="text-sm font-bold text-slate-300">Simple live log</div>
-                </div>
-                <span class="status progress" id="execution-simple-log-count">{{ job.get('logs', [])|length }} raw lines</span>
+                <div class="text-sm font-bold text-slate-300">Run checklist</div>
+                <span class="status progress" id="execution-checklist-count">0 / 0 complete</span>
             </div>
-            <div class="simple-log-list mt-3" id="execution-simple-log">
-                <div class="simple-log-item simple-log-muted">
-                    <span class="simple-log-dot"></span>
-                    <div>Nothing is running right now. Start a preview or a real run to see updates here.</div>
+            <div class="checklist-list mt-3" id="execution-stage-checklist">
+                <div class="checklist-item">
+                    <span class="checklist-icon checklist-icon-pending">○</span>
+                    <div class="checklist-label">No run started.</div>
+                    <span class="status progress">pending</span>
                 </div>
             </div>
         </div>
@@ -100,7 +99,7 @@
                 {% endif %}
             </div>
         </details>
-        <details class="execution-live-log execution-technical-log mt-4" {% if job.get('status') == 'Failed' %}open{% endif %}>
+        <details class="execution-live-log execution-technical-log mt-4" {% if job.get('status') not in ['Idle', 'Complete', 'Preview complete', 'Completed'] or job.get('status') == 'Failed' %}open{% endif %}>
             <summary class="summary-row">
                 <span class="text-sm font-bold text-slate-300">Technical log</span>
                 <span class="status progress">raw</span>

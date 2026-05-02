@@ -231,144 +231,8 @@
             .replace(/\s+/g, " ");
     }
 
-    function logParts(line) {
-        const cleaned = cleanLogLine(line);
-        const match = cleaned.match(/^\[([A-Z_]+)\]\s*(.*)$/);
-        if (!match) return { level: "INFO", message: cleaned };
-        return { level: match[1], message: match[2] || cleaned };
-    }
 
-    function simpleLogTone(level) {
-        if (level === "OK" || level === "DONE" || level === "SKIP") return "simple-log-ok";
-        if (level === "WARN" || level === "BLOCKED") return "simple-log-warn";
-        if (level === "FAILED" || level === "ERROR") return "simple-log-failed";
-        if (level === "INFO" || level === "DISCOVER" || level === "COMPARE" || level === "DECISION" || level === "REMAP" || level === "CONFIG") return "simple-log-muted";
-        return "";
-    }
-
-    function friendlyLogMessage(message, level) {
-        const text = cleanLogLine(message);
-        const rules = [
-            [/Generating KS\.CFG/i, "Preparing the ESXi install answer file."],
-            [/KS\.CFG generated/i, "ESXi install answer file is ready."],
-            [/Building custom ESXi ISO/i, "Building the ESXi installer ISO."],
-            [/Built ESXi ISO/i, "ESXi installer ISO is built."],
-            [/BOOT\.CFG patched/i, "ESXi boot file updated."],
-            [/EFI\/BOOT\/BOOT\.CFG patched/i, "UEFI boot file updated."],
-            [/Ejecting previous virtual media/i, "Clearing any old virtual CD from iLO."],
-            [/Mounting custom ESXi ISO/i, "Attaching the ESXi installer ISO to iLO."],
-            [/Virtual media.*inserted|Inserted virtual media/i, "Installer ISO is mounted in iLO."],
-            [/Setting one-time boot/i, "Telling the server to boot from the installer once."],
-            [/Boot override.*read back|Generic Cd override read back/i, "Boot setting was confirmed."],
-            [/Powering server off/i, "Turning the server off for a controlled boot."],
-            [/Powering server on/i, "Turning the server on."],
-            [/Server is off/i, "Server is off."],
-            [/Server is on/i, "Server is on."],
-            [/Waiting for ESXi management/i, "Waiting for ESXi to come online."],
-            [/ESXi management.*reachable|management network.*reachable/i, "ESXi management network is reachable."],
-            [/Storage.*preflight/i, "Checking the approved storage plan against the live server."],
-            [/Storage apply.*writable|writable.*Volumes/i, "Finding a safe storage apply path."],
-            [/Delete existing logical volumes/i, "Preparing to remove old storage volumes."],
-            [/Create OS RAID/i, "Preparing the OS storage array."],
-            [/Create Data RAID/i, "Preparing the data storage array."],
-            [/Assign hot spare/i, "Preparing the hot spare."],
-            [/Submit payload|submitted successfully|payload.*OK/i, "Storage changes were sent to iLO."],
-            [/Post-change export/i, "Saved the storage result for review."],
-            [/Request server reboot|reboot request/i, "Requesting the required server restart."],
-            [/Read current storage|storage discovery/i, "Reading the current storage layout."],
-            [/iLO.*auth|Signing in|Connecting to iLO/i, "Connecting to iLO."],
-            [/iLO final verification|final iLO IP/i, "Confirming iLO is reachable at the expected address."],
-            [/closed.*connection|RemoteDisconnected|Connection aborted/i, "iLO closed the connection; the app is checking the live state before deciding."],
-        ];
-
-        for (const rule of rules) {
-            if (rule[0].test(text)) return prefixFriendly(rule[1], level);
-        }
-
-        let fallback = text
-            .replace(/^Power reset request:\s*/i, "Power reset details: ")
-            .replace(/\s+endpoint=.*$/i, "")
-            .replace(/\s+allowed=.*$/i, "")
-            .replace(/\s+http=.*$/i, "");
-        if (fallback.length > 180) fallback = fallback.slice(0, 177).trimEnd() + "...";
-        return prefixFriendly(fallback || "Working.", level);
-    }
-
-    function prefixFriendly(message, level) {
-        if (level === "RUNNING") return "Working: " + message;
-        if (level === "OK" || level === "DONE") return "Done: " + message;
-        if (level === "WARN") return "Check: " + message;
-        if (level === "FAILED" || level === "ERROR") return "Stopped: " + message;
-        if (level === "SKIP") return "Skipped: " + message;
-        if (level === "BLOCKED") return "Blocked: " + message;
-        if (level === "DISCOVER") return "Found: " + message;
-        if (level === "COMPARE") return "Checked: " + message;
-        if (level === "DECISION") return "Decision: " + message;
-        if (level === "REMAP") return "Adjusted: " + message;
-        return message;
-    }
-
-    function buildSimpleLogItems(logs, data) {
-        const items = [];
-        const seen = new Set();
-        const hiddenLevels = new Set(["INFO", "CONFIG", "DISCOVER", "COMPARE", "DECISION", "REMAP"]);
-        const skipPatterns = [
-            /^\s*$/,
-            /^endpoint=/i,
-            /^allowed=/i,
-            /^http=/i,
-            /^message_ids=/i,
-            /^first_observed=/i,
-            /^last_observed=/i,
-            /^timeout=/i,
-            /^POST\s+https?:/i,
-            /^GET\s+https?:/i,
-            /^Traceback/i,
-        ];
-
-        (logs || []).forEach(function (raw) {
-            const cleaned = cleanLogLine(raw);
-            if (!cleaned) return;
-            if (skipPatterns.some(function (pattern) { return pattern.test(cleaned); })) return;
-
-            const parts = logParts(cleaned);
-            if (hiddenLevels.has(parts.level)) return;
-            if (!parts.message || parts.message === "Nothing is running right now. Start a preview or a real run to see live updates here.") return;
-            if (/BOOT\.CFG patched|EFI\/BOOT\/BOOT\.CFG patched|KS\.CFG generated/i.test(parts.message) && parts.level === "OK") return;
-            const message = friendlyLogMessage(parts.message, parts.level);
-            const key = `${parts.level}:${message}`;
-            if (seen.has(key)) return;
-            seen.add(key);
-            items.push({ level: parts.level, tone: simpleLogTone(parts.level), message: message });
-        });
-
-        if (!items.length && data && data.current_stage) {
-            items.push({ level: "INFO", tone: "simple-log-muted", message: `Waiting: ${data.current_stage}` });
-        }
-        return items.slice(-7);
-    }
-
-    function renderSimpleLogItems(logs, data) {
-        const items = buildSimpleLogItems(logs, data || {});
-        if (!items.length) {
-            return (
-                '<div class="simple-log-item simple-log-muted">' +
-                '<span class="simple-log-dot"></span>' +
-                '<div>Nothing is running right now. Start a preview or a real run to see updates here.</div>' +
-                "</div>"
-            );
-        }
-        return items.map(function (item) {
-            return (
-                `<div class="simple-log-item ${escapeHtml(item.tone)}">` +
-                '<span class="simple-log-dot"></span>' +
-                `<div>${escapeHtml(item.message)}</div>` +
-                "</div>"
-            );
-        }).join("");
-    }
-
-    function updateExecutionLogViews(logs, data) {
+    function updateExecutionLogViews(logs) {
         const rawLogs = Array.isArray(logs) ? logs.map(cleanLogLine).filter(Boolean) : [];
         const rawNode = document.getElementById("execution-live-logs");
         if (rawNode) {
@@ -376,14 +240,140 @@
                 ? rawLogs.join("\n")
                 : "Nothing is running right now. Start a preview or a real run to see live updates here.";
         }
-
-        const simpleNode = document.getElementById("execution-simple-log");
-        if (simpleNode) simpleNode.innerHTML = renderSimpleLogItems(rawLogs, data || {});
-
-        const countNode = document.getElementById("execution-simple-log-count");
-        if (countNode) countNode.textContent = rawLogs.length ? `${rawLogs.length} raw lines` : "idle";
     }
 
+    function parseScopeStages(scope, currentStage) {
+        const orderedTokens = ["ilo", "storage", "esxi", "windows", "qnap", "iosafe", "cisco_switch"];
+        const labels = {
+            ilo: "iLO",
+            storage: "Storage",
+            esxi: "ESXi",
+            windows: "Windows",
+            qnap: "QNAP",
+            iosafe: "ioSafe",
+            cisco_switch: "Cisco Switch",
+        };
+        const chosen = [];
+        const raw = String(scope || "");
+        const parts = raw.split("__");
+        for (const token of orderedTokens) {
+            if (parts.includes(token)) chosen.push(token);
+        }
+        if (parts.includes("included") && chosen.length === 0) {
+            chosen.push("ilo", "storage", "esxi");
+        }
+        if (!chosen.length) {
+            const stage = String(currentStage || "").toLowerCase();
+            if (stage.includes("ilo")) chosen.push("ilo");
+            if (stage.includes("storage")) chosen.push("storage");
+            if (stage.includes("esxi")) chosen.push("esxi");
+            if (stage.includes("windows")) chosen.push("windows");
+            if (stage.includes("qnap")) chosen.push("qnap");
+            if (stage.includes("iosafe")) chosen.push("iosafe");
+            if (stage.includes("cisco")) chosen.push("cisco_switch");
+        }
+        return chosen.map(function (token) {
+            return { token: token, label: labels[token] || token };
+        });
+    }
+
+    function detectActiveStageToken(currentStage) {
+        const stage = String(currentStage || "").toLowerCase();
+        if (stage.includes("storage")) return "storage";
+        if (stage.includes("esxi")) return "esxi";
+        if (stage.includes("windows")) return "windows";
+        if (stage.includes("qnap")) return "qnap";
+        if (stage.includes("iosafe")) return "iosafe";
+        if (stage.includes("cisco")) return "cisco_switch";
+        if (stage.includes("ilo")) return "ilo";
+        return "";
+    }
+
+    function stageExplicitlyDone(token, data) {
+        if (token === "ilo") {
+            return data.ilo_final_ip_verified === true || String(data.ilo_reset_status || "").toLowerCase() === "completed";
+        }
+        if (token === "storage") {
+            const workflow = String(data.workflow_state || "");
+            return ["post_reboot_validation_complete", "apply_complete"].includes(workflow) || String(data.storage_server_reboot_status || "").toLowerCase() === "completed";
+        }
+        if (token === "esxi") {
+            const stage = String(data.current_stage || "").toLowerCase();
+            return stage.includes("esxi completed") || stage.includes("esxi success") || stage.includes("installed");
+        }
+        return false;
+    }
+
+    function buildExecutionChecklist(data) {
+        const status = String(data.status || "Idle");
+        const stages = parseScopeStages(data.scope, data.current_stage);
+        const activeToken = detectActiveStageToken(data.current_stage);
+        const activeIndex = stages.findIndex(function (item) { return item.token === activeToken; });
+        const isFailed = status.toLowerCase() === "failed";
+        const isComplete = ["complete", "completed", "preview complete"].includes(status.toLowerCase());
+
+        return stages.map(function (stage, idx) {
+            let state = "pending";
+            if (isComplete) {
+                state = "done";
+            } else if (activeToken && stage.token === activeToken) {
+                state = isFailed ? "failed" : "running";
+            } else if (stageExplicitlyDone(stage.token, data)) {
+                state = "done";
+            } else if (activeIndex > -1 && idx < activeIndex) {
+                state = "done";
+            } else if (isFailed && activeIndex === -1 && idx === stages.length - 1) {
+                state = "failed";
+            }
+            return { label: stage.label, state: state };
+        });
+    }
+
+    function renderExecutionChecklist(data) {
+        const items = buildExecutionChecklist(data || {});
+        const countNode = document.getElementById("execution-checklist-count");
+        if (countNode) {
+            const doneCount = items.filter(function (item) { return item.state === "done"; }).length;
+            countNode.textContent = `${doneCount} / ${items.length || 0} complete`;
+        }
+        if (!items.length) {
+            return (
+                '<div class="checklist-item">' +
+                '<span class="checklist-icon checklist-icon-pending">○</span>' +
+                '<div class="checklist-label">No run started.</div>' +
+                '<span class="status progress">pending</span>' +
+                "</div>"
+            );
+        }
+        return items.map(function (item) {
+            let icon = "○";
+            let badge = "pending";
+            let tone = "progress";
+            let iconClass = "checklist-icon-pending";
+            if (item.state === "running") {
+                icon = "◔";
+                badge = "running";
+                iconClass = "checklist-icon-running";
+            } else if (item.state === "done") {
+                icon = "✓";
+                badge = "done";
+                tone = "ready";
+                iconClass = "checklist-icon-done";
+            } else if (item.state === "failed") {
+                icon = "×";
+                badge = "failed";
+                tone = "pending";
+                iconClass = "checklist-icon-failed";
+            }
+            return (
+                '<div class="checklist-item">' +
+                `<span class="checklist-icon ${iconClass}">${icon}</span>` +
+                `<div class="checklist-label">${escapeHtml(item.label)}</div>` +
+                `<span class="status ${tone}">${badge}</span>` +
+                "</div>"
+            );
+        }).join("");
+    }
     function updateActionStatusCard(payload) {
         const card = document.getElementById("page-action-status");
         if (!card) return;
@@ -497,7 +487,7 @@
         const liveLogDetails = card.querySelector(".execution-live-log");
         const existingRawLogs = document.getElementById("execution-live-logs");
         if (existingRawLogs) {
-            updateExecutionLogViews(existingRawLogs.textContent.split("\n"), {});
+            updateExecutionLogViews(existingRawLogs.textContent.split("\n"));
         }
 
         const proto = window.location.protocol === "https:" ? "wss" : "ws";
@@ -527,9 +517,14 @@
             if (bar) bar.style.width = progress;
 
             if (Array.isArray(data.logs)) {
-                updateExecutionLogViews(data.logs, data);
-                if (liveLogDetails && status === "Failed") liveLogDetails.open = true;
+                updateExecutionLogViews(data.logs);
+                if (liveLogDetails && !["Idle", "Complete", "Preview complete", "Completed"].includes(status)) {
+                    liveLogDetails.open = true;
+                }
             }
+
+            const checklist = document.getElementById("execution-stage-checklist");
+            if (checklist) checklist.innerHTML = renderExecutionChecklist(data);
 
             const stageDetails = document.getElementById("execution-live-stage-details");
             if (stageDetails) {

@@ -588,7 +588,7 @@
             border-color: color-mix(in srgb, var(--border-strong) 82%, transparent);
         }
 
-        .execution-simple-log-shell {
+        .execution-stage-checklist-shell {
             border: 1px solid color-mix(in srgb, var(--accent) 16%, var(--border));
             border-radius: 18px;
             background:
@@ -596,14 +596,14 @@
             padding: 16px;
         }
 
-        .simple-log-list {
+        .checklist-list {
             display: grid;
             gap: 9px;
         }
 
-        .simple-log-item {
+        .checklist-item {
             display: grid;
-            grid-template-columns: 12px 1fr;
+            grid-template-columns: 20px 1fr auto;
             gap: 10px;
             align-items: start;
             padding: 11px 12px;
@@ -615,25 +615,21 @@
             line-height: 1.35;
         }
 
-        .simple-log-dot {
-            width: 9px;
-            height: 9px;
-            margin-top: 5px;
-            border-radius: 999px;
-            background: var(--accent);
+        .checklist-icon {
+            font-weight: 800;
+            margin-top: 1px;
+            line-height: 1;
+            font-size: 1rem;
         }
 
-        .simple-log-ok .simple-log-dot { background: var(--good); }
-        .simple-log-warn .simple-log-dot { background: var(--warn); }
-        .simple-log-failed .simple-log-dot { background: var(--bad); }
-        .simple-log-muted {
-            color: var(--muted);
-            background: color-mix(in srgb, var(--panel2) 76%, white 24%);
+        .checklist-label {
+            font-weight: 600;
         }
 
-        .simple-log-muted .simple-log-dot {
-            background: var(--muted-soft);
-        }
+        .checklist-icon-pending { color: var(--muted); }
+        .checklist-icon-running { color: var(--accent); }
+        .checklist-icon-done { color: var(--good); }
+        .checklist-icon-failed { color: var(--bad); }
 
         .execution-live-log .codeblock {
             min-height: 220px;
