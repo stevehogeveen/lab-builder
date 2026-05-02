@@ -4,7 +4,7 @@ Lab Builder boots ESXi by generating a custom ISO, serving it over HTTP, mountin
 
 ## Virtual media URL
 
-The ISO URL is built from `LAB_BUILDER_PUBLIC_BASE_URL` when set. If it is not set, Lab Builder chooses the local source IP used to reach iLO and the port from `LAB_BUILDER_PORT`, `PORT`, or `8000`.
+The ISO URL is built from `LAB_BUILDER_PUBLIC_BASE_URL` when set. If it is not set, Run Center can use the current browser/request URL when that URL is a real LAN host. If neither is available, Lab Builder chooses the local source IP used to reach iLO and the port from `LAB_BUILDER_PORT`, `PORT`, or `8000`.
 
 For real installs, use an address iLO can reach, for example:
 

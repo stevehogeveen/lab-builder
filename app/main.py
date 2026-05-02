@@ -9188,7 +9188,7 @@ def validate_esxi_base_iso(path: Path, version: str) -> None:
         raise OSError(f"Selected ESXi {version} base ISO could not be read: {path}") from exc
 
 
-def detect_public_base_url_details(target_host: str = "") -> dict[str, str]:
+def detect_public_base_url_details(target_host: str = "", runtime_public_base_url: str = "") -> dict[str, str]:
     configured = os.getenv("LAB_BUILDER_PUBLIC_BASE_URL", "").strip().rstrip("/")
     if configured:
         return {
@@ -9196,6 +9196,16 @@ def detect_public_base_url_details(target_host: str = "") -> dict[str, str]:
             "source": "LAB_BUILDER_PUBLIC_BASE_URL",
             "host": configured.split("://", 1)[-1].split("/", 1)[0].split(":", 1)[0],
             "port": configured.rsplit(":", 1)[-1] if ":" in configured.split("://", 1)[-1].split("/", 1)[0] else "",
+            "probe_target": str(target_host or ""),
+        }
+    runtime_configured = str(runtime_public_base_url or "").strip().rstrip("/")
+    if runtime_configured:
+        parsed_runtime = urlparse(runtime_configured)
+        return {
+            "url": runtime_configured,
+            "source": "current Run Center request URL",
+            "host": parsed_runtime.hostname or "",
+            "port": str(parsed_runtime.port or ""),
             "probe_target": str(target_host or ""),
         }
 
@@ -9225,12 +9235,18 @@ def detect_public_base_url_details(target_host: str = "") -> dict[str, str]:
     }
 
 
-def detect_public_base_url(target_host: str = "") -> str:
-    return detect_public_base_url_details(target_host).get("url", "")
+def detect_public_base_url(target_host: str = "", runtime_public_base_url: str = "") -> str:
+    return detect_public_base_url_details(target_host, runtime_public_base_url=runtime_public_base_url).get("url", "")
 
 
 def build_esxi_iso_url(cfg: dict, output_iso: Path, target_host: str = "") -> str:
-    public_base_url = detect_public_base_url(target_host)
+    runtime_public_base_url = str((cfg.get("_runtime", {}) or {}).get("public_base_url") or "")
+    try:
+        public_base_url = detect_public_base_url(target_host, runtime_public_base_url=runtime_public_base_url)
+    except TypeError as exc:
+        if "runtime_public_base_url" not in str(exc):
+            raise
+        public_base_url = detect_public_base_url(target_host)
     kit_name = sanitize_kit_name(cfg.get("site", {}).get("name", "Kit-01"))
     output_name = sanitize_kit_name(output_iso.stem)
     return f"{public_base_url}/esxi-built-iso/{quote(kit_name)}/{quote(output_name)}.iso"
@@ -9357,6 +9373,30 @@ def probe_tcp_port(host: str, port: int, *, timeout_seconds: float = 0.75) -> di
 def _url_host_port(url: str) -> tuple[str, str]:
     parsed = urlparse(str(url or ""))
     return parsed.hostname or "", str(parsed.port or "")
+
+
+def public_base_url_from_request(request: Request) -> str:
+    try:
+        parsed = urlparse(str(request.url))
+        host = (parsed.hostname or "").strip().lower()
+        if not host or host in {"127.0.0.1", "localhost", "testserver"} or host.startswith("127."):
+            return ""
+        scheme = parsed.scheme or "http"
+        netloc = parsed.netloc.split("@")[-1]
+        if not netloc:
+            return ""
+        return f"{scheme}://{netloc}".rstrip("/")
+    except Exception:
+        return ""
+
+
+def apply_request_public_base_url(cfg: dict[str, Any], request: Request) -> None:
+    public_base_url = public_base_url_from_request(request)
+    if not public_base_url:
+        return
+    runtime = dict(cfg.get("_runtime", {}) or {})
+    runtime["public_base_url"] = public_base_url
+    cfg["_runtime"] = runtime
 
 
 def build_esxi_runtime_status(cfg: dict[str, Any], review: dict[str, Any]) -> dict[str, Any]:
@@ -9516,7 +9556,13 @@ def build_esxi_install_review(cfg: dict, *, run_stamp: str | None = None, includ
     values = get_esxi_effective_values(cfg)
     base_iso_path = resolve_esxi_base_iso_path(cfg)
     validate_esxi_base_iso(base_iso_path, values["version"])
-    public_base_url = detect_public_base_url_details(login_ip)
+    runtime_public_base_url = str((cfg.get("_runtime", {}) or {}).get("public_base_url") or "")
+    try:
+        public_base_url = detect_public_base_url_details(login_ip, runtime_public_base_url=runtime_public_base_url)
+    except TypeError as exc:
+        if "runtime_public_base_url" not in str(exc):
+            raise
+        public_base_url = detect_public_base_url_details(login_ip)
     iso_url = build_esxi_iso_url(cfg, output_iso, login_ip)
     review = {
         "run_stamp": stamp,
@@ -14371,6 +14417,7 @@ async def prepare_execute(
     return_page: str = Form("execution"),
 ):
     cfg = load_kit_config()
+    apply_request_public_base_url(cfg, request)
     scope = normalize_run_center_scope(scope, selected_scopes)
     preview_error = None
     try:
@@ -14400,6 +14447,7 @@ async def execute_scope(
     return_page: str = Form("execution"),
 ):
     cfg = load_kit_config()
+    apply_request_public_base_url(cfg, request)
     scope = normalize_run_center_scope(scope, selected_scopes)
     launch_options = build_execution_launch_options(cfg, scope)
     real_launch = launch_options.get("real")

@@ -1547,6 +1547,29 @@ def test_detect_public_base_url_details_reports_env_source(monkeypatch):
     assert result["probe_target"] == "10.10.8.90"
 
 
+def test_public_base_url_from_request_uses_lan_host():
+    class FakeRequest:
+        url = "http://192.168.1.26:8001/execution"
+
+    class LocalRequest:
+        url = "http://127.0.0.1:8001/execution"
+
+    assert main.public_base_url_from_request(FakeRequest()) == "http://192.168.1.26:8001"
+    assert main.public_base_url_from_request(LocalRequest()) == ""
+
+
+def test_build_esxi_iso_url_prefers_runtime_request_url(monkeypatch, tmp_path):
+    monkeypatch.delenv("LAB_BUILDER_PUBLIC_BASE_URL", raising=False)
+    monkeypatch.setenv("LAB_BUILDER_PORT", "8000")
+    cfg = main.default_config()
+    cfg["site"]["name"] = "Runtime URL Kit"
+    cfg["_runtime"] = {"public_base_url": "http://192.168.1.26:8001"}
+
+    url = main.build_esxi_iso_url(cfg, tmp_path / "esxi-runtime.iso", "10.10.8.90")
+
+    assert url == "http://192.168.1.26:8001/esxi-built-iso/Runtime-URL-Kit/esxi-runtime.iso"
+
+
 def test_esxi_runtime_status_explains_powered_off_server(monkeypatch):
     cfg = main.default_config()
     cfg["site"]["name"] = "Runtime ESXi Kit"
