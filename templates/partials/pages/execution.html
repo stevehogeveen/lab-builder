@@ -361,6 +361,7 @@
                         <div class="result md:col-span-2" style="margin-top: 0;">Base ISO path: {{ execution_review.esxi_install_review.base_iso_path }}</div>
                         <div class="result md:col-span-2" style="margin-top: 0;">Built ISO path: {{ execution_review.esxi_install_review.output_iso_path }}</div>
                         <div class="result md:col-span-2" style="margin-top: 0;">Virtual media URL: {{ execution_review.esxi_install_review.virtual_media_url }}</div>
+                        <div class="result md:col-span-2" style="margin-top: 0;">Virtual media URL source: {{ execution_review.esxi_install_review.virtual_media_base_url_source or 'Not set' }}{% if execution_review.esxi_install_review.virtual_media_base_url_host %} | host={{ execution_review.esxi_install_review.virtual_media_base_url_host }} port={{ execution_review.esxi_install_review.virtual_media_base_url_port or 'default' }}{% endif %}</div>
                         <div class="result md:col-span-2" style="margin-top: 0;">Manual test defaults: {{ execution_review.esxi_install_review.manual_defaults_label }}</div>
                         {% if execution_review.esxi_install_review.missing_fields %}
                         <div class="result md:col-span-2" style="margin-top: 0;">Missing required values: {{ ', '.join(execution_review.esxi_install_review.missing_fields) }}</div>

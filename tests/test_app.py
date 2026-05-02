@@ -1534,6 +1534,18 @@ def test_verify_esxi_virtual_media_url_reports_unreachable(monkeypatch, tmp_path
     assert "LAB_BUILDER_PUBLIC_BASE_URL" in result["recommended_fix"]
 
 
+def test_detect_public_base_url_details_reports_env_source(monkeypatch):
+    monkeypatch.setenv("LAB_BUILDER_PUBLIC_BASE_URL", "http://lab-builder.example.test:9000")
+
+    result = main.detect_public_base_url_details("10.10.8.90")
+
+    assert result["url"] == "http://lab-builder.example.test:9000"
+    assert result["source"] == "LAB_BUILDER_PUBLIC_BASE_URL"
+    assert result["host"] == "lab-builder.example.test"
+    assert result["port"] == "9000"
+    assert result["probe_target"] == "10.10.8.90"
+
+
 def test_run_esxi_real_blocks_when_virtual_media_url_is_not_served(monkeypatch, tmp_path):
     cfg = main.default_config()
     cfg["site"]["name"] = "Real ESXi URL Check Kit"
@@ -3280,6 +3292,17 @@ def test_prepare_execute_enables_real_launch_for_esxi_scope(client, monkeypatch,
 
     monkeypatch.setattr(main, "datetime", FakeDateTime)
     monkeypatch.setattr(main, "detect_public_base_url", lambda target_host="": "http://lab-builder.local:8000")
+    monkeypatch.setattr(
+        main,
+        "detect_public_base_url_details",
+        lambda target_host="": {
+            "url": "http://lab-builder.local:8000",
+            "source": "LAB_BUILDER_PUBLIC_BASE_URL",
+            "host": "lab-builder.local",
+            "port": "8000",
+            "probe_target": target_host,
+        },
+    )
     monkeypatch.setattr(main, "resolve_esxi_base_iso_path", lambda cfg_obj: fake_esxi_base_iso(tmp_path))
 
     response = client.post(
@@ -3302,6 +3325,8 @@ def test_prepare_execute_enables_real_launch_for_esxi_scope(client, monkeypatch,
     assert "esxi-20260416-121500/esxi-20260416-121500.iso" in response.text
     assert "Virtual media URL:" in response.text
     assert "http://lab-builder.local:8000/esxi-built-iso/ESXi-Launch-Review-Kit/esxi-20260416-121500.iso" in response.text
+    assert "Virtual media URL source: LAB_BUILDER_PUBLIC_BASE_URL" in response.text
+    assert "host=lab-builder.local port=8000" in response.text
     assert "Manual test defaults: Manual test script defaults are not used by Run Center" in response.text
     assert 'name="esxi_run_stamp" value="20260416-121500"' in response.text
     assert "Run confidence" in response.text

@@ -8094,6 +8094,7 @@ def build_execution_review(cfg: dict, scope: str):
                 f"Root password: {'Saved' if esxi_install_review.get('root_password_saved') else 'Missing'}",
                 f"Built ISO path: {esxi_install_review.get('output_iso_path') or 'Not set'}",
                 f"Virtual media URL: {esxi_install_review.get('virtual_media_url') or 'Not set'}",
+                f"Virtual media URL source: {esxi_install_review.get('virtual_media_base_url_source') or 'Not set'}",
                 f"Base ISO path: {esxi_install_review.get('base_iso_path') or 'Not set'}",
                 f"Manual test defaults: {esxi_install_review.get('manual_defaults_label') or 'Not set'}",
             ]
@@ -8189,6 +8190,8 @@ def build_execution_review(cfg: dict, scope: str):
                 {"label": "Root password saved", "value": "Yes" if esxi_install_review.get("root_password_saved") else "No"},
                 {"label": "Built ISO path", "value": esxi_install_review.get("output_iso_path") or "Not set"},
                 {"label": "Virtual media URL", "value": esxi_install_review.get("virtual_media_url") or "Not set"},
+                {"label": "Virtual media URL source", "value": esxi_install_review.get("virtual_media_base_url_source") or "Not set"},
+                {"label": "Virtual media URL probe", "value": f"{esxi_install_review.get('virtual_media_base_url_host') or 'unknown'}:{esxi_install_review.get('virtual_media_base_url_port') or 'unknown'} via {esxi_install_review.get('virtual_media_base_url_probe_target') or 'unknown'}"},
                 {"label": "Base ISO path", "value": esxi_install_review.get("base_iso_path") or "Not set"},
                 {"label": "Manual test defaults", "value": esxi_install_review.get("manual_defaults_label") or "Not set"},
                 {"label": "Enable SSH", "value": "Yes" if esxi_install_review.get("enable_ssh") else "No"},
@@ -9173,10 +9176,16 @@ def validate_esxi_base_iso(path: Path, version: str) -> None:
         raise OSError(f"Selected ESXi {version} base ISO could not be read: {path}") from exc
 
 
-def detect_public_base_url(target_host: str = "") -> str:
+def detect_public_base_url_details(target_host: str = "") -> dict[str, str]:
     configured = os.getenv("LAB_BUILDER_PUBLIC_BASE_URL", "").strip().rstrip("/")
     if configured:
-        return configured
+        return {
+            "url": configured,
+            "source": "LAB_BUILDER_PUBLIC_BASE_URL",
+            "host": configured.split("://", 1)[-1].split("/", 1)[0].split(":", 1)[0],
+            "port": configured.rsplit(":", 1)[-1] if ":" in configured.split("://", 1)[-1].split("/", 1)[0] else "",
+            "probe_target": str(target_host or ""),
+        }
 
     host = "127.0.0.1"
     probe_target = (target_host or "8.8.8.8").strip()
@@ -9188,7 +9197,24 @@ def detect_public_base_url(target_host: str = "") -> str:
         pass
 
     port = os.getenv("LAB_BUILDER_PORT", "").strip() or os.getenv("PORT", "").strip() or "8000"
-    return f"http://{host}:{port}"
+    source = "auto-detected route to iLO"
+    if os.getenv("LAB_BUILDER_PORT", "").strip():
+        source += " + LAB_BUILDER_PORT"
+    elif os.getenv("PORT", "").strip():
+        source += " + PORT"
+    else:
+        source += " + default port 8000"
+    return {
+        "url": f"http://{host}:{port}",
+        "source": source,
+        "host": host,
+        "port": port,
+        "probe_target": probe_target,
+    }
+
+
+def detect_public_base_url(target_host: str = "") -> str:
+    return detect_public_base_url_details(target_host).get("url", "")
 
 
 def build_esxi_iso_url(cfg: dict, output_iso: Path, target_host: str = "") -> str:
@@ -9371,6 +9397,7 @@ def build_esxi_install_review(cfg: dict, *, run_stamp: str | None = None) -> dic
     values = get_esxi_effective_values(cfg)
     base_iso_path = resolve_esxi_base_iso_path(cfg)
     validate_esxi_base_iso(base_iso_path, values["version"])
+    public_base_url = detect_public_base_url_details(login_ip)
     iso_url = build_esxi_iso_url(cfg, output_iso, login_ip)
     return {
         "run_stamp": stamp,
@@ -9380,6 +9407,11 @@ def build_esxi_install_review(cfg: dict, *, run_stamp: str | None = None) -> dic
         "base_iso_path": str(base_iso_path),
         "output_iso_path": str(output_iso),
         "virtual_media_url": iso_url,
+        "virtual_media_base_url": public_base_url.get("url", ""),
+        "virtual_media_base_url_source": public_base_url.get("source", ""),
+        "virtual_media_base_url_host": public_base_url.get("host", ""),
+        "virtual_media_base_url_port": public_base_url.get("port", ""),
+        "virtual_media_base_url_probe_target": public_base_url.get("probe_target", ""),
         "hostname": values["hostname"],
         "management_ip": values["management_ip"],
         "subnet_mask": values["subnet_mask"],
