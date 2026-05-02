@@ -183,9 +183,12 @@
         {% endif %}
     </section>
 
-    <section class="card">
-        <div class="text-lg font-semibold mb-2">What happened last</div>
-        <div class="text-sm text-slate-400 mb-4">This is the latest ESXi result the app recorded for this kit.</div>
+    <details class="card">
+        <summary class="summary-row">
+            <span class="text-lg font-semibold">What happened last</span>
+            <span class="status progress">history</span>
+        </summary>
+        <div class="text-sm text-slate-400 mt-4 mb-4">This is the latest ESXi result the app recorded for this kit.</div>
         {% if esxi_latest_receipt %}
         <div class="dashboard-receipt-card">
             <div class="flex items-start justify-between gap-3 flex-wrap">
@@ -219,5 +222,5 @@
             <div class="text-sm text-slate-400 mt-1">Save this page first, then use Run Center when you are ready to review and start the install.</div>
         </div>
         {% endif %}
-    </section>
+    </details>
 </section>

@@ -48,9 +48,27 @@
                 <div class="text-sm font-semibold">{{ live_job_story.waiting_on }}</div>
             </div>
         </div>
-        <div class="mt-4">
-            <div class="text-sm font-bold text-slate-300 mb-2">Live stage details</div>
-            <div class="text-sm text-slate-400 mb-3">Shows the last confirmed checks for each stage while the run is active.</div>
+        <div class="execution-simple-log-shell mt-4">
+            <div class="flex items-center justify-between gap-3 flex-wrap">
+                <div>
+                    <div class="text-sm font-bold text-slate-300">Simple live log</div>
+                    <div class="text-xs text-slate-400 mt-1">Plain-language updates. Open the technical log only when you need exact raw output.</div>
+                </div>
+                <span class="status progress" id="execution-simple-log-count">{{ job.get('logs', [])|length }} raw lines</span>
+            </div>
+            <div class="simple-log-list mt-3" id="execution-simple-log">
+                <div class="simple-log-item simple-log-muted">
+                    <span class="simple-log-dot"></span>
+                    <div>Nothing is running right now. Start a preview or a real run to see updates here.</div>
+                </div>
+            </div>
+        </div>
+        <details class="mt-4">
+            <summary class="summary-row">
+                <span class="text-sm font-bold text-slate-300">Live stage details</span>
+                <span class="status progress">checks</span>
+            </summary>
+            <div class="text-sm text-slate-400 mt-3 mb-3">Shows the last confirmed checks for each stage while the run is active.</div>
             <div class="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-3" id="execution-live-stage-details">
                 {% if live_stage_cards %}
                 {% for stage in live_stage_cards %}
@@ -84,11 +102,11 @@
                 </div>
                 {% endif %}
             </div>
-        </div>
-        <details class="execution-live-log" {% if job.get('status') not in ['Idle', 'Complete', 'Preview complete', 'Completed'] or job.get('logs') %}open{% endif %}>
+        </details>
+        <details class="execution-live-log execution-technical-log mt-4" {% if job.get('status') == 'Failed' %}open{% endif %}>
             <summary class="summary-row">
-                <span class="text-sm font-bold text-slate-300">Live log</span>
-                <span class="status progress">live</span>
+                <span class="text-sm font-bold text-slate-300">Technical log</span>
+                <span class="status progress">raw</span>
             </summary>
             <div class="text-xs text-slate-400 mt-3">Detailed execution logs are saved with the run bundle and can also be reopened later from Reports.</div>
             <div class="codeblock max-h-96 overflow-y-auto mt-3" id="execution-live-logs">{% if job.get('logs') %}{% for line in job.get('logs', []) %}{{ line }}
@@ -215,9 +233,12 @@
         </div>
 
         {% if execution_review.change_items %}
-        <div>
-            <div class="text-sm font-bold text-slate-300 mb-2">Everything that will change</div>
-            <div class="text-sm text-slate-400 mb-3">This is the exact saved plan the app will try to apply during this run.</div>
+        <details class="card card-compact">
+            <summary class="summary-row">
+                <span class="text-sm font-bold text-slate-300">Everything that will change</span>
+                <span class="status progress">{{ execution_review.change_items|length }} items</span>
+            </summary>
+            <div class="text-sm text-slate-400 mt-3 mb-3">This is the exact saved plan the app will try to apply during this run.</div>
             <div class="space-y-2">
                 {% for item in execution_review.change_items %}
                 <div class="review-change-row">
@@ -238,12 +259,15 @@
                 </div>
                 {% endfor %}
             </div>
-        </div>
+        </details>
         {% endif %}
 
         {% if execution_review.change_summary %}
-        <div>
-            <div class="text-sm font-bold text-slate-300 mb-2">Before and after this run</div>
+        <details class="card card-compact">
+            <summary class="summary-row">
+                <span class="text-sm font-bold text-slate-300">Before and after this run</span>
+                <span class="status progress">summary</span>
+            </summary>
             <div class="grid grid-cols-1 xl:grid-cols-2 gap-3">
                 {% for item in execution_review.change_summary %}
                 <div class="card card-compact execution-change-card">
@@ -268,7 +292,7 @@
                 </div>
                 {% endfor %}
             </div>
-        </div>
+        </details>
         {% endif %}
 
         <div>

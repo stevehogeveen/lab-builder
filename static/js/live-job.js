@@ -214,6 +214,163 @@
         }).join("");
     }
 
+    function cleanLogLine(line) {
+        return String(line == null ? "" : line)
+            .trim()
+            .replace(/^["']|["']$/g, "")
+            .replace(/\s+/g, " ");
+    }
+
+    function logParts(line) {
+        const cleaned = cleanLogLine(line);
+        const match = cleaned.match(/^\[([A-Z_]+)\]\s*(.*)$/);
+        if (!match) return { level: "INFO", message: cleaned };
+        return { level: match[1], message: match[2] || cleaned };
+    }
+
+    function simpleLogTone(level) {
+        if (level === "OK" || level === "DONE" || level === "SKIP") return "simple-log-ok";
+        if (level === "WARN" || level === "BLOCKED") return "simple-log-warn";
+        if (level === "FAILED" || level === "ERROR") return "simple-log-failed";
+        if (level === "INFO" || level === "DISCOVER" || level === "COMPARE" || level === "DECISION" || level === "REMAP" || level === "CONFIG") return "simple-log-muted";
+        return "";
+    }
+
+    function friendlyLogMessage(message, level) {
+        const text = cleanLogLine(message);
+        const rules = [
+            [/Generating KS\.CFG/i, "Preparing the ESXi install answer file."],
+            [/KS\.CFG generated/i, "ESXi install answer file is ready."],
+            [/Building custom ESXi ISO/i, "Building the ESXi installer ISO."],
+            [/Built ESXi ISO/i, "ESXi installer ISO is built."],
+            [/BOOT\.CFG patched/i, "ESXi boot file updated."],
+            [/EFI\/BOOT\/BOOT\.CFG patched/i, "UEFI boot file updated."],
+            [/Ejecting previous virtual media/i, "Clearing any old virtual CD from iLO."],
+            [/Mounting custom ESXi ISO/i, "Attaching the ESXi installer ISO to iLO."],
+            [/Virtual media.*inserted|Inserted virtual media/i, "Installer ISO is mounted in iLO."],
+            [/Setting one-time boot/i, "Telling the server to boot from the installer once."],
+            [/Boot override.*read back|Generic Cd override read back/i, "Boot setting was confirmed."],
+            [/Powering server off/i, "Turning the server off for a controlled boot."],
+            [/Powering server on/i, "Turning the server on."],
+            [/Server is off/i, "Server is off."],
+            [/Server is on/i, "Server is on."],
+            [/Waiting for ESXi management/i, "Waiting for ESXi to come online."],
+            [/ESXi management.*reachable|management network.*reachable/i, "ESXi management network is reachable."],
+            [/Storage.*preflight/i, "Checking the approved storage plan against the live server."],
+            [/Storage apply.*writable|writable.*Volumes/i, "Finding a safe storage apply path."],
+            [/Delete existing logical volumes/i, "Preparing to remove old storage volumes."],
+            [/Create OS RAID/i, "Preparing the OS storage array."],
+            [/Create Data RAID/i, "Preparing the data storage array."],
+            [/Assign hot spare/i, "Preparing the hot spare."],
+            [/Submit payload|submitted successfully|payload.*OK/i, "Storage changes were sent to iLO."],
+            [/Post-change export/i, "Saved the storage result for review."],
+            [/Request server reboot|reboot request/i, "Requesting the required server restart."],
+            [/Read current storage|storage discovery/i, "Reading the current storage layout."],
+            [/iLO.*auth|Signing in|Connecting to iLO/i, "Connecting to iLO."],
+            [/iLO final verification|final iLO IP/i, "Confirming iLO is reachable at the expected address."],
+            [/closed.*connection|RemoteDisconnected|Connection aborted/i, "iLO closed the connection; the app is checking the live state before deciding."],
+        ];
+
+        for (const rule of rules) {
+            if (rule[0].test(text)) return prefixFriendly(rule[1], level);
+        }
+
+        let fallback = text
+            .replace(/^Power reset request:\s*/i, "Power reset details: ")
+            .replace(/\s+endpoint=.*$/i, "")
+            .replace(/\s+allowed=.*$/i, "")
+            .replace(/\s+http=.*$/i, "");
+        if (fallback.length > 180) fallback = fallback.slice(0, 177).trimEnd() + "...";
+        return prefixFriendly(fallback || "Working.", level);
+    }
+
+    function prefixFriendly(message, level) {
+        if (level === "RUNNING") return "Working: " + message;
+        if (level === "OK" || level === "DONE") return "Done: " + message;
+        if (level === "WARN") return "Check: " + message;
+        if (level === "FAILED" || level === "ERROR") return "Stopped: " + message;
+        if (level === "SKIP") return "Skipped: " + message;
+        if (level === "BLOCKED") return "Blocked: " + message;
+        if (level === "DISCOVER") return "Found: " + message;
+        if (level === "COMPARE") return "Checked: " + message;
+        if (level === "DECISION") return "Decision: " + message;
+        if (level === "REMAP") return "Adjusted: " + message;
+        return message;
+    }
+
+    function buildSimpleLogItems(logs, data) {
+        const items = [];
+        const seen = new Set();
+        const skipPatterns = [
+            /^\s*$/,
+            /^endpoint=/i,
+            /^allowed=/i,
+            /^http=/i,
+            /^message_ids=/i,
+            /^first_observed=/i,
+            /^last_observed=/i,
+            /^timeout=/i,
+            /^POST\s+https?:/i,
+            /^GET\s+https?:/i,
+            /^Traceback/i,
+        ];
+
+        (logs || []).forEach(function (raw) {
+            const cleaned = cleanLogLine(raw);
+            if (!cleaned) return;
+            if (skipPatterns.some(function (pattern) { return pattern.test(cleaned); })) return;
+
+            const parts = logParts(cleaned);
+            if (!parts.message || parts.message === "Nothing is running right now. Start a preview or a real run to see live updates here.") return;
+            const message = friendlyLogMessage(parts.message, parts.level);
+            const key = `${parts.level}:${message}`;
+            if (seen.has(key)) return;
+            seen.add(key);
+            items.push({ level: parts.level, tone: simpleLogTone(parts.level), message: message });
+        });
+
+        if (!items.length && data && data.current_stage) {
+            items.push({ level: "INFO", tone: "simple-log-muted", message: `Waiting: ${data.current_stage}` });
+        }
+        return items.slice(-12);
+    }
+
+    function renderSimpleLogItems(logs, data) {
+        const items = buildSimpleLogItems(logs, data || {});
+        if (!items.length) {
+            return (
+                '<div class="simple-log-item simple-log-muted">' +
+                '<span class="simple-log-dot"></span>' +
+                '<div>Nothing is running right now. Start a preview or a real run to see updates here.</div>' +
+                "</div>"
+            );
+        }
+        return items.map(function (item) {
+            return (
+                `<div class="simple-log-item ${escapeHtml(item.tone)}">` +
+                '<span class="simple-log-dot"></span>' +
+                `<div>${escapeHtml(item.message)}</div>` +
+                "</div>"
+            );
+        }).join("");
+    }
+
+    function updateExecutionLogViews(logs, data) {
+        const rawLogs = Array.isArray(logs) ? logs.map(cleanLogLine).filter(Boolean) : [];
+        const rawNode = document.getElementById("execution-live-logs");
+        if (rawNode) {
+            rawNode.textContent = rawLogs.length
+                ? rawLogs.join("\n")
+                : "Nothing is running right now. Start a preview or a real run to see live updates here.";
+        }
+
+        const simpleNode = document.getElementById("execution-simple-log");
+        if (simpleNode) simpleNode.innerHTML = renderSimpleLogItems(rawLogs, data || {});
+
+        const countNode = document.getElementById("execution-simple-log-count");
+        if (countNode) countNode.textContent = rawLogs.length ? `${rawLogs.length} raw lines` : "idle";
+    }
+
     function updateActionStatusCard(payload) {
         const card = document.getElementById("page-action-status");
         if (!card) return;
@@ -325,6 +482,10 @@
         const card = document.getElementById("execution-live-card");
         if (!card || !opts || !opts.kitName) return;
         const liveLogDetails = card.querySelector(".execution-live-log");
+        const existingRawLogs = document.getElementById("execution-live-logs");
+        if (existingRawLogs) {
+            updateExecutionLogViews(existingRawLogs.textContent.split("\n"), {});
+        }
 
         const proto = window.location.protocol === "https:" ? "wss" : "ws";
         const wsUrl = `${proto}://${window.location.host}/ws/job/${encodeURIComponent(opts.kitName)}`;
@@ -352,14 +513,9 @@
             const bar = document.getElementById("execution-live-bar");
             if (bar) bar.style.width = progress;
 
-            const logs = document.getElementById("execution-live-logs");
-            if (logs) {
-                if (Array.isArray(data.logs) && data.logs.length) {
-                    logs.textContent = data.logs.join("\n");
-                    if (liveLogDetails) liveLogDetails.open = true;
-                } else {
-                    logs.textContent = "Nothing is running right now. Start a preview or a real run to see live updates here.";
-                }
+            if (Array.isArray(data.logs)) {
+                updateExecutionLogViews(data.logs, data);
+                if (liveLogDetails && status === "Failed") liveLogDetails.open = true;
             }
 
             const stageDetails = document.getElementById("execution-live-stage-details");

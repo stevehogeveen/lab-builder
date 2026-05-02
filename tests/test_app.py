@@ -7084,6 +7084,9 @@ def test_execution_page_no_longer_shows_view_live_log(client):
 
     assert response.status_code == 200
     assert "View live log" not in response.text
+    assert "Simple live log" in response.text
+    assert "Technical log" in response.text
+    assert 'id="execution-simple-log"' in response.text
     assert "Detailed execution logs are saved with the run" in response.text
 
 
