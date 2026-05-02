@@ -20,10 +20,20 @@
                 continue;
             }
 
-            const idx = line.indexOf(":");
-            if (idx > -1) {
-                const key = line.slice(0, idx).trim();
-                let value = line.slice(idx + 1).trim();
+            // YAML list items can wrap onto indented continuation lines.
+            // Keep appending those lines to the most recent list entry.
+            if (/^\s+/.test(line) && currentKey && Array.isArray(data[currentKey]) && data[currentKey].length) {
+                const idx = data[currentKey].length - 1;
+                const prev = String(data[currentKey][idx] == null ? "" : data[currentKey][idx]);
+                data[currentKey][idx] = `${prev} ${line.trim()}`.trim();
+                continue;
+            }
+
+            // Only parse top-level keys to avoid misreading wrapped values.
+            const keyMatch = line.match(/^([^:\s][^:]*):\s*(.*)$/);
+            if (keyMatch) {
+                const key = keyMatch[1].trim();
+                let value = keyMatch[2].trim();
                 if (value === "") {
                     data[key] = [];
                 } else {
