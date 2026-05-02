@@ -50,6 +50,7 @@ def isolate_runtime_paths(tmp_path, monkeypatch):
     for name, value in paths.items():
         monkeypatch.setattr(main, name, value)
     monkeypatch.setenv("LAB_BUILDER_VALIDATE_ESXI_MEDIA_URL", "0")
+    monkeypatch.setenv("LAB_BUILDER_LIVE_RUN_CENTER_CHECKS", "0")
     main.set_current_kit_name("Kit-01")
 
 
@@ -1544,6 +1545,64 @@ def test_detect_public_base_url_details_reports_env_source(monkeypatch):
     assert result["host"] == "lab-builder.example.test"
     assert result["port"] == "9000"
     assert result["probe_target"] == "10.10.8.90"
+
+
+def test_esxi_runtime_status_explains_powered_off_server(monkeypatch):
+    cfg = main.default_config()
+    cfg["site"]["name"] = "Runtime ESXi Kit"
+    cfg["ilo"]["current_ip"] = "10.10.8.90"
+    cfg["ilo"]["host"] = "10.10.8.90"
+    cfg["ilo"]["username"] = "Administrator"
+    cfg["ilo"]["password"] = "secret"
+    cfg["esxi"]["hostname"] = "esxi-lab"
+    cfg["esxi"]["management_ip"] = "10.10.8.10"
+    cfg["esxi"]["subnet_mask"] = "255.255.255.0"
+    cfg["esxi"]["gateway"] = "10.10.8.1"
+    cfg["esxi"]["root_password"] = "Valid1Pass!"
+    main.save_kit_config(cfg)
+    main.save_job(
+        "Runtime ESXi Kit",
+        {
+            "status": "Completed",
+            "scope": "esxi",
+            "current_stage": "Finished",
+            "esxi_iso_url": "http://10.10.8.20:8000/esxi-built-iso/Runtime-ESXi-Kit/esxi-old.iso",
+            "esxi_management_network": {"host": "10.10.8.10", "port": 443, "attempts": 12},
+        },
+    )
+    monkeypatch.setenv("LAB_BUILDER_LIVE_RUN_CENTER_CHECKS", "1")
+    monkeypatch.setattr(main, "probe_tcp_port", lambda host, port, timeout_seconds=0.75: {"host": host, "port": port, "reachable": False, "error": "timed out"})
+
+    class FakeRuntimeILOClient:
+        def __init__(self, cfg_obj):
+            self.cfg = cfg_obj
+
+        def get_system_path(self):
+            return "/redfish/v1/Systems/1"
+
+        def get_system(self, system_path):
+            return {
+                "PowerState": "Off",
+                "Oem": {"Hpe": {"PostState": "PowerOff"}},
+                "BootProgress": {"LastState": "None"},
+            }
+
+        def get_virtual_media(self):
+            return [{"@odata.id": "/redfish/v1/Managers/1/VirtualMedia/2", "Inserted": False, "Image": ""}]
+
+    monkeypatch.setattr(main, "ILOClient", lambda cfg_obj: FakeRuntimeILOClient(cfg_obj))
+    review = {
+        "management_ip": "10.10.8.10",
+        "virtual_media_url": "http://10.10.8.30:8000/esxi-built-iso/Runtime-ESXi-Kit/esxi-new.iso",
+    }
+
+    status = main.build_esxi_runtime_status(cfg, review)
+
+    assert status["management_reachable"] is False
+    assert status["ilo_power_state"] == "Off"
+    assert status["stale_media_host"] is True
+    assert "currently Off" in status["summary"]
+    assert "Last run used media host 10.10.8.20:8000" in status["recommended_action"]
 
 
 def test_run_esxi_real_blocks_when_virtual_media_url_is_not_served(monkeypatch, tmp_path):

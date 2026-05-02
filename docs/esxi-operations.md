@@ -19,6 +19,16 @@ Before mounting the ISO, Lab Builder now fetches the generated URL itself. If th
 
 If iLO virtual media actions close the connection, Lab Builder reconnects and reads back live virtual media state before deciding whether the action failed. If old media is stuck, it tries standard eject, retry eject, and the observed iLO-compatible clear fallback: `PATCH {"Image": null, "Inserted": false}`.
 
+## Run Center live advisory
+
+Run Center shows the current ESXi management reachability when live checks are enabled. It also compares the last run's mounted media URL with the URL the next run will use, which catches DHCP/source-IP drift before another boot attempt.
+
+Disable this optional live UI check with:
+
+```bash
+LAB_BUILDER_LIVE_RUN_CENTER_CHECKS=0
+```
+
 ## Debug mode
 
 Set this in the kit when the installer screen needs to remain visible:
