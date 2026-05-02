@@ -135,6 +135,31 @@ How to detect:
   - `Previous virtual media cleared with Redfish PATCH fallback`
 
 
+## C3. ESXi virtual media URL not served
+
+What users saw:
+- iLO could mount a URL, but the installer did not reliably boot unless a helper server was running on the URL/port used by the generated virtual media link.
+- The risky pattern was a generated URL like `http://192.168.1.51:8000/...` while the visible app server was only listening on another port.
+
+Root cause:
+- The run could proceed after ISO build without proving that Lab Builder was actually serving the generated ISO URL.
+- iLO virtual media needs a reachable HTTP URL; a wrong public base URL wastes a full boot attempt.
+
+Fix:
+- After building the ISO, Lab Builder now fetches the generated virtual media URL before mounting it in iLO.
+- If the URL is not served, the run blocks before boot changes and recommends setting `LAB_BUILDER_PUBLIC_BASE_URL` / `LAB_BUILDER_PORT`.
+
+Where fixed:
+- `app/main.py` (`verify_esxi_virtual_media_url`, ESXi real-run preflight).
+- `docs/esxi-operations.md`.
+
+How to detect:
+- In live logs, look for:
+  - `Verifying Lab Builder can serve the ESXi virtual media URL`
+  - `Virtual media URL reachable from Lab Builder`
+  - `Virtual media URL check failed`
+
+
 ## D. WebSocket crashes on partial job YAML writes
 
 What users saw:

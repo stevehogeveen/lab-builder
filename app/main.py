@@ -6,6 +6,7 @@ import ipaddress
 import json
 import os
 import re
+import requests
 import socket
 import threading
 import time
@@ -5180,6 +5181,7 @@ def esxi_failure_diagnosis(job: dict[str, Any], detail: str, exc: Exception | No
     install_values = dict(job.get("esxi_install_values") or {})
     boot_samples = list(job.get("esxi_boot_evidence_samples") or [])
     final_boot_evidence = dict(job.get("esxi_boot_evidence") or {})
+    media_url_check = dict(job.get("esxi_virtual_media_url_check") or {})
     installer_boot_observed = bool(job.get("esxi_installer_boot_observed"))
     installer_reboot_detected = bool(job.get("esxi_installer_reboot_detected"))
     post_install_guard = dict(job.get("esxi_post_install_boot_guard") or {})
@@ -5227,8 +5229,16 @@ def esxi_failure_diagnosis(job: dict[str, Any], detail: str, exc: Exception | No
         )
     if ks_cfg:
         attempted.append(f"Generated KS.CFG and saved a redacted preview at {ks_cfg.get('redacted_preview_path') or '(not written)'}.")
+    if media_url_check:
+        attempted.append(f"Checked virtual media URL serving status={media_url_check.get('status') or 'unknown'}.")
     manual_curl = power_manual_curl_command({**power_details, "action": power_details.get("action") or "On"})
-    if power_details:
+    if str(media_url_check.get("status") or "") == "failed" or "Virtual media URL check failed" in str(detail or ""):
+        selected_action = "Block ESXi virtual media mount because the generated ISO URL was not reachable."
+        recommended_fix = (
+            media_url_check.get("recommended_fix")
+            or "Set LAB_BUILDER_PUBLIC_BASE_URL to the Lab Builder URL reachable by iLO, then rerun ESXi only."
+        )
+    elif power_details:
         selected_action = "ESXi boot preparation succeeded through ISO mount and boot override; power-on did not reach On."
         recommended_fix = (
             "Retry ResetType=On using a fresh connection or Connection: close. "
@@ -5273,6 +5283,7 @@ def esxi_failure_diagnosis(job: dict[str, Any], detail: str, exc: Exception | No
             "final_boot_evidence": final_boot_evidence,
             "boot_evidence_samples": boot_samples[-12:],
             "post_install_boot_guard": post_install_guard,
+            "virtual_media_url_check": media_url_check,
         },
         differences=rejection_reasons,
         safe_corrections_attempted=attempted,
@@ -5283,6 +5294,7 @@ def esxi_failure_diagnosis(job: dict[str, Any], detail: str, exc: Exception | No
             "boot_option_inventory": boot_inventory,
             "virtual_media_device": virtual_media.get("device_path", ""),
             "virtual_media_insert_target": virtual_media.get("insert_target", ""),
+            "virtual_media_url_check": media_url_check,
             "manual_curl_command": manual_curl,
             "ks_cfg": ks_cfg,
             "install_target": install_target,
@@ -9186,6 +9198,102 @@ def build_esxi_iso_url(cfg: dict, output_iso: Path, target_host: str = "") -> st
     return f"{public_base_url}/esxi-built-iso/{quote(kit_name)}/{quote(output_name)}.iso"
 
 
+def verify_esxi_virtual_media_url(iso_url: str, output_iso: Path, *, timeout_seconds: int = 10) -> dict[str, Any]:
+    expected_size = output_iso.stat().st_size if output_iso.exists() else 0
+    result: dict[str, Any] = {
+        "url": str(iso_url or ""),
+        "output_iso_path": str(output_iso),
+        "expected_size_bytes": expected_size,
+        "status": "unknown",
+        "http_status": "",
+        "content_length": "",
+        "bytes_read": 0,
+        "recommended_fix": "",
+    }
+    skip_value = os.getenv("LAB_BUILDER_VALIDATE_ESXI_MEDIA_URL", "1").strip().lower()
+    if skip_value in {"0", "false", "no", "skip", "disabled"}:
+        result["status"] = "skipped"
+        result["reason"] = "disabled_by_env"
+        result["recommended_fix"] = "Unset LAB_BUILDER_VALIDATE_ESXI_MEDIA_URL or set it to 1 to enable this preflight."
+        return result
+    if not iso_url:
+        result["status"] = "failed"
+        result["error"] = "Virtual media URL is empty."
+        result["recommended_fix"] = "Configure a reachable Lab Builder public base URL before running ESXi."
+        return result
+    if not output_iso.exists():
+        result["status"] = "failed"
+        result["error"] = f"Generated ESXi ISO does not exist: {output_iso}"
+        result["recommended_fix"] = "Rebuild the ESXi ISO and verify the export path is writable."
+        return result
+
+    response = None
+    try:
+        response = requests.get(iso_url, stream=True, timeout=(3, max(timeout_seconds, 1)))
+        result["http_status"] = response.status_code
+        result["content_length"] = response.headers.get("content-length", "")
+        if response.status_code >= 400:
+            result["status"] = "failed"
+            result["error"] = f"GET {iso_url} returned HTTP {response.status_code}."
+            result["recommended_fix"] = (
+                "Start Lab Builder on the configured public URL or set LAB_BUILDER_PUBLIC_BASE_URL "
+                "to the address and port reachable by iLO."
+            )
+            return result
+        first_chunk = b""
+        for chunk in response.iter_content(chunk_size=4096):
+            if chunk:
+                first_chunk = chunk
+                break
+        result["bytes_read"] = len(first_chunk)
+        if not first_chunk:
+            result["status"] = "failed"
+            result["error"] = f"GET {iso_url} succeeded but returned no ISO bytes."
+            result["recommended_fix"] = "Verify the generated ISO route and output file before mounting virtual media."
+            return result
+        result["status"] = "ok"
+        if result["content_length"]:
+            try:
+                result["content_length_matches_expected"] = int(result["content_length"]) == expected_size
+            except ValueError:
+                result["content_length_matches_expected"] = False
+        return result
+    except requests.RequestException as exc:
+        result["status"] = "failed"
+        result["error"] = str(exc).splitlines()[0]
+        result["recommended_fix"] = (
+            "Start Lab Builder on the configured public URL, or set LAB_BUILDER_PUBLIC_BASE_URL "
+            "to a URL reachable from this host and iLO. The ESXi installer cannot boot from a URL "
+            "that is not being served."
+        )
+        return result
+    finally:
+        if response is not None:
+            try:
+                response.close()
+            except Exception:
+                pass
+
+
+def esxi_virtual_media_url_check_summary(check: dict[str, Any]) -> str:
+    status = str(check.get("status") or "unknown")
+    if status == "ok":
+        return (
+            "Virtual media URL reachable from Lab Builder: "
+            f"http_status={check.get('http_status') or '(unknown)'} "
+            f"bytes_read={check.get('bytes_read') or 0} "
+            f"content_length={check.get('content_length') or '(unknown)'} "
+            f"expected_size={check.get('expected_size_bytes') or 0}"
+        )
+    if status == "skipped":
+        return f"Virtual media URL preflight skipped: {check.get('reason') or 'not specified'}"
+    return (
+        "Virtual media URL check failed: "
+        f"{check.get('error') or 'unknown error'} | "
+        f"recommended_fix={check.get('recommended_fix') or 'Check Lab Builder public base URL.'}"
+    )
+
+
 def get_esxi_effective_values(cfg: dict[str, Any]) -> dict[str, Any]:
     esxi_cfg = cfg.get("esxi", {}) or {}
     try:
@@ -10117,6 +10225,19 @@ def run_esxi_real(cfg: dict, run_stamp: str | None = None):
             )
         update_job(kit_name, job, "Running", "Build complete", 2, total, f"[OK] Built ESXi ISO: {output_iso}")
         update_job(kit_name, job, "Running", "Build complete", 2, total, f"[INFO] Virtual media URL: {iso_url}")
+        update_job(kit_name, job, "Running", "Build complete", 2, total, "[RUNNING] Verifying Lab Builder can serve the ESXi virtual media URL")
+        media_url_check = verify_esxi_virtual_media_url(iso_url, output_iso)
+        job["esxi_virtual_media_url_check"] = dict(media_url_check)
+        trace_payload["artifacts"]["virtual_media_url_check"] = dict(media_url_check)
+        save_job(kit_name, job)
+        save_esxi_trace(trace_path, trace_payload)
+        check_summary = esxi_virtual_media_url_check_summary(media_url_check)
+        if media_url_check.get("status") == "ok":
+            update_job(kit_name, job, "Running", "Build complete", 2, total, f"[OK] {check_summary}")
+        elif media_url_check.get("status") == "skipped":
+            update_job(kit_name, job, "Running", "Build complete", 2, total, f"[WARN] {check_summary}")
+        else:
+            raise ILOError(check_summary)
         client = build_esxi_ilo_client()
         update_job(kit_name, job, "Running", "Build complete", 2, total, "[INFO] Reconnected to iLO after ISO build")
 

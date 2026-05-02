@@ -49,6 +49,7 @@ def isolate_runtime_paths(tmp_path, monkeypatch):
             value.mkdir(parents=True, exist_ok=True)
     for name, value in paths.items():
         monkeypatch.setattr(main, name, value)
+    monkeypatch.setenv("LAB_BUILDER_VALIDATE_ESXI_MEDIA_URL", "0")
     main.set_current_kit_name("Kit-01")
 
 
@@ -1514,6 +1515,63 @@ def test_build_esxi_install_review_fails_missing_selected_iso(tmp_path):
 
     with pytest.raises(FileNotFoundError, match="Configured ESXi base ISO was not found"):
         main.build_esxi_install_review(cfg, run_stamp="20260418-191000")
+
+
+def test_verify_esxi_virtual_media_url_reports_unreachable(monkeypatch, tmp_path):
+    iso = tmp_path / "built.iso"
+    iso.write_bytes(b"iso")
+    monkeypatch.setenv("LAB_BUILDER_VALIDATE_ESXI_MEDIA_URL", "1")
+
+    def fake_get(*args, **kwargs):
+        raise requests.ConnectionError("connection refused")
+
+    monkeypatch.setattr(main.requests, "get", fake_get)
+
+    result = main.verify_esxi_virtual_media_url("http://192.168.1.51:8000/esxi.iso", iso)
+
+    assert result["status"] == "failed"
+    assert "connection refused" in result["error"]
+    assert "LAB_BUILDER_PUBLIC_BASE_URL" in result["recommended_fix"]
+
+
+def test_run_esxi_real_blocks_when_virtual_media_url_is_not_served(monkeypatch, tmp_path):
+    cfg = main.default_config()
+    cfg["site"]["name"] = "Real ESXi URL Check Kit"
+    cfg["ilo"]["current_ip"] = "10.10.8.90"
+    cfg["ilo"]["host"] = "10.10.8.90"
+    cfg["ilo"]["username"] = "Administrator"
+    cfg["ilo"]["password"] = "secret"
+    cfg["esxi"]["hostname"] = "esxi-lab"
+    cfg["esxi"]["management_ip"] = "10.10.8.10"
+    cfg["esxi"]["subnet_mask"] = "255.255.255.0"
+    cfg["esxi"]["gateway"] = "10.10.8.1"
+    cfg["esxi"]["root_password"] = "Valid1Pass!"
+    built_iso = tmp_path / "esxi-url-check.iso"
+    built_iso.write_bytes(b"iso")
+
+    monkeypatch.setattr(main, "build_custom_iso", lambda spec: built_iso)
+    monkeypatch.setattr(main, "resolve_esxi_base_iso_path", lambda cfg_obj: fake_esxi_base_iso(tmp_path))
+    monkeypatch.setattr(main, "detect_public_base_url", lambda target_host="": "http://192.168.1.51:8000")
+    monkeypatch.setattr(
+        main,
+        "verify_esxi_virtual_media_url",
+        lambda iso_url, output_iso: {
+            "status": "failed",
+            "url": iso_url,
+            "output_iso_path": str(output_iso),
+            "error": "connection refused",
+            "recommended_fix": "Set LAB_BUILDER_PUBLIC_BASE_URL to the reachable app URL.",
+        },
+    )
+
+    main.run_esxi_real(cfg, run_stamp="20260418-191500")
+    job = main.load_job("Real ESXi URL Check Kit")
+    joined_logs = "\n".join(job["logs"])
+
+    assert job["status"] == "Failed"
+    assert "Virtual media URL check failed" in joined_logs
+    assert job["esxi_virtual_media_url_check"]["status"] == "failed"
+    assert job["diagnosis"]["selected_action"] == "Block ESXi virtual media mount because the generated ISO URL was not reachable."
 
 
 def test_global_settings_and_workflow_pages_show_defaults_and_dependencies(client):
