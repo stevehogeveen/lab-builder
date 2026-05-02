@@ -469,6 +469,41 @@ def run_center_scope_keys(scope: str, cfg: dict | None = None) -> list[str]:
     return []
 
 
+def initialize_stage_statuses(scope: str, cfg: dict | None = None) -> dict[str, str]:
+    statuses: dict[str, str] = {}
+    for key in run_center_scope_keys(scope, cfg):
+        statuses[key] = "pending"
+    return statuses
+
+
+def _normalized_stage_status(value: Any) -> str:
+    allowed = {"pending", "running", "completed", "failed", "skipped"}
+    cleaned = str(value or "").strip().lower()
+    return cleaned if cleaned in allowed else "pending"
+
+
+def merge_stage_statuses(existing: Any, incoming: Any) -> dict[str, str]:
+    merged: dict[str, str] = {}
+    for source in (existing, incoming):
+        if not isinstance(source, dict):
+            continue
+        for key, value in source.items():
+            token = str(key or "").strip().lower()
+            if token not in RUN_CENTER_STAGE_KEYS:
+                continue
+            merged[token] = _normalized_stage_status(value)
+    return merged
+
+
+def set_stage_status(job: dict[str, Any], token: str, status: str) -> None:
+    token_clean = str(token or "").strip().lower()
+    if token_clean not in RUN_CENTER_STAGE_KEYS:
+        return
+    statuses = merge_stage_statuses(job.get("stage_statuses"), {})
+    statuses[token_clean] = _normalized_stage_status(status)
+    job["stage_statuses"] = statuses
+
+
 def get_current_kit_name():
     if CURRENT_KIT_FILE.exists():
         selected = sanitize_kit_name(CURRENT_KIT_FILE.read_text(encoding="utf-8").strip())
@@ -687,6 +722,8 @@ def load_job(kit_name: str):
             return {
                 "status": "Updating",
                 "scope": "",
+                "root_scope": "",
+                "stage_statuses": {},
                 "current_stage": "Refreshing live status",
                 "progress_percent": 0,
                 "completed_steps": 0,
@@ -696,6 +733,8 @@ def load_job(kit_name: str):
     return {
         "status": "Idle",
         "scope": "",
+        "root_scope": "",
+        "stage_statuses": {},
         "current_stage": "",
         "progress_percent": 0,
         "completed_steps": 0,
@@ -711,12 +750,14 @@ def normalize_loaded_job_state(job: dict[str, Any]) -> dict[str, Any]:
         except (TypeError, ValueError):
             return 0
 
-    status = str(job.get("status") or "")
+    normalized_job = dict(job)
+    normalized_job["stage_statuses"] = merge_stage_statuses(normalized_job.get("stage_statuses"), {})
+    status = str(normalized_job.get("status") or "")
     completed = as_int(job.get("completed_steps"))
     total = as_int(job.get("total_steps"))
     progress = as_int(job.get("progress_percent"))
     if status == "Running" and total > 0 and completed >= total and progress >= 100:
-        normalized = dict(job)
+        normalized = dict(normalized_job)
         normalized["status"] = "Completed"
         normalized["current_stage"] = str(normalized.get("current_stage") or "Finished")
         logs = list(normalized.get("logs") or [])
@@ -724,7 +765,7 @@ def normalize_loaded_job_state(job: dict[str, Any]) -> dict[str, Any]:
             logs.append("[DONE] Run reached all recorded steps; marking stale running state as completed.")
         normalized["logs"] = logs
         return normalized
-    return job
+    return normalized_job
 
 
 def save_job(kit_name: str, job: dict):
@@ -8908,6 +8949,8 @@ def initialize_background_job(kit_name: str, scope: str):
             "completed_steps": 0,
             "total_steps": 0,
             "logs": [f"[QUEUED] {mode['label']} requested for scope: {scope}"],
+            "root_scope": scope,
+            "stage_statuses": initialize_stage_statuses(scope),
         },
     )
 
@@ -8929,6 +8972,11 @@ def carry_forward_job_bundle_metadata(kit_name: str, job: dict[str, Any]) -> dic
         job["trace_events"] = list(existing.get("trace_events") or [])
     if existing.get("logs") and not job.get("logs"):
         job["logs"] = list(existing.get("logs") or [])
+    if existing.get("root_scope") and not job.get("root_scope"):
+        job["root_scope"] = str(existing.get("root_scope") or "")
+    merged_stage_statuses = merge_stage_statuses(existing.get("stage_statuses"), job.get("stage_statuses"))
+    if merged_stage_statuses:
+        job["stage_statuses"] = merged_stage_statuses
     return job
 
 
@@ -9011,24 +9059,49 @@ def append_job_history_snapshot(cfg: dict, scope: str):
 
 def execute_real_job_in_background(cfg: dict, scope: str):
     kit_name = cfg["site"]["name"]
+    selected_tokens = run_center_scope_keys(scope, cfg)
+
+    def mark_stage(token: str, state: str) -> None:
+        current_job = load_job(kit_name)
+        current_job["root_scope"] = str(current_job.get("root_scope") or scope)
+        if not current_job.get("stage_statuses"):
+            current_job["stage_statuses"] = initialize_stage_statuses(current_job["root_scope"], cfg)
+        set_stage_status(current_job, token, state)
+        save_job(kit_name, current_job)
+
+    current_job = load_job(kit_name)
+    current_job["root_scope"] = str(current_job.get("root_scope") or scope)
+    current_job["stage_statuses"] = merge_stage_statuses(
+        initialize_stage_statuses(current_job["root_scope"], cfg),
+        current_job.get("stage_statuses"),
+    )
+    save_job(kit_name, current_job)
     try:
         if scope.startswith("multi__"):
-            selected = run_center_scope_keys(scope, cfg)
+            selected = selected_tokens
             if not selected:
                 raise RuntimeError("No stages were selected for the real run.")
             if not all(item in {"ilo", "storage", "esxi"} for item in selected):
                 raise RuntimeError("Real selected-stage execution currently supports iLO, storage, and ESXi only.")
             storage_was_handled_by_ilo = False
             if "ilo" in selected:
+                mark_stage("ilo", "running")
                 run_ilo_real(cfg)
                 finished_job = load_job(kit_name)
                 if finished_job.get("status") == "Failed":
+                    mark_stage("ilo", "failed")
+                    if "storage" in selected:
+                        mark_stage("storage", "skipped")
+                    if "esxi" in selected:
+                        mark_stage("esxi", "skipped")
                     return
+                mark_stage("ilo", "completed")
                 cfg = load_kit_config(kit_name)
                 promote_final_ilo_endpoint(cfg)
                 save_kit_config(cfg)
                 storage_was_handled_by_ilo = bool((finished_job.get("storage_run_directory") or "") or cfg.get("storage", {}).get("include_in_ilo_run"))
             if "storage" in selected and not storage_was_handled_by_ilo:
+                mark_stage("storage", "running")
                 cfg = load_kit_config(kit_name)
                 promote_final_ilo_endpoint(cfg)
                 save_kit_config(cfg)
@@ -9050,21 +9123,34 @@ def execute_real_job_in_background(cfg: dict, scope: str):
                 workflow_state = load_storage_workflow_state(apply_paths)
                 apply_state = (workflow_state.get("apply", {}) if workflow_state else {}) or {}
                 if apply_state.get("workflow_state") == "staged_reboot_required" and not apply_state.get("reboot_requested"):
+                    mark_stage("storage", "running")
                     start_storage_manual_reboot_watch_background(cfg, discovery_raw_path, raid_plan_path, apply_paths)
                     return
+                mark_stage("storage", "completed")
             elif "storage" in selected and storage_was_handled_by_ilo:
+                mark_stage("storage", "completed")
                 cfg = load_kit_config(kit_name)
                 promote_final_ilo_endpoint(cfg)
                 save_kit_config(cfg)
             if "esxi" in selected:
+                mark_stage("esxi", "running")
                 cfg = load_kit_config(kit_name)
                 promote_final_ilo_endpoint(cfg)
                 save_kit_config(cfg)
                 run_esxi_real(cfg, run_stamp=str((cfg.get("_runtime", {}) or {}).get("esxi_run_stamp") or "").strip() or None)
+                finished_job = load_job(kit_name)
+                if finished_job.get("status") == "Failed":
+                    mark_stage("esxi", "failed")
+                    return
+                mark_stage("esxi", "completed")
             return
         if scope == "ilo":
+            mark_stage("ilo", "running")
             run_ilo_real(cfg)
+            finished_job = load_job(kit_name)
+            mark_stage("ilo", "failed" if finished_job.get("status") == "Failed" else "completed")
         elif scope == "storage":
+            mark_stage("storage", "running")
             promote_final_ilo_endpoint(cfg)
             save_kit_config(cfg)
             storage_execution = validate_storage_ready_for_ilo_run(cfg)
@@ -9085,19 +9171,37 @@ def execute_real_job_in_background(cfg: dict, scope: str):
             workflow_state = load_storage_workflow_state(apply_paths)
             apply_state = (workflow_state.get("apply", {}) if workflow_state else {}) or {}
             if apply_state.get("workflow_state") == "staged_reboot_required" and not apply_state.get("reboot_requested"):
+                mark_stage("storage", "running")
                 start_storage_manual_reboot_watch_background(cfg, discovery_raw_path, raid_plan_path, apply_paths)
+            else:
+                mark_stage("storage", "completed")
         elif scope == "esxi":
+            mark_stage("esxi", "running")
             promote_final_ilo_endpoint(cfg)
             save_kit_config(cfg)
             run_esxi_real(cfg, run_stamp=str((cfg.get("_runtime", {}) or {}).get("esxi_run_stamp") or "").strip() or None)
+            finished_job = load_job(kit_name)
+            mark_stage("esxi", "failed" if finished_job.get("status") == "Failed" else "completed")
         else:
             raise RuntimeError(f"Real execution is not wired for scope: {scope}")
     except Exception as e:
+        stage_to_fail = ""
+        current_stage = str(load_job(kit_name).get("current_stage") or "").lower()
+        if "esxi" in current_stage:
+            stage_to_fail = "esxi"
+        elif "storage" in current_stage or "reboot" in current_stage:
+            stage_to_fail = "storage"
+        elif "ilo" in current_stage:
+            stage_to_fail = "ilo"
+        if stage_to_fail:
+            mark_stage(stage_to_fail, "failed")
         save_job(
             kit_name,
             {
                 "status": "Failed",
                 "scope": scope,
+                "root_scope": scope,
+                "stage_statuses": merge_stage_statuses(initialize_stage_statuses(scope, cfg), load_job(kit_name).get("stage_statuses")),
                 "current_stage": "Unexpected error",
                 "progress_percent": 0,
                 "completed_steps": 0,
@@ -9731,6 +9835,8 @@ def collect_esxi_boot_evidence(client: ILOClient, *, system_path: str | None = N
 
 def run_esxi_real(cfg: dict, run_stamp: str | None = None):
     kit_name = cfg["site"]["name"]
+    existing_job = load_job(kit_name)
+    inherited_root_scope = str(existing_job.get("root_scope") or "esxi")
     ilo_cfg = cfg.get("ilo", {}) or {}
     esxi_cfg = cfg.get("esxi", {}) or {}
     login_ip = resolve_ilo_control_host(cfg)
@@ -9765,6 +9871,11 @@ def run_esxi_real(cfg: dict, run_stamp: str | None = None):
         "esxi_post_install_boot_guard": {},
         "esxi_power_transitions": {},
         "esxi_management_network": {},
+        "root_scope": inherited_root_scope,
+        "stage_statuses": merge_stage_statuses(
+            initialize_stage_statuses(inherited_root_scope, cfg),
+            existing_job.get("stage_statuses"),
+        ),
     }
     job = carry_forward_job_bundle_metadata(kit_name, job)
     save_job(kit_name, job)
@@ -11057,6 +11168,8 @@ def run_esxi_real(cfg: dict, run_stamp: str | None = None):
 
 def run_ilo_real(cfg: dict):
     kit_name = cfg["site"]["name"]
+    existing_job = load_job(kit_name)
+    inherited_root_scope = str(existing_job.get("root_scope") or "ilo")
     ilo_cfg = cfg.get("ilo", {})
     snmp_cfg = cfg.get("shared_snmp", {})
     snmp_users = normalize_snmp_users(snmp_cfg.get("users", []))
@@ -11111,6 +11224,11 @@ def run_ilo_real(cfg: dict):
         "ilo_reset_status": "Not required",
         "ilo_stage_finished": False,
         "ilo_final_ip_verified": False,
+        "root_scope": inherited_root_scope,
+        "stage_statuses": merge_stage_statuses(
+            initialize_stage_statuses(inherited_root_scope, cfg),
+            existing_job.get("stage_statuses"),
+        ),
     }
     job = carry_forward_job_bundle_metadata(kit_name, job)
     save_job(kit_name, job)
@@ -12483,6 +12601,8 @@ def run_job_simulation(cfg: dict, scope: str):
         "completed_steps": 0,
         "total_steps": total,
         "logs": [],
+        "root_scope": scope,
+        "stage_statuses": initialize_stage_statuses(scope, cfg),
     }
     job = carry_forward_job_bundle_metadata(kit_name, job)
     save_job(kit_name, job)
@@ -12500,6 +12620,8 @@ def run_job_simulation(cfg: dict, scope: str):
     job["completed_steps"] = total
     job["progress_percent"] = 100
     job["logs"].append("[DONE] Preview complete. No real changes were made.")
+    for token in run_center_scope_keys(scope, cfg):
+        set_stage_status(job, token, "completed")
     save_job(kit_name, job)
 
 
@@ -14559,6 +14681,8 @@ async def execute_preview_scope(
             "completed_steps": 0,
             "total_steps": 0,
             "logs": [f"[QUEUED] Preview / safety mode requested for scope: {scope}"],
+            "root_scope": scope,
+            "stage_statuses": initialize_stage_statuses(scope, cfg),
         },
     )
     threading.Thread(

@@ -3708,6 +3708,25 @@ def test_multi_real_run_promotes_final_ilo_ip_before_esxi(client, monkeypatch):
         ("ilo", "10.10.8.90", "10.10.8.91"),
         ("esxi", "10.10.8.91", "10.10.8.91", None),
     ]
+    final_job = main.load_job(cfg["site"]["name"])
+    assert final_job.get("root_scope") == "multi__ilo__esxi"
+    assert final_job.get("stage_statuses", {}).get("ilo") == "completed"
+    assert final_job.get("stage_statuses", {}).get("esxi") == "completed"
+
+
+def test_initialize_background_job_sets_stage_statuses_for_selected_scope():
+    cfg = main.default_config()
+    cfg["site"]["name"] = "Stage Status Init Kit"
+    cfg["included"]["ilo"] = True
+    cfg["included"]["storage"] = True
+    cfg["included"]["esxi"] = False
+    main.save_kit_config(cfg)
+
+    main.initialize_background_job("Stage Status Init Kit", "multi__ilo__storage")
+    job = main.load_job("Stage Status Init Kit")
+
+    assert job.get("root_scope") == "multi__ilo__storage"
+    assert job.get("stage_statuses") == {"ilo": "pending", "storage": "pending"}
 
 
 def test_execute_real_scope_blocks_with_exact_missing_esxi_fields(client, monkeypatch):

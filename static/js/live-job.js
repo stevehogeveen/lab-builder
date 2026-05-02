@@ -3,18 +3,45 @@
         const lines = String(text || "").split("\n");
         const data = {};
         let currentKey = null;
+        let currentMapKey = null;
+
+        function parseScalar(value) {
+            let parsed = String(value == null ? "" : value).trim();
+            parsed = parsed.replace(/^["']|["']$/g, "");
+            if (/^\d+$/.test(parsed)) return parseInt(parsed, 10);
+            if (parsed === "true") return true;
+            if (parsed === "false") return false;
+            return parsed;
+        }
 
         for (const rawLine of lines) {
             const line = rawLine.replace(/\r$/, "");
             if (!line.trim()) continue;
 
+            if (/^\s+/.test(line) && currentMapKey && data[currentMapKey] && typeof data[currentMapKey] === "object" && !Array.isArray(data[currentMapKey])) {
+                const nestedMatch = line.match(/^\s+([^:\s][^:]*):\s*(.*)$/);
+                if (nestedMatch) {
+                    const nestedKey = nestedMatch[1].trim();
+                    const nestedValue = parseScalar(nestedMatch[2]);
+                    data[currentMapKey][nestedKey] = nestedValue;
+                    continue;
+                }
+            }
+
+            if (/^\s+/.test(line) && currentKey && Array.isArray(data[currentKey]) && data[currentKey].length === 0) {
+                const nestedMatch = line.match(/^\s+([^:\s][^:]*):\s*(.*)$/);
+                if (nestedMatch) {
+                    data[currentKey] = {};
+                    currentMapKey = currentKey;
+                    data[currentMapKey][nestedMatch[1].trim()] = parseScalar(nestedMatch[2]);
+                    continue;
+                }
+            }
+
             if (/^\s*-\s/.test(line)) {
                 if (currentKey && Array.isArray(data[currentKey])) {
                     let item = line.replace(/^\s*-\s/, "").trim();
-                    item = item.replace(/^["']|["']$/g, "");
-                    if (/^\d+$/.test(item)) item = parseInt(item, 10);
-                    if (item === "true") item = true;
-                    if (item === "false") item = false;
+                    item = parseScalar(item);
                     data[currentKey].push(item);
                 }
                 continue;
@@ -36,12 +63,10 @@
                 let value = keyMatch[2].trim();
                 if (value === "") {
                     data[key] = [];
+                    currentMapKey = null;
                 } else {
-                    value = value.replace(/^["']|["']$/g, "");
-                    if (/^\d+$/.test(value)) value = parseInt(value, 10);
-                    if (value === "true") value = true;
-                    if (value === "false") value = false;
-                    data[key] = value;
+                    data[key] = parseScalar(value);
+                    currentMapKey = null;
                 }
                 currentKey = key;
             }
@@ -289,41 +314,31 @@
         return "";
     }
 
-    function stageExplicitlyDone(token, data) {
-        if (token === "ilo") {
-            return data.ilo_final_ip_verified === true || String(data.ilo_reset_status || "").toLowerCase() === "completed";
-        }
-        if (token === "storage") {
-            const workflow = String(data.workflow_state || "");
-            return ["post_reboot_validation_complete", "apply_complete"].includes(workflow) || String(data.storage_server_reboot_status || "").toLowerCase() === "completed";
-        }
-        if (token === "esxi") {
-            const stage = String(data.current_stage || "").toLowerCase();
-            return stage.includes("esxi completed") || stage.includes("esxi success") || stage.includes("installed");
-        }
-        return false;
-    }
-
     function buildExecutionChecklist(data) {
         const status = String(data.status || "Idle");
-        const stages = parseScopeStages(data.scope, data.current_stage);
+        const stages = parseScopeStages(data.root_scope || data.scope, data.current_stage);
         const activeToken = detectActiveStageToken(data.current_stage);
-        const activeIndex = stages.findIndex(function (item) { return item.token === activeToken; });
         const isFailed = status.toLowerCase() === "failed";
-        const isComplete = ["complete", "completed", "preview complete"].includes(status.toLowerCase());
+        const isComplete = ["complete", "completed", "preview complete"].includes(status.toLowerCase()) || status.toLowerCase() === "finished";
+        const stageStatuses = data.stage_statuses && typeof data.stage_statuses === "object" ? data.stage_statuses : {};
 
         return stages.map(function (stage, idx) {
+            const explicit = String(stageStatuses[stage.token] || "").toLowerCase();
             let state = "pending";
-            if (isComplete) {
+            if (explicit === "completed") {
                 state = "done";
-            } else if (activeToken && stage.token === activeToken) {
-                state = isFailed ? "failed" : "running";
-            } else if (stageExplicitlyDone(stage.token, data)) {
-                state = "done";
-            } else if (activeIndex > -1 && idx < activeIndex) {
-                state = "done";
-            } else if (isFailed && activeIndex === -1 && idx === stages.length - 1) {
+            } else if (explicit === "running") {
+                state = "running";
+            } else if (explicit === "failed") {
                 state = "failed";
+            } else if (explicit === "skipped") {
+                state = "pending";
+            } else if (isComplete) {
+                state = "done";
+            } else if (isFailed && activeToken && stage.token === activeToken) {
+                state = "failed";
+            } else if (!explicit && activeToken && stage.token === activeToken) {
+                state = "running";
             }
             return { label: stage.label, state: state };
         });
