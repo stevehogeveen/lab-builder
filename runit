@@ -1,0 +1,44 @@
+#!/usr/bin/env bash
+set -e
+
+APP_DIR="$(cd "$(dirname "$0")" && pwd)"
+PORT=8000
+
+cd "$APP_DIR"
+
+echo "[INFO] Checking port $PORT..."
+
+PIDS="$(lsof -ti tcp:$PORT 2>/dev/null || true)"
+
+if [ -n "$PIDS" ]; then
+  echo "[WARN] Port $PORT is already in use by PID(s): $PIDS"
+  echo "[INFO] Stopping process(es) on port $PORT..."
+  kill $PIDS 2>/dev/null || true
+  sleep 2
+
+  STILL_RUNNING="$(lsof -ti tcp:$PORT 2>/dev/null || true)"
+  if [ -n "$STILL_RUNNING" ]; then
+    echo "[WARN] Process still using port $PORT. Forcing stop..."
+    kill -9 $STILL_RUNNING 2>/dev/null || true
+    sleep 1
+  fi
+fi
+
+if ! command -v lsof >/dev/null 2>&1; then
+  echo "[ERROR] lsof is not installed. Install it with:"
+  echo "sudo apt install lsof"
+  exit 1
+fi
+
+if [ ! -d ".venv" ]; then
+  echo "[ERROR] .venv not found. Create it first with:"
+  echo "python3 -m venv .venv"
+  echo "source .venv/bin/activate"
+  echo "pip install -r requirements.txt"
+  exit 1
+fi
+
+source .venv/bin/activate
+
+echo "[OK] Starting Lab Builder on http://0.0.0.0:$PORT"
+uvicorn app.main:app --reload --host 0.0.0.0 --port "$PORT"

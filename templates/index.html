@@ -615,6 +615,62 @@
             line-height: 1.35;
         }
 
+        .checklist-summary-row {
+            display: grid;
+            grid-template-columns: 20px 1fr auto;
+            gap: 10px;
+            align-items: start;
+            width: 100%;
+        }
+
+        .checklist-details {
+            border-top: 1px solid color-mix(in srgb, var(--border) 82%, transparent);
+            padding: 10px 12px 12px 12px;
+            font-size: 0.9rem;
+            color: color-mix(in srgb, var(--text) 96%, var(--muted) 4%);
+            display: grid;
+            gap: 6px;
+        }
+
+        .checklist-item-expanded {
+            display: block;
+            padding: 0;
+            border-color: color-mix(in srgb, var(--accent) 20%, var(--border));
+            background: color-mix(in srgb, white 92%, var(--accent-soft) 8%);
+        }
+
+        .checklist-item-expanded .checklist-summary-row {
+            padding: 12px;
+        }
+
+        .checklist-steps {
+            margin-top: 6px;
+            display: grid;
+            gap: 6px;
+        }
+
+        .checklist-step-row {
+            display: grid;
+            grid-template-columns: 16px 1fr auto;
+            align-items: center;
+            gap: 8px;
+            padding: 6px 8px;
+            border: 1px solid color-mix(in srgb, var(--border) 78%, transparent);
+            border-radius: 10px;
+            background: color-mix(in srgb, white 90%, var(--panel2) 10%);
+        }
+
+        .checklist-step-symbol {
+            font-weight: 700;
+            color: color-mix(in srgb, var(--text) 72%, var(--muted) 28%);
+            text-align: center;
+        }
+
+        .checklist-step-label {
+            font-size: 0.84rem;
+            font-weight: 600;
+        }
+
         .checklist-icon {
             font-weight: 800;
             margin-top: 1px;

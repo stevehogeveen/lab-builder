@@ -2228,6 +2228,29 @@ def build_live_job_story(job: dict[str, Any]) -> dict[str, str]:
     }
 
 
+def build_run_checklist(job: dict[str, Any], cfg: dict[str, Any]) -> list[dict[str, str]]:
+    labels = {
+        "ilo": "iLO",
+        "storage": "Storage",
+        "esxi": "ESXi",
+        "windows": "Windows",
+        "qnap": "QNAP",
+        "iosafe": "ioSafe",
+        "cisco_switch": "Cisco Switch",
+    }
+    scope = str(job.get("root_scope") or job.get("scope") or "").strip().lower()
+    selected = run_center_scope_keys(scope, cfg) if scope else []
+    statuses = merge_stage_statuses(job.get("stage_statuses"), {})
+    overall = str(job.get("status") or "").strip().lower()
+    checklist: list[dict[str, str]] = []
+    for token in selected:
+        state = _normalized_stage_status(statuses.get(token))
+        if overall in {"completed", "complete", "preview complete"} and state == "pending":
+            state = "completed"
+        checklist.append({"token": token, "label": labels.get(token, token), "state": state})
+    return checklist
+
+
 def build_live_stage_cards(job: dict[str, Any]) -> list[dict[str, Any]]:
     cards: list[dict[str, Any]] = []
     scope = str(job.get("scope") or "")
@@ -5381,6 +5404,40 @@ def storage_blocked_diagnosis(plan: dict[str, Any], discovery: dict[str, Any], a
     )
 
 
+def build_storage_failure_fields(
+    error_text: str,
+    diagnosis: dict[str, Any] | None = None,
+    *,
+    stage: str = "Storage apply",
+) -> dict[str, str]:
+    diagnosis = diagnosis or {}
+    rejected = [str(item).strip() for item in (diagnosis.get("rejection_reasons") or []) if str(item).strip()]
+    recommended = str(diagnosis.get("recommended_fix") or "").strip()
+    selected_action = str(diagnosis.get("selected_action") or "").strip()
+    status = str(diagnosis.get("status") or "failed").strip() or "failed"
+    detail = str(error_text or "").strip() or "Unknown storage error."
+
+    explanation_parts = [f"{stage} failed: {detail}."]
+    if rejected:
+        explanation_parts.append(f"Detected issue: {rejected[0]}.")
+    if selected_action:
+        explanation_parts.append(f"System decision: {selected_action}.")
+    explanation = " ".join(explanation_parts)
+    if not recommended:
+        recommended = "Run storage discovery again, verify controller/drive visibility, then re-approve storage before applying."
+    codex_handoff = (
+        f"[STORAGE FAILURE HANDOFF] stage={stage}; status={status}; error={detail}; "
+        f"likely_cause={rejected[0] if rejected else detail}; recommended_fix={recommended}"
+    )
+    return {
+        "area": "storage",
+        "reason": detail,
+        "explanation": explanation,
+        "recommended_fix": recommended,
+        "codex_handoff": codex_handoff,
+    }
+
+
 def storage_apply_mode_for_plan(plan: dict[str, Any]) -> str:
     next_action = str((plan.get("apply_readiness", {}) or {}).get("next_action") or "").strip().lower()
     default_recommendation = str(plan.get("default_recommendation") or "").strip().lower()
@@ -6068,6 +6125,11 @@ def run_storage_apply(
         "completed_steps": 0,
         "total_steps": total_steps,
         "logs": [],
+        "failure_area": "",
+        "failure_reason": "",
+        "failure_explanation": "",
+        "failure_recommended_fix": "",
+        "failure_codex_handoff": "",
     }
     save_job(kit_name, job)
 
@@ -6453,6 +6515,16 @@ def run_storage_apply(
         if getattr(e, "power_reset_details", None):
             diagnosis = power_failure_diagnosis("Storage apply", "On", e)
             attach_storage_diagnosis(job, apply_state, diagnosis)
+        failure = build_storage_failure_fields(
+            error_text,
+            job.get("diagnosis") if isinstance(job.get("diagnosis"), dict) else {},
+            stage="Storage apply",
+        )
+        job["failure_area"] = failure["area"]
+        job["failure_reason"] = failure["reason"]
+        job["failure_explanation"] = failure["explanation"]
+        job["failure_recommended_fix"] = failure["recommended_fix"]
+        job["failure_codex_handoff"] = failure["codex_handoff"]
         apply_state["status"] = "Failed"
         apply_state["workflow_state"] = "apply_failed"
         apply_state["finished_at"] = time.strftime("%Y-%m-%d %H:%M:%S")
@@ -6574,6 +6646,11 @@ def run_storage_reboot(
         "workflow_state": "reboot_requested",
         "reboot_status": "Running",
         "storage_run_directory": str(apply_paths["directory"]),
+        "failure_area": "",
+        "failure_reason": "",
+        "failure_explanation": "",
+        "failure_recommended_fix": "",
+        "failure_codex_handoff": "",
     }
     save_job(kit_name, job)
 
@@ -6766,6 +6843,16 @@ def run_storage_reboot(
         )
     except Exception as e:
         error_text = str(e).splitlines()[0]
+        failure = build_storage_failure_fields(
+            error_text,
+            job.get("diagnosis") if isinstance(job.get("diagnosis"), dict) else {},
+            stage="Storage reboot",
+        )
+        job["failure_area"] = failure["area"]
+        job["failure_reason"] = failure["reason"]
+        job["failure_explanation"] = failure["explanation"]
+        job["failure_recommended_fix"] = failure["recommended_fix"]
+        job["failure_codex_handoff"] = failure["codex_handoff"]
         reboot_state["status"] = "Failed"
         reboot_state["finished_at"] = time.strftime("%Y-%m-%d %H:%M:%S")
         reboot_state.setdefault("errors", []).append(error_text)
@@ -12726,6 +12813,7 @@ def render_page(
     esxi_advanced_profile = build_esxi_advanced_profile(cfg, esxi_page_review)
     live_job_story = build_live_job_story(job)
     live_stage_cards = build_live_stage_cards(job)
+    run_checklist = build_run_checklist(job, cfg)
     report_center = build_report_center(
         cfg,
         query=str(request.query_params.get("report_query", "") or ""),
@@ -12805,6 +12893,7 @@ def render_page(
         "esxi_advanced_profile": esxi_advanced_profile,
         "live_job_story": live_job_story,
         "live_stage_cards": live_stage_cards,
+        "run_checklist": run_checklist,
         "report_center": report_center,
         "ilo_inclusion": ilo_inclusion,
         "esxi_inclusion": esxi_inclusion,
@@ -14644,6 +14733,55 @@ async def execute_scope(
         msg = f"Preview started for scope: {scope}. No real changes will be made."
 
     return render_page(request, cfg, active_page=return_page, message=msg)
+
+
+@app.post("/retry-storage-stage", response_class=HTMLResponse)
+async def retry_storage_stage(
+    request: Request,
+    return_page: str = Form("execution"),
+):
+    cfg = load_kit_config()
+    apply_request_public_base_url(cfg, request)
+    scope = "storage"
+    review = build_execution_review(cfg, scope)
+    launch_options = build_execution_launch_options(cfg, scope)
+    real_launch = launch_options.get("real")
+    if not real_launch:
+        return render_page(
+            request,
+            cfg,
+            active_page=return_page,
+            error_message="Storage retry blocked: a real storage run is not currently available.",
+            execution_preview=review.get("detail_text"),
+            execution_review=review,
+            confirm_scope=scope,
+        )
+    scope = str(real_launch.get("scope") or scope)
+    try:
+        validate_execution_scope(cfg, scope)
+    except Exception as e:
+        return render_page(
+            request,
+            cfg,
+            active_page=return_page,
+            error_message=f"Storage retry blocked: {str(e).splitlines()[0]}",
+            execution_preview=review.get("detail_text"),
+            execution_review=review,
+            confirm_scope=scope,
+        )
+
+    initialize_background_job(cfg["site"]["name"], scope)
+    threading.Thread(
+        target=execute_real_job_in_background,
+        args=(cfg, scope),
+        daemon=True,
+    ).start()
+    return render_page(
+        request,
+        cfg,
+        active_page=return_page,
+        message="Storage retry started. Follow the Live job panel for step-by-step progress.",
+    )
 
 
 @app.post("/execute-preview", response_class=HTMLResponse)

@@ -267,6 +267,22 @@
         }
     }
 
+    function renderExecutionFailureDetails(data) {
+        const shell = document.getElementById("execution-failure-details");
+        if (!shell) return;
+        const status = String(data.status || "").toLowerCase();
+        const scope = String(data.scope || "").toLowerCase();
+        const stage = String(data.current_stage || "").toLowerCase();
+        const area = String(data.failure_area || "").toLowerCase();
+        const isStorageFailure = status === "failed" && (area === "storage" || scope.includes("storage") || stage.includes("storage"));
+        shell.style.display = isStorageFailure ? "" : "none";
+        if (!isStorageFailure) return;
+        setText("execution-failure-reason", data.failure_reason || "Storage run failed.");
+        setText("execution-failure-explanation", data.failure_explanation || "Storage stage failed before completion.");
+        setText("execution-failure-fix", data.failure_recommended_fix || "Run storage discovery again, re-approve storage, then rerun the stage.");
+        setText("execution-failure-codex", data.failure_codex_handoff || "");
+    }
+
     function parseScopeStages(scope, currentStage) {
         const orderedTokens = ["ilo", "storage", "esxi", "windows", "qnap", "iosafe", "cisco_switch"];
         const labels = {
@@ -340,8 +356,137 @@
             } else if (!explicit && activeToken && stage.token === activeToken) {
                 state = "running";
             }
-            return { label: stage.label, state: state };
+            return { label: stage.label, state: state, token: stage.token };
         });
+    }
+
+    function stageKeywords(token) {
+        if (token === "ilo") return ["ilo", "dns", "snmp"];
+        if (token === "storage") return ["storage", "raid", "volume", "reboot"];
+        if (token === "esxi") return ["esxi", "iso", "kickstart", "virtual media", "boot"];
+        return [token];
+    }
+
+    function lastRelevantStageLog(token, logs) {
+        const items = Array.isArray(logs) ? logs.map(cleanLogLine).filter(Boolean) : [];
+        const keys = stageKeywords(token);
+        for (let i = items.length - 1; i >= 0; i -= 1) {
+            const line = String(items[i] || "");
+            const lower = line.toLowerCase();
+            if (keys.some(function (key) { return lower.includes(key); })) {
+                return line;
+            }
+        }
+        return "";
+    }
+
+    function stageStepSummary(item, data) {
+        const currentStage = String(data.current_stage || "");
+        const active = detectActiveStageToken(currentStage);
+        if (active && active === item.token) {
+            return currentStage || "Running";
+        }
+        if (item.state === "done") return "Stage complete.";
+        if (item.state === "failed") return "Stage failed.";
+        if (item.state === "running") return currentStage || "Running";
+        return "Waiting to start.";
+    }
+
+    function stageSteps(token) {
+        if (token === "ilo") {
+            return [
+                "Validate iLO config",
+                "Connect to Redfish",
+                "Apply iLO network/DNS/SNMP/users",
+                "Finalize iLO stage",
+            ];
+        }
+        if (token === "storage") {
+            return [
+                "Validate approved storage plan",
+                "Ensure server power is On",
+                "Apply storage layout",
+                "Reboot/validate storage result",
+            ];
+        }
+        if (token === "esxi") {
+            return [
+                "Validate ESXi inputs",
+                "Build and stage ESXi ISO",
+                "Prepare boot/virtual media",
+                "Power on and wait for ESXi network",
+            ];
+        }
+        return ["Run stage"];
+    }
+
+    function stageCurrentStepIndex(token, data) {
+        const stageText = String((data || {}).current_stage || "").toLowerCase();
+        if (token === "ilo") {
+            if (stageText.includes("validating ilo")) return 0;
+            if (stageText.includes("connecting to")) return 1;
+            if (stageText.includes("apply") || stageText.includes("dns") || stageText.includes("snmp") || stageText.includes("local user")) return 2;
+            if (stageText.includes("finish ilo") || stageText.includes("reset ilo") || stageText.includes("verify ilo")) return 3;
+            return 0;
+        }
+        if (token === "storage") {
+            if (stageText.includes("run storage stage") || stageText.includes("choose storage")) return 0;
+            if (stageText.includes("power on") || stageText.includes("power state")) return 1;
+            if (stageText.includes("apply storage") || stageText.includes("delete") || stageText.includes("create")) return 2;
+            if (stageText.includes("reboot") || stageText.includes("post-reboot") || stageText.includes("validation")) return 3;
+            return 0;
+        }
+        if (token === "esxi") {
+            if (stageText.includes("validation failed") || stageText.includes("validate esxi")) return 0;
+            if (stageText.includes("build iso") || stageText.includes("ks.cfg") || stageText.includes("generated iso")) return 1;
+            if (stageText.includes("mount iso") || stageText.includes("boot override") || stageText.includes("virtual media") || stageText.includes("power off")) return 2;
+            if (stageText.includes("power on") || stageText.includes("wait for esxi network") || stageText.includes("esxi error")) return 3;
+            return 0;
+        }
+        return 0;
+    }
+
+    function renderStageTimeline(token, state, data) {
+        const steps = stageSteps(token);
+        const activeIndex = stageCurrentStepIndex(token, data);
+        return steps.map(function (step, idx) {
+            let badge = "up next";
+            let klass = "progress";
+            let symbol = "○";
+            if (state === "done") {
+                badge = "done";
+                klass = "ready";
+                symbol = "✓";
+            } else if (state === "pending") {
+                badge = "up next";
+            } else if (state === "running") {
+                if (idx < activeIndex) {
+                    badge = "done";
+                    klass = "ready";
+                    symbol = "✓";
+                } else if (idx === activeIndex) {
+                    badge = "running";
+                    symbol = "◔";
+                }
+            } else if (state === "failed") {
+                if (idx < activeIndex) {
+                    badge = "done";
+                    klass = "ready";
+                    symbol = "✓";
+                } else if (idx === activeIndex) {
+                    badge = "failed";
+                    klass = "pending";
+                    symbol = "×";
+                }
+            }
+            return (
+                '<div class="checklist-step-row">' +
+                `<span class="checklist-step-symbol">${symbol}</span>` +
+                `<span class="checklist-step-label">${escapeHtml(step)}</span>` +
+                `<span class="status ${klass}">${badge}</span>` +
+                "</div>"
+            );
+        }).join("");
     }
 
     function renderExecutionChecklist(data) {
@@ -380,11 +525,20 @@
                 tone = "pending";
                 iconClass = "checklist-icon-failed";
             }
+            const stepSummary = stageStepSummary(item, data || {});
+            const lastLog = lastRelevantStageLog(item.token, (data || {}).logs);
             return (
-                '<div class="checklist-item">' +
+                '<div class="checklist-item checklist-item-expanded">' +
+                '<div class="checklist-summary-row">' +
                 `<span class="checklist-icon ${iconClass}">${icon}</span>` +
                 `<div class="checklist-label">${escapeHtml(item.label)}</div>` +
                 `<span class="status ${tone}">${badge}</span>` +
+                "</div>" +
+                '<div class="checklist-details checklist-details-always">' +
+                `<div><strong>Current step:</strong> ${escapeHtml(stepSummary)}</div>` +
+                `<div><strong>Last relevant log:</strong> ${escapeHtml(lastLog || "No stage-specific log line yet.")}</div>` +
+                `<div class="checklist-steps">${renderStageTimeline(item.token, item.state, data || {})}</div>` +
+                "</div>" +
                 "</div>"
             );
         }).join("");
@@ -510,40 +664,45 @@
         const ws = new WebSocket(wsUrl);
 
         ws.onmessage = function (event) {
-            const data = parseJobPayload(event.data);
-            const status = String(data.status || "Idle");
-            const mode = data.execution_mode_label || data.execution_mode || "Not running";
-            const currentStep = data.current_stage || "Nothing is running right now.";
-            const progress = `${data.progress_percent || 0}%`;
-            const completed = `${data.completed_steps || 0} / ${data.total_steps || 0}`;
+            try {
+                const data = parseJobPayload(event.data);
+                const status = String(data.status || "Idle");
+                const mode = data.execution_mode_label || data.execution_mode || "Not running";
+                const currentStep = data.current_stage || "Nothing is running right now.";
+                const progress = `${data.progress_percent || 0}%`;
+                const completed = `${data.completed_steps || 0} / ${data.total_steps || 0}`;
 
-            setText("execution-live-mode", mode);
-            setText("execution-live-step", currentStep);
-            setText("execution-live-progress", progress);
-            setText("execution-live-completed", completed);
+                setText("execution-live-mode", mode);
+                setText("execution-live-step", currentStep);
+                setText("execution-live-progress", progress);
+                setText("execution-live-completed", completed);
 
-            const statusNode = document.getElementById("execution-live-status");
-            if (statusNode) {
-                statusNode.textContent = status;
-                statusNode.className = `status ${statusTone(status)}`;
-            }
-
-            const bar = document.getElementById("execution-live-bar");
-            if (bar) bar.style.width = progress;
-
-            if (Array.isArray(data.logs)) {
-                updateExecutionLogViews(data.logs);
-                if (liveLogDetails && !["Idle", "Complete", "Preview complete", "Completed"].includes(status)) {
-                    liveLogDetails.open = true;
+                const statusNode = document.getElementById("execution-live-status");
+                if (statusNode) {
+                    statusNode.textContent = status;
+                    statusNode.className = `status ${statusTone(status)}`;
                 }
-            }
 
-            const checklist = document.getElementById("execution-stage-checklist");
-            if (checklist) checklist.innerHTML = renderExecutionChecklist(data);
+                const bar = document.getElementById("execution-live-bar");
+                if (bar) bar.style.width = progress;
 
-            const stageDetails = document.getElementById("execution-live-stage-details");
-            if (stageDetails) {
-                stageDetails.innerHTML = renderLiveStageCards(buildLiveStageCards(data));
+                if (Array.isArray(data.logs)) {
+                    updateExecutionLogViews(data.logs);
+                    if (liveLogDetails && !["Idle", "Complete", "Preview complete", "Completed"].includes(status)) {
+                        liveLogDetails.open = true;
+                    }
+                }
+
+                const checklist = document.getElementById("execution-stage-checklist");
+                if (checklist) checklist.innerHTML = renderExecutionChecklist(data);
+
+                const stageDetails = document.getElementById("execution-live-stage-details");
+                if (stageDetails) {
+                    stageDetails.innerHTML = renderLiveStageCards(buildLiveStageCards(data));
+                }
+                renderExecutionFailureDetails(data);
+            } catch (_err) {
+                // Keep existing checklist/log view visible if a payload is malformed.
             }
         };
     };

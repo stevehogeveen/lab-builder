@@ -50,14 +50,51 @@
         <div class="execution-stage-checklist-shell mt-4">
             <div class="flex items-center justify-between gap-3 flex-wrap">
                 <div class="text-sm font-bold text-slate-300">Run checklist</div>
-                <span class="status progress" id="execution-checklist-count">0 / 0 complete</span>
+                <span class="status progress" id="execution-checklist-count">{{ (run_checklist | selectattr('state', 'equalto', 'completed') | list | length) if run_checklist else 0 }} / {{ run_checklist|length if run_checklist else 0 }} complete</span>
             </div>
             <div class="checklist-list mt-3" id="execution-stage-checklist">
+                {% if run_checklist %}
+                {% for item in run_checklist %}
+                <div class="checklist-item checklist-item-expanded">
+                    <div class="checklist-summary-row">
+                    {% if item.state == 'completed' %}
+                    <span class="checklist-icon checklist-icon-done">✓</span>
+                    <div class="checklist-label">{{ item.label }}</div>
+                    <span class="status ready">done</span>
+                    {% elif item.state == 'running' %}
+                    <span class="checklist-icon checklist-icon-running">◔</span>
+                    <div class="checklist-label">{{ item.label }}</div>
+                    <span class="status progress">running</span>
+                    {% elif item.state == 'failed' %}
+                    <span class="checklist-icon checklist-icon-failed">×</span>
+                    <div class="checklist-label">{{ item.label }}</div>
+                    <span class="status pending">failed</span>
+                    {% else %}
+                    <span class="checklist-icon checklist-icon-pending">○</span>
+                    <div class="checklist-label">{{ item.label }}</div>
+                    <span class="status progress">pending</span>
+                    {% endif %}
+                    </div>
+                    <div class="checklist-details checklist-details-always">
+                        {% if item.state == 'running' %}
+                        <div><strong>Current step:</strong> {{ job.get('current_stage') or 'Running' }}</div>
+                        {% elif item.state == 'completed' %}
+                        <div><strong>Current step:</strong> Stage complete.</div>
+                        {% elif item.state == 'failed' %}
+                        <div><strong>Current step:</strong> Stage failed.</div>
+                        {% else %}
+                        <div><strong>Current step:</strong> Waiting to start.</div>
+                        {% endif %}
+                    </div>
+                </div>
+                {% endfor %}
+                {% else %}
                 <div class="checklist-item">
                     <span class="checklist-icon checklist-icon-pending">○</span>
                     <div class="checklist-label">No run started.</div>
                     <span class="status progress">pending</span>
                 </div>
+                {% endif %}
             </div>
         </div>
         <details class="mt-4">
@@ -99,6 +136,38 @@
                 {% endif %}
             </div>
         </details>
+        <section
+            class="card card-compact mt-4"
+            id="execution-failure-details"
+            {% if not (job.get('status') == 'Failed' and (job.get('failure_area') == 'storage' or 'storage' in (job.get('scope', '')|lower) or 'storage' in (job.get('current_stage', '')|lower))) %}style="display: none;"{% endif %}
+        >
+            <div class="text-sm font-bold text-slate-300 mb-2">Storage failure details</div>
+            <div class="result" style="margin-top: 0;">
+                <div><strong>Failure:</strong> <span id="execution-failure-reason">{{ job.get('failure_reason') or 'Storage run failed.' }}</span></div>
+                <div class="mt-2"><strong>Explanation:</strong> <span id="execution-failure-explanation">{{ job.get('failure_explanation') or 'Storage stage failed before completion.' }}</span></div>
+                <div class="mt-2"><strong>Suggested fix:</strong> <span id="execution-failure-fix">{{ job.get('failure_recommended_fix') or 'Run storage discovery again, re-approve storage, then rerun the stage.' }}</span></div>
+            </div>
+            <div class="actions mt-3">
+                <form
+                    hx-post="/retry-storage-stage"
+                    hx-target="#main-content"
+                    hx-swap="outerHTML"
+                    data-action-title="Retrying storage stage"
+                    data-action-start="Starting a storage-only retry run."
+                    data-action-complete="Storage retry requested."
+                >
+                    <input type="hidden" name="return_page" value="execution">
+                    <button class="btn btn-danger action-button" type="submit">Retry storage stage</button>
+                </form>
+            </div>
+            <details class="mt-3">
+                <summary class="summary-row">
+                    <span class="text-sm font-bold text-slate-300">Codex handoff message</span>
+                    <span class="status pending">copy</span>
+                </summary>
+                <div class="codeblock mt-3" id="execution-failure-codex">{{ job.get('failure_codex_handoff') or '' }}</div>
+            </details>
+        </section>
         <details class="execution-live-log execution-technical-log mt-4" {% if job.get('status') not in ['Idle', 'Complete', 'Preview complete', 'Completed'] or job.get('status') == 'Failed' %}open{% endif %}>
             <summary class="summary-row">
                 <span class="text-sm font-bold text-slate-300">Technical log</span>
