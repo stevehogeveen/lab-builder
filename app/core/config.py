@@ -433,13 +433,42 @@ def merge_defaults(cfg: dict[str, Any]) -> dict[str, Any]:
     return normalize_ilo_config(base)
 
 
+def subnet_details(subnet: str) -> dict[str, Any]:
+    network = ipaddress.ip_network(subnet, strict=False)
+    total = network.num_addresses
+    if total >= 2:
+        first_usable = network.network_address + 1
+        last_usable = network.broadcast_address - 1
+        max_usable_offset = total - 2
+    else:
+        first_usable = network.network_address
+        last_usable = network.broadcast_address
+        max_usable_offset = 0
+    return {
+        "subnet": str(network),
+        "network_address": str(network.network_address),
+        "broadcast_address": str(network.broadcast_address),
+        "netmask": str(network.netmask),
+        "prefixlen": network.prefixlen,
+        "total_addresses": total,
+        "first_usable": str(first_usable),
+        "last_usable": str(last_usable),
+        "max_usable_offset": max_usable_offset,
+    }
+
+
 def ip_at_offset(network_cidr: str, offset: int, require_usable: bool = True) -> str:
     network = ipaddress.ip_network(network_cidr, strict=False)
+    if int(offset) < 0:
+        raise ValueError(f"Offset {offset} cannot be negative")
     candidate = network.network_address + int(offset)
     if candidate not in network:
-        raise ValueError(f"Offset {offset} is outside {network_cidr}")
-    if require_usable and (candidate == network.network_address or candidate == network.broadcast_address):
-        raise ValueError(f"Offset {offset} resolves to a reserved address in {network_cidr}")
+        raise ValueError(f"Offset {offset} is outside subnet {network_cidr}")
+    if require_usable:
+        if candidate == network.network_address:
+            raise ValueError(f"Offset {offset} resolves to network address {candidate}")
+        if candidate == network.broadcast_address:
+            raise ValueError(f"Offset {offset} resolves to broadcast address {candidate}")
     return str(candidate)
 
 
@@ -447,22 +476,66 @@ def build_default_ip_plan(subnet: str) -> dict[str, Any]:
     return {key: ip_at_offset(subnet, offset) for key, offset in DEFAULT_IP_OFFSETS.items()}
 
 
-def calc_ip_plan(cfg: dict[str, Any]) -> dict[str, Any]:
-    subnet = str(cfg.get("shared_network", {}).get("subnet") or "").strip()
-    if not subnet:
-        raise ValueError("Shared subnet is required before calculating the IP plan.")
-    network = ipaddress.ip_network(subnet, strict=False)
-    if network.version != 4:
-        raise ValueError("Only IPv4 shared subnets are currently supported.")
-    raw_plan = dict(cfg.get("ip_plan") or {})
+def validate_ip_for_subnet(network_cidr: str, value: str, label: str) -> str:
+    try:
+        address = ipaddress.ip_address((value or "").strip())
+    except ValueError as exc:
+        raise ValueError(f"{label} must be a valid IP address") from exc
+    network = ipaddress.ip_network(network_cidr, strict=False)
+    if address not in network:
+        raise ValueError(f"{label} must be inside subnet {network_cidr}")
+    if address == network.network_address:
+        raise ValueError(f"{label} cannot be the network address")
+    if address == network.broadcast_address:
+        raise ValueError(f"{label} cannot be the broadcast address")
+    return str(address)
+
+
+def build_legacy_offset_plan(cfg: dict[str, Any], subnet: str) -> dict[str, Any]:
+    shared_network = cfg.get("shared_network", {})
+    return {
+        key: ip_at_offset(subnet, int(shared_network.get(f"{key}_offset", offset)))
+        for key, offset in DEFAULT_IP_OFFSETS.items()
+    }
+
+
+def normalize_ip_plan(cfg: dict[str, Any], subnet: str) -> dict[str, Any]:
+    raw_plan = cfg.get("ip_plan") or {}
     if all(raw_plan.get(key) for key in DEFAULT_IP_OFFSETS):
-        gateway = str(raw_plan.get("gateway") or "").strip()
-        if gateway and ipaddress.ip_address(gateway) in network:
-            return {
-                key: str(raw_plan.get(key) or "").strip()
-                for key in DEFAULT_IP_OFFSETS
-            } | {"subnet": subnet, "netmask": str(network.netmask)}
-    return build_default_ip_plan(subnet) | {"subnet": subnet, "netmask": str(network.netmask)}
+        plan_source = raw_plan
+    else:
+        plan_source = build_legacy_offset_plan(cfg, subnet)
+    plan = {
+        key: validate_ip_for_subnet(subnet, plan_source.get(key, ""), key.replace("_", " ").upper())
+        for key in DEFAULT_IP_OFFSETS
+    }
+    ip_owners: dict[str, list[str]] = {}
+    for key, value in plan.items():
+        ip_owners.setdefault(value, []).append(key.replace("_", " "))
+    duplicates = [
+        f"{ip} ({', '.join(labels)})"
+        for ip, labels in ip_owners.items()
+        if len(labels) > 1
+    ]
+    if duplicates:
+        raise ValueError("Each device IP must be unique within the kit. Duplicate: " + "; ".join(duplicates))
+    return plan
+
+
+def calc_ip_plan(cfg: dict[str, Any]) -> dict[str, Any]:
+    shared_network = cfg.get("shared_network", {})
+    subnet = shared_network.get("subnet", "10.10.8.0/24")
+    details = subnet_details(subnet)
+    plan = normalize_ip_plan(cfg, subnet)
+    return {
+        "subnet": details["subnet"],
+        "netmask": details["netmask"],
+        "prefixlen": details["prefixlen"],
+        "first_usable": details["first_usable"],
+        "last_usable": details["last_usable"],
+        "max_usable_offset": details["max_usable_offset"],
+        **plan,
+    }
 
 
 def apply_ip_plan(cfg: dict[str, Any]) -> dict[str, Any]:
@@ -545,3 +618,123 @@ def build_snmp_input_review(cfg: dict[str, Any]) -> dict[str, Any]:
     if primary_username and not users:
         notes.append("The primary SNMPv3 user is saved, but the normalized user list is empty.")
     return {"errors": errors, "notes": notes}
+
+
+def build_ilo_field_errors(cfg: dict[str, Any]) -> dict[str, Any]:
+    ilo_cfg = cfg.get("ilo", {}) or {}
+    main_username_errors = validate_ilo_login_name(ilo_cfg.get("username", ""), label="iLO username")
+    main_password_check = validate_ilo_password(
+        ilo_cfg.get("password", ""),
+        username=str(ilo_cfg.get("username") or ""),
+        label="iLO password",
+    )
+    extra_users = []
+    for item in normalize_ilo_additional_users(ilo_cfg.get("additional_users", [])):
+        username_errors = validate_ilo_login_name(item.get("username", ""), label="Extra iLO user username")
+        password_check = validate_ilo_password(
+            item.get("password", ""),
+            username=str(item.get("username") or ""),
+            label="Extra iLO user password",
+        )
+        extra_users.append(
+            {
+                "username": username_errors,
+                "password": list(password_check.get("errors") or []),
+            }
+        )
+    return {
+        "username": main_username_errors,
+        "password": list(main_password_check.get("errors") or []),
+        "extra_users": extra_users,
+    }
+
+
+def build_snmp_field_errors(cfg: dict[str, Any]) -> dict[str, Any]:
+    snmp_cfg = cfg.get("shared_snmp", {}) or {}
+    primary_username = str(snmp_cfg.get("v3_username") or "").strip()
+    primary_auth_password = str(snmp_cfg.get("v3_auth_password") or "")
+    primary_priv_password = str(snmp_cfg.get("v3_priv_password") or "")
+    extra_users = normalize_snmp_users(snmp_cfg.get("users", []))[1:] if snmp_cfg.get("users") else []
+    return {
+        "username": validate_snmpv3_username(primary_username, label="SNMPv3 user") if primary_username or primary_auth_password or primary_priv_password else [],
+        "auth_password": validate_snmpv3_password(primary_auth_password, label="SNMPv3 auth password", required=bool(primary_username or primary_priv_password)),
+        "priv_password": validate_snmpv3_password(primary_priv_password, label="SNMPv3 privacy password", required=bool(primary_username or primary_auth_password)),
+        "extra_users": [
+            {
+                "username": validate_snmpv3_username(item.get("username", ""), label="Additional SNMPv3 user"),
+                "auth_password": validate_snmpv3_password(item.get("auth_password", ""), label="Additional SNMPv3 auth password"),
+                "priv_password": validate_snmpv3_password(item.get("priv_password", ""), label="Additional SNMPv3 privacy password"),
+            }
+            for item in extra_users
+        ],
+    }
+
+
+def validate_esxi_hostname(value: str) -> list[str]:
+    hostname = str(value or "").strip()
+    if not hostname:
+        return ["Server name is required."]
+    if len(hostname) > 253:
+        return ["Server name is too long. Keep the full name at 253 characters or less."]
+    if re.search(r"[^A-Za-z0-9.\-]", hostname):
+        return ["Use only letters, numbers, hyphens, and dots in the ESXi server name."]
+    if hostname.startswith(".") or hostname.endswith("."):
+        return ["Do not start or end the ESXi server name with a dot."]
+    labels = hostname.split(".")
+    if any(not label for label in labels):
+        return ["Do not use empty name parts or two dots in a row in the ESXi server name."]
+    errors: list[str] = []
+    for label in labels:
+        if len(label) > 63:
+            errors.append("Each part of the ESXi server name must be 63 characters or less.")
+            break
+        if not re.fullmatch(r"[A-Za-z0-9](?:[A-Za-z0-9\-]*[A-Za-z0-9])?", label):
+            errors.append("Each part of the ESXi server name must start and end with a letter or number.")
+            break
+    return errors
+
+
+def build_esxi_password_policy_check(password: str, *, username: str = "root") -> dict[str, Any]:
+    value = str(password or "")
+    errors: list[str] = []
+    notes: list[str] = []
+    if not value:
+        errors.append("Root password is required.")
+        return {"valid": False, "errors": errors, "notes": notes, "class_count": 0, "length": 0}
+    if any(ch.isspace() for ch in value):
+        errors.append("Do not use spaces in the ESXi root password.")
+    length = len(value)
+    if length < 7:
+        errors.append("Use at least 7 characters for the ESXi root password.")
+    if length > 39:
+        errors.append("Keep the ESXi root password under 40 characters.")
+    lower_count = sum(1 for ch in value if ch.islower())
+    upper_count = sum(1 for ch in value if ch.isupper())
+    digit_count = sum(1 for ch in value if ch.isdigit())
+    special_count = sum(1 for ch in value if not ch.isalnum())
+    effective_classes = 0
+    if lower_count:
+        effective_classes += 1
+    if upper_count:
+        if upper_count == 1 and value[:1].isupper():
+            notes.append("A single uppercase letter at the start may not count toward ESXi complexity.")
+        else:
+            effective_classes += 1
+    if digit_count:
+        if digit_count == 1 and value[-1:].isdigit():
+            notes.append("A single number at the end may not count toward ESXi complexity.")
+        else:
+            effective_classes += 1
+    if special_count:
+        effective_classes += 1
+    if effective_classes < 3:
+        errors.append("Use at least 3 character types: lowercase, uppercase, number, or special.")
+    if username and username.lower() in value.lower():
+        notes.append("Avoid using the username inside the ESXi root password.")
+    return {
+        "valid": not errors,
+        "errors": errors,
+        "notes": notes,
+        "class_count": effective_classes,
+        "length": length,
+    }
