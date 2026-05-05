@@ -9,6 +9,9 @@ from fastapi.testclient import TestClient
 
 from app.ilo import ILOClient, ILOConfig, ILOError
 from app.esxi.kickstart import build_kickstart, redact_kickstart_text
+from app.core.config import build_default_ip_plan
+from app.core.models import KitConfigModel
+from app.core.stage_registry import StageRegistry, CallableStagePlugin
 import app.ilo as ilo_module
 import app.main as main
 from app.debug_bundle import redact_value
@@ -3511,6 +3514,9 @@ def test_execute_real_storage_starts_manual_reboot_watch_when_staged(client, mon
     assert started["discovery_raw_path"] == "/tmp/discovery.json"
     assert started["raid_plan_path"] == "/tmp/plan.yml"
     assert started["directory"] == str(apply_dir)
+    final_job = main.load_job(cfg["site"]["name"])
+    assert final_job.get("current_stage") == "Queued for manual reboot"
+    assert final_job.get("stage_statuses", {}).get("storage") == "running"
 
 
 def test_prepare_execute_enables_real_launch_for_esxi_scope(client, monkeypatch, tmp_path):
@@ -3896,6 +3902,81 @@ def test_multi_real_run_promotes_final_ilo_ip_before_esxi(client, monkeypatch):
     final_job = main.load_job(cfg["site"]["name"])
     assert final_job.get("root_scope") == "multi__ilo__esxi"
     assert final_job.get("stage_statuses", {}).get("ilo") == "completed"
+    assert final_job.get("stage_statuses", {}).get("esxi") == "completed"
+
+
+def test_execute_real_single_ilo_scope_uses_registry_executor(monkeypatch):
+    cfg = main.default_config()
+    cfg["site"]["name"] = "Single ILO Scope Kit"
+    main.save_kit_config(cfg)
+    kit_name = main.sanitize_kit_name(cfg["site"]["name"])
+    main.initialize_background_job(kit_name, "ilo")
+
+    calls = []
+
+    def fake_run_ilo_real(run_cfg):
+        calls.append(run_cfg["site"]["name"])
+        main.save_job(
+            run_cfg["site"]["name"],
+            {
+                "status": "Completed",
+                "scope": "ilo",
+                "root_scope": "ilo",
+                "current_stage": "iLO finished",
+                "logs": ["[OK] iLO finished"],
+            },
+        )
+
+    monkeypatch.setattr(main, "run_ilo_real", fake_run_ilo_real)
+
+    main.execute_real_job_in_background(cfg, "ilo")
+
+    assert calls == [kit_name]
+    final_job = main.load_job(kit_name)
+    assert final_job.get("stage_statuses", {}).get("ilo") == "completed"
+
+
+def test_execute_real_single_esxi_scope_uses_registry_executor(monkeypatch):
+    cfg = main.default_config()
+    cfg["site"]["name"] = "Single ESXi Scope Kit"
+    cfg["ilo"]["current_ip"] = "10.10.8.90"
+    cfg["ilo"]["host"] = "10.10.8.90"
+    cfg["esxi"]["root_password"] = "Valid1Pass!"
+    cfg["esxi"]["hostname"] = "esxi-lab"
+    cfg["_runtime"] = {"esxi_run_stamp": "20260505-120000"}
+    main.save_kit_config(cfg)
+    kit_name = main.sanitize_kit_name(cfg["site"]["name"])
+    main.initialize_background_job(kit_name, "esxi")
+
+    calls = []
+
+    def fake_promote_final_ilo_endpoint(run_cfg, final_ip=None):
+        del final_ip
+        calls.append(("promote", run_cfg["site"]["name"]))
+
+    def fake_run_esxi_real(run_cfg, run_stamp=None):
+        calls.append(("esxi", run_cfg["site"]["name"], run_stamp))
+        main.save_job(
+            run_cfg["site"]["name"],
+            {
+                "status": "Completed",
+                "scope": "esxi",
+                "root_scope": "esxi",
+                "current_stage": "ESXi finished",
+                "logs": ["[OK] ESXi finished"],
+            },
+        )
+
+    monkeypatch.setattr(main, "promote_final_ilo_endpoint", fake_promote_final_ilo_endpoint)
+    monkeypatch.setattr(main, "run_esxi_real", fake_run_esxi_real)
+
+    main.execute_real_job_in_background(cfg, "esxi")
+
+    assert calls == [
+        ("promote", kit_name),
+        ("esxi", kit_name, "20260505-120000"),
+    ]
+    final_job = main.load_job(kit_name)
     assert final_job.get("stage_statuses", {}).get("esxi") == "completed"
 
 
@@ -11161,3 +11242,63 @@ def test_import_kit_config_loads_uploaded_config(client):
     assert "Current kit: Imported-Kit" in response.text
     cfg = main.load_kit_config("Imported-Kit")
     assert cfg["ilo"]["current_ip"] == "10.44.55.90"
+
+
+def test_kit_config_model_accepts_existing_yaml_shape():
+    cfg = KitConfigModel(**main.default_config())
+    dumped = cfg.model_dump()
+    assert dumped["site"]["name"] == "Kit-01"
+    assert dumped["ilo"]["policy"]["discover_start_octet"] == 21
+
+
+def test_build_default_ip_plan_uses_expected_offsets():
+    plan = build_default_ip_plan("10.55.66.0/24")
+    assert plan == {
+        "gateway": "10.55.66.1",
+        "switch": "10.55.66.2",
+        "esxi": "10.55.66.10",
+        "ilo": "10.55.66.11",
+        "windows": "10.55.66.20",
+        "qnap": "10.55.66.30",
+        "iosafe": "10.55.66.31",
+    }
+
+
+def test_stage_registry_registers_and_filters_enabled_stages():
+    registry = StageRegistry()
+    registry.register(
+        CallableStagePlugin(
+            name="alpha",
+            title="Alpha",
+            enabled_fn=lambda context: bool(context.get("enabled")),
+            plan_fn=lambda context: {"planned": True},
+            validate_fn=lambda context: {"ok": True},
+            execute_fn=lambda context, job: job.update({"ran": True}),
+        )
+    )
+    registry.register(
+        CallableStagePlugin(
+            name="beta",
+            title="Beta",
+            enabled_fn=lambda context: False,
+            plan_fn=lambda context: {},
+            validate_fn=lambda context: {},
+            execute_fn=lambda context, job: None,
+        )
+    )
+    enabled = registry.enabled({"enabled": True})
+    assert [stage.name for stage in enabled] == ["alpha"]
+    assert registry.get("alpha").plan({}) == {"planned": True}
+
+
+def test_build_stage_registry_contains_core_stages():
+    registry = main.build_stage_registry(main.default_config())
+    assert registry.get("ilo") is not None
+    assert registry.get("storage") is not None
+    assert registry.get("esxi") is not None
+
+
+def test_get_steps_for_scope_uses_registry_titles():
+    steps = main.get_steps_for_scope(main.default_config(), "ilo")
+    assert steps[0] == "Preview iLO target and sign-in"
+    assert "policy and account changes" in steps[2]

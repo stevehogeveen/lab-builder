@@ -1,0 +1,547 @@
+from __future__ import annotations
+
+import copy
+import ipaddress
+import re
+from typing import Any
+
+from .models import KitConfigModel
+
+DEFAULT_IP_OFFSETS = {
+    "gateway": 1,
+    "switch": 2,
+    "esxi": 10,
+    "ilo": 11,
+    "windows": 20,
+    "qnap": 30,
+    "iosafe": 31,
+}
+DEFAULT_KIT_NAME = "Kit-01"
+
+
+def sanitize_kit_name(name: str) -> str:
+    name = (name or "").strip()
+    if not name:
+        return DEFAULT_KIT_NAME
+    name = re.sub(r"[^\w\- ]+", "", name)
+    name = name.replace(" ", "-")
+    return name or DEFAULT_KIT_NAME
+
+
+def normalize_ilo_hostname(value: str) -> str:
+    hostname = str(value or "").strip()
+    if not hostname:
+        return ""
+    hostname = re.sub(r"[^A-Za-z0-9\-]+", "-", hostname)
+    hostname = re.sub(r"-{2,}", "-", hostname).strip("-")
+    return hostname[:63]
+
+
+def has_non_printable_chars(value: str) -> bool:
+    return any((not ch.isprintable()) or ch in "\r\n\t" for ch in str(value or ""))
+
+
+def count_password_classes(value: str) -> int:
+    text = str(value or "")
+    classes = 0
+    if any(ch.islower() for ch in text):
+        classes += 1
+    if any(ch.isupper() for ch in text):
+        classes += 1
+    if any(ch.isdigit() for ch in text):
+        classes += 1
+    if any(not ch.isalnum() for ch in text):
+        classes += 1
+    return classes
+
+
+def validate_ilo_login_name(value: str, *, label: str, required: bool = True) -> list[str]:
+    username = str(value or "").strip()
+    if not username:
+        return [f"{label} is required."] if required else []
+    errors: list[str] = []
+    if len(username) > 39:
+        errors.append(f"{label} must be 39 characters or less.")
+    if has_non_printable_chars(username):
+        errors.append(f"{label} must use printable characters only.")
+    if re.search(r"\s", username):
+        errors.append(f"{label} cannot contain spaces.")
+    return errors
+
+
+def validate_ilo_password(value: str, *, username: str = "", label: str, required: bool = True) -> dict[str, list[str]]:
+    password = str(value or "")
+    errors: list[str] = []
+    notes: list[str] = []
+    if not password:
+        if required:
+            errors.append(f"{label} is required.")
+        return {"errors": errors, "notes": notes}
+    if len(password) > 39:
+        errors.append(f"{label} must be 39 characters or less.")
+    if has_non_printable_chars(password):
+        errors.append(f"{label} must use printable characters only.")
+    if len(password) < 8:
+        notes.append(f"{label} is under 8 characters. Many iLO policies use a minimum of 8.")
+    if count_password_classes(password) < 3:
+        notes.append(f"{label} does not use 3 character types. iLO complexity policy may reject it.")
+    if username and username.lower() in password.lower():
+        notes.append(f"{label} contains the user name. HPE recommends avoiding that.")
+    return {"errors": errors, "notes": notes}
+
+
+def validate_snmpv3_username(value: str, *, label: str) -> list[str]:
+    username = str(value or "").strip()
+    if not username:
+        return [f"{label} is required."]
+    errors: list[str] = []
+    if len(username) > 32:
+        errors.append(f"{label} must be 32 characters or less.")
+    if has_non_printable_chars(username):
+        errors.append(f"{label} must use printable characters only.")
+    if re.search(r"\s", username):
+        errors.append(f"{label} cannot contain spaces.")
+    return errors
+
+
+def validate_snmpv3_password(value: str, *, label: str, required: bool = True) -> list[str]:
+    password = str(value or "")
+    if not password:
+        return [f"{label} is required."] if required else []
+    errors: list[str] = []
+    if has_non_printable_chars(password):
+        errors.append(f"{label} must use printable characters only.")
+    if len(password) < 8:
+        errors.append(f"{label} must be at least 8 characters.")
+    return errors
+
+
+def default_config() -> dict[str, Any]:
+    return KitConfigModel(
+        ip_plan={
+            "gateway": "10.10.8.1",
+            "switch": "10.10.8.2",
+            "esxi": "10.10.8.10",
+            "ilo": "10.10.8.11",
+            "windows": "10.10.8.20",
+            "qnap": "10.10.8.30",
+            "iosafe": "10.10.8.31",
+        },
+        included={
+            "ilo": True,
+            "esxi": True,
+            "windows": False,
+            "qnap": False,
+            "iosafe": False,
+            "cisco_switch": False,
+            "storage": False,
+        },
+        section_completion={
+            "basics": False,
+            "network": False,
+            "included": False,
+            "credentials": False,
+        },
+        windows={
+            "vm_name": "win2022-01",
+            "admin_password": "",
+            "ip_address": "",
+            "subnet_mask": "255.255.255.0",
+            "gateway": "",
+            "dns_servers": [],
+        },
+        qnap={"hostname": "qnap01", "ip": "", "username": "admin", "password": ""},
+        iosafe={"hostname": "iosafe01", "ip": "", "username": "admin", "password": ""},
+        cisco_switch={"hostname": "sw01", "ip": "", "username": "admin", "password": ""},
+    ).model_dump()
+
+
+def normalize_ilo_additional_users(entries: list[dict[str, Any]] | Any) -> list[dict[str, str]]:
+    normalized: list[dict[str, str]] = []
+    if not isinstance(entries, list):
+        return normalized
+    for item in entries:
+        if not isinstance(item, dict):
+            continue
+        username = str(item.get("username") or "").strip()
+        password = str(item.get("password") or "")
+        role = str(item.get("role") or "Administrator").strip() or "Administrator"
+        if not username or not password:
+            continue
+        normalized.append({"username": username, "password": password, "role": role})
+    return normalized
+
+
+def standard_ilo_policy_defaults() -> dict[str, Any]:
+    return copy.deepcopy(default_config()["ilo"]["policy"])
+
+
+def normalize_ilo_policy(policy: dict[str, Any] | Any) -> dict[str, Any]:
+    normalized = standard_ilo_policy_defaults()
+    if isinstance(policy, dict):
+        normalized.update(policy)
+    for key in (
+        "discover_enabled", "apply_standard_policy", "enable_standard_accounts", "enable_license_check",
+        "enable_snmp_policy", "enable_alert_destinations", "enable_ipv6_disable", "enable_time_policy", "enable_auto_reset",
+    ):
+        value = normalized.get(key)
+        normalized[key] = value.strip().lower() not in {"0", "false", "no", "off", ""} if isinstance(value, str) else bool(value)
+    try:
+        start_octet = int(normalized.get("discover_start_octet") or 21)
+    except (TypeError, ValueError):
+        start_octet = 21
+    try:
+        end_octet = int(normalized.get("discover_end_octet") or 29)
+    except (TypeError, ValueError):
+        end_octet = 29
+    start_octet = max(1, min(start_octet, 254))
+    end_octet = max(1, min(end_octet, 254))
+    if start_octet > end_octet:
+        start_octet, end_octet = end_octet, start_octet
+    normalized["discover_start_octet"] = start_octet
+    normalized["discover_end_octet"] = end_octet
+    normalized["alert_destinations"] = [str(item).strip() for item in list(normalized.get("alert_destinations") or []) if str(item or "").strip()]
+    discovered_hosts = []
+    for item in list(normalized.get("discovered_hosts") or []):
+        if not isinstance(item, dict):
+            continue
+        host = str(item.get("host") or "").strip()
+        if not host:
+            continue
+        discovered_hosts.append({
+            "host": host,
+            "reachable": bool(item.get("reachable")),
+            "latency_ms": item.get("latency_ms", ""),
+            "error": str(item.get("error") or "").strip(),
+        })
+    normalized["discovered_hosts"] = discovered_hosts
+    return normalized
+
+
+def standard_ilo_policy_kit_id(cfg: dict[str, Any]) -> str:
+    return sanitize_kit_name(str((cfg.get("site") or {}).get("name") or "KIT")).upper()
+
+
+def build_policy_ilo_username(kit_id: str, suffix: str) -> str:
+    raw = f"{str(kit_id or '').strip()}_{suffix}"
+    normalized = re.sub(r"[^A-Za-z0-9_.-]+", "", raw)
+    if len(normalized) <= 39:
+        return normalized
+    keep = max(1, 39 - len(suffix) - 1)
+    return f"{normalized[:keep]}_{suffix}"
+
+
+def standard_ilo_policy_accounts(cfg: dict[str, Any]) -> list[dict[str, Any]]:
+    policy = normalize_ilo_policy((cfg.get("ilo") or {}).get("policy"))
+    kit_id = standard_ilo_policy_kit_id(cfg)
+    oa_privileges = {
+        "LoginPriv": True,
+        "RemoteConsolePriv": True,
+        "VirtualPowerAndResetPriv": True,
+        "UserConfigPriv": False,
+        "iLOConfigPriv": False,
+        "VirtualMediaPriv": False,
+        "HostNICConfigPriv": False,
+        "HostBIOSConfigPriv": False,
+        "HostStorageConfigPriv": False,
+        "SystemRecoveryConfigPriv": False,
+    }
+    accounts = [
+        {"username": build_policy_ilo_username(kit_id, "Admin"), "password": str(policy.get("kit_admin_password") or ""), "role": "Administrator"},
+        {"username": build_policy_ilo_username(kit_id, "OA"), "password": str(policy.get("kit_operator_password") or ""), "role": "Operator", "privileges": oa_privileges},
+        {"username": str(policy.get("shared_admin_username") or "765CS").strip() or "765CS", "password": str(policy.get("shared_admin_password") or ""), "role": "Administrator"},
+    ]
+    return [item for item in accounts if str(item.get("username") or "").strip() and str(item.get("password") or "")]
+
+
+def build_standard_ilo_policy(cfg: dict[str, Any]) -> dict[str, Any]:
+    policy = normalize_ilo_policy((cfg.get("ilo") or {}).get("policy"))
+    kit_id = standard_ilo_policy_kit_id(cfg)
+    shared_snmp = dict((cfg.get("shared_snmp") or {}))
+    configured_v3_username = str(policy.get("snmpv3_username") or "").strip()
+    shared_v3_username = str(shared_snmp.get("v3_username") or "").strip()
+    v3_username = shared_v3_username if configured_v3_username in {"", "765CS"} and shared_v3_username else (configured_v3_username or "765CS")
+    v3_auth_password = str(policy.get("snmpv3_auth_password") or shared_snmp.get("v3_auth_password") or "")
+    v3_priv_password = str(policy.get("snmpv3_priv_password") or shared_snmp.get("v3_priv_password") or "")
+    return {
+        "kit_id": kit_id,
+        "settings": policy,
+        "accounts": standard_ilo_policy_accounts(cfg),
+        "snmp": {
+            "system_contact": str(policy.get("snmp_system_contact") or "765 DSS"),
+            "system_location": kit_id if str(policy.get("snmp_location_source") or "kit_id") == "kit_id" else str(policy.get("snmp_system_location") or kit_id),
+            "system_role": str(policy.get("snmp_system_role") or "iLO"),
+            "read_community": str(policy.get("snmp_read_community") or shared_snmp.get("read_community") or ""),
+            "v3_username": v3_username,
+            "v3_auth_protocol": str(policy.get("snmpv3_auth_protocol") or "SHA").strip() or "SHA",
+            "v3_auth_password": v3_auth_password,
+            "v3_priv_protocol": str(policy.get("snmpv3_priv_protocol") or "AES").strip() or "AES",
+            "v3_priv_password": v3_priv_password,
+            "alert_destinations": list(policy.get("alert_destinations") or []),
+            "alert_protocol": str(policy.get("alert_protocol") or "SNMPv3Inform"),
+        },
+        "time": {
+            "server": str(((cfg.get("ilo") or {}).get("gateway") or (cfg.get("ip_plan") or {}).get("gateway") or "")).strip(),
+            "timezone": str(policy.get("timezone") or "Bogota, Lima, Quito, Eastern Time(US & Canada)"),
+        },
+    }
+
+
+def policy_enabled(cfg: dict[str, Any], key: str) -> bool:
+    policy = normalize_ilo_policy((cfg.get("ilo") or {}).get("policy"))
+    if key == "discover_enabled":
+        return bool(policy.get("discover_enabled"))
+    return bool(policy.get("apply_standard_policy")) and bool(policy.get(key))
+
+
+def build_ilo_discovery_targets(cfg: dict[str, Any]) -> list[str]:
+    policy = normalize_ilo_policy((cfg.get("ilo") or {}).get("policy"))
+    if not policy.get("discover_enabled"):
+        return []
+    subnet = str((cfg.get("shared_network") or {}).get("subnet") or "").strip()
+    try:
+        network = ipaddress.ip_network(subnet, strict=False)
+    except Exception:
+        return []
+    if network.version != 4:
+        return []
+    start_octet = int(policy.get("discover_start_octet") or 21)
+    end_octet = int(policy.get("discover_end_octet") or 29)
+    targets: list[str] = []
+    for octet in range(start_octet, end_octet + 1):
+        candidate = f"{network.network_address.exploded.rsplit('.', 1)[0]}.{octet}"
+        try:
+            if ipaddress.ip_address(candidate) in network:
+                targets.append(candidate)
+        except Exception:
+            continue
+    return targets
+
+
+def normalize_snmp_users(entries: list[dict[str, Any]] | Any) -> list[dict[str, str]]:
+    normalized: list[dict[str, str]] = []
+    if not isinstance(entries, list):
+        return normalized
+    for item in entries:
+        if not isinstance(item, dict):
+            continue
+        username = str(item.get("username") or "").strip()
+        auth_protocol = str(item.get("auth_protocol") or "SHA").strip() or "SHA"
+        auth_password = str(item.get("auth_password") or "")
+        priv_protocol = str(item.get("priv_protocol") or "AES").strip() or "AES"
+        priv_password = str(item.get("priv_password") or "")
+        if not username:
+            continue
+        normalized.append({
+            "username": username,
+            "auth_protocol": auth_protocol,
+            "auth_password": auth_password,
+            "priv_protocol": priv_protocol,
+            "priv_password": priv_password,
+        })
+    return normalized
+
+
+def extract_ilo_additional_users_from_form(form: Any) -> list[dict[str, str]]:
+    usernames = form.getlist("ilo_extra_username")
+    passwords = form.getlist("ilo_extra_password")
+    roles = form.getlist("ilo_extra_role")
+    entries: list[dict[str, str]] = []
+    for index, username in enumerate(usernames):
+        entries.append({
+            "username": username,
+            "password": passwords[index] if index < len(passwords) else "",
+            "role": roles[index] if index < len(roles) else "Administrator",
+        })
+    return normalize_ilo_additional_users(entries)
+
+
+def extract_snmp_users_from_form(form: Any, *, primary_username: str, primary_auth_protocol: str, primary_auth_password: str, primary_priv_protocol: str, primary_priv_password: str) -> list[dict[str, str]]:
+    entries: list[dict[str, str]] = []
+    if str(primary_username or "").strip():
+        entries.append({
+            "username": primary_username,
+            "auth_protocol": primary_auth_protocol,
+            "auth_password": primary_auth_password,
+            "priv_protocol": primary_priv_protocol,
+            "priv_password": primary_priv_password,
+        })
+    usernames = form.getlist("snmp_extra_username")
+    auth_protocols = form.getlist("snmp_extra_auth_protocol")
+    auth_passwords = form.getlist("snmp_extra_auth_password")
+    priv_protocols = form.getlist("snmp_extra_priv_protocol")
+    priv_passwords = form.getlist("snmp_extra_priv_password")
+    for index, username in enumerate(usernames):
+        entries.append({
+            "username": username,
+            "auth_protocol": auth_protocols[index] if index < len(auth_protocols) else "SHA",
+            "auth_password": auth_passwords[index] if index < len(auth_passwords) else "",
+            "priv_protocol": priv_protocols[index] if index < len(priv_protocols) else "AES",
+            "priv_password": priv_passwords[index] if index < len(priv_passwords) else "",
+        })
+    return normalize_snmp_users(entries)
+
+
+def normalize_ilo_config(cfg: dict[str, Any]) -> dict[str, Any]:
+    ilo_cfg = cfg.setdefault("ilo", {})
+    snmp_cfg = cfg.setdefault("shared_snmp", {})
+    legacy_host = (ilo_cfg.get("host") or "").strip()
+    current_ip = (ilo_cfg.get("current_ip") or legacy_host or "").strip()
+    target_ip = (ilo_cfg.get("target_ip") or "").strip()
+    subnet_mask = (ilo_cfg.get("subnet_mask") or cfg.get("ip_plan", {}).get("netmask") or "").strip()
+    gateway = (ilo_cfg.get("gateway") or cfg.get("ip_plan", {}).get("gateway") or "").strip()
+    dns_servers = ilo_cfg.get("dns_servers")
+    if not target_ip:
+        target_ip = (cfg.get("ip_plan", {}).get("ilo") or current_ip or legacy_host).strip()
+    if not current_ip:
+        current_ip = target_ip
+    if not isinstance(dns_servers, list):
+        dns_servers = cfg.get("shared_network", {}).get("dns_servers", [])
+    normalized_dns = [str(x).strip() for x in dns_servers[:4]]
+    while len(normalized_dns) < 4:
+        normalized_dns.append("")
+    ilo_cfg["current_ip"] = current_ip
+    ilo_cfg["target_ip"] = target_ip
+    ilo_cfg["subnet_mask"] = subnet_mask
+    ilo_cfg["gateway"] = gateway
+    ilo_cfg["dns_servers"] = normalized_dns
+    ilo_cfg["host"] = current_ip
+    ilo_cfg["additional_users"] = normalize_ilo_additional_users(ilo_cfg.get("additional_users", []))
+    ilo_cfg["policy"] = normalize_ilo_policy(ilo_cfg.get("policy"))
+    normalized_snmp_users = normalize_snmp_users(snmp_cfg.get("users", []))
+    if not normalized_snmp_users:
+        primary_snmp_username = str(snmp_cfg.get("v3_username") or "").strip()
+        if primary_snmp_username:
+            normalized_snmp_users = [{
+                "username": primary_snmp_username,
+                "auth_protocol": str(snmp_cfg.get("v3_auth_protocol") or "SHA").strip() or "SHA",
+                "auth_password": str(snmp_cfg.get("v3_auth_password") or ""),
+                "priv_protocol": str(snmp_cfg.get("v3_priv_protocol") or "AES").strip() or "AES",
+                "priv_password": str(snmp_cfg.get("v3_priv_password") or ""),
+            }]
+    snmp_cfg["users"] = normalized_snmp_users
+    return cfg
+
+
+def merge_defaults(cfg: dict[str, Any]) -> dict[str, Any]:
+    base = default_config()
+    for key, value in cfg.items():
+        if isinstance(value, dict) and isinstance(base.get(key), dict):
+            base[key].update(value)
+        else:
+            base[key] = value
+    return normalize_ilo_config(base)
+
+
+def ip_at_offset(network_cidr: str, offset: int, require_usable: bool = True) -> str:
+    network = ipaddress.ip_network(network_cidr, strict=False)
+    candidate = network.network_address + int(offset)
+    if candidate not in network:
+        raise ValueError(f"Offset {offset} is outside {network_cidr}")
+    if require_usable and (candidate == network.network_address or candidate == network.broadcast_address):
+        raise ValueError(f"Offset {offset} resolves to a reserved address in {network_cidr}")
+    return str(candidate)
+
+
+def build_default_ip_plan(subnet: str) -> dict[str, Any]:
+    return {key: ip_at_offset(subnet, offset) for key, offset in DEFAULT_IP_OFFSETS.items()}
+
+
+def calc_ip_plan(cfg: dict[str, Any]) -> dict[str, Any]:
+    subnet = str(cfg.get("shared_network", {}).get("subnet") or "").strip()
+    if not subnet:
+        raise ValueError("Shared subnet is required before calculating the IP plan.")
+    network = ipaddress.ip_network(subnet, strict=False)
+    if network.version != 4:
+        raise ValueError("Only IPv4 shared subnets are currently supported.")
+    raw_plan = dict(cfg.get("ip_plan") or {})
+    if all(raw_plan.get(key) for key in DEFAULT_IP_OFFSETS):
+        gateway = str(raw_plan.get("gateway") or "").strip()
+        if gateway and ipaddress.ip_address(gateway) in network:
+            return {
+                key: str(raw_plan.get(key) or "").strip()
+                for key in DEFAULT_IP_OFFSETS
+            } | {"subnet": subnet, "netmask": str(network.netmask)}
+    return build_default_ip_plan(subnet) | {"subnet": subnet, "netmask": str(network.netmask)}
+
+
+def apply_ip_plan(cfg: dict[str, Any]) -> dict[str, Any]:
+    cfg = merge_defaults(cfg)
+    plan = calc_ip_plan(cfg)
+    shared_dns = [x for x in cfg.get("shared_network", {}).get("dns_servers", []) if x]
+    cfg["ip_plan"] = plan
+    cfg["ilo"]["target_ip"] = plan["ilo"]
+    cfg["ilo"]["current_ip"] = (cfg["ilo"].get("current_ip") or cfg["ilo"].get("host") or plan["ilo"]).strip()
+    cfg["ilo"]["subnet_mask"] = (cfg["ilo"].get("subnet_mask") or plan["netmask"]).strip()
+    cfg["ilo"]["gateway"] = (cfg["ilo"].get("gateway") or plan["gateway"]).strip()
+    ilo_dns = cfg["ilo"].get("dns_servers", [])
+    cfg["ilo"]["dns_servers"] = ilo_dns if any(x and str(x).strip() for x in ilo_dns) else cfg.get("shared_network", {}).get("dns_servers", ["", "", "", ""])[:4]
+    cfg["ilo"]["host"] = cfg["ilo"]["current_ip"]
+    cfg["esxi"]["management_ip"] = plan["esxi"]
+    cfg["esxi"]["gateway"] = plan["gateway"]
+    cfg["esxi"]["subnet_mask"] = plan["netmask"]
+    cfg["esxi"]["dns_servers"] = shared_dns if shared_dns else [plan["gateway"]]
+    cfg["windows"]["ip_address"] = plan["windows"]
+    cfg["windows"]["gateway"] = plan["gateway"]
+    cfg["windows"]["subnet_mask"] = plan["netmask"]
+    cfg["windows"]["dns_servers"] = shared_dns if shared_dns else [plan["gateway"]]
+    cfg["qnap"]["ip"] = plan["qnap"]
+    cfg["iosafe"]["ip"] = plan["iosafe"]
+    cfg["cisco_switch"]["ip"] = plan["switch"]
+    return cfg
+
+
+def build_ilo_input_review(cfg: dict[str, Any], *, include_policy_validation: bool = False) -> dict[str, Any]:
+    ilo_cfg = cfg.get("ilo", {}) or {}
+    policy = normalize_ilo_policy(ilo_cfg.get("policy"))
+    errors: list[str] = []
+    notes: list[str] = []
+    errors.extend(validate_ilo_login_name(ilo_cfg.get("username", ""), label="iLO username"))
+    password_check = validate_ilo_password(ilo_cfg.get("password", ""), username=str(ilo_cfg.get("username") or ""), label="iLO password")
+    errors.extend(password_check["errors"])
+    notes.extend(password_check["notes"])
+    for index, item in enumerate(normalize_ilo_additional_users(ilo_cfg.get("additional_users", [])), start=1):
+        prefix = f"Extra iLO user {index}"
+        errors.extend(validate_ilo_login_name(item.get("username", ""), label=f"{prefix} username"))
+        extra_check = validate_ilo_password(item.get("password", ""), username=str(item.get("username") or ""), label=f"{prefix} password")
+        errors.extend(extra_check["errors"])
+        notes.extend(extra_check["notes"])
+    if include_policy_validation and policy.get("apply_standard_policy") and policy.get("enable_standard_accounts"):
+        for item in standard_ilo_policy_accounts(cfg):
+            username = str(item.get("username") or "").strip()
+            password = str(item.get("password") or "")
+            errors.extend(validate_ilo_login_name(username, label=f"Policy iLO user {username}"))
+            if not password:
+                errors.append(f"Policy iLO user {username} password is required.")
+                continue
+            extra_check = validate_ilo_password(password, username=username, label=f"Policy iLO user {username} password")
+            errors.extend(extra_check["errors"])
+            notes.extend(extra_check["notes"])
+    if include_policy_validation and policy.get("apply_standard_policy") and policy.get("enable_snmp_policy"):
+        snmp_username = str(policy.get("snmpv3_username") or "765CS").strip()
+        errors.extend(validate_snmpv3_username(snmp_username, label="Policy SNMPv3 user"))
+        errors.extend(validate_snmpv3_password(str(policy.get("snmpv3_auth_password") or ""), label="Policy SNMPv3 auth password"))
+        errors.extend(validate_snmpv3_password(str(policy.get("snmpv3_priv_password") or ""), label="Policy SNMPv3 privacy password"))
+    return {"errors": errors, "notes": notes}
+
+
+def build_snmp_input_review(cfg: dict[str, Any]) -> dict[str, Any]:
+    snmp_cfg = cfg.get("shared_snmp", {}) or {}
+    errors: list[str] = []
+    notes: list[str] = []
+    users = normalize_snmp_users(snmp_cfg.get("users", []))
+    primary_username = str(snmp_cfg.get("v3_username") or "").strip()
+    primary_auth_password = str(snmp_cfg.get("v3_auth_password") or "")
+    primary_priv_password = str(snmp_cfg.get("v3_priv_password") or "")
+    if primary_username or primary_auth_password or primary_priv_password:
+        errors.extend(validate_snmpv3_username(primary_username, label="SNMPv3 user"))
+        errors.extend(validate_snmpv3_password(primary_auth_password, label="SNMPv3 auth password"))
+        errors.extend(validate_snmpv3_password(primary_priv_password, label="SNMPv3 privacy password"))
+    for index, item in enumerate(users[1:] if users else [], start=1):
+        prefix = f"Additional SNMPv3 user {index}"
+        errors.extend(validate_snmpv3_username(item.get("username", ""), label=f"{prefix}"))
+        errors.extend(validate_snmpv3_password(item.get("auth_password", ""), label=f"{prefix} auth password"))
+        errors.extend(validate_snmpv3_password(item.get("priv_password", ""), label=f"{prefix} privacy password"))
+    if primary_username and not users:
+        notes.append("The primary SNMPv3 user is saved, but the normalized user list is empty.")
+    return {"errors": errors, "notes": notes}

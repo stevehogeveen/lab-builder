@@ -25,6 +25,12 @@ from app.esxi.builder import build_custom_iso
 from app.esxi.models import EsxiBuildSpec
 from app.debug_bundle import create_debug_bundle
 from app.diagnostics import diagnostic_log_lines, diagnostic_result
+from app.core.config import default_config as core_default_config, build_default_ip_plan as core_build_default_ip_plan
+from app.core.jobs import JobStepRunner
+from app.core.stage_registry import StageRegistry
+from app.stages.ilo.plugin import create_ilo_stage
+from app.stages.esxi.plugin import create_esxi_stage
+from app.stages.storage.plugin import create_storage_stage
 
 ILO_CLIENT_BASE = ILOClient
 
@@ -807,6 +813,18 @@ PAGE_META = {
 STORAGE_APPROVAL_CONFIRM = "APPROVE STORAGE"
 RUN_CENTER_STAGE_KEYS = ["ilo", "storage", "esxi", "windows", "qnap", "iosafe", "cisco_switch"]
 DEFAULT_KIT_NAME = "Kit-01"
+
+
+def build_stage_registry(cfg: dict[str, Any] | None = None) -> StageRegistry:
+    context_cfg = cfg or default_config()
+    registry = StageRegistry([
+        create_ilo_stage(),
+        create_storage_stage(),
+        create_esxi_stage(),
+    ])
+    # Touch the plugins through their enabled hooks so tests can validate registry wiring
+    registry.enabled({"cfg": context_cfg})
+    return registry
 
 
 def sanitize_kit_name(name: str) -> str:
@@ -9311,148 +9329,7 @@ def render_exports_folder_listing(root: Path) -> str:
     return "\n".join(lines).rstrip()
 
 def default_config():
-    return {
-        "site": {"name": "Kit-01"},
-        "shared_network": {
-            "subnet": "10.10.8.0/24",
-            "dns_servers": ["", "", "", ""],
-        },
-        "shared_snmp": {
-            "v3_username": "",
-            "v3_auth_protocol": "SHA",
-            "v3_auth_password": "",
-            "v3_priv_protocol": "AES",
-            "v3_priv_password": "",
-            "users": [],
-        },
-        "ip_plan": {
-            "gateway": "10.10.8.1",
-            "switch": "10.10.8.2",
-            "esxi": "10.10.8.10",
-            "ilo": "10.10.8.11",
-            "windows": "10.10.8.20",
-            "qnap": "10.10.8.30",
-            "iosafe": "10.10.8.31",
-        },
-        "included": {
-            "ilo": True,
-            "esxi": True,
-            "windows": False,
-            "qnap": False,
-            "iosafe": False,
-            "cisco_switch": False,
-            "storage": False,
-        },
-        "section_completion": {
-            "basics": False,
-            "network": False,
-            "included": False,
-            "credentials": False,
-        },
-        "ilo": {
-            "host": "",
-            "current_ip": "",
-            "target_ip": "",
-            "subnet_mask": "255.255.255.0",
-            "gateway": "",
-            "dns_servers": ["", "", "", ""],
-            "hostname": "ilo01",
-            "username": "Administrator",
-            "password": "",
-            "additional_users": [],
-            "policy": {
-                "discover_enabled": True,
-                "discover_start_octet": 21,
-                "discover_end_octet": 29,
-                "apply_standard_policy": True,
-                "enable_standard_accounts": True,
-                "enable_license_check": True,
-                "enable_snmp_policy": True,
-                "enable_alert_destinations": True,
-                "enable_ipv6_disable": True,
-                "enable_time_policy": True,
-                "enable_auto_reset": True,
-                "kit_admin_password": "",
-                "kit_operator_password": "",
-                "shared_admin_username": "765CS",
-                "shared_admin_password": "",
-                "snmp_read_community": "",
-                "snmpv3_username": "765CS",
-                "snmpv3_auth_protocol": "SHA",
-                "snmpv3_auth_password": "",
-                "snmpv3_priv_protocol": "AES",
-                "snmpv3_priv_password": "",
-                "snmp_system_contact": "765 DSS",
-                "snmp_system_role": "iLO",
-                "snmp_location_source": "kit_id",
-                "alert_destinations": ["10.245.190.67", "10.245.190.68"],
-                "alert_protocol": "SNMPv3Inform",
-                "timezone": "Bogota, Lima, Quito, Eastern Time(US & Canada)",
-            },
-        },
-        "esxi": {
-            "version": "7",
-            "base_iso_path": "",
-            "hostname": "esxi01",
-            "management_ip": "",
-            "subnet_mask": "255.255.255.0",
-            "gateway": "",
-            "dns_servers": [],
-            "root_password": "",
-            "debug_no_reboot": False,
-        },
-        "windows": {
-            "vm_name": "win2022-01",
-            "admin_password": "",
-            "ip_address": "",
-            "subnet_mask": "255.255.255.0",
-            "gateway": "",
-            "dns_servers": [],
-        },
-        "qnap": {
-            "hostname": "qnap01",
-            "ip": "",
-            "username": "admin",
-            "password": "",
-        },
-        "iosafe": {
-            "hostname": "iosafe01",
-            "ip": "",
-            "username": "admin",
-            "password": "",
-        },
-        "cisco_switch": {
-            "hostname": "sw01",
-            "ip": "",
-            "username": "admin",
-            "password": "",
-        },
-        "storage": {
-            "target_host_override": "",
-            "username": "",
-            "password": "",
-            "include_in_ilo_run": False,
-            "latest_discovery_raw_path": "",
-            "latest_discovery_fingerprint": "",
-            "latest_plan_path": "",
-            "latest_plan_summary": {},
-            "latest_host": "",
-            "latest_serial_number": "",
-            "state": "idle",
-            "status_reason": "",
-            "approval": {
-                "state": "",
-                "approved_at": "",
-                "host": "",
-                "serial_number": "",
-                "discovery_raw_path": "",
-                "plan_path": "",
-                "discovery_fingerprint": "",
-                "plan_summary": {},
-                "reboot_expected": False,
-            },
-        },
-    }
+    return core_default_config()
 
 
 def merge_defaults(cfg):
@@ -9831,7 +9708,7 @@ def ip_at_offset(network_cidr: str, offset: int, require_usable: bool = True) ->
 
 
 def build_default_ip_plan(subnet: str) -> dict:
-    return {key: ip_at_offset(subnet, offset) for key, offset in DEFAULT_IP_OFFSETS.items()}
+    return core_build_default_ip_plan(subnet)
 
 
 def validate_ip_for_subnet(network_cidr: str, value: str, label: str) -> str:
@@ -10774,20 +10651,24 @@ def build_execution_review(cfg: dict, scope: str):
 
 
 def get_steps_for_scope(cfg: dict, scope: str):
+    registry = build_stage_registry(cfg)
+    registered = {stage.name: stage for stage in registry.all()}
     if scope == "ilo":
+        title = registered.get("ilo").title if registered.get("ilo") else "iLO"
         return [
-            "Preview iLO target and sign-in",
-            "Preview iLO network changes",
-            "Preview DNS and SNMP changes",
-            "Preview complete - ready for real iLO execution",
+            f"Preview {title} target and sign-in",
+            f"Preview {title} network changes",
+            f"Preview {title} policy and account changes",
+            f"Preview complete - ready for real {title} execution",
         ]
     if scope == "esxi":
+        title = registered.get("esxi").title if registered.get("esxi") else "ESXi"
         return [
-            "Preview ESXi configuration",
+            f"Preview {title} configuration",
             "Preview generated install inputs",
             "Preview ISO patch inputs",
             "Preview install target checks",
-            "Preview complete - ready for real ESXi execution",
+            f"Preview complete - ready for real {title} execution",
         ]
     if scope == "windows":
         return [
@@ -10824,12 +10705,12 @@ def get_steps_for_scope(cfg: dict, scope: str):
     if scope == "included":
         steps = ["Preview included kit scope"]
         included = cfg.get("included", {})
-        if included.get("storage"):
-            steps.append("Preview approved storage plan")
-        if included.get("ilo"):
-            steps.append("Preview iLO actions")
-        if included.get("esxi"):
-            steps.append("Preview ESXi actions")
+        if included.get("storage") and registered.get("storage"):
+            steps.append(f"Preview approved {registered['storage'].title} plan")
+        if included.get("ilo") and registered.get("ilo"):
+            steps.append(f"Preview {registered['ilo'].title} actions")
+        if included.get("esxi") and registered.get("esxi"):
+            steps.append(f"Preview {registered['esxi'].title} actions")
         if included.get("windows"):
             steps.append("Preview Windows actions")
         if included.get("qnap"):
@@ -10843,14 +10724,16 @@ def get_steps_for_scope(cfg: dict, scope: str):
     if scope.startswith("multi__"):
         steps = ["Preview selected stages"]
         for key in run_center_scope_keys(scope, cfg):
-            label = {
-                "ilo": "Preview iLO actions",
-                "esxi": "Preview ESXi actions",
-                "windows": "Preview Windows actions",
-                "qnap": "Preview QNAP actions",
-                "iosafe": "Preview ioSafe actions",
-                "cisco_switch": "Preview Cisco switch actions",
-            }.get(key, f"Preview {key} actions")
+            label = (
+                f"Preview {registered[key].title} actions"
+                if key in registered
+                else {
+                    "windows": "Preview Windows actions",
+                    "qnap": "Preview QNAP actions",
+                    "iosafe": "Preview ioSafe actions",
+                    "cisco_switch": "Preview Cisco switch actions",
+                }.get(key, f"Preview {key} actions")
+            )
             steps.append(label)
         steps.append("Preview complete - ready for the selected run")
         return steps
@@ -10916,25 +10799,20 @@ def update_job(
     log_line: str,
     progress_percent: int | None = None,
 ):
-    ensure_run_bundle_for_job(kit_name, job)
-    job["status"] = status
-    job["current_stage"] = current_stage
-    job["completed_steps"] = completed
-    job["total_steps"] = total
-    job["progress_percent"] = progress_percent if progress_percent is not None else (int((completed / total) * 100) if total else 0)
-    job["logs"].append(log_line)
-    job.setdefault("trace_events", []).append(
-        {
-            "time": time.strftime("%Y-%m-%d %H:%M:%S"),
-            "status": status,
-            "stage": current_stage,
-            "completed_steps": completed,
-            "total_steps": total,
-            "progress_percent": job["progress_percent"],
-            "log": log_line,
-        }
+    runner = JobStepRunner(
+        kit_name=kit_name,
+        job=job,
+        save_job=save_job,
+        ensure_run_bundle=ensure_run_bundle_for_job,
     )
-    save_job(kit_name, job)
+    runner.step(
+        status=status,
+        stage=current_stage,
+        completed=completed,
+        total=total,
+        log=log_line,
+        progress_percent=progress_percent,
+    )
 
 
 def initialize_background_job(kit_name: str, scope: str):
@@ -11062,6 +10940,7 @@ def append_job_history_snapshot(cfg: dict, scope: str):
 def execute_real_job_in_background(cfg: dict, scope: str):
     kit_name = cfg["site"]["name"]
     selected_tokens = run_center_scope_keys(scope, cfg)
+    registry = build_stage_registry(cfg)
 
     def mark_stage(token: str, state: str) -> None:
         current_job = load_job(kit_name)
@@ -11146,44 +11025,23 @@ def execute_real_job_in_background(cfg: dict, scope: str):
                     return
                 mark_stage("esxi", "completed")
             return
-        if scope == "ilo":
-            mark_stage("ilo", "running")
-            run_ilo_real(cfg)
+        if scope in {"ilo", "storage", "esxi"}:
+            stage = registry.get(scope)
+            if stage is None:
+                raise RuntimeError(f"Stage registry entry is missing for scope: {scope}")
+            mark_stage(scope, "running")
+            context = {
+                "cfg": cfg,
+                "executors": {
+                    "ilo": lambda _job: run_ilo_real(cfg),
+                    "storage": lambda _job: _execute_storage_stage(cfg, kit_name, mark_stage),
+                    "esxi": lambda _job: _execute_esxi_stage(cfg, kit_name),
+                },
+            }
+            stage.execute(context, load_job(kit_name))
             finished_job = load_job(kit_name)
-            mark_stage("ilo", "failed" if finished_job.get("status") == "Failed" else "completed")
-        elif scope == "storage":
-            mark_stage("storage", "running")
-            promote_final_ilo_endpoint(cfg)
-            save_kit_config(cfg)
-            storage_execution = validate_storage_ready_for_ilo_run(cfg)
-            discovery_raw_path = str(storage_execution.get("discovery_raw_path") or "")
-            raid_plan_path = str(storage_execution.get("plan_path") or "")
-            if not discovery_raw_path or not raid_plan_path:
-                raise RuntimeError("Approved storage artifacts are missing for the real storage run.")
-            _discovery, _discovery_paths, plan, plan_paths = restore_storage_page_state(
-                discovery_raw_path=discovery_raw_path,
-                raid_plan_path=raid_plan_path,
-                expected_host=str(storage_execution.get("approved_host") or ""),
-            )
-            if not plan_paths:
-                raise RuntimeError("Approved storage plan artifact is missing for the real storage run.")
-            apply_mode = storage_apply_mode_for_plan(plan)
-            apply_paths = initialize_storage_apply_artifacts(cfg, plan, plan_paths)
-            run_storage_apply(cfg, discovery_raw_path, raid_plan_path, apply_mode, apply_paths)
-            workflow_state = load_storage_workflow_state(apply_paths)
-            apply_state = (workflow_state.get("apply", {}) if workflow_state else {}) or {}
-            if apply_state.get("workflow_state") == "staged_reboot_required" and not apply_state.get("reboot_requested"):
-                mark_stage("storage", "running")
-                start_storage_manual_reboot_watch_background(cfg, discovery_raw_path, raid_plan_path, apply_paths)
-            else:
-                mark_stage("storage", "completed")
-        elif scope == "esxi":
-            mark_stage("esxi", "running")
-            promote_final_ilo_endpoint(cfg)
-            save_kit_config(cfg)
-            run_esxi_real(cfg, run_stamp=str((cfg.get("_runtime", {}) or {}).get("esxi_run_stamp") or "").strip() or None)
-            finished_job = load_job(kit_name)
-            mark_stage("esxi", "failed" if finished_job.get("status") == "Failed" else "completed")
+            if scope != "storage" or finished_job.get("status") == "Failed" or finished_job.get("current_stage") != "Queued for manual reboot":
+                mark_stage(scope, "failed" if finished_job.get("status") == "Failed" else "completed")
         else:
             raise RuntimeError(f"Real execution is not wired for scope: {scope}")
     except Exception as e:
@@ -11213,6 +11071,40 @@ def execute_real_job_in_background(cfg: dict, scope: str):
         )
     finally:
         append_job_history_snapshot(cfg, scope)
+
+
+def _execute_storage_stage(cfg: dict[str, Any], kit_name: str, mark_stage: Callable[[str, str], None]) -> None:
+    promote_final_ilo_endpoint(cfg)
+    save_kit_config(cfg)
+    storage_execution = validate_storage_ready_for_ilo_run(cfg)
+    discovery_raw_path = str(storage_execution.get("discovery_raw_path") or "")
+    raid_plan_path = str(storage_execution.get("plan_path") or "")
+    if not discovery_raw_path or not raid_plan_path:
+        raise RuntimeError("Approved storage artifacts are missing for the real storage run.")
+    _discovery, _discovery_paths, plan, plan_paths = restore_storage_page_state(
+        discovery_raw_path=discovery_raw_path,
+        raid_plan_path=raid_plan_path,
+        expected_host=str(storage_execution.get("approved_host") or ""),
+    )
+    if not plan_paths:
+        raise RuntimeError("Approved storage plan artifact is missing for the real storage run.")
+    apply_mode = storage_apply_mode_for_plan(plan)
+    apply_paths = initialize_storage_apply_artifacts(cfg, plan, plan_paths)
+    run_storage_apply(cfg, discovery_raw_path, raid_plan_path, apply_mode, apply_paths)
+    workflow_state = load_storage_workflow_state(apply_paths)
+    apply_state = (workflow_state.get("apply", {}) if workflow_state else {}) or {}
+    if apply_state.get("workflow_state") == "staged_reboot_required" and not apply_state.get("reboot_requested"):
+        mark_stage("storage", "running")
+        start_storage_manual_reboot_watch_background(cfg, discovery_raw_path, raid_plan_path, apply_paths)
+        current_job = load_job(kit_name)
+        current_job["current_stage"] = "Queued for manual reboot"
+        save_job(kit_name, current_job)
+
+
+def _execute_esxi_stage(cfg: dict[str, Any], kit_name: str) -> None:
+    promote_final_ilo_endpoint(cfg)
+    save_kit_config(cfg)
+    run_esxi_real(cfg, run_stamp=str((cfg.get("_runtime", {}) or {}).get("esxi_run_stamp") or "").strip() or None)
 
 
 def resolve_esxi_base_iso_path(cfg: dict) -> Path:
