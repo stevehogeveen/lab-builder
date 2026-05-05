@@ -67,6 +67,7 @@ from app.core.config import (
 from app.core.jobs import JobStepRunner
 from app.core.database import DatabaseStore, SQLiteRuntime
 from app.core.stage_registry import StageRegistry
+from app.stages.ilo.adapter import HpeIloRedfishAdapter
 from app.stages.ilo.plugin import create_ilo_stage
 from app.stages.esxi.plugin import create_esxi_stage
 from app.stages.storage.plugin import create_storage_stage
@@ -12048,6 +12049,9 @@ def run_ilo_real(cfg: dict):
     def build_ilo_client(hostname: str) -> ILOClient:
         return ILOClient(ILOConfig(host=hostname, username=username, password=password, verify_tls=False, timeout=15))
 
+    def policy_adapter() -> HpeIloRedfishAdapter:
+        return HpeIloRedfishAdapter(client)
+
     def reconnect_to_active_ip(next_ip: str, *, stage_name: str, step_index: int, retries: int = 6, wait_seconds: float = 5.0):
         nonlocal client, active_ip
         notes: list[str] = []
@@ -12847,7 +12851,7 @@ def run_ilo_real(cfg: dict):
         if policy_enabled(cfg, "enable_license_check"):
             try:
                 update_job(kit_name, job, "Running", "Check iLO license", 11, total, "[RUNNING] Checking iLO license status.")
-                license_result = client.get_license_status_best_effort()
+                license_result = policy_adapter().license_status()
                 job["license_status"] = "OK" if license_result.get("ok") else "Warning"
                 job["license_warnings"] = list(license_result.get("warnings") or [])
                 job["ilo_policy_raw_results"]["license"] = dict(license_result)
@@ -12892,7 +12896,7 @@ def run_ilo_real(cfg: dict):
                         "reset_recommended": bool(legacy_ipv6.get("reset_recommended")),
                     }
                 else:
-                    ipv6_result = client.configure_ipv6_policy_best_effort()
+                    ipv6_result = policy_adapter().apply_ipv6_policy()
                 ipv6_change_applied = bool(ipv6_result.get("changed"))
                 job["ipv6_policy_status"] = "Verified" if ipv6_result.get("verified") else "Mismatch"
                 job["ipv6_policy_checks"] = list(ipv6_result.get("checks") or [])
@@ -12951,7 +12955,7 @@ def run_ilo_real(cfg: dict):
                             v3_priv_password=active_snmp_user.get("v3_priv_password", ""),
                         )
                     else:
-                        snmp_result = client.configure_snmp_policy_best_effort(
+                        snmp_result = policy_adapter().apply_snmp_policy(
                             system_contact=active_snmp_user.get("system_contact", ""),
                             system_location=active_snmp_user.get("system_location", ""),
                             system_role=active_snmp_user.get("system_role", ""),
@@ -13030,7 +13034,7 @@ def run_ilo_real(cfg: dict):
             try:
                 config_changes_attempted = True
                 update_job(kit_name, job, "Running", "Configure SNMP alerts", 13, total, "[RUNNING] Updating SNMP alert destinations.")
-                alerts_result = client.configure_snmp_alert_destinations_best_effort(
+                alerts_result = policy_adapter().apply_alert_destinations(
                     destinations=list(active_snmp_user.get("alert_destinations") or []),
                     protocol=str(active_snmp_user.get("alert_protocol") or "SNMPv3Inform"),
                     snmpv3_user=str(active_snmp_user.get("v3_username") or ""),
@@ -13065,7 +13069,7 @@ def run_ilo_real(cfg: dict):
             try:
                 config_changes_attempted = True
                 update_job(kit_name, job, "Running", "Configure time policy", 13, total, "[RUNNING] Applying SNTP/time policy.")
-                time_result = client.configure_sntp_policy_best_effort(
+                time_result = policy_adapter().apply_time_policy(
                     ntp_server=str(standard_policy.get("time", {}).get("server") or ""),
                     timezone=str(standard_policy.get("time", {}).get("timezone") or ""),
                 )
