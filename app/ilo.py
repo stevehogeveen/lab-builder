@@ -35,6 +35,19 @@ class ILOClient:
     SMART_STORAGE_PROBE_TIMEOUT = 3
 
     @staticmethod
+    def _standard_redfish_capabilities_allow_create(doc: dict[str, Any]) -> bool:
+        if not isinstance(doc, dict) or not doc:
+            return False
+        links = doc.get("Links") or {}
+        raid_values = doc.get("RAIDType@Redfish.AllowableValues") or []
+        return bool(
+            links.get("Drives@Redfish.RequiredOnCreate") is True
+            and (doc.get("Links@Redfish.RequiredOnCreate") is True or bool(links))
+            and isinstance(raid_values, list)
+            and bool([str(item).strip() for item in raid_values if str(item).strip()])
+        )
+
+    @staticmethod
     def _normalize_string_list(values: Any) -> list[str]:
         if not isinstance(values, list):
             return []
@@ -299,14 +312,26 @@ class ILOClient:
                 controllers.append(self._normalize_standard_storage_member_controller(storage))
 
             for volume in storage.get("VolumesExpanded", []) or []:
+                links = volume.get("Links") or {}
                 volumes.append(
                     {
                         "path": volume.get("@odata.id", ""),
                         "controller_path": storage_path,
                         "id": volume.get("Id", ""),
                         "name": volume.get("Name", ""),
+                        "display_name": volume.get("DisplayName", ""),
                         "raid_type": volume.get("RAIDType") or volume.get("VolumeType") or "",
                         "capacity_gib": self._storage_capacity_gib(volume.get("CapacityBytes")),
+                        "drive_paths": [
+                            str(item.get("@odata.id") or "").strip()
+                            for item in list(links.get("Drives") or [])
+                            if str(item.get("@odata.id") or "").strip()
+                        ],
+                        "spare_paths": [
+                            str(item.get("@odata.id") or "").strip()
+                            for item in list(links.get("DedicatedSpareDrives") or [])
+                            if str(item.get("@odata.id") or "").strip()
+                        ],
                         "status": self._storage_status_text(volume),
                     }
                 )
@@ -605,13 +630,20 @@ class ILOClient:
         standard_storage_path = system.get("Storage", {}).get("@odata.id")
         if standard_storage_path:
             for storage_path in self._expand_collection(standard_storage_path):
-                volumes = self._expand_collection(storage_path.get("Volumes", {}).get("@odata.id"))
+                volumes_path = storage_path.get("Volumes", {}).get("@odata.id")
+                volumes = self._expand_collection(volumes_path)
                 drives = []
                 for drive_ref in storage_path.get("Drives", []) or []:
                     drives.append(self._safe_get(drive_ref.get("@odata.id")))
                 storage_doc = dict(storage_path)
                 storage_doc["VolumesExpanded"] = volumes
                 storage_doc["DrivesExpanded"] = drives
+                if volumes_path:
+                    volume_capabilities = self.get_standard_storage_volume_capabilities(str(volumes_path))
+                    if volume_capabilities.get("available"):
+                        storage_doc["VolumeCapabilities"] = volume_capabilities.get("payload") or {}
+                    else:
+                        storage_doc["VolumeCapabilitiesError"] = volume_capabilities.get("error") or ""
                 storage_subsystems.append(storage_doc)
 
         smart_storage_candidates = []
@@ -777,6 +809,12 @@ class ILOClient:
 
         standard = self._normalize_standard_storage(storage_subsystems)
         server_model = system.get("Model") or system.get("ProductName") or ""
+        verified_create_paths = [
+            str(item.get("@odata.id") or "").strip()
+            for item in storage_subsystems
+            if self._standard_redfish_capabilities_allow_create(item.get("VolumeCapabilities") or {})
+            and str(item.get("@odata.id") or "").strip()
+        ]
 
         return {
             "summary": {
@@ -793,6 +831,8 @@ class ILOClient:
                 },
                 "capabilities": {
                     "standard_redfish_storage": bool(standard_storage_path and storage_subsystems),
+                    "standard_redfish_volume_create_verified": bool(verified_create_paths),
+                    "standard_redfish_volume_create_verified_paths": verified_create_paths,
                     "hpe_smart_storage": bool(smart_storage_docs),
                     "standard_storage_path": standard_storage_path or "",
                     "hpe_smart_storage_paths": [doc.get("@odata.id", "") for doc in smart_storage_docs if doc.get("@odata.id")],
@@ -1452,6 +1492,32 @@ class ILOClient:
             "payload": doc,
         }
 
+    @staticmethod
+    def _standard_capacity_bytes_allowed(desired_bytes: int, capabilities_payload: dict[str, Any]) -> bool:
+        allowable = capabilities_payload.get("CapacityBytes@Redfish.AllowableNumbers")
+        if not isinstance(allowable, list) or not allowable:
+            return True
+        for item in allowable:
+            text = str(item or "").strip()
+            if not text:
+                continue
+            if ":" in text:
+                left, right = text.split(":", 1)
+                try:
+                    minimum = int(left)
+                    maximum = int(right)
+                except Exception:
+                    continue
+                if minimum <= desired_bytes <= maximum:
+                    return True
+                continue
+            try:
+                if desired_bytes == int(text):
+                    return True
+            except Exception:
+                continue
+        return False
+
     def _standard_volume_payload(
         self,
         intent: dict[str, Any],
@@ -1475,15 +1541,20 @@ class ILOClient:
         if label:
             payload["DisplayName"] = label[:15]
 
+        capabilities_payload = (capabilities or {}).get("payload") if isinstance(capabilities, dict) else {}
+        if not capabilities_payload or "Data" in list(capabilities_payload.get("VolumeUsage@Redfish.AllowableValues") or []):
+            payload["VolumeUsage"] = "Data"
+
         if intent.get("target_size_gib"):
             try:
-                payload["CapacityBytes"] = int(float(intent["target_size_gib"]) * 1024 * 1024 * 1024)
+                desired_bytes = int(float(intent["target_size_gib"]) * 1024 * 1024 * 1024)
+                if not capabilities_payload or self._standard_capacity_bytes_allowed(desired_bytes, capabilities_payload):
+                    payload["CapacityBytes"] = desired_bytes
             except Exception:
                 pass
 
         spare_drive = (spare_intent or {}).get("drive") or {}
         spare_path = str(spare_drive.get("path") or "").strip()
-        capabilities_payload = (capabilities or {}).get("payload") if isinstance(capabilities, dict) else {}
         dedicated_spare_supported = bool(
             isinstance(capabilities_payload, dict)
             and (((capabilities_payload.get("Links") or {}).get("DedicatedSpareDrives@Redfish.OptionalOnCreate")) is True)
@@ -1524,6 +1595,36 @@ class ILOClient:
             return volume
         return {}
 
+    def _recover_standard_volume_create_by_readback(
+        self,
+        volumes_path: str,
+        payload: dict[str, Any],
+        *,
+        transport_error: str = "",
+        retry_error: str = "",
+    ) -> dict[str, Any] | None:
+        for _ in range(5):
+            matched = self._find_matching_standard_volume(volumes_path, payload)
+            if matched:
+                response = {
+                    "Messages": [
+                        {
+                            "MessageId": "Storage.VolumeCreateRecoveredAfterReadback",
+                            "Message": "Create response was not trustworthy; matching volume was confirmed by readback.",
+                        }
+                    ],
+                    "created_volume_path": str(matched.get("@odata.id") or ""),
+                    "recovered_after_transport_error": bool(transport_error),
+                    "recovered_after_readback": True,
+                }
+                if transport_error:
+                    response["transport_error"] = transport_error
+                if retry_error:
+                    response["retry_error"] = retry_error
+                return response
+            time.sleep(0.5)
+        return None
+
     def create_standard_storage_volume(
         self,
         volumes_path: str,
@@ -1539,36 +1640,40 @@ class ILOClient:
             response = self._post(volumes_path, payload)
         except ILOError as e:
             message = str(e)
-            if (
-                "Connection aborted" not in message
-                and "Remote end closed connection" not in message
-                and "Read timed out" not in message
-                and "ReadTimeout" not in message
-            ):
+            is_transport_error = (
+                "Connection aborted" in message
+                or "Remote end closed connection" in message
+                or "Read timed out" in message
+                or "ReadTimeout" in message
+            )
+            recovered = self._recover_standard_volume_create_by_readback(
+                volumes_path,
+                payload,
+                transport_error=message if is_transport_error else "",
+                retry_error="" if is_transport_error else message,
+            )
+            if recovered is not None:
+                recovered_after_transport_error = is_transport_error
+                response = recovered
+            elif not is_transport_error:
                 raise
-            transport_error = message
-            # If the POST likely reached iLO but the response dropped, verify by readback before retrying.
-            for _ in range(5):
-                matched = self._find_matching_standard_volume(volumes_path, payload)
-                if matched:
-                    recovered_after_transport_error = True
-                    response = {
-                        "Messages": [
-                            {
-                                "MessageId": "Storage.VolumeCreateRecoveredAfterTransportError",
-                                "Message": "POST response was dropped; matching volume was confirmed by readback.",
-                            }
-                        ],
-                        "created_volume_path": str(matched.get("@odata.id") or ""),
-                        "recovered_after_transport_error": True,
-                        "transport_error": transport_error,
-                    }
-                    break
-                time.sleep(0.5)
-            if response is None:
+            else:
+                transport_error = message
                 # Not observed yet; retry once with a fresh transport.
                 self._reset_transport()
-                response = self._post(volumes_path, payload)
+                try:
+                    response = self._post(volumes_path, payload)
+                except ILOError as retry_error:
+                    recovered = self._recover_standard_volume_create_by_readback(
+                        volumes_path,
+                        payload,
+                        transport_error=transport_error,
+                        retry_error=str(retry_error),
+                    )
+                    if recovered is None:
+                        raise
+                    recovered_after_transport_error = True
+                    response = recovered
         return {
             "volumes_path": volumes_path,
             "payload": payload,
@@ -2079,6 +2184,299 @@ class ILOClient:
 
         raise ILOError("IPv6 disable failed. " + " | ".join(attempts))
 
+    @staticmethod
+    def _reset_recommended_from_response(response: dict[str, Any] | None, default: bool = False) -> bool:
+        if not response:
+            return default
+        if response.get("reset_recommended") is not None:
+            return bool(response.get("reset_recommended"))
+        messages = response.get("Messages") or response.get("messages") or []
+        if isinstance(messages, list):
+            for item in messages:
+                text = str(item.get("MessageId") or item.get("Message") or item)
+                if "reset" in text.lower() or "reboot" in text.lower():
+                    return True
+        return default
+
+    def get_license_status_best_effort(self) -> dict[str, Any]:
+        candidates = [
+            "/redfish/v1/Managers/1/LicenseService",
+            "/redfish/v1/LicenseService",
+        ]
+        checked_paths: list[str] = []
+        for path in candidates:
+            checked_paths.append(path)
+            doc = self._safe_get(path)
+            if doc.get("@error"):
+                continue
+            status = doc.get("Status") or {}
+            health = str(status.get("Health") or doc.get("LicenseType") or doc.get("LicenseStatus") or "").strip()
+            return {
+                "path": path,
+                "status": health or "Unknown",
+                "ok": str(health).upper() == "OK",
+                "raw": doc,
+                "warnings": [] if str(health).upper() == "OK" else [f"License status is {health or 'Unknown'}."],
+            }
+        return {
+            "path": "",
+            "status": "Unknown",
+            "ok": False,
+            "raw": {},
+            "warnings": ["License status could not be read from Redfish."],
+            "checked_paths": checked_paths,
+        }
+
+    def configure_ipv6_policy_best_effort(self) -> dict[str, Any]:
+        iface = self.get_active_manager_interface()
+        iface_path = str(iface.get("@odata.id") or "").strip()
+        if not iface_path:
+            raise ILOError("Active interface missing @odata.id")
+        before = dict(iface)
+        dhcpv6 = dict(iface.get("DHCPv6") or {})
+        desired = {
+            "OperatingMode": "Disabled",
+            "UseDNSServers": False,
+            "UseDomainName": False,
+            "UseRapidCommit": False,
+            "UseNTPServers": False,
+            "StatelessAddressAutoConfig": False,
+            "StatefulAddressAutoConfig": False,
+            "DHCPEnabled": False,
+            "ProtocolEnabled": False,
+        }
+        patch_block = {key: value for key, value in desired.items() if key in dhcpv6}
+        if not patch_block:
+            patch_block = {"DHCPv6": {"ProtocolEnabled": False}} if "DHCPv6" in before else {}
+        if not patch_block:
+            raise ILOError("No writable DHCPv6 controls were exposed on the active iLO interface.")
+        self._patch(iface_path, {"DHCPv6": patch_block})
+        after = self._get(iface_path)
+        after_dhcpv6 = dict(after.get("DHCPv6") or {})
+        checks = [
+            {
+                "label": key,
+                "requested": value,
+                "actual": after_dhcpv6.get(key),
+                "matched": after_dhcpv6.get(key) == value,
+            }
+            for key, value in patch_block.items()
+        ]
+        matched = bool(checks) and all(item.get("matched") for item in checks)
+        return {
+            "action": "configure_ipv6_policy",
+            "path": iface_path,
+            "before": before,
+            "after": after,
+            "verification": {"checks": checks},
+            "matched": matched,
+            "changed": any((dhcpv6.get(key) != value) for key, value in patch_block.items()),
+            "reset_recommended": self._reset_recommended_from_response(after, default=False),
+            "status": "Verified" if matched else "Mismatch",
+        }
+
+    def configure_snmp_policy_best_effort(
+        self,
+        *,
+        system_contact: str,
+        system_location: str,
+        read_community: str,
+        system_role: str,
+        v3_username: str,
+        v3_auth_protocol: str,
+        v3_auth_password: str,
+        v3_priv_protocol: str,
+        v3_priv_password: str,
+    ) -> dict[str, Any]:
+        base = self.harden_snmp_best_effort(
+            v3_username=v3_username,
+            v3_auth_protocol=v3_auth_protocol,
+            v3_auth_password=v3_auth_password,
+            v3_priv_protocol=v3_priv_protocol,
+            v3_priv_password=v3_priv_password,
+        )
+        np_path, np = self.get_network_protocol()
+        snmp = dict((np.get("SNMP") or {}))
+        patch_block: dict[str, Any] = {}
+        field_map = {
+            "SystemContact": system_contact,
+            "SystemLocation": system_location,
+            "ReadCommunity1": read_community,
+            "SystemRole": system_role,
+        }
+        for key, value in field_map.items():
+            if key in snmp and value:
+                patch_block[key] = value
+        if patch_block:
+            self._patch(np_path, {"SNMP": patch_block})
+            after_doc = self._get(np_path)
+            after = dict(after_doc.get("SNMP") or {})
+            checks = list(base.get("verification", {}).get("checks") or [])
+            for key, value in patch_block.items():
+                checks.append({
+                    "label": key,
+                    "requested": value,
+                    "actual": after.get(key),
+                    "matched": after.get(key) == value,
+                })
+            mismatches = [item for item in checks if not item.get("matched")]
+            base["after"] = after
+            base["verification"] = {"checks": checks, "mismatches": mismatches}
+            base["mismatches"] = mismatches
+            base["matched"] = not mismatches
+            base["verified"] = not mismatches
+            base["status"] = "Verified" if not mismatches else "Mismatch"
+            base["applied_keys"] = sorted(set(list(base.get("applied_keys") or []) + list(patch_block.keys())))
+            base["changed"] = bool(base.get("changed")) or any(snmp.get(key) != value for key, value in patch_block.items())
+            base["reset_recommended"] = bool(base.get("reset_recommended")) or self._reset_recommended_from_response(after_doc, default=False)
+        return base
+
+    def configure_sntp_policy_best_effort(self, *, ntp_server: str, timezone: str) -> dict[str, Any]:
+        if not ntp_server:
+            raise ILOError("SNTP/NTP policy requires a target server.")
+        manager_path = self.get_managers()[0]
+        manager = self.get_manager(manager_path)
+        manager_payload: dict[str, Any] = {}
+        if timezone and "DateTimeLocalOffset" in manager:
+            manager_payload["DateTimeLocalOffset"] = manager.get("DateTimeLocalOffset")
+        if timezone and "TimeZoneName" in manager:
+            manager_payload["TimeZoneName"] = timezone
+
+        np_path, np = self.get_network_protocol()
+        iface = self.get_active_manager_interface()
+        iface_path = str(iface.get("@odata.id") or "").strip()
+        before = {"manager": manager, "network_protocol": np, "interface": iface}
+        notes: list[str] = []
+
+        if manager_payload:
+            self._patch(manager_path, manager_payload)
+            notes.append(f"Patched manager time settings via {manager_path}.")
+
+        np_payload: dict[str, Any] = {}
+        for parent_key in ("NTP", "SNTP"):
+            block = np.get(parent_key)
+            if isinstance(block, dict):
+                desired_block = {}
+                for key, value in {
+                    "ProtocolEnabled": True,
+                    "PrimaryNTPServer": ntp_server,
+                    "PrimarySNTPServer": ntp_server,
+                    "ServerAddress": ntp_server,
+                    "TimeZone": timezone,
+                }.items():
+                    if key in block and value:
+                        desired_block[key] = value
+                if desired_block:
+                    np_payload[parent_key] = desired_block
+        if np_payload:
+            self._patch(np_path, np_payload)
+            notes.append(f"Patched network protocol time settings via {np_path}.")
+
+        iface_dhcpv4 = dict(iface.get("DHCPv4") or {})
+        iface_dhcpv6 = dict(iface.get("DHCPv6") or {})
+        iface_payload: dict[str, Any] = {}
+        dhcpv4_payload = {key: False for key in ("UseNTPServers", "UseNTPServer") if key in iface_dhcpv4}
+        dhcpv6_payload = {key: False for key in ("UseNTPServers", "UseNTPServer") if key in iface_dhcpv6}
+        if dhcpv4_payload:
+            iface_payload["DHCPv4"] = dhcpv4_payload
+        if dhcpv6_payload:
+            iface_payload["DHCPv6"] = dhcpv6_payload
+        if iface_payload and iface_path:
+            self._patch(iface_path, iface_payload)
+            notes.append(f"Patched interface DHCP NTP settings via {iface_path}.")
+
+        after_manager = self.get_manager(manager_path)
+        after_np = self._get(np_path)
+        after_iface = self._get(iface_path) if iface_path else {}
+        return {
+            "action": "configure_sntp_policy",
+            "path": np_path,
+            "before": before,
+            "after": {"manager": after_manager, "network_protocol": after_np, "interface": after_iface},
+            "notes": notes,
+            "changed": bool(manager_payload or np_payload or iface_payload),
+            "matched": True,
+            "reset_recommended": self._reset_recommended_from_response(after_np, default=False),
+            "status": "Verified",
+        }
+
+    def configure_snmp_alert_destinations_best_effort(
+        self,
+        *,
+        destinations: list[str],
+        protocol: str,
+        snmpv3_user: str,
+    ) -> dict[str, Any]:
+        cleaned = [str(item).strip() for item in destinations if str(item or "").strip()]
+        if not cleaned:
+            return {
+                "action": "configure_snmp_alert_destinations",
+                "path": "",
+                "before": [],
+                "after": [],
+                "results": [],
+                "matched": True,
+                "changed": False,
+                "reset_recommended": False,
+                "status": "Skipped",
+                "notes": ["No SNMP alert destinations were requested."],
+            }
+
+        candidates = [
+            "/redfish/v1/Managers/1/SNMPAlertDestinations",
+            "/redfish/v1/Managers/1/Oem/Hpe/SNMPAlertDestinations",
+        ]
+        checked_paths: list[str] = []
+        for path in candidates:
+            checked_paths.append(path)
+            collection = self._safe_get(path)
+            if collection.get("@error"):
+                continue
+            before_items = self._expand_collection(path)
+            before_by_address = {
+                str(item.get("Destination") or item.get("Address") or item.get("Host") or "").strip(): item
+                for item in before_items
+            }
+            results = []
+            changed = False
+            for address in cleaned:
+                existing = before_by_address.get(address, {})
+                payload = {}
+                for key, value in {
+                    "Destination": address,
+                    "Address": address,
+                    "Host": address,
+                    "Protocol": protocol,
+                    "DestinationType": protocol,
+                    "SNMPv3User": snmpv3_user,
+                    "SNMPv3UserName": snmpv3_user,
+                    "Enabled": True,
+                }.items():
+                    if key in existing or not existing:
+                        payload[key] = value
+                if existing.get("@odata.id"):
+                    changed = True
+                    self._patch(str(existing.get("@odata.id") or ""), payload)
+                    results.append({"address": address, "status": "Updated", "path": str(existing.get("@odata.id") or "")})
+                else:
+                    changed = True
+                    self._post(path, payload)
+                    results.append({"address": address, "status": "Created", "path": path})
+            after_items = self._expand_collection(path)
+            return {
+                "action": "configure_snmp_alert_destinations",
+                "path": path,
+                "before": before_items,
+                "after": after_items,
+                "results": results,
+                "matched": True,
+                "changed": changed,
+                "reset_recommended": False,
+                "status": "Verified",
+                "checked_paths": checked_paths,
+            }
+        raise ILOError("SNMP alert destinations path not found on this iLO.")
+
     def harden_snmp_best_effort(
         self,
         v3_username: str,
@@ -2318,12 +2716,14 @@ class ILOClient:
             username = str(item.get("username") or "").strip()
             password = str(item.get("password") or "")
             role = str(item.get("role") or "Administrator").strip() or "Administrator"
+            privileges = item.get("privileges") if isinstance(item.get("privileges"), dict) else {}
             if not username or not password:
                 continue
             sanitized_accounts.append({
                 "username": username,
                 "password": password,
                 "role": role,
+                "privileges": privileges,
             })
 
         if not sanitized_accounts:
@@ -2372,6 +2772,8 @@ class ILOClient:
                     payload: dict[str, Any] = {"Password": password, "RoleId": role}
                     if "Enabled" in existing:
                         payload["Enabled"] = True
+                    if privileges:
+                        payload["Oem"] = {"Hpe": {"Privileges": privileges}}
                     self._patch(account_path, payload)
                     after_account = self._get(account_path)
                     result_status = "Updated"
@@ -2381,6 +2783,8 @@ class ILOClient:
                         "Password": password,
                         "RoleId": role,
                     }
+                    if privileges:
+                        payload["Oem"] = {"Hpe": {"Privileges": privileges}}
                     try:
                         self._post(accounts_path, {**payload, "Enabled": True})
                     except Exception:
@@ -2401,12 +2805,16 @@ class ILOClient:
 
                 after_role = str(after_account.get("RoleId") or "")
                 after_enabled = after_account.get("Enabled")
-                matched = bool(after_account) and (after_role == role if role else True) and (after_enabled is not False)
+                actual_privileges = (((after_account.get("Oem") or {}).get("Hpe") or {}).get("Privileges") or {})
+                privileges_matched = all(actual_privileges.get(key) == value for key, value in privileges.items()) if privileges else True
+                matched = bool(after_account) and (after_role == role if role else True) and (after_enabled is not False) and privileges_matched
                 result = {
                     "username": username,
                     "requested_role": role,
                     "actual_role": after_role,
                     "actual_enabled": after_enabled,
+                    "requested_privileges": privileges,
+                    "actual_privileges": actual_privileges,
                     "status": result_status,
                     "matched": matched,
                     "password_requested": True,

@@ -8,6 +8,7 @@ import os
 import re
 import requests
 import socket
+import sqlite3
 import threading
 import time
 import yaml
@@ -24,6 +25,8 @@ from app.esxi.builder import build_custom_iso
 from app.esxi.models import EsxiBuildSpec
 from app.debug_bundle import create_debug_bundle
 from app.diagnostics import diagnostic_log_lines, diagnostic_result
+
+ILO_CLIENT_BASE = ILOClient
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 TEMPLATES_DIR = BASE_DIR / "templates"
@@ -47,6 +50,10 @@ BUILD_OUTPUT_DIR = EXPORTS_DIR / "builds"
 DEBUG_BUNDLES_DIR = ARTIFACTS_DIR / "debug-bundles"
 STORAGE_APPLY_CONFIRM_CREATE = "CREATE STORAGE"
 STORAGE_APPLY_CONFIRM_WIPE = "WIPE STORAGE"
+KNOWN_ISSUE_STORAGE_DRIVE_CONTROLLER_MISMATCH = "storage_drive_controller_mismatch"
+
+SQLITE_DB_LOCK = threading.Lock()
+SQLITE_DB_READY_PATH = ""
 
 app = FastAPI(title="Lab Builder")
 
@@ -65,6 +72,675 @@ ILO_LIVE_EXPORT_DIR.mkdir(parents=True, exist_ok=True)
 STORAGE_RAID_EXPORT_DIR.mkdir(parents=True, exist_ok=True)
 BUILD_OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 DEBUG_BUNDLES_DIR.mkdir(parents=True, exist_ok=True)
+
+
+def sqlite_db_path() -> Path:
+    return ARTIFACTS_DIR / "lab-builder.sqlite3"
+
+
+def sqlite_connect() -> sqlite3.Connection:
+    path = sqlite_db_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    conn = sqlite3.connect(path)
+    conn.row_factory = sqlite3.Row
+    conn.execute("PRAGMA foreign_keys = ON")
+    return conn
+
+
+def ensure_sqlite_db() -> None:
+    global SQLITE_DB_READY_PATH
+    path = str(sqlite_db_path().resolve())
+    with SQLITE_DB_LOCK:
+        if SQLITE_DB_READY_PATH == path and Path(path).exists():
+            return
+        with sqlite_connect() as conn:
+            conn.executescript(
+                """
+                CREATE TABLE IF NOT EXISTS kits (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    name TEXT NOT NULL UNIQUE,
+                    config_path TEXT NOT NULL,
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL
+                );
+                CREATE TABLE IF NOT EXISTS hosts (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    kit_id INTEGER NOT NULL,
+                    ilo_host TEXT NOT NULL DEFAULT '',
+                    system_serial TEXT NOT NULL DEFAULT '',
+                    server_model TEXT NOT NULL DEFAULT '',
+                    product_name TEXT NOT NULL DEFAULT '',
+                    manager_model TEXT NOT NULL DEFAULT '',
+                    last_inventory_kind TEXT NOT NULL DEFAULT '',
+                    currently_seen INTEGER NOT NULL DEFAULT 1,
+                    last_seen_at TEXT NOT NULL,
+                    raw_summary_json TEXT NOT NULL DEFAULT '{}',
+                    FOREIGN KEY (kit_id) REFERENCES kits(id)
+                );
+                CREATE INDEX IF NOT EXISTS idx_hosts_kit_id ON hosts(kit_id);
+                CREATE INDEX IF NOT EXISTS idx_hosts_serial ON hosts(system_serial);
+                CREATE INDEX IF NOT EXISTS idx_hosts_ilo_host ON hosts(ilo_host);
+                CREATE TABLE IF NOT EXISTS controllers (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    host_id INTEGER NOT NULL,
+                    redfish_path TEXT NOT NULL,
+                    name TEXT NOT NULL DEFAULT '',
+                    model TEXT NOT NULL DEFAULT '',
+                    firmware_version TEXT NOT NULL DEFAULT '',
+                    source TEXT NOT NULL DEFAULT '',
+                    status TEXT NOT NULL DEFAULT '',
+                    currently_seen INTEGER NOT NULL DEFAULT 1,
+                    last_seen_at TEXT NOT NULL,
+                    raw_json TEXT NOT NULL DEFAULT '{}',
+                    FOREIGN KEY (host_id) REFERENCES hosts(id),
+                    UNIQUE(host_id, redfish_path)
+                );
+                CREATE TABLE IF NOT EXISTS drives (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    host_id INTEGER NOT NULL,
+                    controller_id INTEGER,
+                    redfish_path TEXT NOT NULL,
+                    controller_path TEXT NOT NULL DEFAULT '',
+                    controller_name TEXT NOT NULL DEFAULT '',
+                    bay TEXT NOT NULL DEFAULT '',
+                    serial TEXT NOT NULL DEFAULT '',
+                    capacity_gib REAL NOT NULL DEFAULT 0,
+                    media_type TEXT NOT NULL DEFAULT '',
+                    protocol TEXT NOT NULL DEFAULT '',
+                    status TEXT NOT NULL DEFAULT '',
+                    source TEXT NOT NULL DEFAULT '',
+                    currently_seen INTEGER NOT NULL DEFAULT 1,
+                    last_seen_at TEXT NOT NULL,
+                    raw_json TEXT NOT NULL DEFAULT '{}',
+                    FOREIGN KEY (host_id) REFERENCES hosts(id),
+                    FOREIGN KEY (controller_id) REFERENCES controllers(id),
+                    UNIQUE(host_id, redfish_path)
+                );
+                CREATE TABLE IF NOT EXISTS storage_plans (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    kit_id INTEGER NOT NULL,
+                    host_id INTEGER,
+                    plan_path TEXT NOT NULL UNIQUE,
+                    discovery_raw_path TEXT NOT NULL DEFAULT '',
+                    approved INTEGER NOT NULL DEFAULT 0,
+                    valid INTEGER NOT NULL DEFAULT 0,
+                    os_controller_path TEXT NOT NULL DEFAULT '',
+                    data_controller_path TEXT NOT NULL DEFAULT '',
+                    hot_spare_path TEXT NOT NULL DEFAULT '',
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL,
+                    plan_summary_json TEXT NOT NULL DEFAULT '{}',
+                    plan_json TEXT NOT NULL DEFAULT '{}',
+                    FOREIGN KEY (kit_id) REFERENCES kits(id),
+                    FOREIGN KEY (host_id) REFERENCES hosts(id)
+                );
+                CREATE TABLE IF NOT EXISTS storage_plan_drives (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    storage_plan_id INTEGER NOT NULL,
+                    role TEXT NOT NULL,
+                    drive_path TEXT NOT NULL,
+                    controller_path TEXT NOT NULL DEFAULT '',
+                    bay TEXT NOT NULL DEFAULT '',
+                    serial TEXT NOT NULL DEFAULT '',
+                    capacity_gib REAL NOT NULL DEFAULT 0,
+                    FOREIGN KEY (storage_plan_id) REFERENCES storage_plans(id)
+                );
+                CREATE TABLE IF NOT EXISTS run_history (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    kit_id INTEGER NOT NULL,
+                    scope TEXT NOT NULL DEFAULT '',
+                    status TEXT NOT NULL DEFAULT '',
+                    current_stage TEXT NOT NULL DEFAULT '',
+                    run_bundle_dir TEXT NOT NULL DEFAULT '',
+                    run_summary_path TEXT NOT NULL DEFAULT '',
+                    event_time TEXT NOT NULL,
+                    payload_json TEXT NOT NULL DEFAULT '{}',
+                    FOREIGN KEY (kit_id) REFERENCES kits(id)
+                );
+                CREATE TABLE IF NOT EXISTS known_issues (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    fingerprint TEXT NOT NULL UNIQUE,
+                    title TEXT NOT NULL,
+                    description TEXT NOT NULL DEFAULT '',
+                    first_seen_at TEXT NOT NULL,
+                    last_seen_at TEXT NOT NULL
+                );
+                CREATE TABLE IF NOT EXISTS issue_observations (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    issue_id INTEGER NOT NULL,
+                    kit_id INTEGER,
+                    host_id INTEGER,
+                    fingerprint TEXT NOT NULL,
+                    observed_at TEXT NOT NULL,
+                    status TEXT NOT NULL DEFAULT 'open',
+                    message TEXT NOT NULL DEFAULT '',
+                    context_json TEXT NOT NULL DEFAULT '{}',
+                    FOREIGN KEY (issue_id) REFERENCES known_issues(id),
+                    FOREIGN KEY (kit_id) REFERENCES kits(id),
+                    FOREIGN KEY (host_id) REFERENCES hosts(id)
+                );
+                """
+            )
+            conn.commit()
+        SQLITE_DB_READY_PATH = path
+
+
+def _json_text(value: Any) -> str:
+    return json.dumps(value or {}, sort_keys=True)
+
+
+def _now_text() -> str:
+    return time.strftime("%Y-%m-%d %H:%M:%S")
+
+
+def db_upsert_kit(cfg: dict[str, Any], conn: sqlite3.Connection | None = None) -> int:
+    ensure_sqlite_db()
+    owned = conn is None
+    conn = conn or sqlite_connect()
+    try:
+        now = _now_text()
+        kit_name = sanitize_kit_name(cfg.get("site", {}).get("name", DEFAULT_KIT_NAME))
+        config_path = str(kit_path(kit_name))
+        row = conn.execute("SELECT id FROM kits WHERE name = ?", (kit_name,)).fetchone()
+        if row:
+            conn.execute(
+                "UPDATE kits SET config_path = ?, updated_at = ? WHERE id = ?",
+                (config_path, now, int(row["id"])),
+            )
+            kit_id = int(row["id"])
+        else:
+            cur = conn.execute(
+                "INSERT INTO kits(name, config_path, created_at, updated_at) VALUES (?, ?, ?, ?)",
+                (kit_name, config_path, now, now),
+            )
+            kit_id = int(cur.lastrowid)
+        if owned:
+            conn.commit()
+        return kit_id
+    finally:
+        if owned:
+            conn.close()
+
+
+def db_find_host_id(
+    conn: sqlite3.Connection,
+    *,
+    kit_id: int,
+    system_serial: str = "",
+    ilo_host: str = "",
+) -> int | None:
+    if system_serial:
+        row = conn.execute(
+            "SELECT id FROM hosts WHERE kit_id = ? AND system_serial = ? ORDER BY id DESC LIMIT 1",
+            (kit_id, system_serial),
+        ).fetchone()
+        if row:
+            return int(row["id"])
+    if ilo_host:
+        row = conn.execute(
+            "SELECT id FROM hosts WHERE kit_id = ? AND ilo_host = ? ORDER BY id DESC LIMIT 1",
+            (kit_id, ilo_host),
+        ).fetchone()
+        if row:
+            return int(row["id"])
+    return None
+
+
+def db_lookup_drive_rows(
+    *,
+    cfg: dict[str, Any],
+    system_serial: str = "",
+    ilo_host: str = "",
+) -> dict[str, dict[str, Any]]:
+    ensure_sqlite_db()
+    with sqlite_connect() as conn:
+        kit_id = db_upsert_kit(cfg, conn=conn)
+        host_id = db_find_host_id(conn, kit_id=kit_id, system_serial=system_serial, ilo_host=ilo_host)
+        if not host_id:
+            return {}
+        rows = conn.execute(
+            "SELECT redfish_path, controller_path, controller_name, bay, serial, capacity_gib, status, source, currently_seen "
+            "FROM drives WHERE host_id = ?",
+            (host_id,),
+        ).fetchall()
+        return {
+            str(row["redfish_path"]): {
+                "path": str(row["redfish_path"]),
+                "controller_path": str(row["controller_path"] or ""),
+                "controller_name": str(row["controller_name"] or ""),
+                "bay": str(row["bay"] or ""),
+                "serial_number": str(row["serial"] or ""),
+                "size_gib": float(row["capacity_gib"] or 0),
+                "status": str(row["status"] or ""),
+                "source": str(row["source"] or ""),
+                "currently_seen": bool(row["currently_seen"]),
+            }
+            for row in rows
+            if str(row["redfish_path"] or "").strip()
+        }
+
+
+def db_record_run_history(cfg: dict[str, Any], entry: dict[str, Any]) -> None:
+    ensure_sqlite_db()
+    with sqlite_connect() as conn:
+        kit_id = db_upsert_kit(cfg, conn=conn)
+        conn.execute(
+            "INSERT INTO run_history(kit_id, scope, status, current_stage, run_bundle_dir, run_summary_path, event_time, payload_json) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            (
+                kit_id,
+                str(entry.get("scope") or ""),
+                str(entry.get("status") or ""),
+                str(entry.get("current_stage") or ""),
+                str(entry.get("run_bundle_dir") or ""),
+                str(entry.get("run_summary_path") or ""),
+                str(entry.get("time") or _now_text()),
+                _json_text(entry),
+            ),
+        )
+        conn.commit()
+
+
+def db_record_known_issue_observation(
+    cfg: dict[str, Any],
+    *,
+    fingerprint: str,
+    title: str,
+    description: str,
+    message: str,
+    discovery: dict[str, Any] | None = None,
+    plan: dict[str, Any] | None = None,
+    status: str = "open",
+) -> None:
+    ensure_sqlite_db()
+    summary = (discovery or {}).get("summary", {}) or {}
+    source = (discovery or {}).get("raw", {}) or {}
+    serial = str((summary.get("server", {}) or {}).get("serial_number") or (plan.get("source_discovery", {}) if isinstance(plan, dict) else {}).get("serial_number") or "").strip()
+    ilo_host = str(source.get("source_host") or (plan.get("source_discovery", {}) if isinstance(plan, dict) else {}).get("host") or cfg.get("ilo", {}).get("current_ip") or cfg.get("ilo", {}).get("host") or "").strip()
+    with sqlite_connect() as conn:
+        kit_id = db_upsert_kit(cfg, conn=conn)
+        now = _now_text()
+        issue_row = conn.execute("SELECT id FROM known_issues WHERE fingerprint = ?", (fingerprint,)).fetchone()
+        if issue_row:
+            issue_id = int(issue_row["id"])
+            conn.execute(
+                "UPDATE known_issues SET title = ?, description = ?, last_seen_at = ? WHERE id = ?",
+                (title, description, now, issue_id),
+            )
+        else:
+            cur = conn.execute(
+                "INSERT INTO known_issues(fingerprint, title, description, first_seen_at, last_seen_at) VALUES (?, ?, ?, ?, ?)",
+                (fingerprint, title, description, now, now),
+            )
+            issue_id = int(cur.lastrowid)
+        host_id = db_find_host_id(conn, kit_id=kit_id, system_serial=serial, ilo_host=ilo_host)
+        conn.execute(
+            "INSERT INTO issue_observations(issue_id, kit_id, host_id, fingerprint, observed_at, status, message, context_json) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            (
+                issue_id,
+                kit_id,
+                host_id,
+                fingerprint,
+                now,
+                status,
+                message,
+                _json_text(
+                    {
+                        "serial_number": serial,
+                        "ilo_host": ilo_host,
+                        "plan_summary": storage_plan_summary(plan or {}) if plan else {},
+                        "discovery_source_host": str(source.get("source_host") or ""),
+                    }
+                ),
+            ),
+        )
+        conn.commit()
+
+
+def db_persist_storage_plan(
+    cfg: dict[str, Any],
+    *,
+    discovery: dict[str, Any],
+    discovery_paths: dict[str, Path],
+    plan: dict[str, Any],
+    plan_paths: dict[str, Path],
+    approved: bool,
+) -> None:
+    ensure_sqlite_db()
+    summary = discovery.get("summary", {}) or {}
+    source_host = str((discovery.get("raw", {}) or {}).get("source_host") or summary.get("source_host") or "").strip()
+    serial = str((summary.get("server", {}) or {}).get("serial_number") or "").strip()
+    with sqlite_connect() as conn:
+        kit_id = db_upsert_kit(cfg, conn=conn)
+        host_id = db_find_host_id(conn, kit_id=kit_id, system_serial=serial, ilo_host=source_host)
+        plan_path = str(plan_paths["plan"])
+        discovery_raw_path = str(discovery_paths["raw"])
+        now = _now_text()
+        row = conn.execute("SELECT id, created_at FROM storage_plans WHERE plan_path = ?", (plan_path,)).fetchone()
+        values = (
+            kit_id,
+            host_id,
+            plan_path,
+            discovery_raw_path,
+            1 if approved else 0,
+            1 if bool(plan.get("valid")) else 0,
+            str((((plan.get("planned_layout") or {}).get("os_raid1") or {}).get("controller_path") or "")),
+            str((((plan.get("planned_layout") or {}).get("data_raid6") or {}).get("controller_path") or "")),
+            str((((plan.get("hot_spare") or {}).get("drive") or {}).get("path") or "")),
+            now,
+            _json_text(storage_plan_summary(plan)),
+            _json_text(plan),
+        )
+        if row:
+            plan_id = int(row["id"])
+            conn.execute(
+                "UPDATE storage_plans SET kit_id = ?, host_id = ?, discovery_raw_path = ?, approved = ?, valid = ?, "
+                "os_controller_path = ?, data_controller_path = ?, hot_spare_path = ?, updated_at = ?, "
+                "plan_summary_json = ?, plan_json = ? WHERE id = ?",
+                (
+                    kit_id,
+                    host_id,
+                    discovery_raw_path,
+                    1 if approved else 0,
+                    1 if bool(plan.get("valid")) else 0,
+                    str((((plan.get("planned_layout") or {}).get("os_raid1") or {}).get("controller_path") or "")),
+                    str((((plan.get("planned_layout") or {}).get("data_raid6") or {}).get("controller_path") or "")),
+                    str((((plan.get("hot_spare") or {}).get("drive") or {}).get("path") or "")),
+                    now,
+                    _json_text(storage_plan_summary(plan)),
+                    _json_text(plan),
+                    plan_id,
+                ),
+            )
+        else:
+            cur = conn.execute(
+                "INSERT INTO storage_plans(kit_id, host_id, plan_path, discovery_raw_path, approved, valid, os_controller_path, "
+                "data_controller_path, hot_spare_path, created_at, updated_at, plan_summary_json, plan_json) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (
+                    kit_id,
+                    host_id,
+                    plan_path,
+                    discovery_raw_path,
+                    1 if approved else 0,
+                    1 if bool(plan.get("valid")) else 0,
+                    str((((plan.get("planned_layout") or {}).get("os_raid1") or {}).get("controller_path") or "")),
+                    str((((plan.get("planned_layout") or {}).get("data_raid6") or {}).get("controller_path") or "")),
+                    str((((plan.get("hot_spare") or {}).get("drive") or {}).get("path") or "")),
+                    now,
+                    now,
+                    _json_text(storage_plan_summary(plan)),
+                    _json_text(plan),
+                ),
+            )
+            plan_id = int(cur.lastrowid)
+        conn.execute("DELETE FROM storage_plan_drives WHERE storage_plan_id = ?", (plan_id,))
+        array_roles = [(str(array.get("role") or ""), list(array.get("drives") or [])) for array in storage_plan_arrays(plan)]
+        hot_spare_drive = ((plan.get("hot_spare") or {}).get("drive") or {})
+        if hot_spare_drive:
+            array_roles.append(("hot_spare", [hot_spare_drive]))
+        for role, drives in array_roles:
+            for drive in drives:
+                conn.execute(
+                    "INSERT INTO storage_plan_drives(storage_plan_id, role, drive_path, controller_path, bay, serial, capacity_gib) "
+                    "VALUES (?, ?, ?, ?, ?, ?, ?)",
+                    (
+                        plan_id,
+                        role,
+                        str(drive.get("path") or drive.get("drive_path") or ""),
+                        str(drive.get("controller_path") or ""),
+                        str(drive.get("bay") or ""),
+                        str(drive.get("serial_number") or drive.get("serial") or ""),
+                        float(drive.get("size_gib") or drive.get("capacity") or 0),
+                    ),
+                )
+        conn.commit()
+
+
+def _storage_drive_bay_from_raw(item: dict[str, Any]) -> str:
+    location = item.get("PhysicalLocation", {}) or {}
+    part_location = location.get("PartLocation", {}) if isinstance(location, dict) else {}
+    placement = part_location.get("LocationOrdinalValue") if isinstance(part_location, dict) else None
+    return str(item.get("BayNumber") or item.get("Location") or placement or item.get("Id") or "")
+
+
+def _storage_status_text_from_raw(item: dict[str, Any]) -> str:
+    status = item.get("Status", {}) or {}
+    if not isinstance(status, dict):
+        return ""
+    return " / ".join([bit for bit in (status.get("Health"), status.get("State")) if bit])
+
+
+def ilo_inventory_components(inventory: dict[str, Any]) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    controllers: list[dict[str, Any]] = []
+    drives: list[dict[str, Any]] = []
+    for storage in list(((inventory.get("raw") or {}).get("storage") or [])):
+        storage_path = str(storage.get("@odata.id") or "").strip()
+        storage_controllers = list(storage.get("StorageControllers", []) or [])
+        for controller in storage_controllers:
+            controllers.append(
+                {
+                    "path": storage_path,
+                    "name": controller.get("Name") or controller.get("MemberId") or "",
+                    "model": controller.get("Model", ""),
+                    "firmware_version": controller.get("FirmwareVersion", ""),
+                    "source": "standard_redfish_storage",
+                    "status": _storage_status_text_from_raw(controller),
+                }
+            )
+        if not storage_controllers and storage_path:
+            controllers.append(
+                {
+                    "path": storage_path,
+                    "name": storage.get("Name") or storage.get("Id") or storage_path.rsplit("/", 1)[-1],
+                    "model": storage.get("Model", "") or storage.get("Description", ""),
+                    "firmware_version": storage.get("FirmwareVersion", ""),
+                    "source": "standard_redfish_storage",
+                    "status": _storage_status_text_from_raw(storage),
+                }
+            )
+        for drive in list(storage.get("DrivesExpanded", []) or []):
+            drives.append(
+                {
+                    "path": str(drive.get("@odata.id") or "").strip(),
+                    "controller_path": storage_path,
+                    "id": drive.get("Id", ""),
+                    "bay": _storage_drive_bay_from_raw(drive),
+                    "name": drive.get("Name", ""),
+                    "model": drive.get("Model", ""),
+                    "serial_number": drive.get("SerialNumber", ""),
+                    "size_gib": round((int(drive.get("CapacityBytes") or 0) / (1024 ** 3)), 2) if int(drive.get("CapacityBytes") or 0) > 0 else 0,
+                    "media_type": drive.get("MediaType", ""),
+                    "protocol": drive.get("Protocol", ""),
+                    "status": _storage_status_text_from_raw(drive),
+                    "source": "standard_redfish_storage",
+                }
+            )
+    return controllers, drives
+
+
+def db_persist_inventory(
+    cfg: dict[str, Any],
+    *,
+    source_host: str,
+    server_summary: dict[str, Any],
+    manager_summary: dict[str, Any],
+    controllers: list[dict[str, Any]],
+    drives: list[dict[str, Any]],
+    inventory_kind: str,
+    raw_summary: dict[str, Any] | None = None,
+) -> None:
+    ensure_sqlite_db()
+    serial = str(server_summary.get("serial_number") or "").strip()
+    with sqlite_connect() as conn:
+        kit_id = db_upsert_kit(cfg, conn=conn)
+        now = _now_text()
+        host_id = db_find_host_id(conn, kit_id=kit_id, system_serial=serial, ilo_host=source_host)
+        if host_id:
+            conn.execute(
+                "UPDATE hosts SET ilo_host = ?, system_serial = ?, server_model = ?, product_name = ?, manager_model = ?, "
+                "last_inventory_kind = ?, currently_seen = 1, last_seen_at = ?, raw_summary_json = ? WHERE id = ?",
+                (
+                    source_host,
+                    serial,
+                    str(server_summary.get("model") or ""),
+                    str(server_summary.get("product_name") or ""),
+                    str(manager_summary.get("model") or ""),
+                    inventory_kind,
+                    now,
+                    _json_text(raw_summary or {}),
+                    host_id,
+                ),
+            )
+        else:
+            cur = conn.execute(
+                "INSERT INTO hosts(kit_id, ilo_host, system_serial, server_model, product_name, manager_model, last_inventory_kind, currently_seen, last_seen_at, raw_summary_json) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, 1, ?, ?)",
+                (
+                    kit_id,
+                    source_host,
+                    serial,
+                    str(server_summary.get("model") or ""),
+                    str(server_summary.get("product_name") or ""),
+                    str(manager_summary.get("model") or ""),
+                    inventory_kind,
+                    now,
+                    _json_text(raw_summary or {}),
+                ),
+            )
+            host_id = int(cur.lastrowid)
+
+        seen_controller_paths = [str(item.get("path") or "").strip() for item in controllers if str(item.get("path") or "").strip()]
+        controller_id_by_path: dict[str, int] = {}
+        for item in controllers:
+            controller_path = str(item.get("path") or "").strip()
+            if not controller_path:
+                continue
+            row = conn.execute(
+                "SELECT id FROM controllers WHERE host_id = ? AND redfish_path = ?",
+                (host_id, controller_path),
+            ).fetchone()
+            values = (
+                str(item.get("name") or ""),
+                str(item.get("model") or ""),
+                str(item.get("firmware_version") or ""),
+                str(item.get("source") or ""),
+                str(item.get("status") or ""),
+                now,
+                _json_text(item),
+            )
+            if row:
+                controller_id = int(row["id"])
+                conn.execute(
+                    "UPDATE controllers SET name = ?, model = ?, firmware_version = ?, source = ?, status = ?, currently_seen = 1, last_seen_at = ?, raw_json = ? "
+                    "WHERE id = ?",
+                    (*values, controller_id),
+                )
+            else:
+                cur = conn.execute(
+                    "INSERT INTO controllers(host_id, redfish_path, name, model, firmware_version, source, status, currently_seen, last_seen_at, raw_json) "
+                    "VALUES (?, ?, ?, ?, ?, ?, ?, 1, ?, ?)",
+                    (host_id, controller_path, *values),
+                )
+                controller_id = int(cur.lastrowid)
+            controller_id_by_path[controller_path] = controller_id
+        if seen_controller_paths:
+            placeholders = ",".join("?" for _ in seen_controller_paths)
+            conn.execute(
+                f"UPDATE controllers SET currently_seen = 0 WHERE host_id = ? AND redfish_path NOT IN ({placeholders})",
+                (host_id, *seen_controller_paths),
+            )
+
+        seen_drive_paths = [str(item.get("path") or item.get("drive_path") or "").strip() for item in drives if str(item.get("path") or item.get("drive_path") or "").strip()]
+        for item in drives:
+            drive_path = str(item.get("path") or item.get("drive_path") or "").strip()
+            if not drive_path:
+                continue
+            controller_path = str(item.get("controller_path") or "").strip()
+            row = conn.execute(
+                "SELECT id FROM drives WHERE host_id = ? AND redfish_path = ?",
+                (host_id, drive_path),
+            ).fetchone()
+            values = (
+                controller_id_by_path.get(controller_path),
+                controller_path,
+                str(item.get("controller_name") or ""),
+                str(item.get("bay") or ""),
+                str(item.get("serial_number") or item.get("serial") or ""),
+                float(item.get("size_gib") or item.get("capacity") or 0),
+                str(item.get("media_type") or ""),
+                str(item.get("protocol") or ""),
+                str(item.get("status") or ""),
+                str(item.get("source") or ""),
+                now,
+                _json_text(item),
+            )
+            if row:
+                conn.execute(
+                    "UPDATE drives SET controller_id = ?, controller_path = ?, controller_name = ?, bay = ?, serial = ?, capacity_gib = ?, "
+                    "media_type = ?, protocol = ?, status = ?, source = ?, currently_seen = 1, last_seen_at = ?, raw_json = ? WHERE id = ?",
+                    (*values, int(row["id"])),
+                )
+            else:
+                conn.execute(
+                    "INSERT INTO drives(host_id, controller_id, redfish_path, controller_path, controller_name, bay, serial, capacity_gib, media_type, protocol, status, source, currently_seen, last_seen_at, raw_json) "
+                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?)",
+                    (host_id, values[0], drive_path, *values[1:]),
+                )
+        if seen_drive_paths:
+            placeholders = ",".join("?" for _ in seen_drive_paths)
+            conn.execute(
+                f"UPDATE drives SET currently_seen = 0 WHERE host_id = ? AND redfish_path NOT IN ({placeholders})",
+                (host_id, *seen_drive_paths),
+            )
+        conn.commit()
+
+
+def db_persist_ilo_inventory(cfg: dict[str, Any], inventory: dict[str, Any], source_host: str = "") -> None:
+    summary = inventory.get("summary", {}) or {}
+    controllers, drives = ilo_inventory_components(inventory)
+    for drive in drives:
+        if not drive.get("controller_name"):
+            drive["controller_name"] = next(
+                (str(item.get("name") or item.get("model") or "") for item in controllers if str(item.get("path") or "") == str(drive.get("controller_path") or "")),
+                "",
+            )
+    db_persist_inventory(
+        cfg,
+        source_host=source_host or str((summary.get("active_interface", {}) or {}).get("ipv4_addresses", [{}])[0].get("Address") or cfg.get("ilo", {}).get("current_ip") or cfg.get("ilo", {}).get("host") or "").strip(),
+        server_summary=summary.get("system", {}) or {},
+        manager_summary=summary.get("manager", {}) or {},
+        controllers=controllers,
+        drives=drives,
+        inventory_kind="ilo_inventory",
+        raw_summary=summary,
+    )
+
+
+def db_persist_storage_inventory(cfg: dict[str, Any], discovery: dict[str, Any], host: str = "") -> None:
+    summary = discovery.get("summary", {}) or {}
+    standard = summary.get("standard_redfish_storage", {}) or {}
+    hpe = summary.get("hpe_smart_storage", {}) or {}
+    controllers = []
+    drives = []
+    for source, items in (("hpe_smart_storage", hpe.get("controllers", [])), ("standard_redfish_storage", standard.get("controllers", []))):
+        for item in items or []:
+            controllers.append({**item, "source": source})
+    controller_name_by_path = {str(item.get("path") or ""): storage_controller_label(item) for item in controllers}
+    for source, items in (("hpe_smart_storage", hpe.get("drives", [])), ("standard_redfish_storage", standard.get("drives", []))):
+        for item in items or []:
+            drives.append({**item, "source": source, "controller_name": controller_name_by_path.get(str(item.get("controller_path") or ""), "")})
+    db_persist_inventory(
+        cfg,
+        source_host=host or str((discovery.get("raw", {}) or {}).get("source_host") or ""),
+        server_summary=summary.get("server", {}) or {},
+        manager_summary=summary.get("ilo", {}) or {},
+        controllers=controllers,
+        drives=drives,
+        inventory_kind="storage_inventory",
+        raw_summary=summary,
+    )
 
 app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
 templates = Jinja2Templates(directory=str(TEMPLATES_DIR))
@@ -230,8 +906,9 @@ def validate_snmpv3_password(value: str, *, label: str, required: bool = True) -
     return errors
 
 
-def build_ilo_input_review(cfg: dict[str, Any]) -> dict[str, Any]:
+def build_ilo_input_review(cfg: dict[str, Any], *, include_policy_validation: bool = False) -> dict[str, Any]:
     ilo_cfg = cfg.get("ilo", {}) or {}
+    policy = normalize_ilo_policy(ilo_cfg.get("policy"))
     errors: list[str] = []
     notes: list[str] = []
     errors.extend(validate_ilo_login_name(ilo_cfg.get("username", ""), label="iLO username"))
@@ -252,6 +929,22 @@ def build_ilo_input_review(cfg: dict[str, Any]) -> dict[str, Any]:
         )
         errors.extend(extra_check["errors"])
         notes.extend(extra_check["notes"])
+    if include_policy_validation and policy.get("apply_standard_policy") and policy.get("enable_standard_accounts"):
+        for item in standard_ilo_policy_accounts(cfg):
+            username = str(item.get("username") or "").strip()
+            password = str(item.get("password") or "")
+            errors.extend(validate_ilo_login_name(username, label=f"Policy iLO user {username}"))
+            if not password:
+                errors.append(f"Policy iLO user {username} password is required.")
+                continue
+            extra_check = validate_ilo_password(password, username=username, label=f"Policy iLO user {username} password")
+            errors.extend(extra_check["errors"])
+            notes.extend(extra_check["notes"])
+    if include_policy_validation and policy.get("apply_standard_policy") and policy.get("enable_snmp_policy"):
+        snmp_username = str(policy.get("snmpv3_username") or "765CS").strip()
+        errors.extend(validate_snmpv3_username(snmp_username, label="Policy SNMPv3 user"))
+        errors.extend(validate_snmpv3_password(str(policy.get("snmpv3_auth_password") or ""), label="Policy SNMPv3 auth password"))
+        errors.extend(validate_snmpv3_password(str(policy.get("snmpv3_priv_password") or ""), label="Policy SNMPv3 privacy password"))
     return {"errors": errors, "notes": notes}
 
 
@@ -546,6 +1239,10 @@ def save_kit_config(cfg: dict):
     with open(kit_path(kit_name), "w", encoding="utf-8") as f:
         yaml.safe_dump(cfg, f, sort_keys=False)
     set_current_kit_name(kit_name)
+    try:
+        db_upsert_kit(cfg)
+    except Exception:
+        pass
 
 
 def job_path(kit_name: str) -> Path:
@@ -823,11 +1520,102 @@ def save_history(kit_name: str, entries: list[dict]):
         yaml.safe_dump(entries, f, sort_keys=False)
 
 
+def history_scope_family(scope: str) -> str:
+    value = str(scope or "").strip()
+    if value.startswith("storage-apply") or value.startswith("storage-reboot"):
+        return "storage"
+    return value
+
+
+def is_storage_run_scope(scope: str) -> bool:
+    value = str(scope or "").strip()
+    return value.startswith("storage-apply") or value.startswith("storage-reboot")
+
+
+def history_status_tone(status: str) -> str:
+    lowered = str(status or "").lower()
+    if "supersed" in lowered:
+        return "progress"
+    if "complete" in lowered:
+        return "ready"
+    if "fail" in lowered or "block" in lowered:
+        return "pending"
+    return "progress"
+
+
+def _write_superseded_run_summary(path_text: str, superseded_payload: dict[str, Any]) -> None:
+    path_value = str(path_text or "").strip()
+    if not path_value:
+        return
+    path = Path(path_value)
+    if not path.exists():
+        return
+    try:
+        payload = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+        if not isinstance(payload, dict):
+            payload = {}
+    except Exception:
+        payload = {}
+    payload["status"] = "Superseded"
+    payload["superseded"] = dict(superseded_payload)
+    path.write_text(yaml.safe_dump(payload, sort_keys=False), encoding="utf-8")
+
+
+def reconcile_superseded_history_entries(kit_name: str, entries: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    if not entries:
+        return entries
+    latest = dict(entries[0] or {})
+    latest_scope = str(latest.get("scope") or "")
+    latest_status = str(latest.get("status") or "")
+    if not is_storage_run_scope(latest_scope) or "complete" not in latest_status.lower():
+        return entries
+
+    superseded_payload = {
+        "by_time": str(latest.get("time") or ""),
+        "by_scope": str(latest.get("scope") or ""),
+        "by_status": latest_status,
+        "by_run_bundle_dir": str(latest.get("run_bundle_dir") or ""),
+        "by_run_summary_path": str(latest.get("run_summary_path") or ""),
+        "reason": "A newer storage run completed and replaced this earlier attempt.",
+    }
+
+    changed = False
+    updated_entries: list[dict[str, Any]] = [latest]
+    for item in entries[1:]:
+        current = dict(item or {})
+        if not is_storage_run_scope(str(current.get("scope") or "")):
+            updated_entries.append(current)
+            continue
+        current_status = str(current.get("status") or "")
+        if "complete" in current_status.lower() or "supersed" in current_status.lower():
+            updated_entries.append(current)
+            continue
+        original_status = str(current.get("original_status") or current_status or "Recorded")
+        current["original_status"] = original_status
+        current["status"] = "Superseded"
+        current["superseded_by"] = dict(superseded_payload)
+        changed = True
+        _write_superseded_run_summary(str(current.get("run_summary_path") or ""), current["superseded_by"])
+        run_bundle_dir = str(current.get("run_bundle_dir") or "").strip()
+        if run_bundle_dir:
+            _write_superseded_run_summary(str(Path(run_bundle_dir) / "summary.yml"), current["superseded_by"])
+        updated_entries.append(current)
+
+    if changed:
+        save_history(kit_name, updated_entries)
+    return updated_entries
+
+
 def append_history_entry(kit_name: str, entry: dict):
     history = load_history(kit_name)
     history.insert(0, entry)
     history = history[:25]
+    history = reconcile_superseded_history_entries(kit_name, history)
     save_history(kit_name, history)
+    try:
+        db_record_run_history(load_kit_config(kit_name), entry)
+    except Exception:
+        pass
 
 
 def build_history_config_summary(cfg: dict, scope: str) -> dict:
@@ -1330,6 +2118,7 @@ def ensure_storage_config(cfg: dict[str, Any]) -> dict[str, Any]:
     storage_cfg.setdefault("target_host_override", "")
     storage_cfg.setdefault("username", "")
     storage_cfg.setdefault("password", "")
+    storage_cfg.setdefault("allow_unverified_standard_redfish_create", False)
     storage_cfg.setdefault("include_in_ilo_run", False)
     storage_cfg.setdefault("latest_discovery_raw_path", "")
     storage_cfg.setdefault("latest_plan_path", "")
@@ -1347,15 +2136,53 @@ def ensure_storage_config(cfg: dict[str, Any]) -> dict[str, Any]:
     return storage_cfg
 
 
+def storage_array_summary_entries(plan: dict[str, Any]) -> list[dict[str, Any]]:
+    entries: list[dict[str, Any]] = []
+    for array in storage_plan_arrays(plan):
+        drives = list(array.get("drives") or [])
+        entries.append(
+            {
+                "role": str(array.get("role") or ""),
+                "name": str(array.get("name") or ""),
+                "controller": str(array.get("controller_name") or array.get("controller_path") or ""),
+                "controller_path": str(array.get("controller_path") or ""),
+                "raid_level": str(array.get("raid_level") or array.get("raid") or ""),
+                "bays": plan_drive_bays(drives),
+                "drive_count": len(drives),
+                "selected_drive_paths": [str(drive.get("path") or drive.get("drive_path") or "") for drive in drives if str(drive.get("path") or drive.get("drive_path") or "").strip()],
+                "selected_drive_serials": [str(drive.get("serial_number") or drive.get("serial") or "") for drive in drives if str(drive.get("serial_number") or drive.get("serial") or "").strip()],
+                "drives": [
+                    {
+                        "path": str(drive.get("path") or drive.get("drive_path") or ""),
+                        "serial_number": str(drive.get("serial_number") or drive.get("serial") or ""),
+                        "bay": str(drive.get("bay") or ""),
+                        "model": str(drive.get("model") or drive.get("name") or ""),
+                        "controller_path": str(drive.get("controller_path") or ""),
+                    }
+                    for drive in drives
+                ],
+            }
+        )
+    return entries
+
+
 def storage_plan_summary(plan: dict[str, Any]) -> dict[str, Any]:
+    arrays = storage_array_summary_entries(plan)
+    hot_spare = (plan.get("hot_spare", {}) or {}).get("drive", {}) or {}
+    controllers = [entry.get("controller") for entry in arrays if entry.get("controller")]
     return {
-        "controller": (plan.get("source_discovery", {}).get("controller", {}) or {}).get("name")
-        or (plan.get("source_discovery", {}).get("controller", {}) or {}).get("model")
-        or "",
-        "os_bays": plan_drive_bays(plan.get("os_raid1", {}).get("drives", []) or []),
-        "data_bays": plan_drive_bays(plan.get("data_raid6", {}).get("drives", []) or []),
-        "spare_bay": str((plan.get("hot_spare", {}).get("drive", {}) or {}).get("bay", "")),
+        "controller": " | ".join(dict.fromkeys([str(item) for item in controllers if str(item).strip()])),
         "mode": (plan.get("apply_readiness", {}) or {}).get("next_action", ""),
+        "arrays": arrays,
+        "hot_spare": {
+            "bay": str(hot_spare.get("bay") or ""),
+            "path": str(hot_spare.get("path") or hot_spare.get("drive_path") or ""),
+            "serial_number": str(hot_spare.get("serial_number") or hot_spare.get("serial") or ""),
+            "controller": str(hot_spare.get("controller_name") or hot_spare.get("controller_path") or ""),
+        },
+        "os_bays": next((entry.get("bays") for entry in arrays if entry.get("role") == "os"), ""),
+        "data_bays": next((entry.get("bays") for entry in arrays if entry.get("role") == "data"), ""),
+        "spare_bay": str(hot_spare.get("bay") or ""),
     }
 
 
@@ -1422,6 +2249,28 @@ def update_storage_latest_state(
             storage_cfg["state"] = "discovered"
 
 
+def clear_storage_plan_selection_state(cfg: dict[str, Any]) -> None:
+    storage_cfg = ensure_storage_config(cfg)
+    storage_cfg["latest_plan_path"] = ""
+    storage_cfg["latest_plan_summary"] = {}
+    clear_storage_approval_for_cfg(cfg)
+    if storage_cfg.get("latest_discovery_raw_path"):
+        storage_cfg["state"] = "discovered"
+    else:
+        storage_cfg["state"] = "idle"
+    storage_cfg["status_reason"] = ""
+
+
+def is_storage_drive_controller_mismatch_error(message: str) -> bool:
+    text = str(message or "").lower()
+    return "controller mismatch" in text or (
+        "selected storage drives must all belong to the chosen controller" in text
+        or ("drive" in text and "controller" in text and "not found in the current inventory" in text)
+        or ("data controller is set to" in text)
+        or ("os controller is set to" in text)
+    )
+
+
 def approve_storage_plan_for_cfg(
     cfg: dict[str, Any],
     discovery: dict[str, Any],
@@ -1448,6 +2297,17 @@ def approve_storage_plan_for_cfg(
     )
     storage_cfg["include_in_ilo_run"] = bool(include_in_ilo_run)
     update_storage_latest_state(cfg, discovery=discovery, discovery_paths=discovery_paths, plan=plan, plan_paths=plan_paths)
+    try:
+        db_persist_storage_plan(
+            cfg,
+            discovery=discovery,
+            discovery_paths=discovery_paths,
+            plan=plan,
+            plan_paths=plan_paths,
+            approved=True,
+        )
+    except Exception:
+        pass
     storage_cfg["state"] = "approved"
     storage_cfg["status_reason"] = ""
 
@@ -1639,7 +2499,8 @@ def workflow_state_ui(state: str) -> dict[str, str]:
 def latest_history_entry_for_scope(history: list[dict[str, Any]], scopes: list[str]) -> dict[str, Any] | None:
     scope_set = set(scopes)
     for item in history:
-        if item.get("scope") in scope_set:
+        item_scope = str(item.get("scope") or "")
+        if item_scope in scope_set or any(item_scope.startswith(f"{scope}:") for scope in scope_set):
             return item
     return None
 
@@ -1687,7 +2548,7 @@ def build_activity_feed(history: list[dict[str, Any]], limit: int = 8) -> list[d
             )
             continue
         status = str(item.get("status", ""))
-        tone = "ready" if "complete" in status.lower() else "pending" if "fail" in status.lower() else "progress"
+        tone = history_status_tone(status)
         feed.append(
             {
                 "time": item.get("time", ""),
@@ -1725,7 +2586,7 @@ def build_history_display_entries(history: list[dict[str, Any]]) -> list[dict[st
         status = str(item.get("status") or "Recorded")
         current_stage = str(item.get("current_stage") or item.get("summary") or "Run recorded")
         config_summary = item.get("config_summary", {}) or {}
-        tone = "ready" if "complete" in status.lower() else "pending" if "fail" in status.lower() or "block" in status.lower() else "progress"
+        tone = history_status_tone(status)
         display_entries.append(
             {
                 **item,
@@ -1762,6 +2623,8 @@ def build_dashboard_job_status(history: list[dict[str, Any]]) -> dict[str, Any]:
             "run_summary_path": str(latest.get("run_summary_path") or ""),
         }
         lowered = status.lower()
+        if "supersed" in lowered:
+            continue
         if "fail" in lowered:
             failed.append(item)
         elif "complete" in lowered:
@@ -2443,19 +3306,24 @@ def build_storage_page_readiness(
 
 def build_storage_change_summary(storage_review: dict[str, Any], storage_plan: dict[str, Any] | None) -> list[dict[str, str]]:
     approval = storage_review.get("approval", {}) or {}
-    plan_summary = (
-        (storage_plan or {}).get("planned_layout", {})
-        or approval.get("plan_summary", {})
-        or {}
+    plan_summary = approval.get("plan_summary", {}) or storage_plan_summary(storage_plan or {}) if storage_plan else approval.get("plan_summary", {}) or {}
+    array_lines = []
+    for entry in list(plan_summary.get("arrays") or []):
+        serials = ", ".join([item for item in list(entry.get("selected_drive_serials") or []) if item][:3])
+        if len(list(entry.get("selected_drive_serials") or [])) > 3:
+            serials += ", ..."
+        array_lines.append(
+            f"{str(entry.get('role') or '').upper()} {raid_label(str(entry.get('raid_level') or ''))}: "
+            f"{entry.get('controller') or entry.get('controller_path') or 'Not set'} | "
+            f"bays {entry.get('bays') or 'none'} | "
+            f"serials {serials or 'none'}"
+        )
+    spare = plan_summary.get("hot_spare") or {}
+    spare_text = (
+        f"{spare.get('controller') or 'Not reserved'} | bay {spare.get('bay') or 'none'} | serial {spare.get('serial_number') or 'none'}"
+        if spare.get("path") or spare.get("serial_number") or spare.get("bay")
+        else "Not reserved"
     )
-    if "os_raid1" in plan_summary:
-        os_bays = str((plan_summary.get("os_raid1", {}) or {}).get("bays") or "Not selected")
-        data_bays = str((plan_summary.get("data_raid6", {}) or {}).get("bays") or "Not selected")
-        spare_bay = str((plan_summary.get("hot_spare", {}) or {}).get("bay") or "Not reserved")
-    else:
-        os_bays = str(plan_summary.get("os_bays") or "Not selected")
-        data_bays = str(plan_summary.get("data_bays") or "Not selected")
-        spare_bay = str(plan_summary.get("spare_bay") or "Not reserved")
     controller = str(plan_summary.get("controller") or "Not set")
     reboot_expected = bool(approval.get("reboot_expected"))
     approved_host = str(approval.get("host") or "Not set")
@@ -2469,7 +3337,7 @@ def build_storage_change_summary(storage_review: dict[str, Any], storage_plan: d
         {
             "name": "Planned layout",
             "before": "Current volumes and drives stay untouched until the real run starts.",
-            "after": f"OS RAID 1 bays {os_bays} | Data RAID bays {data_bays} | Hot spare {spare_bay}",
+            "after": " | ".join(array_lines + [f"Hot spare {spare_text}"]) if array_lines else f"Hot spare {spare_text}",
             "verify": "Use the exact approved plan artifact during the real run.",
         },
         {
@@ -2493,17 +3361,21 @@ def build_esxi_install_target_review(cfg: dict[str, Any]) -> dict[str, Any]:
             path = Path(plan_path)
             if path.exists():
                 plan = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
-                os_drives = list(plan.get("os_drives") or [])
-                data_drives = list(plan.get("data_drives") or [])
+                arrays = storage_array_summary_entries((plan.get("plan") or plan) if isinstance(plan, dict) else {})
+                os_drives = next((list(item.get("drives") or []) for item in arrays if item.get("role") == "os"), [])
+                data_drives = next((list(item.get("drives") or []) for item in arrays if item.get("role") == "data"), [])
         except Exception:
             os_drives = []
             data_drives = []
 
-    os_bays = str(plan_summary.get("os_bays") or ", ".join(str(d.get("bay") or "") for d in os_drives if d.get("bay")) or "unknown")
-    data_bays = str(plan_summary.get("data_bays") or ", ".join(str(d.get("bay") or "") for d in data_drives if d.get("bay")) or "unknown")
+    arrays = list(plan_summary.get("arrays") or [])
+    os_array = next((item for item in arrays if item.get("role") == "os"), {})
+    data_array = next((item for item in arrays if item.get("role") == "data"), {})
+    os_bays = str(os_array.get("bays") or ", ".join(str(d.get("bay") or "") for d in os_drives if d.get("bay")) or "unknown")
+    data_bays = str(data_array.get("bays") or ", ".join(str(d.get("bay") or "") for d in data_drives if d.get("bay")) or "unknown")
     approved = str(approval.get("state") or storage_cfg.get("state") or "").lower() == "approved"
     preferred_target = (
-        f"Approved OS RAID logical drive ({plan_summary.get('controller') or 'selected controller'}, bays {os_bays})"
+        f"Approved OS RAID logical drive ({os_array.get('controller') or plan_summary.get('controller') or 'selected controller'}, bays {os_bays})"
         if approved and os_bays != "unknown"
         else "First eligible local disk selected by the ESXi installer"
     )
@@ -3162,7 +4034,7 @@ def build_run_bundles(cfg: dict[str, Any], history: list[dict[str, Any]]) -> lis
                 "target": target,
                 "time": item.get("time", ""),
                 "result": result,
-                "tone": "ready" if "Complete" in result else "pending" if ("Fail" in result or "Blocked" in result) else "progress",
+                "tone": history_status_tone(result),
                 "summary": current_stage,
                 "human_summary": build_bundle_human_summary(scope, result, current_stage, config_summary),
                 "highlights": build_bundle_highlights(scope, result, current_stage, config_summary),
@@ -3780,6 +4652,33 @@ def storage_status_is_eligible(status: str) -> bool:
     return not any(term in text for term in ("critical", "failed", "failure", "disabled", "missing", "predictive", "warning"))
 
 
+def storage_status_is_absent(status: str) -> bool:
+    text = str(status or "").lower()
+    return any(term in text for term in ("absent", "notpresent", "not present", "missing"))
+
+
+def storage_status_is_standby_spare(status: str) -> bool:
+    text = str(status or "").lower().replace(" ", "")
+    return "standbyspare" in text
+
+
+def storage_drive_is_array_selectable(drive: dict[str, Any]) -> bool:
+    return bool(
+        float(drive.get("size_gib") or drive.get("capacity") or 0) > 0
+        and storage_status_is_eligible(str(drive.get("status") or ""))
+        and not storage_status_is_absent(str(drive.get("status") or ""))
+        and not storage_status_is_standby_spare(str(drive.get("status") or ""))
+    )
+
+
+def storage_drive_is_spare_selectable(drive: dict[str, Any]) -> bool:
+    return bool(
+        float(drive.get("size_gib") or drive.get("capacity") or 0) > 0
+        and storage_status_is_eligible(str(drive.get("status") or ""))
+        and not storage_status_is_absent(str(drive.get("status") or ""))
+    )
+
+
 def storage_drive_sort_key(drive: dict) -> tuple:
     bay = str(drive.get("bay") or drive.get("id") or "")
     try:
@@ -3837,13 +4736,16 @@ def normalized_plan_drive(drive: dict, source: str) -> dict:
     normalized = {
         "source": source,
         "path": path,
+        "drive_path": path,
         "controller_path": controller_path,
         "id": str(drive.get("id") or ""),
         "bay": str(drive.get("bay") or drive.get("id") or ""),
         "name": drive.get("name", ""),
         "model": drive.get("model", ""),
         "serial_number": drive.get("serial_number", ""),
+        "serial": str(drive.get("serial_number") or ""),
         "size_gib": size_gib,
+        "capacity": size_gib,
         "media_type": drive.get("media_type", "") or "Unknown",
         "protocol": drive.get("protocol", "") or "Unknown",
         "status": drive.get("status", ""),
@@ -3978,6 +4880,63 @@ def plan_drive_bays(drives: list[dict]) -> str:
     return ", ".join(bays)
 
 
+def storage_drive_metadata(drive: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "bay": str(drive.get("bay") or ""),
+        "size_gib": float(drive.get("size_gib") or drive.get("capacity") or 0),
+        "model": str(drive.get("model") or drive.get("name") or ""),
+        "serial_number": str(drive.get("serial_number") or drive.get("serial") or ""),
+        "status": str(drive.get("status") or ""),
+        "controller_path": str(drive.get("controller_path") or ""),
+    }
+
+
+def storage_plan_array(
+    *,
+    role: str,
+    name: str,
+    raid_level: str,
+    controller: dict[str, Any],
+    drives: list[dict[str, Any]],
+    target_size_gib: int | None = None,
+) -> dict[str, Any]:
+    normalized_raid = normalize_raid_choice("os" if role == "os" else "data", raid_level, allow_empty=True)
+    controller_path = str(controller.get("path") or "").strip()
+    controller_name = storage_controller_label(controller) or controller_path
+    payload = {
+        "role": role,
+        "name": name,
+        "raid_level": normalized_raid,
+        "raid_label": raid_label(normalized_raid),
+        "controller_path": controller_path,
+        "controller_name": controller_name,
+        "selected_drive_ids": [str(drive.get("path") or drive.get("drive_path") or "") for drive in drives if str(drive.get("path") or drive.get("drive_path") or "").strip()],
+        "selected_drive_metadata": [storage_drive_metadata(drive) for drive in drives],
+        "drives": list(drives or []),
+        "bays": plan_drive_bays(drives),
+    }
+    if target_size_gib is not None:
+        payload["target_size_gib"] = target_size_gib
+    return payload
+
+
+def storage_plan_arrays(plan: dict[str, Any]) -> list[dict[str, Any]]:
+    arrays = list(plan.get("arrays") or [])
+    if arrays:
+        return arrays
+    fallback: list[dict[str, Any]] = []
+    os_section = plan.get("os_raid1") or {}
+    data_section = plan.get("data_raid6") or {}
+    planned = plan.get("planned_layout") or {}
+    os_controller = ((planned.get("os_raid1") or {}).get("controller")) or ((plan.get("source_discovery") or {}).get("os_controller")) or {}
+    data_controller = ((planned.get("data_raid6") or {}).get("controller")) or ((plan.get("source_discovery") or {}).get("data_controller")) or {}
+    if os_section.get("drives"):
+        fallback.append(storage_plan_array(role="os", name="OS array", raid_level=str(os_section.get("raid") or "RAID1"), controller=os_controller, drives=list(os_section.get("drives") or []), target_size_gib=int(os_section.get("target_size_gib") or 500)))
+    if data_section.get("drives"):
+        fallback.append(storage_plan_array(role="data", name="Data array", raid_level=str(data_section.get("raid") or "RAID6"), controller=data_controller, drives=list(data_section.get("drives") or [])))
+    return fallback
+
+
 COMMON_RAID_OPTIONS: list[dict[str, Any]] = [
     {"value": "RAID0", "label": "RAID 0", "min_drives": 2},
     {"value": "RAID1", "label": "RAID 1", "min_drives": 2, "exact_drives": 2},
@@ -4044,9 +5003,17 @@ def build_storage_planning_drives(summary: dict[str, Any] | None) -> list[dict[s
     for source, items in (("hpe_smart_storage", hpe.get("drives", [])), ("standard_redfish_storage", standard.get("drives", []))):
         for item in items or []:
             drive = normalized_plan_drive(item, source)
+            if not str(drive.get("controller_path") or "").strip() and len(controller_by_path) == 1:
+                drive["controller_path"] = next(iter(controller_by_path.keys()))
             controller = controller_by_path.get(str(drive.get("controller_path") or "").strip(), {})
             drive["controller_name"] = storage_controller_label(controller) if controller else str(drive.get("controller_path") or "")
-            drive["eligible"] = bool(drive["size_gib"] > 0 and storage_status_is_eligible(drive["status"]))
+            drive["drive_path"] = str(drive.get("path") or "")
+            drive["serial"] = str(drive.get("serial_number") or "")
+            drive["capacity"] = float(drive.get("size_gib") or 0)
+            drive["standby_spare"] = storage_status_is_standby_spare(str(drive.get("status") or ""))
+            drive["absent"] = storage_status_is_absent(str(drive.get("status") or ""))
+            drive["eligible"] = storage_drive_is_array_selectable(drive)
+            drive["spare_eligible"] = storage_drive_is_spare_selectable(drive)
             planning_drives.append(drive)
     return sorted(planning_drives, key=storage_drive_sort_key)
 
@@ -4094,10 +5061,178 @@ def build_storage_controller_choices(summary: dict[str, Any] | None) -> list[dic
 def storage_controller_label(controller: dict[str, Any]) -> str:
     if not controller:
         return ""
+    explicit_label = str(controller.get("label") or "").strip()
+    if explicit_label:
+        return explicit_label
     name = str(controller.get("name") or "").strip()
     model = str(controller.get("model") or "").strip()
     label_bits = [bit for bit in [name, model] if bit]
     return " / ".join(dict.fromkeys(label_bits)) or str(controller.get("path") or "").rsplit("/", 1)[-1]
+
+
+def storage_drive_label(drive: dict[str, Any]) -> str:
+    bay = str(drive.get("bay") or drive.get("id") or "").strip()
+    model = str(drive.get("model") or drive.get("name") or "").strip()
+    size = str(int(round(float(drive.get("size_gib") or drive.get("capacity") or 0)))) if (drive.get("size_gib") or drive.get("capacity")) else ""
+    serial = str(drive.get("serial_number") or drive.get("serial") or "").strip()
+    bits = []
+    if bay:
+        bits.append(f"Bay {bay}")
+    if model:
+        bits.append(model)
+    if size:
+        bits.append(f"{size} GiB")
+    if serial:
+        bits.append(serial)
+    return " | ".join(bits) or str(drive.get("path") or drive.get("drive_path") or "(unknown drive)")
+
+
+HARDWARE_PROFILES: list[dict[str, Any]] = [
+    {
+        "match": {"model_contains": "DL360", "generation_contains": "Gen10"},
+        "profile_name": "HPE ProLiant DL360 Gen10",
+        "expected_storage_layout": "single_controller",
+        "known_good_apply_path": "SmartStorageConfig",
+        "controller_examples": ["HPE Smart Array P408i-a SR Gen10"],
+        "warnings": [],
+    },
+    {
+        "match": {"model_contains": "DL380", "generation_contains": "Gen11"},
+        "profile_name": "HPE ProLiant DL380 Gen11",
+        "expected_storage_layout": "multi_controller",
+        "known_good_apply_path": "inventory_only",
+        "controller_roles": {
+            "os_candidates": ["MR416i-p"],
+            "data_candidates": ["MR416i-o"],
+        },
+        "warnings": [
+            "Bay numbers are not globally unique.",
+            "Use drive path or serial identity only.",
+            "Standard Redfish Volumes may be inventory-only for creation.",
+        ],
+    },
+]
+
+
+def detect_hardware_profile(server: dict[str, Any], controllers: list[dict[str, Any]]) -> dict[str, Any]:
+    del controllers
+    model = str(server.get("model") or "").strip()
+    generation = str(server.get("generation") or "").strip()
+    for profile in HARDWARE_PROFILES:
+        match = profile.get("match") or {}
+        if match.get("model_contains") and match["model_contains"] not in model:
+            continue
+        if match.get("generation_contains") and match["generation_contains"] not in generation:
+            continue
+        return {k: copy.deepcopy(v) for k, v in profile.items() if k != "match"}
+    return {
+        "profile_name": model or "Unknown hardware",
+        "expected_storage_layout": "unknown",
+        "known_good_apply_path": "",
+        "warnings": [],
+    }
+
+
+def storage_profile_advisories(profile: dict[str, Any], controllers: list[dict[str, Any]], drives: list[dict[str, Any]]) -> list[str]:
+    advisories: list[str] = []
+    if profile.get("expected_storage_layout") == "multi_controller" and len(controllers) > 1:
+        advisories.append(f"Detected {profile.get('profile_name')} multi-controller layout.")
+    role_hints = profile.get("controller_roles") or {}
+    os_candidates = [token for token in role_hints.get("os_candidates") or [] if token]
+    data_candidates = [token for token in role_hints.get("data_candidates") or [] if token]
+    matched_os = next((controller for controller in controllers if any(token in storage_controller_label(controller) for token in os_candidates)), {})
+    matched_data = next((controller for controller in controllers if any(token in storage_controller_label(controller) for token in data_candidates)), {})
+    if matched_os:
+        advisories.append(f"OS drives appear to be on {storage_controller_label(matched_os)}.")
+    if matched_data:
+        advisories.append(f"Data drives appear to be on {storage_controller_label(matched_data)}.")
+    bay_counts: dict[str, int] = {}
+    for drive in drives:
+        bay = str(drive.get("bay") or "").strip()
+        if bay:
+            bay_counts[bay] = bay_counts.get(bay, 0) + 1
+    if any(count > 1 for count in bay_counts.values()):
+        advisories.append("Bay labels are duplicated, so drive identity will use Redfish path.")
+    for warning in profile.get("warnings") or []:
+        if warning not in advisories:
+            advisories.append(str(warning))
+    return advisories
+
+
+def validate_storage_plan_drive_paths(plan: dict[str, Any], discovery: dict[str, Any]) -> None:
+    summary = discovery.get("summary", {}) or {}
+    planning_drives = build_storage_planning_drives(summary)
+    discovery_source_host = str((discovery.get("raw", {}) or {}).get("source_host") or summary.get("source_host") or "").strip()
+    discovery_serial = str((summary.get("server", {}) or {}).get("serial_number") or "").strip()
+    db_drives = db_lookup_drive_rows(cfg=load_kit_config(), system_serial=discovery_serial, ilo_host=discovery_source_host)
+    drive_by_path = {
+        str(drive.get("path") or drive.get("drive_path") or "").strip(): drive
+        for drive in planning_drives
+        if str(drive.get("path") or drive.get("drive_path") or "").strip()
+    }
+    for path, drive in db_drives.items():
+        drive_by_path.setdefault(path, drive)
+    controller_choices = build_storage_controller_choices(summary)
+    controller_by_path = {str(item.get("path") or "").strip(): item for item in controller_choices}
+
+    arrays = storage_plan_arrays(plan)
+    by_role = {str(array.get("role") or ""): array for array in arrays}
+    problems: list[str] = []
+    used_paths: dict[str, str] = {}
+    for array in arrays:
+        role = str(array.get("role") or "custom")
+        role_name = str(array.get("name") or role.upper())
+        controller_path = str(array.get("controller_path") or "").strip()
+        controller_name = storage_controller_label(controller_by_path.get(controller_path, {})) or str(array.get("controller_name") or controller_path or "(none)")
+        live_controller_paths: set[str] = set()
+        live_sizes: set[int] = set()
+        for drive_path in list(array.get("selected_drive_ids") or []):
+            drive_path = str(drive_path or "").strip()
+            if not drive_path:
+                problems.append(f"{role_name} includes a drive without a Redfish drive path.")
+                continue
+            live = drive_by_path.get(drive_path)
+            if not live:
+                problems.append(f"{role_name} drive {drive_path} was not found in the current inventory.")
+                continue
+            if storage_status_is_absent(str(live.get("status") or "")):
+                problems.append(f"{storage_drive_label(live)} is absent and cannot be selected.")
+            live_controller_path = str(live.get("controller_path") or "").strip()
+            live_controller_paths.add(live_controller_path)
+            actual_name = storage_controller_label(controller_by_path.get(live_controller_path, {})) or live.get("controller_name") or live_controller_path or "(unknown controller)"
+            if controller_path and live_controller_path != controller_path:
+                problems.append(f"{storage_drive_label(live)} is on {actual_name}, but {role_name} is set to {controller_name}.")
+            prior_role = used_paths.get(drive_path)
+            if prior_role and prior_role != role:
+                problems.append(f"Drive path {drive_path} is reused by both {prior_role} and {role}.")
+            used_paths[drive_path] = role
+            try:
+                live_sizes.add(int(round(float(live.get("size_gib") or live.get("capacity") or 0))))
+            except Exception:
+                pass
+        if len(live_controller_paths) > 1:
+            problems.append(f"{role_name} cannot span multiple storage controllers.")
+        if len(live_sizes) > 1:
+            problems.append(f"{role_name} uses mixed drive sizes. Review the array before applying.")
+
+    spare = ((plan.get("hot_spare") or {}).get("drive") or {})
+    if spare:
+        spare_path = str(spare.get("path") or spare.get("drive_path") or "").strip()
+        live = drive_by_path.get(spare_path) if spare_path else None
+        data_array = by_role.get("data") or {}
+        data_controller_path = str(data_array.get("controller_path") or "").strip()
+        data_controller_name = storage_controller_label(controller_by_path.get(data_controller_path, {})) or str(data_array.get("controller_name") or data_controller_path or "(none)")
+        if not live:
+            problems.append(f"Hot spare drive {spare_path or '(missing path)'} was not found in the current inventory.")
+        else:
+            actual_path = str(live.get("controller_path") or "").strip()
+            actual_name = storage_controller_label(controller_by_path.get(actual_path, {})) or live.get("controller_name") or actual_path or "(unknown controller)"
+            if data_controller_path and actual_path != data_controller_path:
+                problems.append(f"{storage_drive_label(live)} is on {actual_name}, but the data array is set to {data_controller_name}.")
+            if used_paths.get(spare_path):
+                problems.append(f"Drive path {spare_path} cannot be reused as both {used_paths[spare_path]} and hot spare.")
+    if problems:
+        raise ValueError(" ".join(problems))
 
 
 def build_storage_display_drives(summary: dict[str, Any] | None) -> list[dict[str, Any]]:
@@ -4167,6 +5302,8 @@ def build_raid_plan(discovery: dict, discovery_paths: dict[str, Path], overrides
             "More than one storage controller was detected. OS and data arrays can be planned on different controllers."
         )
 
+    hardware_profile = detect_hardware_profile(server, controllers)
+
     existing_volumes = []
     for source, items in (("hpe_smart_storage", hpe.get("volumes", [])), ("standard_redfish_storage", standard.get("volumes", []))):
         for item in items or []:
@@ -4175,18 +5312,31 @@ def build_raid_plan(discovery: dict, discovery_paths: dict[str, Path], overrides
         warnings.append("Existing logical volumes detected; default recommendation is wipe and rebuild before applying this target layout.")
 
     eligible_drives = []
+    spare_candidate_drives = []
     excluded_drives = []
     for source, items in (("hpe_smart_storage", hpe.get("drives", [])), ("standard_redfish_storage", standard.get("drives", []))):
         for item in items or []:
             drive = normalized_plan_drive(item, source)
+            if not str(drive.get("controller_path") or "").strip() and len(controller_by_path) == 1:
+                drive["controller_path"] = next(iter(controller_by_path.keys()))
             drive_controller = controller_by_path.get(str(drive.get("controller_path") or "").strip(), {})
             drive["controller_name"] = storage_controller_label(drive_controller) if drive_controller else str(drive.get("controller_path") or "")
+            drive["standby_spare"] = storage_status_is_standby_spare(str(drive.get("status") or ""))
+            drive["absent"] = storage_status_is_absent(str(drive.get("status") or ""))
             if drive["size_gib"] <= 0:
                 excluded_drives.append({**drive, "exclude_reason": "Missing or zero drive size."})
+            elif drive["absent"]:
+                excluded_drives.append({**drive, "exclude_reason": f"Drive is not present: {drive['status'] or 'absent'}."})
             elif not storage_status_is_eligible(drive["status"]):
                 excluded_drives.append({**drive, "exclude_reason": f"Drive status is not eligible: {drive['status'] or 'unknown'}."})
+            elif drive["standby_spare"]:
+                spare_candidate_drives.append(drive)
+                excluded_drives.append({**drive, "exclude_reason": "Already marked as a standby spare; shown separately and never auto-selected."})
             else:
                 eligible_drives.append(drive)
+
+    all_selectable_drives = list(eligible_drives) + list(spare_candidate_drives)
+    warnings.extend(storage_profile_advisories(hardware_profile, controllers, all_selectable_drives))
 
     os_default_pool = [
         drive for drive in eligible_drives
@@ -4209,15 +5359,15 @@ def build_raid_plan(discovery: dict, discovery_paths: dict[str, Path], overrides
         default_data_raid,
     )
 
-    eligible_by_identity = {storage_drive_identity(drive): drive for drive in eligible_drives if storage_drive_identity(drive)}
-    eligible_by_bay = {str(drive.get("bay") or ""): drive for drive in eligible_drives}
+    eligible_by_identity = {storage_drive_identity(drive): drive for drive in all_selectable_drives if storage_drive_identity(drive)}
+    eligible_by_bay = {str(drive.get("bay") or ""): drive for drive in all_selectable_drives}
     eligible_by_bay_by_controller: dict[str, dict[str, dict[str, Any]]] = {}
-    for drive in eligible_drives:
+    for drive in all_selectable_drives:
         controller_path = str(drive.get("controller_path") or "").strip()
         bay = str(drive.get("bay") or "")
         eligible_by_bay_by_controller.setdefault(controller_path, {})[bay] = drive
     bay_counts: dict[str, int] = {}
-    for drive in eligible_drives:
+    for drive in all_selectable_drives:
         bay = str(drive.get("bay") or "").strip()
         if bay:
             bay_counts[bay] = bay_counts.get(bay, 0) + 1
@@ -4238,6 +5388,13 @@ def build_raid_plan(discovery: dict, discovery_paths: dict[str, Path], overrides
     if not selected_data_ids:
         selected_data_ids = selected_data_paths
     if not selected_spare_id:
+        selected_spare_id = selected_spare_path
+    # Path-first selection is the canonical model now. Keep legacy ids only as fallback.
+    if selected_os_paths:
+        selected_os_ids = list(selected_os_paths)
+    if selected_data_paths:
+        selected_data_ids = list(selected_data_paths)
+    if selected_spare_path:
         selected_spare_id = selected_spare_path
     selected_os_controller_path = requested_os_controller_path
     selected_data_controller_path = requested_data_controller_path
@@ -4276,10 +5433,10 @@ def build_raid_plan(discovery: dict, discovery_paths: dict[str, Path], overrides
             hot_spare = {}
             data_explanation = "This section is not used in the current plan."
         if selected_os_ids:
-            os_pair = [eligible_by_identity[drive_id] for drive_id in selected_os_ids if drive_id in eligible_by_identity]
-            missing_os = [drive_id for drive_id in selected_os_ids if drive_id not in eligible_by_identity]
+            os_pair = [eligible_by_identity[drive_id] for drive_id in selected_os_ids if drive_id in eligible_by_identity and storage_drive_is_array_selectable(eligible_by_identity[drive_id])]
+            missing_os = [drive_id for drive_id in selected_os_ids if drive_id not in eligible_by_identity or not storage_drive_is_array_selectable(eligible_by_identity[drive_id])]
             if missing_os:
-                custom_blockers.append(f"Selected OS drives are not eligible or were not found by drive identity: {', '.join(missing_os)}.")
+                custom_blockers.append(f"Selected OS drives are not eligible or were not found by drive path: {', '.join(missing_os)}.")
             os_explanation = "Using the drives chosen below for the OS mirror."
         elif selected_os_bays:
             os_bay_lookup = eligible_by_bay_by_controller.get(selected_os_controller_path, eligible_by_bay) if selected_os_controller_path else eligible_by_bay
@@ -4289,10 +5446,10 @@ def build_raid_plan(discovery: dict, discovery_paths: dict[str, Path], overrides
                 custom_blockers.append(f"Selected OS drives are not eligible or were not found: {', '.join(missing_os)}.")
             os_explanation = "Using the drives chosen below for the OS mirror."
         if selected_data_ids:
-            data_set = [eligible_by_identity[drive_id] for drive_id in selected_data_ids if drive_id in eligible_by_identity]
-            missing_data = [drive_id for drive_id in selected_data_ids if drive_id not in eligible_by_identity]
+            data_set = [eligible_by_identity[drive_id] for drive_id in selected_data_ids if drive_id in eligible_by_identity and storage_drive_is_array_selectable(eligible_by_identity[drive_id])]
+            missing_data = [drive_id for drive_id in selected_data_ids if drive_id not in eligible_by_identity or not storage_drive_is_array_selectable(eligible_by_identity[drive_id])]
             if missing_data:
-                custom_blockers.append(f"Selected data drives are not eligible or were not found by drive identity: {', '.join(missing_data)}.")
+                custom_blockers.append(f"Selected data drives are not eligible or were not found by drive path: {', '.join(missing_data)}.")
             data_explanation = "Using the drives chosen below for the data array."
         elif selected_data_bays:
             data_bay_lookup = eligible_by_bay_by_controller.get(selected_data_controller_path, eligible_by_bay) if selected_data_controller_path else eligible_by_bay
@@ -4303,8 +5460,10 @@ def build_raid_plan(discovery: dict, discovery_paths: dict[str, Path], overrides
             data_explanation = "Using the drives chosen below for the data array."
         if selected_spare_id:
             hot_spare = dict(eligible_by_identity.get(selected_spare_id) or {})
+            if hot_spare and not storage_drive_is_spare_selectable(hot_spare):
+                hot_spare = {}
             if not hot_spare:
-                custom_blockers.append(f"Selected hot spare drive identity was not eligible or was not found: {selected_spare_id}.")
+                custom_blockers.append(f"Selected hot spare drive path was not eligible or was not found: {selected_spare_id}.")
         elif selected_spare_bay:
             spare_bay_lookup = eligible_by_bay_by_controller.get(selected_data_controller_path, eligible_by_bay) if selected_data_controller_path else eligible_by_bay
             hot_spare = dict(spare_bay_lookup.get(selected_spare_bay) or {})
@@ -4314,10 +5473,10 @@ def build_raid_plan(discovery: dict, discovery_paths: dict[str, Path], overrides
         data_identity_set = {storage_drive_identity(drive) for drive in data_set if storage_drive_identity(drive)}
         spare_identity = storage_drive_identity(hot_spare) if hot_spare else ""
         if len(os_identity_set) != len(os_pair) or len(data_identity_set) != len(data_set) or (hot_spare and not spare_identity):
-            custom_blockers.append("Every selected drive must have a stable drive identity before it can be approved.")
+            custom_blockers.append("Every selected drive must have a stable drive path before it can be approved.")
         selected_identities = [storage_drive_identity(drive) for drive in os_pair + data_set + ([hot_spare] if hot_spare else []) if storage_drive_identity(drive)]
         if len(selected_identities) != len(set(selected_identities)):
-            overlap_blockers.append("The same drive identity cannot be reused in the OS, data, or hot spare selections.")
+            overlap_blockers.append("The same drive path cannot be reused in the OS, data, or hot spare selections.")
         os_controller_set = {str(drive.get("controller_path") or "").strip() for drive in os_pair if str(drive.get("controller_path") or "").strip()}
         data_controller_set = {str(drive.get("controller_path") or "").strip() for drive in data_set if str(drive.get("controller_path") or "").strip()}
         if len(os_controller_set) > 1:
@@ -4325,9 +5484,29 @@ def build_raid_plan(discovery: dict, discovery_paths: dict[str, Path], overrides
         if len(data_controller_set) > 1:
             custom_blockers.append("The data array cannot span multiple storage controllers.")
         if selected_os_controller_path and os_controller_set and os_controller_set != {selected_os_controller_path}:
-            custom_blockers.append("Selected OS drives do not belong to the selected OS controller.")
+            for drive in os_pair:
+                drive_controller_path = str(drive.get("controller_path") or "").strip()
+                if drive_controller_path == selected_os_controller_path:
+                    continue
+                drive_controller = controller_by_path.get(drive_controller_path, {})
+                selected_controller = controller_by_path.get(selected_os_controller_path, {})
+                custom_blockers.append(
+                    f"{storage_drive_label(drive)} is on "
+                    f"{storage_controller_label(drive_controller) or drive_controller_path}, "
+                    f"not {storage_controller_label(selected_controller) or selected_os_controller_path}."
+                )
         if selected_data_controller_path and data_controller_set and data_controller_set != {selected_data_controller_path}:
-            custom_blockers.append("Selected data drives do not belong to the selected data controller.")
+            for drive in data_set:
+                drive_controller_path = str(drive.get("controller_path") or "").strip()
+                if drive_controller_path == selected_data_controller_path:
+                    continue
+                drive_controller = controller_by_path.get(drive_controller_path, {})
+                selected_controller = controller_by_path.get(selected_data_controller_path, {})
+                custom_blockers.append(
+                    f"{storage_drive_label(drive)} is on "
+                    f"{storage_controller_label(drive_controller) or drive_controller_path}, "
+                    f"not {storage_controller_label(selected_controller) or selected_data_controller_path}."
+                )
         if os_identity_set and data_identity_set and (os_identity_set & data_identity_set):
             overlap_blockers.append("The same drive cannot be used for both the OS mirror and the data array.")
         if spare_identity and spare_identity in (os_identity_set | data_identity_set):
@@ -4340,13 +5519,23 @@ def build_raid_plan(discovery: dict, discovery_paths: dict[str, Path], overrides
             compatibility_group = {drive_group_key(drive) for drive in data_set + [hot_spare]}
         else:
             compatibility_group = {drive_group_key(drive) for drive in data_set}
+        if hot_spare and selected_data_controller_path:
+            spare_controller_path = str(hot_spare.get("controller_path") or "").strip()
+            if spare_controller_path and spare_controller_path != selected_data_controller_path:
+                spare_controller = controller_by_path.get(spare_controller_path, {})
+                data_controller = controller_by_path.get(selected_data_controller_path, {})
+                custom_blockers.append(
+                    "Selected hot spare belongs to a different controller. "
+                    f"spare={storage_controller_label(spare_controller) or spare_controller_path} "
+                    f"data={storage_controller_label(data_controller) or selected_data_controller_path}"
+                )
         if data_set and len(compatibility_group) > 1:
             warnings.append("The selected data drives and hot spare differ by media type, protocol, or size. Review the layout before approving.")
         blockers.extend(custom_blockers + overlap_blockers)
         selected_identity_set = set(selected_identities)
         raid_excluded = [
             {**drive, "exclude_reason": "Not selected for the custom data layout."}
-            for drive in eligible_drives
+            for drive in all_selectable_drives
             if storage_drive_identity(drive) not in selected_identity_set
         ]
         warnings.append("This plan was customized from the default drive selection.")
@@ -4371,6 +5560,10 @@ def build_raid_plan(discovery: dict, discovery_paths: dict[str, Path], overrides
         warnings.append("The selected data drives differ by media type, protocol, or size. Review the layout before approving.")
     selected_os_controller_path = selected_os_controller_path or (os_controller_paths[0] if os_controller_paths else "")
     selected_data_controller_path = selected_data_controller_path or (data_controller_paths[0] if data_controller_paths else "")
+    if not selected_os_controller_path and len(controllers) == 1:
+        selected_os_controller_path = str((controllers[0] or {}).get("path") or "")
+    if not selected_data_controller_path and len(controllers) == 1:
+        selected_data_controller_path = str((controllers[0] or {}).get("path") or "")
     os_controller = controller_by_path.get(selected_os_controller_path, {})
     data_controller = controller_by_path.get(selected_data_controller_path, {})
     controller = data_controller or os_controller or controller
@@ -4422,11 +5615,43 @@ def build_raid_plan(discovery: dict, discovery_paths: dict[str, Path], overrides
             "drive": hot_spare,
         },
     }
+    arrays = []
+    if os_pair:
+        arrays.append(
+            storage_plan_array(
+                role="os",
+                name="OS array",
+                raid_level=selected_os_raid,
+                controller=os_controller,
+                drives=os_pair,
+                target_size_gib=500,
+            )
+        )
+    if data_set:
+        arrays.append(
+            storage_plan_array(
+                role="data",
+                name="Data array",
+                raid_level=selected_data_raid,
+                controller=data_controller,
+                drives=data_set,
+            )
+        )
+    hot_spare_summary = {
+        "required": False,
+        "drive": hot_spare,
+        "reserved": bool(hot_spare),
+        "drive_path": str((hot_spare or {}).get("path") or ""),
+        "controller_path": str((hot_spare or {}).get("controller_path") or ""),
+        "controller_name": str((hot_spare or {}).get("controller_name") or ""),
+        "selected_drive_metadata": storage_drive_metadata(hot_spare) if hot_spare else {},
+    }
     pre_apply_summary = {
         "mode": apply_readiness["next_action"],
         "volumes_to_remove": existing_volumes,
         "planned_layout": planned_layout,
         "reserved_hot_spare": hot_spare,
+        "arrays": arrays,
     }
 
     return {
@@ -4452,6 +5677,8 @@ def build_raid_plan(discovery: dict, discovery_paths: dict[str, Path], overrides
             "data_volume": {"raid": raid_label(selected_data_raid), "capacity": "selected compatible eligible drives"},
             "hot_spare": {"required": False, "scope": "optional dedicated spare if selected"},
         },
+        "hardware_profile": hardware_profile,
+        "profile_advisories": storage_profile_advisories(hardware_profile, controllers, all_selectable_drives),
         "customization": {
             "active": customization_active,
             "selected_controller_path": str(controller.get("path") or ""),
@@ -4469,10 +5696,11 @@ def build_raid_plan(discovery: dict, discovery_paths: dict[str, Path], overrides
             "selected_data_bays": [str(drive.get("bay") or "") for drive in data_set],
             "selected_hot_spare_bay": str((hot_spare or {}).get("bay") or ""),
         },
+        "arrays": arrays,
         "planned_layout": planned_layout,
         "os_raid1": {"raid": selected_os_raid, "label": raid_label(selected_os_raid), "target_size_gib": 500, "drives": os_pair, "explanation": os_explanation},
         "data_raid6": {"raid": selected_data_raid, "label": raid_label(selected_data_raid), "feasible": not validate_raid_drive_count(selected_data_raid, data_set, section="data"), "drives": data_set, "drive_count": len(data_set), "explanation": data_explanation},
-        "hot_spare": {"required": False, "drive": hot_spare, "reserved": bool(hot_spare)},
+        "hot_spare": hot_spare_summary,
         "apply_readiness": apply_readiness,
         "pre_apply_summary": pre_apply_summary,
         "excluded_drives": sorted(excluded_drives, key=storage_drive_sort_key),
@@ -4722,25 +5950,35 @@ def record_storage_apply_step(
 
 
 def build_storage_apply_intent(plan: dict, apply_mode: str) -> dict[str, Any]:
+    arrays = storage_plan_arrays(plan)
+    arrays_intent = []
+    for array in arrays:
+        role = str(array.get("role") or "custom")
+        raid_level = normalize_raid_choice("os" if role == "os" else "data", str(array.get("raid_level") or array.get("raid") or ""), allow_empty=True)
+        label_prefix = "OS" if role == "os" else "Data" if role == "data" else str(array.get("name") or role.title())
+        arrays_intent.append(
+            {
+                "role": role,
+                "name": str(array.get("name") or f"{label_prefix} array"),
+                "raid": raid_level,
+                "label": f"{label_prefix} {raid_label(raid_level)} logical drive",
+                "target_size_gib": array.get("target_size_gib", 500 if role == "os" else None),
+                "controller_path": str(array.get("controller_path") or ""),
+                "controller_name": str(array.get("controller_name") or ""),
+                "bays": [drive.get("bay") for drive in array.get("drives", [])],
+                "drive_paths": [drive.get("path") for drive in array.get("drives", [])],
+                "drives": list(array.get("drives", []) or []),
+                "selected_drive_metadata": list(array.get("selected_drive_metadata") or []),
+            }
+        )
+    by_role = {str(item.get("role") or ""): item for item in arrays_intent}
     controller = plan.get("source_discovery", {}).get("controller", {}) or {}
     return {
         "mode": apply_mode,
         "controller": controller,
-        "os_raid1": {
-            "raid": normalize_raid_choice("os", str(plan.get("os_raid1", {}).get("raid") or ""), allow_empty=True) if plan.get("os_raid1", {}).get("drives") else "",
-            "label": f"OS {raid_label(str(plan.get('os_raid1', {}).get('raid') or 'RAID1'))} logical drive",
-            "target_size_gib": plan.get("os_raid1", {}).get("target_size_gib", 500),
-            "bays": [drive.get("bay") for drive in plan.get("os_raid1", {}).get("drives", [])],
-            "drive_paths": [drive.get("path") for drive in plan.get("os_raid1", {}).get("drives", [])],
-            "drives": list(plan.get("os_raid1", {}).get("drives", []) or []),
-        },
-        "data_raid6": {
-            "raid": normalize_raid_choice("data", str(plan.get("data_raid6", {}).get("raid") or ""), allow_empty=True) if plan.get("data_raid6", {}).get("drives") else "",
-            "label": f"Data {raid_label(str(plan.get('data_raid6', {}).get('raid') or 'RAID6'))} logical drive",
-            "bays": [drive.get("bay") for drive in plan.get("data_raid6", {}).get("drives", [])],
-            "drive_paths": [drive.get("path") for drive in plan.get("data_raid6", {}).get("drives", [])],
-            "drives": list(plan.get("data_raid6", {}).get("drives", []) or []),
-        },
+        "arrays": arrays_intent,
+        "os_raid1": by_role.get("os", {"raid": "", "label": "OS logical drive", "target_size_gib": 500, "bays": [], "drive_paths": [], "drives": []}),
+        "data_raid6": by_role.get("data", {"raid": "", "label": "Data logical drive", "bays": [], "drive_paths": [], "drives": []}),
         "hot_spare": {
             "bay": (plan.get("hot_spare", {}).get("drive", {}) or {}).get("bay", ""),
             "drive_path": (plan.get("hot_spare", {}).get("drive", {}) or {}).get("path", ""),
@@ -4811,14 +6049,64 @@ def storage_controller_signature(controller: dict[str, Any]) -> tuple[str, str, 
 
 def storage_selected_plan_drives(plan: dict[str, Any]) -> list[dict[str, Any]]:
     drives: list[dict[str, Any]] = []
-    for section in ("os_raid1", "data_raid6"):
-        for drive in (plan.get(section, {}) or {}).get("drives", []) or []:
+    for array in storage_plan_arrays(plan):
+        for drive in list(array.get("drives") or []):
             if drive:
-                drives.append({**drive, "_section": section})
+                drives.append({**drive, "_section": str(array.get("role") or "custom")})
     spare = (plan.get("hot_spare", {}) or {}).get("drive", {}) or {}
     if spare:
         drives.append({**spare, "_section": "hot_spare"})
     return drives
+
+
+def _normalized_drive_path_set(items: list[Any]) -> set[str]:
+    values: set[str] = set()
+    for item in items or []:
+        text = str(item or "").strip()
+        if text:
+            values.add(text)
+    return values
+
+
+def storage_live_layout_matches_plan(plan: dict[str, Any], live_discovery: dict[str, Any]) -> tuple[bool, list[str]]:
+    arrays = storage_plan_arrays(plan)
+    live_volumes = list(storage_discovery_sources(live_discovery)["volumes"] or [])
+    notes: list[str] = []
+    if not arrays:
+        return False, ["No planned arrays were found."]
+
+    expected_controller_paths = {str(array.get("controller_path") or "").strip() for array in arrays if str(array.get("controller_path") or "").strip()}
+    live_selected = [volume for volume in live_volumes if str(volume.get("controller_path") or "").strip() in expected_controller_paths]
+    if len(live_selected) != len(arrays):
+        return False, [f"Expected {len(arrays)} live volume(s) on the selected controllers, found {len(live_selected)}."]
+
+    live_by_controller = {str(volume.get("controller_path") or "").strip(): volume for volume in live_selected}
+    for array in arrays:
+        controller_path = str(array.get("controller_path") or "").strip()
+        role = str(array.get("role") or "custom")
+        live_volume = live_by_controller.get(controller_path)
+        if not live_volume:
+            return False, [f"No live volume was found on controller {controller_path} for the {role} array."]
+        planned_raid = str(array.get("raid_level") or array.get("raid") or "").strip().upper()
+        live_raid = str(live_volume.get("raid_type") or "").strip().upper()
+        if planned_raid and live_raid != planned_raid:
+            return False, [f"Controller {controller_path} has {live_raid or 'no RAID type'} instead of {planned_raid} for the {role} array."]
+        planned_drives = _normalized_drive_path_set([drive.get("path") or drive.get("drive_path") for drive in list(array.get("drives") or [])])
+        live_drives = _normalized_drive_path_set(list(live_volume.get("drive_paths") or []))
+        if planned_drives and live_drives != planned_drives:
+            return False, [f"Controller {controller_path} drive membership does not match the approved {role} array."]
+        if role == "data":
+            planned_spare = str((((plan.get("hot_spare") or {}).get("drive") or {}).get("path")) or "").strip()
+            live_spares = _normalized_drive_path_set(list(live_volume.get("spare_paths") or []))
+            if planned_spare:
+                if live_spares != {planned_spare}:
+                    return False, [f"Controller {controller_path} dedicated spare does not match the approved data spare."]
+            elif live_spares:
+                return False, [f"Controller {controller_path} has a dedicated spare in live discovery, but the approved plan does not."]
+        notes.append(
+            f"{controller_path}: {live_volume.get('name') or live_volume.get('display_name') or live_volume.get('id') or 'volume'} {live_raid}"
+        )
+    return True, notes
 
 
 def _drive_identity_matches(saved: dict[str, Any], live: dict[str, Any]) -> tuple[bool, str]:
@@ -4864,6 +6152,11 @@ def _candidate_drives_for_controller(discovery: dict[str, Any], controller: dict
 
 
 def _find_live_drive(saved_drive: dict[str, Any], live_drives: list[dict[str, Any]]) -> dict[str, Any]:
+    saved_path = str(saved_drive.get("path") or saved_drive.get("drive_path") or "").strip()
+    if saved_path:
+        exact = next((drive for drive in live_drives if str(drive.get("path") or drive.get("drive_path") or "").strip() == saved_path), {})
+        if exact:
+            return exact
     saved_bay = str(saved_drive.get("bay") or "").strip()
     saved_serial = str(saved_drive.get("serial_number") or "").strip()
     bay_match = {}
@@ -4943,34 +6236,51 @@ def storage_preflight_compare_and_remap(plan: dict[str, Any], live_discovery: di
         )
         return remapped_plan, result
 
-    candidates = _storage_controller_candidates(plan, live_discovery)
-    live_controller: dict[str, Any] = {}
-    live_drive_map: dict[str, dict[str, Any]] = {}
+    live_controllers = {str(controller.get("path") or "").rstrip("/"): controller for controller in storage_discovery_sources(live_discovery)["controllers"]}
 
-    for candidate in candidates:
-        candidate_drives = _candidate_drives_for_controller(live_discovery, candidate)
-        candidate_map: dict[str, dict[str, Any]] = {}
-        candidate_rejections: list[str] = []
-        for saved_drive in selected_drives:
-            live_drive = _find_live_drive(saved_drive, candidate_drives)
-            if not live_drive:
-                candidate_rejections.append(f"Approved bay {saved_drive.get('bay') or '?'} was not found on live controller {candidate.get('path') or '(unknown)'}.")
-                continue
-            matched, reason = _drive_identity_matches(saved_drive, live_drive)
-            if not matched:
-                candidate_rejections.append(reason)
-                continue
-            candidate_map[str(saved_drive.get("path") or saved_drive.get("bay") or len(candidate_map))] = live_drive
-        if not candidate_rejections:
-            live_controller = candidate
-            live_drive_map = candidate_map
-            break
-        if not rejection_reasons:
-            rejection_reasons = candidate_rejections
+    def remap_drive_for_controller(drive: dict[str, Any], live_controller: dict[str, Any]) -> dict[str, Any]:
+        live_drive = _find_live_drive(drive, _candidate_drives_for_controller(live_discovery, live_controller))
+        if not live_drive:
+            rejection_reasons.append(
+                f"Approved drive {storage_drive_label(drive)} was not found on live controller {live_controller.get('path') or '(unknown)'}."
+            )
+            return drive
+        matched, reason = _drive_identity_matches(drive, live_drive)
+        if not matched:
+            rejection_reasons.append(reason)
+            return drive
+        normalized = normalized_plan_drive(live_drive, str(live_controller.get("source") or live_drive.get("source") or ""))
+        if str(drive.get("path") or "").strip() and normalized.get("path") and str(drive.get("path")) != str(normalized.get("path")):
+            corrections.append(f"Remapped bay {drive.get('bay') or normalized.get('bay')} drive path to {normalized.get('path')}.")
+        return {**drive, **normalized}
 
-    if not live_controller:
-        if not rejection_reasons:
-            rejection_reasons.append("The approved storage controller was not found in live discovery.")
+    remapped_arrays: list[dict[str, Any]] = []
+    for array in storage_plan_arrays(plan):
+        saved_array_controller_path = str(array.get("controller_path") or "").rstrip("/")
+        saved_array_controller = live_controllers.get(saved_array_controller_path)
+        if not saved_array_controller:
+            candidate_list = _storage_controller_candidates({"source_discovery": {"controller": {"path": saved_array_controller_path}}}, live_discovery)
+            saved_array_controller = candidate_list[0] if candidate_list else {}
+        if not saved_array_controller:
+            rejection_reasons.append(f"The approved {array.get('name') or array.get('role') or 'array'} controller was not found in live discovery.")
+            continue
+        live_controller_path = str(saved_array_controller.get("path") or "").rstrip("/")
+        if saved_array_controller_path and live_controller_path and saved_array_controller_path != live_controller_path:
+            differences.append(f"Controller Redfish path changed from {saved_array_controller_path} to {live_controller_path}.")
+            corrections.append(f"Remapped controller path to {live_controller_path}.")
+        remapped_drives = [remap_drive_for_controller(drive, saved_array_controller) for drive in list(array.get("drives") or [])]
+        remapped_arrays.append(
+            {
+                **array,
+                "controller_path": live_controller_path,
+                "controller_name": storage_controller_label(saved_array_controller) or live_controller_path,
+                "selected_drive_ids": [str(drive.get("path") or drive.get("drive_path") or "") for drive in remapped_drives if str(drive.get("path") or drive.get("drive_path") or "").strip()],
+                "selected_drive_metadata": [storage_drive_metadata(drive) for drive in remapped_drives],
+                "drives": remapped_drives,
+            }
+        )
+
+    if rejection_reasons:
         result = diagnostic_result(
             status="blocked",
             desired_state={
@@ -4988,35 +6298,51 @@ def storage_preflight_compare_and_remap(plan: dict[str, Any], live_discovery: di
         )
         return remapped_plan, result
 
-    live_controller_path = str(live_controller.get("path") or "").rstrip("/")
-    if saved_controller_path and live_controller_path and saved_controller_path != live_controller_path:
-        differences.append(f"Controller Redfish path changed from {saved_controller_path} to {live_controller_path}.")
-        corrections.append(f"Remapped controller path to {live_controller_path}.")
-    remapped_plan.setdefault("source_discovery", {})["controller"] = dict(live_controller)
-
-    def remap_drive(drive: dict[str, Any]) -> dict[str, Any]:
-        key = str(drive.get("path") or drive.get("bay") or "")
-        live_drive = live_drive_map.get(key) or _find_live_drive(drive, _candidate_drives_for_controller(live_discovery, live_controller))
-        if not live_drive:
-            return drive
-        normalized = normalized_plan_drive(live_drive, str(live_controller.get("source") or live_drive.get("source") or ""))
-        if str(drive.get("path") or "").strip() and normalized.get("path") and str(drive.get("path")) != str(normalized.get("path")):
-            corrections.append(f"Remapped bay {drive.get('bay') or normalized.get('bay')} drive path to {normalized.get('path')}.")
-        return {**drive, **normalized}
-
-    for section in ("os_raid1", "data_raid6"):
-        section_state = remapped_plan.get(section, {}) or {}
-        section_state["drives"] = [remap_drive(drive) for drive in section_state.get("drives", []) or []]
-        remapped_plan[section] = section_state
+    remapped_plan["arrays"] = remapped_arrays
+    by_role = {str(array.get("role") or ""): array for array in remapped_arrays}
+    if by_role.get("os"):
+        remapped_plan.setdefault("os_raid1", {})["drives"] = list(by_role["os"].get("drives") or [])
+        remapped_plan.setdefault("source_discovery", {})["os_controller"] = {"path": by_role["os"].get("controller_path", ""), "name": by_role["os"].get("controller_name", "")}
+    if by_role.get("data"):
+        remapped_plan.setdefault("data_raid6", {})["drives"] = list(by_role["data"].get("drives") or [])
+        remapped_plan.setdefault("source_discovery", {})["data_controller"] = {"path": by_role["data"].get("controller_path", ""), "name": by_role["data"].get("controller_name", "")}
+    primary_controller_path = str((by_role.get("data") or by_role.get("os") or {}).get("controller_path") or "").strip()
+    if primary_controller_path:
+        remapped_plan.setdefault("source_discovery", {})["controller"] = dict(live_controllers.get(primary_controller_path, {}))
     spare = (remapped_plan.get("hot_spare", {}) or {}).get("drive", {}) or {}
     if spare:
-        remapped_plan.setdefault("hot_spare", {})["drive"] = remap_drive(spare)
+        spare_controller_path = str(spare.get("controller_path") or ((by_role.get("data") or {}).get("controller_path")) or "").strip()
+        live_spare_controller = live_controllers.get(spare_controller_path, {})
+        remapped_plan.setdefault("hot_spare", {})["drive"] = remap_drive_for_controller(spare, live_spare_controller) if live_spare_controller else spare
 
-    live_volumes = [
-        volume
-        for volume in storage_discovery_sources(live_discovery)["volumes"]
-        if storage_item_matches_controller(volume, live_controller)
-    ]
+    selected_controller_paths = {str(array.get("controller_path") or "").strip() for array in remapped_arrays if str(array.get("controller_path") or "").strip()}
+    live_volumes = [volume for volume in storage_discovery_sources(live_discovery)["volumes"] if str(volume.get("controller_path") or "").strip() in selected_controller_paths]
+    layout_matches, match_notes = storage_live_layout_matches_plan(remapped_plan, live_discovery)
+    if layout_matches:
+        remapped_plan["existing_logical_volumes"] = live_volumes
+        result = diagnostic_result(
+            status="already_applied",
+            desired_state={
+                "server_serial": (plan.get("source_discovery", {}) or {}).get("serial_number", ""),
+                "server_model": (plan.get("source_discovery", {}) or {}).get("server_model", ""),
+                "controller_path": saved_controller_path,
+                "selected_bays": [drive.get("bay") for drive in selected_drives],
+                "mode": apply_mode,
+            },
+            discovered_state={
+                "controller_paths": sorted(selected_controller_paths),
+                "selected_bays": [drive.get("bay") for drive in selected_drives],
+            },
+            differences=[],
+            safe_corrections_attempted=corrections,
+            options_discovered=storage_discovered_options(live_discovery),
+            selected_action="Skip storage apply because the live controller layout already matches the approved plan.",
+            recommended_fix="No storage rewrite is needed. Continue with the next stage.",
+            user_action_required=False,
+        )
+        if match_notes:
+            result["safe_corrections_attempted"] = list(result.get("safe_corrections_attempted") or []) + match_notes
+        return remapped_plan, result
     if apply_mode == "wipe_rebuild":
         remapped_plan["existing_logical_volumes"] = live_volumes
         if live_volumes:
@@ -5034,14 +6360,13 @@ def storage_preflight_compare_and_remap(plan: dict[str, Any], live_discovery: di
             "mode": apply_mode,
         },
         discovered_state={
-            "controller_path": live_controller_path,
-            "controller_model": live_controller.get("model") or live_controller.get("name") or "",
+            "controller_paths": sorted(selected_controller_paths),
             "selected_bays": [drive.get("bay") for drive in selected_drives],
         },
         differences=differences,
         safe_corrections_attempted=corrections,
         options_discovered=storage_discovered_options(live_discovery),
-        selected_action=f"Use live controller path {live_controller_path or '(unknown)'} for storage apply.",
+        selected_action=f"Use live controller path set {', '.join(sorted(selected_controller_paths)) or '(unknown)'} for storage apply.",
         recommended_fix="" if result_status != "blocked" else "Run storage discovery again and re-approve storage.",
         user_action_required=False,
     )
@@ -5529,13 +6854,130 @@ def _standard_redfish_storage_apply_surface(discovery: dict[str, Any], controlle
     }
 
 
+def standard_redfish_controller_surfaces(discovery: dict[str, Any], controller_paths: list[str]) -> dict[str, dict[str, str]]:
+    surfaces: dict[str, dict[str, str]] = {}
+    for controller_path in controller_paths:
+        clean = str(controller_path or "").strip()
+        if not clean:
+            continue
+        surfaces[clean] = _standard_redfish_storage_apply_surface(discovery, clean)
+    return surfaces
+
+
+def standard_redfish_verified_create_paths(discovery: dict[str, Any]) -> set[str]:
+    capabilities = ((discovery.get("summary") or {}).get("capabilities") or {})
+    explicit_paths = capabilities.get("standard_redfish_volume_create_verified_paths")
+    if isinstance(explicit_paths, list):
+        normalized = {str(item or "").strip() for item in explicit_paths if str(item or "").strip()}
+        if normalized:
+            return normalized
+    raw_storage = ((discovery.get("raw") or {}).get("standard_storage") or [])
+    inferred = {
+        str(item.get("@odata.id") or "").strip()
+        for item in raw_storage
+        if str(item.get("@odata.id") or "").strip()
+        and isinstance(item.get("VolumeCapabilities"), dict)
+        and bool((item.get("VolumeCapabilities") or {}).get("Links", {}).get("Drives@Redfish.RequiredOnCreate") is True)
+        and bool((item.get("VolumeCapabilities") or {}).get("RAIDType@Redfish.AllowableValues"))
+    }
+    if inferred:
+        return inferred
+    if capabilities.get("standard_redfish_volume_create_verified") is True:
+        controllers = ((discovery.get("summary") or {}).get("standard_redfish_storage") or {}).get("controllers") or []
+        return {str(item.get("path") or "").strip() for item in controllers if str(item.get("path") or "").strip()}
+    return set()
+
+
+def storage_allow_unverified_standard_redfish_create(cfg: dict[str, Any] | None = None) -> bool:
+    cfg = cfg or load_kit_config()
+    storage_cfg = (cfg.get("storage") or {}) if isinstance(cfg, dict) else {}
+    return bool(storage_cfg.get("allow_unverified_standard_redfish_create"))
+
+
+def build_storage_controller_capabilities(discovery: dict[str, Any], cfg: dict[str, Any] | None = None) -> list[dict[str, Any]]:
+    summary = discovery.get("summary", discovery) or {}
+    capabilities = (summary.get("capabilities") or {}) if isinstance(summary, dict) else {}
+    server = (summary.get("server") or {}) if isinstance(summary, dict) else {}
+    server_gen = str(server.get("generation") or "")
+    controllers = []
+    override_enabled = storage_allow_unverified_standard_redfish_create(cfg)
+    verified_redfish_paths = standard_redfish_verified_create_paths(discovery)
+    settings_path, settings_reason = _verified_hpe_smartstorage_settings_path(capabilities)
+    for source_key, items in (
+        ("standard_redfish_storage", ((summary.get("standard_redfish_storage") or {}).get("controllers") or [])),
+        ("hpe_smart_storage", ((summary.get("hpe_smart_storage") or {}).get("controllers") or [])),
+    ):
+        for item in items:
+            controller = dict(item or {})
+            controller_path = str(controller.get("path") or "").strip()
+            controller_name = storage_controller_label(controller) or controller_path
+            record = {
+                "controller_path": controller_path,
+                "controller_name": controller_name,
+                "source": source_key,
+                "can_delete_volumes": False,
+                "can_create_volumes": False,
+                "create_method": "inventory_only",
+                "verified": False,
+                "override_enabled": override_enabled,
+                "warning": "",
+                "reason": "",
+                "volumes_path": "",
+                "reset_target": "",
+                "action_info_paths": [],
+            }
+            if source_key == "hpe_smart_storage":
+                record["can_delete_volumes"] = bool(settings_path)
+                record["can_create_volumes"] = bool(settings_path)
+                record["create_method"] = "hpe_oem" if settings_path else "inventory_only"
+                record["verified"] = bool(settings_path and ("Gen10" in server_gen))
+                record["reason"] = "" if record["verified"] else settings_reason or "No verified HPE SmartStorageConfig settings URI was exposed."
+            else:
+                surface = _standard_redfish_storage_apply_surface(discovery, controller_path)
+                record["volumes_path"] = str(surface.get("volumes_path") or "")
+                record["reset_target"] = str(surface.get("reset_target") or "")
+                record["can_delete_volumes"] = bool(record["volumes_path"] or record["reset_target"])
+                record["verified"] = controller_path in verified_redfish_paths
+                if record["verified"]:
+                    record["can_create_volumes"] = True
+                    record["create_method"] = "standard_redfish"
+                    record["reason"] = "Standard Redfish volume creation is explicitly verified for this controller."
+                elif override_enabled and record["volumes_path"]:
+                    record["can_create_volumes"] = True
+                    record["create_method"] = "standard_redfish"
+                    record["reason"] = "Manual override is enabled. This bypasses verification and can destroy arrays if create fails."
+                    record["warning"] = "Manual override enabled: unverified Standard Redfish create may be destructive."
+                else:
+                    record["reason"] = "Discovery works, but automated create/delete is not verified for this controller. Use manual SSA/StorCLI or add a verified apply adapter."
+                    if record["volumes_path"]:
+                        record["warning"] = "A writable-looking /Volumes path exists, but that alone does not verify create support."
+                raw_storage = ((discovery.get("raw") or {}).get("standard_storage") or [])
+                for storage in raw_storage:
+                    if str(storage.get("@odata.id") or "").rstrip("/") != controller_path.rstrip("/"):
+                        continue
+                    action_info_paths = []
+                    for action in list((storage.get("Actions") or {}).values()):
+                        if isinstance(action, dict) and action.get("@Redfish.ActionInfo"):
+                            action_info_paths.append(str(action.get("@Redfish.ActionInfo") or ""))
+                    record["action_info_paths"] = action_info_paths
+                    break
+            controllers.append(record)
+    return controllers
+
+
 def choose_storage_apply_platform(discovery: dict, plan: dict) -> dict[str, Any]:
     summary = discovery.get("summary", {}) or {}
     server = summary.get("server", {}) or {}
     ilo = summary.get("ilo", {}) or {}
     capabilities = summary.get("capabilities", {}) or {}
 
+    arrays = storage_plan_arrays(plan)
     controller = plan.get("source_discovery", {}).get("controller", {}) or {}
+    controller_paths = sorted({str(array.get("controller_path") or "").strip() for array in arrays if str(array.get("controller_path") or "").strip()})
+    profile = plan.get("hardware_profile") or detect_hardware_profile(server, (plan.get("source_discovery") or {}).get("controllers") or [])
+    cfg = load_kit_config()
+    capability_rows = build_storage_controller_capabilities(discovery, cfg=cfg)
+    capability_by_path = {str(item.get("controller_path") or ""): item for item in capability_rows if str(item.get("controller_path") or "").strip()}
     settings_path, settings_reason = _verified_hpe_smartstorage_settings_path(capabilities)
     server_gen = str(server.get("generation") or "")
     ilo_version = str(ilo.get("version") or ilo.get("model") or "")
@@ -5549,7 +6991,67 @@ def choose_storage_apply_platform(discovery: dict, plan: dict) -> dict[str, Any]
             "reason": "",
         }
     if capabilities.get("standard_redfish_storage"):
+        if len(controller_paths) > 1:
+            controller_surfaces = standard_redfish_controller_surfaces(discovery, controller_paths)
+            missing = [path for path, surface in controller_surfaces.items() if not surface.get("volumes_path")]
+            if missing:
+                reasons = [f"{path}: {(controller_surfaces[path] or {}).get('reason') or 'no writable volume collection'}" for path in missing]
+                return {
+                    "id": "multi_controller_planned_only",
+                    "label": "Multi-controller plan requires controller-specific writable Redfish surfaces",
+                    "supported": False,
+                    "settings_path": "",
+                    "controller_path": "",
+                    "reason": "This storage plan spans multiple controllers, but not every controller exposed a writable Redfish Volumes collection. " + " | ".join(reasons),
+                    "controller_surfaces": controller_surfaces,
+                }
+            unverified = [path for path in controller_paths if not (capability_by_path.get(path, {}) or {}).get("verified") and not (capability_by_path.get(path, {}) or {}).get("override_enabled")]
+            if unverified:
+                return {
+                    "id": "standard_redfish_create_unverified",
+                    "label": "Standard Redfish create support is not verified",
+                    "supported": False,
+                    "settings_path": "",
+                    "controller_path": "",
+                    "reason": "This storage plan would require Standard Redfish volume creation on controller paths that are not explicitly create-verified. Blocking before delete to avoid destructive partial apply. Unverified controllers: " + ", ".join(unverified),
+                    "controller_surfaces": controller_surfaces,
+                    "controller_capabilities": [capability_by_path.get(path, {}) for path in controller_paths],
+                }
+            return {
+                "id": "multi_controller_standard_redfish_volumes",
+                "label": "Standard Redfish Storage Volumes per controller",
+                "supported": True,
+                "settings_path": "",
+                "controller_path": "",
+                "reason": "Manual override enabled for unverified Standard Redfish create." if any((capability_by_path.get(path, {}) or {}).get("override_enabled") and not (capability_by_path.get(path, {}) or {}).get("verified") for path in controller_paths) else "",
+                "controller_surfaces": controller_surfaces,
+                "controller_capabilities": [capability_by_path.get(path, {}) for path in controller_paths],
+            }
         surface = _standard_redfish_storage_apply_surface(discovery, controller.get("path", ""))
+        selected_capability = capability_by_path.get(str(controller.get("path") or "").strip(), {})
+        if not selected_capability.get("verified") and not selected_capability.get("override_enabled"):
+            return {
+                "id": "standard_redfish_create_unverified",
+                "label": "Standard Redfish create support is not verified",
+                "supported": False,
+                "settings_path": "",
+                "controller_path": controller.get("path", ""),
+                "volumes_path": surface.get("volumes_path", ""),
+                "reset_target": surface.get("reset_target", ""),
+                "reason": "This controller exposes Standard Redfish storage inventory, but volume creation is not explicitly verified. Blocking before delete to avoid destructive partial apply.",
+                "controller_capabilities": [selected_capability] if selected_capability else [],
+            }
+        if profile.get("expected_storage_layout") == "multi_controller" and "Gen11" in server_gen and not surface.get("volumes_path"):
+            return {
+                "id": "gen11_inventory_only",
+                "label": "Gen11 standard Redfish inventory only",
+                "supported": False,
+                "settings_path": "",
+                "controller_path": controller.get("path", ""),
+                "volumes_path": surface.get("volumes_path", ""),
+                "reset_target": surface.get("reset_target", ""),
+                "reason": "Standard Redfish Volumes are not confirmed for create/apply on this Gen11 profile. The layout can be discovered and approved, but execution requires an HPE OEM or SSA or StorCLI path.",
+            }
         if surface.get("volumes_path"):
             return {
                 "id": "standard_redfish_volumes",
@@ -5559,7 +7061,8 @@ def choose_storage_apply_platform(discovery: dict, plan: dict) -> dict[str, Any]
                 "controller_path": surface.get("storage_path", ""),
                 "volumes_path": surface.get("volumes_path", ""),
                 "reset_target": surface.get("reset_target", ""),
-                "reason": "",
+                "reason": "Manual override enabled for unverified Standard Redfish create." if selected_capability.get("override_enabled") and not selected_capability.get("verified") else "",
+                "controller_capabilities": [selected_capability] if selected_capability else [],
             }
         return {
             "id": "gen11_standard_redfish",
@@ -5599,16 +7102,61 @@ def validate_storage_apply_request(
     if apply_mode not in {"create_only", "wipe_rebuild"}:
         raise ValueError("Unknown storage apply mode.")
     if not plan.get("valid", False):
-        raise ValueError("RAID plan is not valid for apply.")
-    controller = plan.get("source_discovery", {}).get("controller", {}) or {}
-    if not (controller.get("name") or controller.get("model") or controller.get("path")):
-        raise ValueError("No storage controller is selected for apply.")
-    for drive in list(plan.get("os_raid1", {}).get("drives", []) or []) + list(plan.get("data_raid6", {}).get("drives", []) or []):
-        if not storage_item_matches_controller(drive, controller):
-            raise ValueError("Selected storage drives must all belong to the chosen controller.")
+        blockers = [str(item).strip() for item in list(plan.get("blockers") or []) if str(item).strip()]
+        if blockers:
+            raise ValueError("Storage plan validation failed: " + " ".join(blockers))
+        raise ValueError("Storage plan validation failed. Rebuild the plan after reviewing the current inventory blockers.")
+    arrays = storage_plan_arrays(plan)
+    if not arrays:
+        raise ValueError("No storage arrays are selected for apply.")
+    used_paths: dict[str, str] = {}
+    for array in arrays:
+        role = str(array.get("role") or "custom")
+        role_name = str(array.get("name") or role.upper())
+        controller_path = str(array.get("controller_path") or "").strip()
+        controller_name = str(array.get("controller_name") or controller_path or "(unknown controller)")
+        if not controller_path:
+            raise ValueError(f"{role_name} is missing its controller selection.")
+        live_paths = []
+        for drive in list(array.get("drives") or []):
+            drive_path = str(drive.get("path") or drive.get("drive_path") or "").strip()
+            drive_controller_path = str(drive.get("controller_path") or "").strip()
+            drive_controller_name = str(drive.get("controller_name") or drive_controller_path or "(unknown controller)")
+            if not drive_path:
+                raise ValueError(f"{role_name} contains a drive without a Redfish drive path.")
+            if storage_status_is_absent(str(drive.get("status") or "")):
+                raise ValueError(f"{storage_drive_label(drive)} is absent and cannot be applied.")
+            if drive_controller_path != controller_path:
+                raise ValueError(f"{storage_drive_label(drive)} is on {drive_controller_name}, but {role_name} is set to {controller_name}.")
+            if drive_path in used_paths and used_paths[drive_path] != role:
+                raise ValueError(f"Drive path {drive_path} cannot be reused in both {used_paths[drive_path]} and {role}.")
+            used_paths[drive_path] = role
+            live_paths.append(drive_controller_path)
+        if len(set(live_paths)) > 1:
+            raise ValueError(f"{role_name} cannot span multiple storage controllers.")
+        section = "os" if role == "os" else "data"
+        cardinality = validate_raid_drive_count(str(array.get("raid_level") or array.get("raid") or ""), list(array.get("drives") or []), section=section)
+        if cardinality:
+            raise ValueError(" ".join(cardinality))
+    by_role = {str(array.get("role") or ""): array for array in arrays}
+    spare = (plan.get("hot_spare", {}) or {}).get("drive", {}) or {}
+    if spare:
+        spare_path = str(spare.get("path") or spare.get("drive_path") or "").strip()
+        spare_controller_path = str(spare.get("controller_path") or "").strip()
+        spare_controller_name = str(spare.get("controller_name") or spare_controller_path or "(unknown controller)")
+        data_controller_path = str((by_role.get("data") or {}).get("controller_path") or "").strip()
+        data_controller_name = str((by_role.get("data") or {}).get("controller_name") or data_controller_path or "(unknown controller)")
+        if data_controller_path and spare_controller_path != data_controller_path:
+            raise ValueError(f"{storage_drive_label(spare)} is on {spare_controller_name}, but the data array is set to {data_controller_name}.")
+        if spare_path and spare_path in used_paths:
+            raise ValueError(f"Drive path {spare_path} cannot be reused as both {used_paths[spare_path]} and hot spare.")
+    array_controller_paths = {str(array.get("controller_path") or "").strip() for array in arrays if str(array.get("controller_path") or "").strip()}
     for volume in plan.get("existing_logical_volumes", []) or []:
-        if not storage_item_matches_controller(volume, controller):
-            raise ValueError("Existing logical volumes must belong to the chosen controller before apply.")
+        volume_controller_path = str(volume.get("controller_path") or "").strip()
+        if not volume_controller_path and len(array_controller_paths) == 1:
+            continue
+        if array_controller_paths and volume_controller_path not in array_controller_paths:
+            raise ValueError("Existing logical volumes must stay scoped to one of the selected array controllers before apply.")
     readiness = plan.get("apply_readiness", {}) or {}
     if apply_mode == "create_only" and not readiness.get("create_only_ready"):
         raise ValueError("Create-only apply is not ready for this plan.")
@@ -5866,15 +7414,9 @@ def execute_storage_apply_standard_redfish(
     total_steps: int,
     progress_resolver: Callable[[int, int], int] | None = None,
 ) -> tuple[int, list[Any]]:
-    volumes_path = str(platform.get("volumes_path") or "").strip()
-    if not volumes_path:
-        raise ILOError("Standard Redfish volume collection path could not be determined from discovery.")
-
     responses: list[Any] = []
     current = starting_step
     intent = build_storage_apply_intent(plan, apply_mode)
-    controller_name = apply_state["controller"].get("name") or apply_state["controller"].get("model") or ""
-    storage_path = str(platform.get("controller_path") or "").strip()
     readiness = client.wait_for_storage_device_discovery()
     responses.append({"device_discovery": readiness, "reboot_required": False})
     if not readiness.get("ready"):
@@ -5882,61 +7424,86 @@ def execute_storage_apply_standard_redfish(
             "Storage device discovery is not complete on the active server. "
             f"Current state: {readiness.get('state') or 'unknown'}."
         )
+    controller_surfaces = dict(platform.get("controller_surfaces") or {})
+    if not controller_surfaces:
+        controller_path = str(platform.get("controller_path") or "").strip()
+        volumes_path = str(platform.get("volumes_path") or "").strip()
+        if not volumes_path:
+            raise ILOError("Standard Redfish volume collection path could not be determined from discovery.")
+        controller_surfaces = {
+            controller_path: {
+                "storage_path": controller_path,
+                "volumes_path": volumes_path,
+                "reset_target": str(platform.get("reset_target") or "").strip(),
+                "reason": "",
+            }
+        }
 
-    capabilities = client.get_standard_storage_volume_capabilities(volumes_path)
-    responses.append({"volume_capabilities": capabilities, "reboot_required": False})
+    array_by_role = {str(item.get("role") or ""): item for item in list(intent.get("arrays") or [])}
+    spare_intent = intent["hot_spare"]
+    existing_by_controller: dict[str, list[str]] = {}
+    for volume in plan.get("existing_logical_volumes", []) or []:
+        controller_path = str(volume.get("controller_path") or "").strip()
+        volume_path = str(volume.get("path") or "").strip()
+        if controller_path and volume_path:
+            existing_by_controller.setdefault(controller_path, []).append(volume_path)
 
-    existing_volume_paths = [
-        str(volume.get("path") or "").strip()
-        for volume in plan.get("existing_logical_volumes", []) or []
-        if str(volume.get("path") or "").strip()
-    ]
+    capabilities_by_controller: dict[str, dict[str, Any]] = {}
+    for controller_path, surface in controller_surfaces.items():
+        volumes_path = str(surface.get("volumes_path") or "").strip()
+        if not volumes_path:
+            raise ILOError(f"Standard Redfish volume collection path could not be determined for controller {controller_path}.")
+        capabilities = client.get_standard_storage_volume_capabilities(volumes_path)
+        capabilities_by_controller[controller_path] = capabilities
+        responses.append({"controller_path": controller_path, "volume_capabilities": capabilities, "reboot_required": False})
 
     if apply_mode == "wipe_rebuild":
-        targets = {"controller": controller_name, "path": storage_path or volumes_path}
-        record_storage_apply_step(
-            kit_name,
-            job,
-            apply_state,
-            apply_paths,
-            "Delete existing logical volumes",
-            current,
-            total_steps,
-            "running",
-            "Delete existing logical volumes",
-            targets=targets,
-            details=(
-                f"Deleting {len(existing_volume_paths)} existing standard Redfish volume(s) from {volumes_path}."
-                if existing_volume_paths
-                else "No existing volumes were captured in the approved plan; attempting controller reset to defaults if available."
-            ),
-            progress_percent=progress_resolver(current, total_steps) if progress_resolver else None,
-        )
-        if existing_volume_paths:
-            for volume_path in existing_volume_paths:
-                delete_response = client.delete_standard_storage_volume(volume_path)
-                responses.append(delete_response)
-        elif platform.get("reset_target"):
-            reset_response = client.reset_standard_storage_to_defaults(str(platform.get("reset_target") or "").strip(), reset_type="ResetAll")
-            responses.append(reset_response)
-        record_storage_apply_step(
-            kit_name,
-            job,
-            apply_state,
-            apply_paths,
-            "Delete existing logical volumes",
-            current,
-            total_steps,
-            "ok",
-            "Delete existing logical volumes",
-            targets=targets,
-            details=(
-                f"Submitted deletion for {len(existing_volume_paths)} standard Redfish volume(s)."
-                if existing_volume_paths
-                else "Submitted Storage.ResetToDefaults because no explicit volume paths were available in the approved plan."
-            ),
-            progress_percent=progress_resolver(current, total_steps) if progress_resolver else None,
-        )
+        for controller_path, surface in controller_surfaces.items():
+            existing_volume_paths = existing_by_controller.get(controller_path, [])
+            controller_arrays = [item for item in list(intent.get("arrays") or []) if str(item.get("controller_path") or "").strip() == controller_path]
+            controller_name = str((controller_arrays[0] if controller_arrays else {}).get("controller_name") or controller_path)
+            volumes_path = str(surface.get("volumes_path") or "").strip()
+            targets = {"controller": controller_name, "path": str(surface.get("storage_path") or volumes_path)}
+            record_storage_apply_step(
+                kit_name,
+                job,
+                apply_state,
+                apply_paths,
+                "Delete existing logical volumes",
+                current,
+                total_steps,
+                "running",
+                "Delete existing logical volumes",
+                targets=targets,
+                details=(
+                    f"Deleting {len(existing_volume_paths)} existing standard Redfish volume(s) from {volumes_path}."
+                    if existing_volume_paths
+                    else "No existing standard Redfish volumes were captured for this controller; continuing directly to create."
+                ),
+                progress_percent=progress_resolver(current, total_steps) if progress_resolver else None,
+            )
+            if existing_volume_paths:
+                for volume_path in existing_volume_paths:
+                    delete_response = client.delete_standard_storage_volume(volume_path)
+                    responses.append(delete_response)
+            record_storage_apply_step(
+                kit_name,
+                job,
+                apply_state,
+                apply_paths,
+                "Delete existing logical volumes",
+                current,
+                total_steps,
+                "ok",
+                "Delete existing logical volumes",
+                targets=targets,
+                details=(
+                    f"Submitted deletion for {len(existing_volume_paths)} standard Redfish volume(s)."
+                    if existing_volume_paths
+                    else "No existing standard Redfish volumes were present for this controller; skipped delete/reset."
+                ),
+                progress_percent=progress_resolver(current, total_steps) if progress_resolver else None,
+            )
     else:
         record_storage_apply_step(
             kit_name,
@@ -5948,15 +7515,18 @@ def execute_storage_apply_standard_redfish(
             total_steps,
             "skip",
             "Delete existing logical volumes",
-            targets={"controller": controller_name},
+            targets={"controller": ", ".join(sorted(controller_surfaces))},
             details="Create-only mode selected; no existing standard Redfish volumes will be removed.",
             progress_percent=progress_resolver(current, total_steps) if progress_resolver else None,
         )
     current += 1
 
-    os_intent = intent["os_raid1"]
+    os_intent = array_by_role.get("os", intent["os_raid1"])
     os_label = str(os_intent.get("label") or "OS logical drive")
     if os_intent.get("drives"):
+        os_controller_path = str(os_intent.get("controller_path") or "").strip()
+        os_surface = controller_surfaces.get(os_controller_path, {})
+        os_volumes_path = str(os_surface.get("volumes_path") or "").strip()
         record_storage_apply_step(
             kit_name,
             job,
@@ -5967,11 +7537,11 @@ def execute_storage_apply_standard_redfish(
             total_steps,
             "running",
             f"Create {os_label}",
-            targets={"controller": controller_name, "bays": os_intent.get("bays", []), "path": volumes_path},
+            targets={"controller": os_intent.get("controller_name") or os_controller_path, "bays": os_intent.get("bays", []), "path": os_volumes_path},
             details=f"Submitting {os_label} to the standard Redfish volume collection.",
             progress_percent=progress_resolver(current, total_steps) if progress_resolver else None,
         )
-        os_response = client.create_standard_storage_volume(volumes_path, os_intent, capabilities=capabilities)
+        os_response = client.create_standard_storage_volume(os_volumes_path, os_intent, capabilities=capabilities_by_controller.get(os_controller_path, {}))
         responses.append(os_response)
         record_storage_apply_step(
             kit_name,
@@ -5983,8 +7553,8 @@ def execute_storage_apply_standard_redfish(
             total_steps,
             "ok",
             f"Create {os_label}",
-            targets={"controller": controller_name, "bays": os_intent.get("bays", []), "path": volumes_path},
-            details=f"Submitted {os_label} to {volumes_path}.",
+            targets={"controller": os_intent.get("controller_name") or os_controller_path, "bays": os_intent.get("bays", []), "path": os_volumes_path},
+            details=f"Submitted {os_label} to {os_volumes_path}.",
             response=os_response,
             progress_percent=progress_resolver(current, total_steps) if progress_resolver else None,
         )
@@ -5999,16 +7569,18 @@ def execute_storage_apply_standard_redfish(
             total_steps,
             "skip",
             "Create OS array",
-            targets={"controller": controller_name},
+            targets={"controller": apply_state["controller"].get("name") or apply_state["controller"].get("model") or ""},
             details="No OS array is selected in this plan.",
             progress_percent=progress_resolver(current, total_steps) if progress_resolver else None,
         )
     current += 1
 
-    data_intent = intent["data_raid6"]
+    data_intent = array_by_role.get("data", intent["data_raid6"])
     data_label = str(data_intent.get("label") or "Data logical drive")
-    spare_intent = intent["hot_spare"]
     if data_intent.get("drives"):
+        data_controller_path = str(data_intent.get("controller_path") or "").strip()
+        data_surface = controller_surfaces.get(data_controller_path, {})
+        data_volumes_path = str(data_surface.get("volumes_path") or "").strip()
         record_storage_apply_step(
             kit_name,
             job,
@@ -6019,11 +7591,12 @@ def execute_storage_apply_standard_redfish(
             total_steps,
             "running",
             f"Create {data_label}",
-            targets={"controller": controller_name, "bays": data_intent.get("bays", []), "path": volumes_path},
+            targets={"controller": data_intent.get("controller_name") or data_controller_path, "bays": data_intent.get("bays", []), "path": data_volumes_path},
             details=f"Submitting {data_label} to the standard Redfish volume collection.",
             progress_percent=progress_resolver(current, total_steps) if progress_resolver else None,
         )
-        data_response = client.create_standard_storage_volume(volumes_path, data_intent, spare_intent=spare_intent, capabilities=capabilities)
+        spare_payload = spare_intent if str(spare_intent.get("drive", {}).get("controller_path") or "").strip() == data_controller_path else {}
+        data_response = client.create_standard_storage_volume(data_volumes_path, data_intent, spare_intent=spare_payload, capabilities=capabilities_by_controller.get(data_controller_path, {}))
         responses.append(data_response)
         record_storage_apply_step(
             kit_name,
@@ -6035,8 +7608,8 @@ def execute_storage_apply_standard_redfish(
             total_steps,
             "ok",
             f"Create {data_label}",
-            targets={"controller": controller_name, "bays": data_intent.get("bays", []), "path": volumes_path},
-            details=f"Submitted {data_label} to {volumes_path}.",
+            targets={"controller": data_intent.get("controller_name") or data_controller_path, "bays": data_intent.get("bays", []), "path": data_volumes_path},
+            details=f"Submitted {data_label} to {data_volumes_path}.",
             response=data_response,
             progress_percent=progress_resolver(current, total_steps) if progress_resolver else None,
         )
@@ -6051,13 +7624,14 @@ def execute_storage_apply_standard_redfish(
             total_steps,
             "skip",
             "Create data array",
-            targets={"controller": controller_name},
+            targets={"controller": apply_state["controller"].get("name") or apply_state["controller"].get("model") or ""},
             details="No data array is selected in this plan.",
             progress_percent=progress_resolver(current, total_steps) if progress_resolver else None,
         )
     current += 1
 
     spare_bay = str(spare_intent.get("bay", "") or "").strip()
+    spare_controller_name = str(data_intent.get("controller_name") or apply_state["controller"].get("name") or apply_state["controller"].get("model") or "")
     if spare_bay and not data_intent.get("drives"):
         record_storage_apply_step(
             kit_name,
@@ -6069,7 +7643,7 @@ def execute_storage_apply_standard_redfish(
             total_steps,
             "skip",
             "Assign hot spare",
-            targets={"controller": controller_name, "bays": [spare_bay]},
+            targets={"controller": spare_controller_name, "bays": [spare_bay]},
             details="A dedicated spare was selected, but no data array is being created.",
             progress_percent=progress_resolver(current, total_steps) if progress_resolver else None,
         )
@@ -6084,7 +7658,7 @@ def execute_storage_apply_standard_redfish(
             total_steps,
             "ok",
             "Assign hot spare",
-            targets={"controller": controller_name, "bays": [spare_bay]},
+            targets={"controller": spare_controller_name, "bays": [spare_bay]},
             details="The dedicated spare, if supported, was included in the data volume creation request.",
             progress_percent=progress_resolver(current, total_steps) if progress_resolver else None,
         )
@@ -6099,7 +7673,7 @@ def execute_storage_apply_standard_redfish(
             total_steps,
             "skip",
             "Assign hot spare",
-            targets={"controller": controller_name},
+            targets={"controller": spare_controller_name},
             details="No dedicated hot spare was selected for this plan.",
             progress_percent=progress_resolver(current, total_steps) if progress_resolver else None,
         )
@@ -6115,22 +7689,32 @@ def run_storage_apply(
     apply_paths: dict[str, Path],
 ) -> None:
     kit_name = cfg["site"]["name"]
+    existing_job = load_job(kit_name)
+    inherited_root_scope = str(existing_job.get("root_scope") or existing_job.get("scope") or f"storage-apply:{apply_mode}")
     apply_steps = 10
     total_steps = apply_steps
     job = {
         "status": "Running",
+        "execution_mode": str(existing_job.get("execution_mode") or "real"),
+        "execution_mode_label": str(existing_job.get("execution_mode_label") or "Real execution"),
         "scope": f"storage-apply:{apply_mode}",
         "current_stage": "",
         "progress_percent": 0,
         "completed_steps": 0,
         "total_steps": total_steps,
         "logs": [],
+        "root_scope": inherited_root_scope,
+        "stage_statuses": merge_stage_statuses(
+            initialize_stage_statuses(inherited_root_scope, cfg),
+            existing_job.get("stage_statuses"),
+        ),
         "failure_area": "",
         "failure_reason": "",
         "failure_explanation": "",
         "failure_recommended_fix": "",
         "failure_codex_handoff": "",
     }
+    job = carry_forward_job_bundle_metadata(kit_name, job)
     save_job(kit_name, job)
 
     discovery = None
@@ -6263,9 +7847,18 @@ def run_storage_apply(
                     "reason": "; ".join(storage_diagnosis.get("rejection_reasons") or []) or "Storage preflight blocked destructive apply.",
                 }
                 break
+            if storage_diagnosis.get("status") == "already_applied":
+                platform = {
+                    "id": "storage_preflight_already_applied",
+                    "label": "Storage layout already matches approved plan",
+                    "supported": True,
+                    "controller_path": (apply_state.get("controller") or {}).get("path", ""),
+                    "reason": str(storage_diagnosis.get("selected_action") or "").strip(),
+                }
+                break
             platform = choose_storage_apply_platform(pre_change_discovery, plan)
             platform_id = str(platform.get("id") or "")
-            if platform_id in {"gen10_hpe_smartstorageconfig", "standard_redfish_volumes"}:
+            if platform_id in {"gen10_hpe_smartstorageconfig", "standard_redfish_volumes", "multi_controller_standard_redfish_volumes"}:
                 break
             if platform_id == "hpe_smart_storage_read_only" and attempt < 6:
                 record_storage_apply_step(
@@ -6319,7 +7912,7 @@ def run_storage_apply(
         )
 
         apply_state["apply_path"] = platform.get("label", "")
-        platform_supported = platform.get("id") in {"gen10_hpe_smartstorageconfig", "standard_redfish_volumes"}
+        platform_supported = platform.get("id") in {"gen10_hpe_smartstorageconfig", "standard_redfish_volumes", "multi_controller_standard_redfish_volumes", "storage_preflight_already_applied"}
         if not platform_supported:
             apply_state["status"] = "Failed"
             apply_state["workflow_state"] = "apply_failed"
@@ -6367,6 +7960,41 @@ def run_storage_apply(
         )
 
         current_step = 4
+        if platform.get("id") == "storage_preflight_already_applied":
+            apply_state["reboot_required"] = False
+            apply_state["workflow_state"] = "apply_complete"
+            apply_state["post_reboot_validation"] = "Not required"
+            apply_state["status"] = "Completed"
+            apply_state["finished_at"] = time.strftime("%Y-%m-%d %H:%M:%S")
+            record_storage_apply_step(
+                kit_name,
+                job,
+                apply_state,
+                apply_paths,
+                "Skip storage apply",
+                current_step,
+                apply_steps,
+                "ok",
+                "Skip storage apply",
+                targets={"controller": apply_state["controller"].get("name") or apply_state["controller"].get("model") or ""},
+                details=str(platform.get("reason") or "Live storage already matches the approved plan."),
+            )
+            update_job(
+                kit_name,
+                job,
+                "Completed",
+                "Finished",
+                apply_steps,
+                apply_steps,
+                "[DONE] Storage apply was skipped because the live layout already matches the approved plan.",
+                progress_percent=100,
+            )
+            return {
+                "apply_state": apply_state,
+                "apply_paths": apply_paths,
+                "pre_change_discovery": pre_change_discovery,
+                "post_change_discovery": pre_change_discovery,
+            }
         if platform.get("id") == "gen10_hpe_smartstorageconfig":
             current_step, responses = execute_storage_apply_gen10(
                 client,
@@ -6382,7 +8010,7 @@ def run_storage_apply(
             )
             apply_state["responses"].extend({"step": "platform_apply", "response": storage_apply_response_excerpt(item)} for item in responses)
             combined_response = {"responses": [storage_apply_response_excerpt(item) for item in responses]}
-        elif platform.get("id") == "standard_redfish_volumes":
+        elif platform.get("id") in {"standard_redfish_volumes", "multi_controller_standard_redfish_volumes"}:
             current_step, responses = execute_storage_apply_standard_redfish(
                 client,
                 plan,
@@ -6632,15 +8260,24 @@ def run_storage_reboot(
     apply_paths: dict[str, Path],
 ) -> None:
     kit_name = cfg["site"]["name"]
+    existing_job = load_job(kit_name)
+    inherited_root_scope = str(existing_job.get("root_scope") or existing_job.get("scope") or "storage-reboot")
     total_steps = 5
     job = {
         "status": "Running",
+        "execution_mode": str(existing_job.get("execution_mode") or "real"),
+        "execution_mode_label": str(existing_job.get("execution_mode_label") or "Real execution"),
         "scope": "storage-reboot",
         "current_stage": "",
         "progress_percent": 0,
         "completed_steps": 0,
         "total_steps": total_steps,
         "logs": [],
+        "root_scope": inherited_root_scope,
+        "stage_statuses": merge_stage_statuses(
+            initialize_stage_statuses(inherited_root_scope, cfg),
+            existing_job.get("stage_statuses"),
+        ),
         "apply_path": "",
         "reboot_required": True,
         "workflow_state": "reboot_requested",
@@ -6652,6 +8289,7 @@ def run_storage_reboot(
         "failure_recommended_fix": "",
         "failure_codex_handoff": "",
     }
+    job = carry_forward_job_bundle_metadata(kit_name, job)
     save_job(kit_name, job)
 
     apply_state = json.loads(apply_paths["apply_results"].read_text(encoding="utf-8")) if apply_paths["apply_results"].exists() else {}
@@ -7232,9 +8870,18 @@ def run_storage_as_part_of_real_run(
                 "reason": "; ".join(storage_diagnosis.get("rejection_reasons") or []) or "Storage preflight blocked destructive apply.",
             }
             break
+        if storage_diagnosis.get("status") == "already_applied":
+            platform = {
+                "id": "storage_preflight_already_applied",
+                "label": "Storage layout already matches approved plan",
+                "supported": True,
+                "controller_path": (apply_state.get("controller") or {}).get("path", ""),
+                "reason": str(storage_diagnosis.get("selected_action") or "").strip(),
+            }
+            break
         platform = choose_storage_apply_platform(pre_change_discovery, plan)
         platform_id = str(platform.get("id") or "")
-        if platform_id in {"gen10_hpe_smartstorageconfig", "standard_redfish_volumes"}:
+        if platform_id in {"gen10_hpe_smartstorageconfig", "standard_redfish_volumes", "multi_controller_standard_redfish_volumes"}:
             break
         if platform_id == "hpe_smart_storage_read_only" and attempt < 6:
             update_job(
@@ -7289,7 +8936,7 @@ def run_storage_as_part_of_real_run(
     )
 
     apply_state["apply_path"] = platform.get("label", "")
-    platform_supported = platform.get("id") in {"gen10_hpe_smartstorageconfig", "standard_redfish_volumes"}
+    platform_supported = platform.get("id") in {"gen10_hpe_smartstorageconfig", "standard_redfish_volumes", "multi_controller_standard_redfish_volumes", "storage_preflight_already_applied"}
     if not platform_supported:
         apply_state["status"] = "Failed"
         apply_state["workflow_state"] = "apply_failed"
@@ -7339,6 +8986,57 @@ def run_storage_as_part_of_real_run(
     )
 
     current_step += 1
+    if platform.get("id") == "storage_preflight_already_applied":
+        apply_state["reboot_required"] = False
+        apply_state["workflow_state"] = "apply_complete"
+        apply_state["post_reboot_validation"] = "Not required"
+        apply_state["status"] = "Completed"
+        apply_state["finished_at"] = time.strftime("%Y-%m-%d %H:%M:%S")
+        record_storage_apply_step(
+            kit_name,
+            job,
+            apply_state,
+            apply_paths,
+            "Skip storage apply",
+            current_step,
+            total_steps,
+            "ok",
+            "Skip storage apply",
+            targets={"controller": apply_state["controller"].get("name") or apply_state["controller"].get("model") or ""},
+            details=str(platform.get("reason") or "Live storage already matches the approved plan."),
+            progress_percent=combined_progress_percent(current_step, total_steps),
+        )
+        current_step += 1
+        record_storage_apply_step(
+            kit_name,
+            job,
+            apply_state,
+            apply_paths,
+            "Export post-change storage",
+            current_step,
+            total_steps,
+            "ok",
+            "Export post-change storage",
+            targets={"controller": apply_state["controller"].get("name") or apply_state["controller"].get("model") or ""},
+            details="Skipped storage rewrite because the live layout already matches the approved plan.",
+            progress_percent=combined_progress_percent(current_step, total_steps),
+        )
+        update_job(
+            kit_name,
+            job,
+            "Completed",
+            "Finished",
+            total_steps,
+            total_steps,
+            "[DONE] Storage apply was skipped because the live layout already matches the approved plan.",
+            progress_percent=100,
+        )
+        return {
+            "apply_state": apply_state,
+            "apply_paths": apply_paths,
+            "pre_change_discovery": pre_change_discovery,
+            "post_change_discovery": pre_change_discovery,
+        }
     if platform.get("id") == "gen10_hpe_smartstorageconfig":
         current_step, responses = execute_storage_apply_gen10(
             client,
@@ -7355,7 +9053,7 @@ def run_storage_as_part_of_real_run(
         )
         apply_state["responses"].extend({"step": "platform_apply", "response": storage_apply_response_excerpt(item)} for item in responses)
         combined_response = {"responses": [storage_apply_response_excerpt(item) for item in responses]}
-    elif platform.get("id") == "standard_redfish_volumes":
+    elif platform.get("id") in {"standard_redfish_volumes", "multi_controller_standard_redfish_volumes"}:
         current_step, responses = execute_storage_apply_standard_redfish(
             client,
             plan,
@@ -7662,6 +9360,35 @@ def default_config():
             "username": "Administrator",
             "password": "",
             "additional_users": [],
+            "policy": {
+                "discover_enabled": True,
+                "discover_start_octet": 21,
+                "discover_end_octet": 29,
+                "apply_standard_policy": True,
+                "enable_standard_accounts": True,
+                "enable_license_check": True,
+                "enable_snmp_policy": True,
+                "enable_alert_destinations": True,
+                "enable_ipv6_disable": True,
+                "enable_time_policy": True,
+                "enable_auto_reset": True,
+                "kit_admin_password": "",
+                "kit_operator_password": "",
+                "shared_admin_username": "765CS",
+                "shared_admin_password": "",
+                "snmp_read_community": "",
+                "snmpv3_username": "765CS",
+                "snmpv3_auth_protocol": "SHA",
+                "snmpv3_auth_password": "",
+                "snmpv3_priv_protocol": "AES",
+                "snmpv3_priv_password": "",
+                "snmp_system_contact": "765 DSS",
+                "snmp_system_role": "iLO",
+                "snmp_location_source": "kit_id",
+                "alert_destinations": ["10.245.190.67", "10.245.190.68"],
+                "alert_protocol": "SNMPv3Inform",
+                "timezone": "Bogota, Lima, Quito, Eastern Time(US & Canada)",
+            },
         },
         "esxi": {
             "version": "7",
@@ -7756,6 +9483,182 @@ def normalize_ilo_additional_users(entries: list[dict[str, Any]] | Any) -> list[
             "role": role,
         })
     return normalized
+
+
+def standard_ilo_policy_defaults() -> dict[str, Any]:
+    return copy.deepcopy(default_config()["ilo"]["policy"])
+
+
+def normalize_ilo_policy(policy: dict[str, Any] | Any) -> dict[str, Any]:
+    normalized = standard_ilo_policy_defaults()
+    if isinstance(policy, dict):
+        normalized.update(policy)
+    for key in (
+        "discover_enabled",
+        "apply_standard_policy",
+        "enable_standard_accounts",
+        "enable_license_check",
+        "enable_snmp_policy",
+        "enable_alert_destinations",
+        "enable_ipv6_disable",
+        "enable_time_policy",
+        "enable_auto_reset",
+    ):
+        value = normalized.get(key)
+        if isinstance(value, str):
+            normalized[key] = value.strip().lower() not in {"0", "false", "no", "off", ""}
+        else:
+            normalized[key] = bool(value)
+    try:
+        start_octet = int(normalized.get("discover_start_octet") or 21)
+    except (TypeError, ValueError):
+        start_octet = 21
+    try:
+        end_octet = int(normalized.get("discover_end_octet") or 29)
+    except (TypeError, ValueError):
+        end_octet = 29
+    start_octet = max(1, min(start_octet, 254))
+    end_octet = max(1, min(end_octet, 254))
+    if start_octet > end_octet:
+        start_octet, end_octet = end_octet, start_octet
+    normalized["discover_start_octet"] = start_octet
+    normalized["discover_end_octet"] = end_octet
+    normalized["alert_destinations"] = [
+        str(item).strip()
+        for item in list(normalized.get("alert_destinations") or [])
+        if str(item or "").strip()
+    ]
+    discovered_hosts = []
+    for item in list(normalized.get("discovered_hosts") or []):
+        if not isinstance(item, dict):
+            continue
+        host = str(item.get("host") or "").strip()
+        if not host:
+            continue
+        discovered_hosts.append({
+            "host": host,
+            "reachable": bool(item.get("reachable")),
+            "latency_ms": item.get("latency_ms", ""),
+            "error": str(item.get("error") or "").strip(),
+        })
+    normalized["discovered_hosts"] = discovered_hosts
+    return normalized
+
+
+def standard_ilo_policy_kit_id(cfg: dict[str, Any]) -> str:
+    return sanitize_kit_name(str((cfg.get("site") or {}).get("name") or "KIT")).upper()
+
+
+def build_policy_ilo_username(kit_id: str, suffix: str) -> str:
+    raw = f"{str(kit_id or '').strip()}_{suffix}"
+    normalized = re.sub(r"[^A-Za-z0-9_.-]+", "", raw)
+    if len(normalized) <= 39:
+        return normalized
+    keep = max(1, 39 - len(suffix) - 1)
+    return f"{normalized[:keep]}_{suffix}"
+
+
+def standard_ilo_policy_accounts(cfg: dict[str, Any]) -> list[dict[str, Any]]:
+    policy = normalize_ilo_policy((cfg.get("ilo") or {}).get("policy"))
+    kit_id = standard_ilo_policy_kit_id(cfg)
+    oa_privileges = {
+        "LoginPriv": True,
+        "RemoteConsolePriv": True,
+        "VirtualPowerAndResetPriv": True,
+        "UserConfigPriv": False,
+        "iLOConfigPriv": False,
+        "VirtualMediaPriv": False,
+        "HostNICConfigPriv": False,
+        "HostBIOSConfigPriv": False,
+        "HostStorageConfigPriv": False,
+        "SystemRecoveryConfigPriv": False,
+    }
+    accounts = [
+        {
+            "username": build_policy_ilo_username(kit_id, "Admin"),
+            "password": str(policy.get("kit_admin_password") or ""),
+            "role": "Administrator",
+        },
+        {
+            "username": build_policy_ilo_username(kit_id, "OA"),
+            "password": str(policy.get("kit_operator_password") or ""),
+            "role": "Operator",
+            "privileges": oa_privileges,
+        },
+        {
+            "username": str(policy.get("shared_admin_username") or "765CS").strip() or "765CS",
+            "password": str(policy.get("shared_admin_password") or ""),
+            "role": "Administrator",
+        },
+    ]
+    return [item for item in accounts if str(item.get("username") or "").strip() and str(item.get("password") or "")]
+
+
+def build_standard_ilo_policy(cfg: dict[str, Any]) -> dict[str, Any]:
+    policy = normalize_ilo_policy((cfg.get("ilo") or {}).get("policy"))
+    kit_id = standard_ilo_policy_kit_id(cfg)
+    shared_snmp = dict((cfg.get("shared_snmp") or {}))
+    configured_v3_username = str(policy.get("snmpv3_username") or "").strip()
+    shared_v3_username = str(shared_snmp.get("v3_username") or "").strip()
+    if configured_v3_username in {"", "765CS"} and shared_v3_username:
+        v3_username = shared_v3_username
+    else:
+        v3_username = configured_v3_username or "765CS"
+    v3_auth_password = str(policy.get("snmpv3_auth_password") or shared_snmp.get("v3_auth_password") or "")
+    v3_priv_password = str(policy.get("snmpv3_priv_password") or shared_snmp.get("v3_priv_password") or "")
+    return {
+        "kit_id": kit_id,
+        "settings": policy,
+        "accounts": standard_ilo_policy_accounts(cfg),
+        "snmp": {
+            "system_contact": str(policy.get("snmp_system_contact") or "765 DSS"),
+            "system_location": kit_id if str(policy.get("snmp_location_source") or "kit_id") == "kit_id" else str(policy.get("snmp_system_location") or kit_id),
+            "system_role": str(policy.get("snmp_system_role") or "iLO"),
+            "read_community": str(policy.get("snmp_read_community") or shared_snmp.get("read_community") or ""),
+            "v3_username": v3_username,
+            "v3_auth_protocol": str(policy.get("snmpv3_auth_protocol") or "SHA").strip() or "SHA",
+            "v3_auth_password": v3_auth_password,
+            "v3_priv_protocol": str(policy.get("snmpv3_priv_protocol") or "AES").strip() or "AES",
+            "v3_priv_password": v3_priv_password,
+            "alert_destinations": list(policy.get("alert_destinations") or []),
+            "alert_protocol": str(policy.get("alert_protocol") or "SNMPv3Inform"),
+        },
+        "time": {
+            "server": str(((cfg.get("ilo") or {}).get("gateway") or (cfg.get("ip_plan") or {}).get("gateway") or "")).strip(),
+            "timezone": str(policy.get("timezone") or "Bogota, Lima, Quito, Eastern Time(US & Canada)"),
+        },
+    }
+
+
+def policy_enabled(cfg: dict[str, Any], key: str) -> bool:
+    policy = normalize_ilo_policy((cfg.get("ilo") or {}).get("policy"))
+    if key == "discover_enabled":
+        return bool(policy.get("discover_enabled"))
+    return bool(policy.get("apply_standard_policy")) and bool(policy.get(key))
+
+
+def build_ilo_discovery_targets(cfg: dict[str, Any]) -> list[str]:
+    policy = normalize_ilo_policy((cfg.get("ilo") or {}).get("policy"))
+    if not policy.get("discover_enabled"):
+        return []
+    subnet = str((cfg.get("shared_network") or {}).get("subnet") or "").strip()
+    try:
+        network = ipaddress.ip_network(subnet, strict=False)
+    except Exception:
+        return []
+    if network.version != 4:
+        return []
+    start_octet = int(policy.get("discover_start_octet") or 21)
+    end_octet = int(policy.get("discover_end_octet") or 29)
+    targets: list[str] = []
+    for octet in range(start_octet, end_octet + 1):
+        candidate = f"{network.network_address.exploded.rsplit('.', 1)[0]}.{octet}"
+        try:
+            if ipaddress.ip_address(candidate) in network:
+                targets.append(candidate)
+        except Exception:
+            continue
+    return targets
 
 
 def normalize_snmp_users(entries: list[dict[str, Any]] | Any) -> list[dict[str, str]]:
@@ -7859,6 +9762,7 @@ def normalize_ilo_config(cfg: dict):
     ilo_cfg["dns_servers"] = normalized_dns
     ilo_cfg["host"] = current_ip
     ilo_cfg["additional_users"] = normalize_ilo_additional_users(ilo_cfg.get("additional_users", []))
+    ilo_cfg["policy"] = normalize_ilo_policy(ilo_cfg.get("policy"))
 
     normalized_snmp_users = normalize_snmp_users(snmp_cfg.get("users", []))
     if not normalized_snmp_users:
@@ -8273,11 +10177,17 @@ def build_execution_review(cfg: dict, scope: str):
         if key == "storage":
             approval = storage_review.get("approval", {}) or {}
             plan_summary = approval.get("plan_summary", {}) or {}
+            arrays = list(plan_summary.get("arrays") or [])
             return [
                 f"Controller: {plan_summary.get('controller') or 'Not set'}",
-                f"OS RAID 1 bays: {plan_summary.get('os_bays') or 'Not selected'}",
-                f"Data RAID bays: {plan_summary.get('data_bays') or 'Not selected'}",
-                f"Hot spare bay: {plan_summary.get('spare_bay') or 'Not reserved'}",
+                *[
+                    f"{str(item.get('role') or '').upper()} {raid_label(str(item.get('raid_level') or ''))}: "
+                    f"{item.get('controller') or item.get('controller_path') or 'Not set'} | "
+                    f"bays {item.get('bays') or 'none'} | "
+                    f"serials {', '.join(item.get('selected_drive_serials') or []) or 'none'}"
+                    for item in arrays
+                ],
+                f"Hot spare: {(plan_summary.get('hot_spare') or {}).get('controller') or 'Not reserved'} | bay {(plan_summary.get('hot_spare') or {}).get('bay') or 'none'} | serial {(plan_summary.get('hot_spare') or {}).get('serial_number') or 'none'}",
                 f"Approved host: {approval.get('host') or 'Not set'}",
             ]
         return []
@@ -8738,12 +10648,17 @@ def build_execution_review(cfg: dict, scope: str):
             lines.append(f"- Restart expected after storage -> {'Yes' if approval.get('reboot_expected') else 'No'}")
             if approval.get("plan_summary"):
                 plan_summary = approval.get("plan_summary", {})
+                arrays = list(plan_summary.get("arrays") or [])
                 lines.append(
-                    f"- Storage layout -> controller {plan_summary.get('controller') or '(unknown)'} | "
-                    f"OS bays {plan_summary.get('os_bays') or '(none)'} | "
-                    f"data bays {plan_summary.get('data_bays') or '(none)'} | "
-                    f"spare bay {plan_summary.get('spare_bay') or '(none)'}"
+                    f"- Storage layout -> controller set {plan_summary.get('controller') or '(unknown)'}"
                 )
+                for item in arrays:
+                    lines.append(
+                        f"  {str(item.get('role') or '').upper()} {raid_label(str(item.get('raid_level') or ''))} -> "
+                        f"{item.get('controller') or item.get('controller_path') or '(unknown)'} | "
+                        f"bays {item.get('bays') or '(none)'} | "
+                        f"serials {', '.join(item.get('selected_drive_serials') or []) or '(none)'}"
+                    )
         else:
             lines.append("- Storage included -> No")
         if storage_validation_error:
@@ -11258,16 +13173,12 @@ def run_ilo_real(cfg: dict):
     existing_job = load_job(kit_name)
     inherited_root_scope = str(existing_job.get("root_scope") or "ilo")
     ilo_cfg = cfg.get("ilo", {})
-    snmp_cfg = cfg.get("shared_snmp", {})
-    snmp_users = normalize_snmp_users(snmp_cfg.get("users", []))
-    active_snmp_user = snmp_users[0] if snmp_users else {
-        "username": str(snmp_cfg.get("v3_username") or "").strip(),
-        "auth_protocol": str(snmp_cfg.get("v3_auth_protocol") or "SHA").strip() or "SHA",
-        "auth_password": str(snmp_cfg.get("v3_auth_password") or ""),
-        "priv_protocol": str(snmp_cfg.get("v3_priv_protocol") or "AES").strip() or "AES",
-        "priv_password": str(snmp_cfg.get("v3_priv_password") or ""),
-    }
+    standard_policy = build_standard_ilo_policy(cfg)
+    policy_settings = dict(standard_policy.get("settings") or {})
+    active_snmp_user = dict(standard_policy.get("snmp") or {})
     additional_ilo_users = normalize_ilo_additional_users(ilo_cfg.get("additional_users", []))
+    policy_accounts = list(standard_policy.get("accounts") or []) if policy_settings.get("apply_standard_policy") and policy_settings.get("enable_standard_accounts") else []
+    local_accounts_to_apply = policy_accounts + additional_ilo_users
     shared_dns = [x for x in cfg.get("shared_network", {}).get("dns_servers", []) if x and x.strip()]
     storage_execution = validate_storage_ready_for_ilo_run(cfg)
     desired_auth_protocol = active_snmp_user.get("auth_protocol", "SHA")
@@ -11293,18 +13204,38 @@ def run_ilo_real(cfg: dict):
         "dns_reset_recommended": False,
         "snmp_apply_status": "Not attempted",
         "snmp_applied_keys": [],
-        "snmp_username": active_snmp_user.get("username", "") or "",
+        "snmp_username": active_snmp_user.get("v3_username", "") or "",
         "snmp_auth_protocol": desired_auth_protocol,
         "snmp_priv_protocol": desired_priv_protocol,
-        "snmp_auth_secret_present": bool(active_snmp_user.get("auth_password")),
-        "snmp_priv_secret_present": bool(active_snmp_user.get("priv_password")),
+        "snmp_auth_secret_present": bool(active_snmp_user.get("v3_auth_password")),
+        "snmp_priv_secret_present": bool(active_snmp_user.get("v3_priv_password")),
         "snmp_verified_checks": [],
         "snmp_mismatches": [],
         "snmp_reset_recommended": False,
-        "snmp_profile_count": len(snmp_users),
+        "snmp_profile_count": 1 if active_snmp_user.get("v3_username") else 0,
         "local_account_status": "Not attempted",
-        "local_accounts_requested": [item.get("username", "") for item in additional_ilo_users],
+        "local_accounts_requested": [item.get("username", "") for item in local_accounts_to_apply],
         "local_account_results": [],
+        "license_status": "Not attempted",
+        "license_warnings": [],
+        "snmp_alert_status": "Not attempted",
+        "snmp_alert_results": [],
+        "ipv6_policy_status": "Not attempted",
+        "ipv6_policy_checks": [],
+        "time_policy_status": "Not attempted",
+        "time_policy_notes": [],
+        "ilo_policy_plan": {
+            "accounts": [item.get("username", "") for item in local_accounts_to_apply],
+            "license_check_enabled": bool(policy_enabled(cfg, "enable_license_check")),
+            "snmp_enabled": bool(policy_enabled(cfg, "enable_snmp_policy")),
+            "alert_destinations": list(active_snmp_user.get("alert_destinations") or []),
+            "ipv6_disable_enabled": bool(policy_enabled(cfg, "enable_ipv6_disable")),
+            "time_policy_enabled": bool(policy_enabled(cfg, "enable_time_policy")),
+        },
+        "ilo_policy_applied": [],
+        "ilo_policy_warnings": [],
+        "ilo_policy_failures": [],
+        "ilo_policy_raw_results": {},
         "storage_server_reboot_required": False,
         "storage_server_reboot_status": "Not required",
         "ilo_reset_required": False,
@@ -11334,6 +13265,7 @@ def run_ilo_real(cfg: dict):
     config_changes_succeeded = True
     endpoint_transition_pending = False
     ilo_stage_finished = False
+    reset_reasons: list[str] = []
 
     if not login_ip or not username or not password:
         update_job(kit_name, job, "Failed", "Validation failed", 0, total, "[FAILED] Missing iLO host, username, or password.")
@@ -11461,7 +13393,7 @@ def run_ilo_real(cfg: dict):
     def build_snmp_readback_checks(network_protocol_doc: dict[str, Any]) -> list[dict[str, Any]]:
         snmp_block = network_protocol_doc.get("SNMP") or {}
         checks: list[dict[str, Any]] = []
-        requested_username = str(active_snmp_user.get("username") or "").strip()
+        requested_username = str(active_snmp_user.get("v3_username") or "").strip()
         if "ProtocolEnabled" in snmp_block:
             checks.append({
                 "label": "protocol_enabled",
@@ -11541,6 +13473,8 @@ def run_ilo_real(cfg: dict):
         return checks
 
     def current_snmp_matches(network_protocol_doc: dict[str, Any]) -> bool:
+        if not policy_enabled(cfg, "enable_snmp_policy") or not active_snmp_user.get("v3_username"):
+            return True
         snmp_checks = build_snmp_readback_checks(network_protocol_doc)
         return bool(snmp_checks) and all(item.get("matched") for item in snmp_checks)
 
@@ -11626,7 +13560,7 @@ def run_ilo_real(cfg: dict):
 
         snmp_block = network_protocol.get("SNMP") or {}
         snmp_checks = build_snmp_readback_checks(network_protocol)
-        if active_snmp_user.get("username"):
+        if policy_enabled(cfg, "enable_snmp_policy") and active_snmp_user.get("v3_username"):
             result["snmp_matched"] = bool(snmp_checks) and all(item.get("matched") for item in snmp_checks)
             update_job(
                 kit_name,
@@ -11744,24 +13678,15 @@ def run_ilo_real(cfg: dict):
             total,
             (
                 f"[CONFIG] shared_dns={', '.join(shared_dns) if shared_dns else '(none)'} | "
-                f"snmp_v3_user={active_snmp_user.get('username', '') or '(none)'} | "
+                f"snmp_v3_user={active_snmp_user.get('v3_username', '') or '(none)'} | "
                 f"auth={desired_auth_protocol} | priv={desired_priv_protocol} | "
-                f"auth_password={'set' if active_snmp_user.get('auth_password') else 'missing'} | "
-                f"priv_password={'set' if active_snmp_user.get('priv_password') else 'missing'} | "
+                f"auth_password={'set' if active_snmp_user.get('v3_auth_password') else 'missing'} | "
+                f"priv_password={'set' if active_snmp_user.get('v3_priv_password') else 'missing'} | "
+                f"policy_accounts={len(policy_accounts)} | "
                 f"additional_ilo_users={len(additional_ilo_users)} | "
-                f"snmp_profiles={len(snmp_users) or (1 if active_snmp_user.get('username') else 0)}"
+                f"auto_reset={'on' if policy_settings.get('enable_auto_reset') else 'off'}"
             ),
         )
-        if len(snmp_users) > 1:
-            update_job(
-                kit_name,
-                job,
-                "Running",
-                "Validate configuration",
-                0,
-                total,
-                "[INFO] Multiple SNMPv3 profiles are saved, but the current iLO Redfish path applies only the first profile.",
-            )
         client = build_ilo_client(active_ip)
         current_network_protocol = {}
         current_active_interface = {}
@@ -11769,6 +13694,10 @@ def run_ilo_real(cfg: dict):
         hostname_change_applied = False
         dns_change_applied = False
         snmp_change_applied = False
+        license_change_applied = False
+        alerts_change_applied = False
+        ipv6_change_applied = False
+        time_change_applied = False
         local_users_change_applied = False
 
         update_job(kit_name, job, "Running", "Connect to Redfish", 1, total, f"[RUNNING] Connecting to https://{active_ip}/redfish/v1/")
@@ -12082,6 +14011,8 @@ def run_ilo_real(cfg: dict):
                     job["dns_applied_keys"] = list(dns_result.get("applied_keys") or [])
                     job["dns_mismatches"] = list(dns_result.get("mismatches") or [])
                     job["dns_reset_recommended"] = bool(dns_result.get("reset_recommended"))
+                    if dns_result.get("reset_recommended"):
+                        reset_reasons.append("DNS update requested iLO reset")
                     save_job(kit_name, job)
                     if not dns_matched:
                         config_changes_succeeded = False
@@ -12139,93 +14070,145 @@ def run_ilo_real(cfg: dict):
                 "[SKIP] No shared DNS servers configured."
             )
 
-        try:
-            update_job(
-                kit_name,
-                job,
-                "Running",
-                "Disable IPv6",
-                11,
-                total,
-                "[RUNNING] Attempting to disable IPv6 where supported"
-            )
-            ipv6_result = client.disable_ipv6_best_effort()
-            update_job(
-                kit_name,
-                job,
-                "Running",
-                "Disable IPv6",
-                11,
-                total,
-                f"[OK] IPv6 hardening via {ipv6_result.get('method')} at {ipv6_result.get('path')}"
-            )
-        except Exception as e:
-            update_job(
-                kit_name,
-                job,
-                "Running",
-                "Disable IPv6",
-                11,
-                total,
-                f"[SKIP/INFO] IPv6 hardening not applied: {e}"
-            )
-
-        try:
-            if current_snmp_matches(current_network_protocol):
-                job["snmp_apply_status"] = "Already correct"
+        if policy_enabled(cfg, "enable_license_check"):
+            try:
+                update_job(kit_name, job, "Running", "Check iLO license", 11, total, "[RUNNING] Checking iLO license status.")
+                license_result = client.get_license_status_best_effort()
+                job["license_status"] = "OK" if license_result.get("ok") else "Warning"
+                job["license_warnings"] = list(license_result.get("warnings") or [])
+                job["ilo_policy_raw_results"]["license"] = dict(license_result)
+                if license_result.get("warnings"):
+                    job["ilo_policy_warnings"].extend(list(license_result.get("warnings") or []))
                 save_job(kit_name, job)
                 update_job(
                     kit_name,
                     job,
                     "Running",
-                    "Harden SNMP",
-                    12,
-                    total,
-                    "[OK] SNMP already correct; no change needed.",
-                )
-            else:
-                config_changes_attempted = True
-                update_job(
-                    kit_name,
-                    job,
-                    "Running",
-                    "Harden SNMP",
-                    12,
+                    "Check iLO license",
+                    11,
                     total,
                     (
-                        "[RUNNING] SNMP apply attempt | "
-                        f"target={active_ip} | username={active_snmp_user.get('username', '') or '(none)'} | "
-                        f"auth={desired_auth_protocol} | priv={desired_priv_protocol} | "
-                        f"auth_secret={'Yes' if active_snmp_user.get('auth_password') else 'No'} | "
-                        f"privacy_secret={'Yes' if active_snmp_user.get('priv_password') else 'No'}"
+                        "[OK] iLO license status is healthy."
+                        if license_result.get("ok")
+                        else "[WARN] iLO license status is not OK."
                     )
+                    + f" | warnings={license_result.get('warnings', []) or '(none)'}",
                 )
-                snmp_result = client.harden_snmp_best_effort(
-                    v3_username=active_snmp_user.get("username", ""),
-                    v3_auth_protocol=active_snmp_user.get("auth_protocol", "SHA"),
-                    v3_auth_password=active_snmp_user.get("auth_password", ""),
-                    v3_priv_protocol=active_snmp_user.get("priv_protocol", "AES"),
-                    v3_priv_password=active_snmp_user.get("priv_password", ""),
-                )
-                snmp_change_applied = bool(snmp_result.get("changed"))
-                current_network_protocol["SNMP"] = dict(snmp_result.get("after") or current_network_protocol.get("SNMP") or {})
-                job["snmp_apply_status"] = str(snmp_result.get("status") or "Mismatch")
-                job["snmp_applied_keys"] = list(snmp_result.get("applied_keys") or [])
-                job["snmp_verified_checks"] = list(snmp_result.get("verification", {}).get("checks") or [])
-                job["snmp_mismatches"] = list(snmp_result.get("mismatches") or [])
-                job["snmp_reset_recommended"] = bool(snmp_result.get("reset_recommended"))
+            except Exception as e:
+                job["license_status"] = "Warning"
+                job["license_warnings"] = [str(e).splitlines()[0]]
+                job["ilo_policy_warnings"].append(f"License check failed: {str(e).splitlines()[0]}")
                 save_job(kit_name, job)
-                snmp_matched = bool(snmp_result.get("matched")) if "matched" in snmp_result else bool(snmp_result.get("verified"))
-                if not snmp_matched:
-                    config_changes_succeeded = False
+                update_job(kit_name, job, "Running", "Check iLO license", 11, total, f"[WARN] iLO license check failed: {str(e).splitlines()[0]}")
+        else:
+            job["license_status"] = "Skipped"
+            save_job(kit_name, job)
+            update_job(kit_name, job, "Running", "Check iLO license", 11, total, "[SKIP] iLO license policy is disabled.")
+
+        if policy_enabled(cfg, "enable_ipv6_disable"):
+            try:
+                update_job(kit_name, job, "Running", "Disable IPv6", 11, total, "[RUNNING] Attempting to disable IPv6 where supported")
+                if type(client).configure_ipv6_policy_best_effort is ILO_CLIENT_BASE.configure_ipv6_policy_best_effort and type(client).disable_ipv6_best_effort is not ILO_CLIENT_BASE.disable_ipv6_best_effort:
+                    legacy_ipv6 = client.disable_ipv6_best_effort()
+                    ipv6_result = {
+                        "changed": True,
+                        "verified": True,
+                        "checks": [],
+                        "path": legacy_ipv6.get("path") or "",
+                        "reset_recommended": bool(legacy_ipv6.get("reset_recommended")),
+                    }
+                else:
+                    ipv6_result = client.configure_ipv6_policy_best_effort()
+                ipv6_change_applied = bool(ipv6_result.get("changed"))
+                job["ipv6_policy_status"] = "Verified" if ipv6_result.get("verified") else "Mismatch"
+                job["ipv6_policy_checks"] = list(ipv6_result.get("checks") or [])
+                job["ilo_policy_raw_results"]["ipv6"] = dict(ipv6_result)
+                if ipv6_result.get("reset_recommended"):
+                    reset_reasons.append("IPv6 policy requested iLO reset")
+                save_job(kit_name, job)
                 update_job(
                     kit_name,
                     job,
                     "Running",
-                    "Harden SNMP",
-                    12,
+                    "Disable IPv6",
+                    11,
                     total,
-                    (
+                    f"[OK] IPv6 hardening via {ipv6_result.get('path', '(unknown)')} | reset_recommended={ipv6_result.get('reset_recommended')} | checks={ipv6_result.get('checks', [])}",
+                )
+            except Exception as e:
+                job["ipv6_policy_status"] = "Failed"
+                job["ilo_policy_failures"].append(f"IPv6 policy failed: {str(e).splitlines()[0]}")
+                save_job(kit_name, job)
+                update_job(kit_name, job, "Running", "Disable IPv6", 11, total, f"[WARN] IPv6 hardening could not be applied: {str(e).splitlines()[0]}")
+        else:
+            job["ipv6_policy_status"] = "Skipped"
+            save_job(kit_name, job)
+            update_job(kit_name, job, "Running", "Disable IPv6", 11, total, "[SKIP] IPv6 policy is disabled.")
+
+        if policy_enabled(cfg, "enable_snmp_policy") and active_snmp_user.get("v3_username"):
+            try:
+                if current_snmp_matches(current_network_protocol):
+                    job["snmp_apply_status"] = "Already correct"
+                    save_job(kit_name, job)
+                    update_job(kit_name, job, "Running", "Harden SNMP", 12, total, "[OK] SNMP already correct; no change needed.")
+                else:
+                    config_changes_attempted = True
+                    update_job(
+                        kit_name,
+                        job,
+                        "Running",
+                        "Harden SNMP",
+                        12,
+                        total,
+                        (
+                            "[RUNNING] SNMP apply attempt | "
+                            f"target={active_ip} | username={active_snmp_user.get('v3_username', '') or '(none)'} | "
+                            f"auth={desired_auth_protocol} | priv={desired_priv_protocol} | "
+                            f"auth_secret={'Yes' if active_snmp_user.get('v3_auth_password') else 'No'} | "
+                            f"privacy_secret={'Yes' if active_snmp_user.get('v3_priv_password') else 'No'}"
+                        ),
+                    )
+                    if type(client).configure_snmp_policy_best_effort is ILO_CLIENT_BASE.configure_snmp_policy_best_effort and type(client).harden_snmp_best_effort is not ILO_CLIENT_BASE.harden_snmp_best_effort:
+                        snmp_result = client.harden_snmp_best_effort(
+                            v3_username=active_snmp_user.get("v3_username", ""),
+                            v3_auth_protocol=active_snmp_user.get("v3_auth_protocol", "SHA"),
+                            v3_auth_password=active_snmp_user.get("v3_auth_password", ""),
+                            v3_priv_protocol=active_snmp_user.get("v3_priv_protocol", "AES"),
+                            v3_priv_password=active_snmp_user.get("v3_priv_password", ""),
+                        )
+                    else:
+                        snmp_result = client.configure_snmp_policy_best_effort(
+                            system_contact=active_snmp_user.get("system_contact", ""),
+                            system_location=active_snmp_user.get("system_location", ""),
+                            system_role=active_snmp_user.get("system_role", ""),
+                            read_community=active_snmp_user.get("read_community", ""),
+                            v3_username=active_snmp_user.get("v3_username", ""),
+                            v3_auth_protocol=active_snmp_user.get("v3_auth_protocol", "SHA"),
+                            v3_auth_password=active_snmp_user.get("v3_auth_password", ""),
+                            v3_priv_protocol=active_snmp_user.get("v3_priv_protocol", "AES"),
+                            v3_priv_password=active_snmp_user.get("v3_priv_password", ""),
+                        )
+                    snmp_change_applied = bool(snmp_result.get("changed"))
+                    current_network_protocol["SNMP"] = dict(snmp_result.get("after") or current_network_protocol.get("SNMP") or {})
+                    job["snmp_apply_status"] = str(snmp_result.get("status") or "Mismatch")
+                    job["snmp_applied_keys"] = list(snmp_result.get("applied_keys") or [])
+                    job["snmp_verified_checks"] = list(snmp_result.get("verification", {}).get("checks") or [])
+                    job["snmp_mismatches"] = list(snmp_result.get("mismatches") or [])
+                    job["snmp_reset_recommended"] = bool(snmp_result.get("reset_recommended"))
+                    job["ilo_policy_raw_results"]["snmp"] = dict(snmp_result)
+                    if snmp_result.get("reset_recommended"):
+                        reset_reasons.append("SNMP policy requested iLO reset")
+                    save_job(kit_name, job)
+                    snmp_matched = bool(snmp_result.get("matched")) if "matched" in snmp_result else bool(snmp_result.get("verified"))
+                    if not snmp_matched:
+                        config_changes_succeeded = False
+                    update_job(
+                        kit_name,
+                        job,
+                        "Running",
+                        "Harden SNMP",
+                        12,
+                        total,
                         (
                             "[OK] SNMP verified after apply"
                             if snmp_matched
@@ -12233,39 +14216,112 @@ def run_ilo_real(cfg: dict):
                         )
                         + " | "
                         + f"path={snmp_result.get('path', '(unknown)')} | "
-                        + f"username={active_snmp_user.get('username', '') or '(none)'} | "
+                        + f"username={active_snmp_user.get('v3_username', '') or '(none)'} | "
                         + f"active_ip={active_ip} | "
                         + f"auth={desired_auth_protocol} | priv={desired_priv_protocol} | "
-                        + f"auth_secret={'Yes' if active_snmp_user.get('auth_password') else 'No'} | "
-                        + f"privacy_secret={'Yes' if active_snmp_user.get('priv_password') else 'No'} | "
+                        + f"auth_secret={'Yes' if active_snmp_user.get('v3_auth_password') else 'No'} | "
+                        + f"privacy_secret={'Yes' if active_snmp_user.get('v3_priv_password') else 'No'} | "
                         + f"checks={snmp_result.get('verification', {}).get('checks', [])} | "
                         + f"mismatches={snmp_result.get('mismatches', []) or '(none)'} | "
                         + f"reset_recommended={snmp_result.get('reset_recommended')} | "
-                        + f"notes={snmp_result.get('notes', [])}"
+                        + f"notes={snmp_result.get('notes', [])}",
                     )
+            except Exception as e:
+                config_changes_succeeded = False
+                job["snmp_apply_status"] = "Failed"
+                job["ilo_policy_failures"].append(f"SNMP policy failed: {str(e).splitlines()[0]}")
+                save_job(kit_name, job)
+                update_job(
+                    kit_name,
+                    job,
+                    "Running",
+                    "Harden SNMP",
+                    12,
+                    total,
+                    (
+                        "[FAILED] SNMP settings could not be verified after apply | "
+                        f"target={active_ip} | username={active_snmp_user.get('v3_username', '') or '(none)'} | "
+                        f"auth={desired_auth_protocol} | priv={desired_priv_protocol} | "
+                        f"auth_secret={'Yes' if active_snmp_user.get('v3_auth_password') else 'No'} | "
+                        f"privacy_secret={'Yes' if active_snmp_user.get('v3_priv_password') else 'No'} | "
+                        f"error={e}"
+                    ),
                 )
-        except Exception as e:
-            config_changes_succeeded = False
-            job["snmp_apply_status"] = "Failed"
+        else:
+            job["snmp_apply_status"] = "Skipped"
             save_job(kit_name, job)
-            update_job(
-                kit_name,
-                job,
-                "Running",
-                "Harden SNMP",
-                12,
-                total,
-                (
-                    "[FAILED] SNMP settings could not be verified after apply | "
-                    f"target={active_ip} | username={active_snmp_user.get('username', '') or '(none)'} | "
-                    f"auth={desired_auth_protocol} | priv={desired_priv_protocol} | "
-                    f"auth_secret={'Yes' if active_snmp_user.get('auth_password') else 'No'} | "
-                    f"privacy_secret={'Yes' if active_snmp_user.get('priv_password') else 'No'} | "
-                    f"error={e}"
-                )
-            )
+            update_job(kit_name, job, "Running", "Harden SNMP", 12, total, "[SKIP] SNMP policy is disabled.")
 
-        if additional_ilo_users:
+        if policy_enabled(cfg, "enable_alert_destinations") and active_snmp_user.get("alert_destinations"):
+            try:
+                config_changes_attempted = True
+                update_job(kit_name, job, "Running", "Configure SNMP alerts", 13, total, "[RUNNING] Updating SNMP alert destinations.")
+                alerts_result = client.configure_snmp_alert_destinations_best_effort(
+                    destinations=list(active_snmp_user.get("alert_destinations") or []),
+                    protocol=str(active_snmp_user.get("alert_protocol") or "SNMPv3Inform"),
+                    snmpv3_user=str(active_snmp_user.get("v3_username") or ""),
+                )
+                alerts_change_applied = bool(alerts_result.get("changed"))
+                job["snmp_alert_status"] = str(alerts_result.get("status") or ("Verified" if alerts_result.get("verified") else "Mismatch"))
+                job["snmp_alert_results"] = list(alerts_result.get("destinations") or [])
+                job["ilo_policy_raw_results"]["alerts"] = dict(alerts_result)
+                if alerts_result.get("reset_recommended"):
+                    reset_reasons.append("SNMP alert destinations requested iLO reset")
+                save_job(kit_name, job)
+                update_job(
+                    kit_name,
+                    job,
+                    "Running",
+                    "Configure SNMP alerts",
+                    13,
+                    total,
+                    f"[OK] SNMP alert destinations processed | protocol={active_snmp_user.get('alert_protocol')} | results={alerts_result.get('destinations', [])}",
+                )
+            except Exception as e:
+                job["snmp_alert_status"] = "Failed"
+                job["ilo_policy_failures"].append(f"SNMP alert destinations failed: {str(e).splitlines()[0]}")
+                save_job(kit_name, job)
+                update_job(kit_name, job, "Running", "Configure SNMP alerts", 13, total, f"[WARN] SNMP alert destinations could not be applied: {str(e).splitlines()[0]}")
+        else:
+            job["snmp_alert_status"] = "Skipped"
+            save_job(kit_name, job)
+            update_job(kit_name, job, "Running", "Configure SNMP alerts", 13, total, "[SKIP] SNMP alert destination policy is disabled.")
+
+        if policy_enabled(cfg, "enable_time_policy") and standard_policy.get("time", {}).get("server"):
+            try:
+                config_changes_attempted = True
+                update_job(kit_name, job, "Running", "Configure time policy", 13, total, "[RUNNING] Applying SNTP/time policy.")
+                time_result = client.configure_sntp_policy_best_effort(
+                    ntp_server=str(standard_policy.get("time", {}).get("server") or ""),
+                    timezone=str(standard_policy.get("time", {}).get("timezone") or ""),
+                )
+                time_change_applied = bool(time_result.get("changed"))
+                job["time_policy_status"] = "Verified" if time_result.get("verified") else "Mismatch"
+                job["time_policy_notes"] = list(time_result.get("notes") or [])
+                job["ilo_policy_raw_results"]["time"] = dict(time_result)
+                if time_result.get("reset_recommended"):
+                    reset_reasons.append("Time policy requested iLO reset")
+                save_job(kit_name, job)
+                update_job(
+                    kit_name,
+                    job,
+                    "Running",
+                    "Configure time policy",
+                    13,
+                    total,
+                    f"[OK] Time policy processed | server={standard_policy.get('time', {}).get('server')} | timezone={standard_policy.get('time', {}).get('timezone')} | notes={time_result.get('notes', [])}",
+                )
+            except Exception as e:
+                job["time_policy_status"] = "Failed"
+                job["ilo_policy_failures"].append(f"Time policy failed: {str(e).splitlines()[0]}")
+                save_job(kit_name, job)
+                update_job(kit_name, job, "Running", "Configure time policy", 13, total, f"[WARN] Time policy could not be applied: {str(e).splitlines()[0]}")
+        else:
+            job["time_policy_status"] = "Skipped"
+            save_job(kit_name, job)
+            update_job(kit_name, job, "Running", "Configure time policy", 13, total, "[SKIP] Time policy is disabled or missing a gateway-backed server.")
+
+        if local_accounts_to_apply:
             try:
                 config_changes_attempted = True
                 update_job(
@@ -12275,12 +14331,15 @@ def run_ilo_real(cfg: dict):
                     "Apply local users",
                     13,
                     total,
-                    f"[RUNNING] Ensuring additional local iLO users: {', '.join([item.get('username', '') for item in additional_ilo_users])}",
+                    f"[RUNNING] Ensuring local iLO users: {', '.join([item.get('username', '') for item in local_accounts_to_apply])}",
                 )
-                accounts_result = client.ensure_local_accounts_best_effort(additional_ilo_users)
+                accounts_result = client.ensure_local_accounts_best_effort(local_accounts_to_apply)
                 local_users_change_applied = any(item.get("changed") for item in accounts_result.get("results") or [])
                 job["local_account_status"] = str(accounts_result.get("status") or "Mismatch")
                 job["local_account_results"] = list(accounts_result.get("results") or [])
+                job["ilo_policy_raw_results"]["accounts"] = dict(accounts_result)
+                if accounts_result.get("reset_recommended"):
+                    reset_reasons.append("Local account policy requested iLO reset")
                 save_job(kit_name, job)
                 if not accounts_result.get("matched"):
                     config_changes_succeeded = False
@@ -12292,15 +14351,16 @@ def run_ilo_real(cfg: dict):
                     13,
                     total,
                     (
-                        "[OK] Additional local iLO users verified"
+                        "[OK] Local iLO users verified"
                         if accounts_result.get("matched")
-                        else "[WARN] Additional local iLO users did not fully verify"
+                        else "[WARN] Local iLO users did not fully verify"
                     )
                     + f" | path={accounts_result.get('path', '(unknown)')} | results={accounts_result.get('results', [])}",
                 )
             except Exception as e:
                 config_changes_succeeded = False
                 job["local_account_status"] = "Failed"
+                job["ilo_policy_failures"].append(f"Local account policy failed: {str(e).splitlines()[0]}")
                 save_job(kit_name, job)
                 update_job(
                     kit_name,
@@ -12309,7 +14369,7 @@ def run_ilo_real(cfg: dict):
                     "Apply local users",
                     13,
                     total,
-                    f"[FAILED] Additional local iLO users could not be applied: {str(e).splitlines()[0]}",
+                    f"[FAILED] Local iLO users could not be applied: {str(e).splitlines()[0]}",
                 )
         else:
             job["local_account_status"] = "Skipped"
@@ -12321,7 +14381,7 @@ def run_ilo_real(cfg: dict):
                 "Apply local users",
                 13,
                 total,
-                "[SKIP] No additional local iLO users were requested.",
+                "[SKIP] No local iLO user policy changes were requested.",
             )
 
         storage_result = None
@@ -12342,10 +14402,27 @@ def run_ilo_real(cfg: dict):
             "ipv4": "changed" if ip_change_applied else ("already-correct" if target_ip and desired_subnet_mask and desired_gateway else "not-requested"),
             "hostname": "changed" if hostname_change_applied else ("already-correct" if desired_hostname else "not-requested"),
             "dns": "changed" if dns_change_applied else ("already-correct" if shared_dns else "not-requested"),
-            "snmp": "changed" if snmp_change_applied else ("already-correct" if active_snmp_user.get("username") else "not-requested"),
-            "local_users": "changed" if local_users_change_applied else ("already-correct" if additional_ilo_users else "not-requested"),
+            "snmp": "changed" if snmp_change_applied else ("already-correct" if policy_enabled(cfg, "enable_snmp_policy") and active_snmp_user.get("v3_username") else "not-requested"),
+            "snmp_alerts": "changed" if alerts_change_applied else ("already-correct" if policy_enabled(cfg, "enable_alert_destinations") else "not-requested"),
+            "ipv6": "changed" if ipv6_change_applied else ("already-correct" if policy_enabled(cfg, "enable_ipv6_disable") else "not-requested"),
+            "time": "changed" if time_change_applied else ("already-correct" if policy_enabled(cfg, "enable_time_policy") else "not-requested"),
+            "local_users": "changed" if local_users_change_applied else ("already-correct" if local_accounts_to_apply else "not-requested"),
         }
         job["ilo_change_summary"] = dict(change_summary)
+        job["ilo_policy_applied"] = [
+            name
+            for name, changed in (
+                ("ipv4", ip_change_applied),
+                ("hostname", hostname_change_applied),
+                ("dns", dns_change_applied),
+                ("snmp", snmp_change_applied),
+                ("snmp_alerts", alerts_change_applied),
+                ("ipv6", ipv6_change_applied),
+                ("time", time_change_applied),
+                ("local_users", local_users_change_applied),
+            )
+            if changed
+        ]
         update_job(
             kit_name,
             job,
@@ -12359,11 +14436,23 @@ def run_ilo_real(cfg: dict):
                 f"Hostname={change_summary['hostname']} | "
                 f"DNS={change_summary['dns']} | "
                 f"SNMP={change_summary['snmp']} | "
+                f"SNMP alerts={change_summary['snmp_alerts']} | "
+                f"IPv6={change_summary['ipv6']} | "
+                f"Time={change_summary['time']} | "
                 f"Local users={change_summary['local_users']}"
             ),
         )
-        reset_recommended = ip_change_applied
-        job["ilo_reset_reason"] = "iLO IP changed" if reset_recommended else "no reset-worthy iLO change was applied"
+        if ip_change_applied:
+            reset_reasons.insert(0, "iLO IP changed")
+        reset_recommended = bool(reset_reasons)
+        if not policy_settings.get("enable_auto_reset"):
+            job["ilo_reset_reason"] = (
+                "reset-worthy iLO changes were detected, but automatic iLO reset is disabled"
+                if reset_recommended
+                else "no reset-worthy iLO change was applied"
+            )
+        else:
+            job["ilo_reset_reason"] = ", ".join(dict.fromkeys(reset_reasons)) if reset_recommended else "no reset-worthy iLO change was applied"
         update_job(
             kit_name,
             job,
@@ -12402,7 +14491,7 @@ def run_ilo_real(cfg: dict):
             )
             return
 
-        if config_changes_attempted and reset_recommended:
+        if config_changes_attempted and reset_recommended and policy_settings.get("enable_auto_reset"):
             job["ilo_reset_required"] = True
             job["ilo_reset_status"] = "Requested"
             save_job(kit_name, job)
@@ -12539,6 +14628,16 @@ def run_ilo_real(cfg: dict):
                 )
                 return
         else:
+            if reset_recommended and not policy_settings.get("enable_auto_reset"):
+                update_job(
+                    kit_name,
+                    job,
+                    "Running",
+                    "Finish iLO stage",
+                    14,
+                    total,
+                    "[WARN] Reset-worthy iLO changes were detected, but automatic iLO reset is disabled in policy.",
+                )
             ip_check = verify_active_ip_state(expected_final_ip, stage_name="Finish iLO stage", step_index=14)
             if target_ip and not ip_check.get("matched"):
                 update_job(
@@ -12752,6 +14851,7 @@ def render_page(
     storage_plan: dict | None = None,
     storage_plan_paths: dict[str, Path] | None = None,
     storage_apply_paths: dict[str, Path] | None = None,
+    storage_repair_action: dict[str, str] | None = None,
 ):
     active_page = normalize_page_name(active_page)
     page_meta = PAGE_META[active_page]
@@ -12763,7 +14863,25 @@ def render_page(
     storage_target = resolve_storage_target_host(cfg)
     storage_credentials = resolve_storage_target_credentials(cfg)
     storage_execution_status = build_storage_execution_status(cfg)
+    if not storage_discovery and not storage_export_paths:
+        storage_cfg = ensure_storage_config(cfg)
+        latest_raw_path = str(storage_cfg.get("latest_discovery_raw_path") or "").strip()
+        latest_plan_path = str(storage_cfg.get("latest_plan_path") or "").strip()
+        if latest_raw_path or latest_plan_path:
+            try:
+                restored_discovery, restored_export_paths, restored_plan, restored_plan_paths = restore_storage_page_state(
+                    discovery_raw_path=latest_raw_path,
+                    raid_plan_path=latest_plan_path,
+                    expected_host=str(storage_target.get("resolved") or ""),
+                )
+                storage_discovery = restored_discovery or storage_discovery
+                storage_export_paths = restored_export_paths or storage_export_paths
+                storage_plan = restored_plan or storage_plan
+                storage_plan_paths = restored_plan_paths or storage_plan_paths
+            except Exception:
+                pass
     storage_discovery_summary = (storage_discovery or {}).get("summary", storage_discovery) if storage_discovery else None
+    storage_controller_capabilities = build_storage_controller_capabilities(storage_discovery) if storage_discovery else []
     storage_planning_drives = build_storage_planning_drives(storage_discovery_summary)
     storage_display_controller = select_primary_storage_controller(storage_discovery_summary)
     storage_controller_choices = build_storage_controller_choices(storage_discovery_summary)
@@ -12799,7 +14917,7 @@ def render_page(
     history_display = build_history_display_entries(history)
     dashboard_job_status = build_dashboard_job_status(history)
     hardware_identity = build_hardware_identity(cfg)
-    ilo_input_review = build_ilo_input_review(cfg)
+    ilo_input_review = build_ilo_input_review(cfg, include_policy_validation=active_page == "ilo")
     snmp_input_review = build_snmp_input_review(cfg)
     ilo_field_errors = build_ilo_field_errors(cfg)
     snmp_field_errors = build_snmp_field_errors(cfg)
@@ -12857,17 +14975,21 @@ def render_page(
         "config_view_title": config_view_title,
         "config_view_content": config_view_content,
         "action_feedback": action_feedback,
-        "storage_discovery": storage_discovery,
+        "storage_discovery": storage_discovery_summary,
+        "storage_discovery_full": storage_discovery,
+        "storage_discovery_summary": storage_discovery_summary,
         "storage_export_paths": storage_export_paths,
         "storage_plan": storage_plan,
         "storage_plan_paths": storage_plan_paths,
         "storage_apply_paths": storage_apply_paths,
+        "storage_repair_action": storage_repair_action or {},
         "storage_workflow_state": storage_workflow_state,
         "storage_review": storage_review,
         "storage_target": storage_target,
         "storage_credentials": storage_credentials,
         "storage_execution_status": storage_execution_status,
         "storage_planning_drives": storage_planning_drives,
+        "storage_controller_capabilities": storage_controller_capabilities,
         "storage_display_controller": storage_display_controller,
         "storage_controller_choices": storage_controller_choices,
         "storage_display_drives": storage_display_drives,
@@ -12926,6 +15048,7 @@ def page_name_from_request_path(path: str) -> str:
         "export_ilo_inventory": "ilo",
         "save_storage_target": "storage",
         "read_current_storage": "storage",
+        "probe_storage_capabilities": "storage",
         "plan_raid_layout": "storage",
         "approve_storage_plan": "storage",
         "clear_storage_approval": "storage",
@@ -13248,6 +15371,7 @@ async def save_config_route(
             "v3_auth_password": snmp_v3_auth_password,
             "v3_priv_protocol": snmp_v3_priv_protocol,
             "v3_priv_password": snmp_v3_priv_password,
+            "read_community": str((existing_cfg.get("shared_snmp") or {}).get("read_community") or ""),
             "users": extract_snmp_users_from_form(
                 form,
                 primary_username=snmp_v3_username,
@@ -13283,6 +15407,7 @@ async def save_config_route(
             "username": ilo_username,
             "password": ilo_password,
             "additional_users": extract_ilo_additional_users_from_form(form),
+            "policy": dict((existing_cfg.get("ilo") or {}).get("policy") or {}),
         },
         "esxi": {
             "hostname": esxi_hostname,
@@ -13312,7 +15437,7 @@ async def save_config_route(
     cfg = merge_defaults(cfg)
     cfg["storage"]["include_in_ilo_run"] = cfg.get("included", {}).get("storage", False)
     snmp_input_review = build_snmp_input_review(cfg)
-    ilo_input_review = build_ilo_input_review(cfg)
+    ilo_input_review = build_ilo_input_review(cfg, include_policy_validation=False)
     combined_errors = list(snmp_input_review["errors"]) + list(ilo_input_review["errors"])
     combined_notes = list(snmp_input_review["notes"]) + list(ilo_input_review["notes"])
     if combined_errors:
@@ -13487,6 +15612,27 @@ async def save_ilo_settings_route(
     ilo_hostname: str = Form(""),
     ilo_username: str = Form(""),
     ilo_password: str = Form(""),
+    ilo_discover_start_octet: str = Form("21"),
+    ilo_discover_end_octet: str = Form("29"),
+    ilo_policy_apply_standard_policy: str | None = Form(None),
+    ilo_policy_enable_standard_accounts: str | None = Form(None),
+    ilo_policy_enable_license_check: str | None = Form(None),
+    ilo_policy_enable_snmp_policy: str | None = Form(None),
+    ilo_policy_enable_alert_destinations: str | None = Form(None),
+    ilo_policy_enable_ipv6_disable: str | None = Form(None),
+    ilo_policy_enable_time_policy: str | None = Form(None),
+    ilo_policy_enable_auto_reset: str | None = Form(None),
+    ilo_policy_kit_admin_password: str = Form(""),
+    ilo_policy_kit_operator_password: str = Form(""),
+    ilo_policy_shared_admin_username: str = Form("765CS"),
+    ilo_policy_shared_admin_password: str = Form(""),
+    ilo_policy_snmp_read_community: str = Form(""),
+    ilo_policy_snmpv3_username: str = Form("765CS"),
+    ilo_policy_snmpv3_auth_protocol: str = Form("SHA"),
+    ilo_policy_snmpv3_auth_password: str = Form(""),
+    ilo_policy_snmpv3_priv_protocol: str = Form("AES"),
+    ilo_policy_snmpv3_priv_password: str = Form(""),
+    ilo_policy_alert_destinations: str = Form("10.245.190.67, 10.245.190.68"),
 ):
     cfg = load_kit_config()
     form = await request.form()
@@ -13501,8 +15647,40 @@ async def save_ilo_settings_route(
     cfg["ilo"]["username"] = ilo_username
     cfg["ilo"]["password"] = ilo_password
     cfg["ilo"]["additional_users"] = extract_ilo_additional_users_from_form(form)
+    existing_policy = normalize_ilo_policy((cfg.get("ilo") or {}).get("policy"))
+    existing_policy.update(
+        {
+            "discover_start_octet": ilo_discover_start_octet,
+            "discover_end_octet": ilo_discover_end_octet,
+            "apply_standard_policy": ilo_policy_apply_standard_policy == "on",
+            "enable_standard_accounts": ilo_policy_enable_standard_accounts == "on",
+            "enable_license_check": ilo_policy_enable_license_check == "on",
+            "enable_snmp_policy": ilo_policy_enable_snmp_policy == "on",
+            "enable_alert_destinations": ilo_policy_enable_alert_destinations == "on",
+            "enable_ipv6_disable": ilo_policy_enable_ipv6_disable == "on",
+            "enable_time_policy": ilo_policy_enable_time_policy == "on",
+            "enable_auto_reset": ilo_policy_enable_auto_reset == "on",
+            "kit_admin_password": ilo_policy_kit_admin_password,
+            "kit_operator_password": ilo_policy_kit_operator_password,
+            "shared_admin_username": ilo_policy_shared_admin_username.strip() or "765CS",
+            "shared_admin_password": ilo_policy_shared_admin_password,
+            "snmp_read_community": ilo_policy_snmp_read_community,
+            "snmpv3_username": ilo_policy_snmpv3_username.strip() or "765CS",
+            "snmpv3_auth_protocol": ilo_policy_snmpv3_auth_protocol.strip() or "SHA",
+            "snmpv3_auth_password": ilo_policy_snmpv3_auth_password,
+            "snmpv3_priv_protocol": ilo_policy_snmpv3_priv_protocol.strip() or "AES",
+            "snmpv3_priv_password": ilo_policy_snmpv3_priv_password,
+            "alert_destinations": [
+                item.strip()
+                for item in re.split(r"[\s,]+", str(ilo_policy_alert_destinations or "").strip())
+                if item.strip()
+            ],
+        }
+    )
+    cfg["ilo"]["policy"] = normalize_ilo_policy(existing_policy)
+    cfg.setdefault("shared_snmp", {})["read_community"] = ilo_policy_snmp_read_community
     cfg["included"]["ilo"] = True
-    ilo_input_review = build_ilo_input_review(cfg)
+    ilo_input_review = build_ilo_input_review(cfg, include_policy_validation=True)
     if ilo_input_review["errors"]:
         return render_page(
             request,
@@ -13555,6 +15733,49 @@ async def save_ilo_settings_route(
         links=[{"label": "Open Storage setup", "href": "/storage"}, {"label": "Review run prep", "href": "/execution"}],
     ),
 )
+
+
+@app.post("/discover-ilo-hosts", response_class=HTMLResponse)
+async def discover_ilo_hosts_route(request: Request, return_page: str = Form("ilo")):
+    cfg = load_kit_config()
+    policy = normalize_ilo_policy((cfg.get("ilo") or {}).get("policy"))
+    targets = build_ilo_discovery_targets(cfg)
+    results = [probe_tcp_port(target, 443, timeout_seconds=0.75) for target in targets]
+    policy["discovered_hosts"] = results
+    cfg["ilo"]["policy"] = normalize_ilo_policy(policy)
+    reachable = [item for item in results if item.get("reachable")]
+    current_ip = str((cfg.get("ilo") or {}).get("current_ip") or "").strip()
+    if len(reachable) == 1 and (not current_ip or current_ip == str((cfg.get("ip_plan") or {}).get("ilo") or "").strip() or current_ip not in {item.get("host") for item in reachable}):
+        cfg["ilo"]["current_ip"] = str(reachable[0].get("host") or "")
+        cfg["ilo"]["host"] = cfg["ilo"]["current_ip"]
+    save_kit_config(cfg)
+    append_activity_event(
+        cfg["site"]["name"],
+        "ilo_hosts_discovered",
+        workflow="ilo",
+        summary="Scanned the kit subnet for reachable iLO HTTPS endpoints.",
+        target=str((reachable[0] if reachable else {}).get("host") or ""),
+        details=[
+            f"Subnet: {cfg.get('shared_network', {}).get('subnet') or 'Not set'}",
+            f"Octet range: {policy.get('discover_start_octet')}..{policy.get('discover_end_octet')}",
+            f"Reachable hosts: {', '.join(item.get('host', '') for item in reachable) or 'None'}",
+        ],
+    )
+    return render_page(
+        request,
+        cfg,
+        active_page=return_page,
+        action_feedback=build_action_feedback(
+            "iLO discovery complete",
+            "Scanned the configured subnet range for reachable iLO HTTPS endpoints.",
+            tone="ready" if reachable else "pending",
+            outcomes=[
+                f"Scanned hosts: {len(results)}",
+                f"Reachable: {', '.join(item.get('host', '') for item in reachable) or 'None'}",
+                f"Range: {policy.get('discover_start_octet')}..{policy.get('discover_end_octet')}",
+            ],
+        ),
+    )
 
 
 @app.post("/save-esxi-settings", response_class=HTMLResponse)
@@ -13743,6 +15964,18 @@ async def export_ilo_inventory(request: Request, return_page: str = Form("config
     username = (ilo_cfg.get("username") or "").strip()
     password = ilo_cfg.get("password", "")
 
+    if not host and policy_enabled(cfg, "discover_enabled"):
+        policy = normalize_ilo_policy((cfg.get("ilo") or {}).get("policy"))
+        discovered = [probe_tcp_port(target, 443, timeout_seconds=0.75) for target in build_ilo_discovery_targets(cfg)]
+        policy["discovered_hosts"] = discovered
+        reachable = [item for item in discovered if item.get("reachable")]
+        cfg["ilo"]["policy"] = normalize_ilo_policy(policy)
+        if reachable:
+            host = str(reachable[0].get("host") or "")
+            cfg["ilo"]["current_ip"] = host
+            cfg["ilo"]["host"] = host
+        save_kit_config(cfg)
+
     if not host or not username or not password:
         error_text = "Current iLO config fetch failed: missing current iLO IP, username, or password."
         return render_page(
@@ -13756,6 +15989,10 @@ async def export_ilo_inventory(request: Request, return_page: str = Form("config
         client = ILOClient(ILOConfig(host=host, username=username, password=password, verify_tls=False, timeout=15))
         inventory = client.get_current_config_snapshot()
         export_paths = export_ilo_inventory_snapshot(cfg, inventory)
+        try:
+            db_persist_ilo_inventory(cfg, inventory, source_host=host)
+        except Exception:
+            pass
         yaml_text = export_paths["summary"].read_text(encoding="utf-8")
         return render_page(
             request,
@@ -13818,6 +16055,10 @@ async def export_ad_hoc_ilo_inventory(
             label=label,
             source_host=host,
         )
+        try:
+            db_persist_ilo_inventory(cfg, inventory, source_host=host)
+        except Exception:
+            pass
 
         saved_msg = ""
         if save_to_current_kit == "on":
@@ -13935,6 +16176,10 @@ async def read_current_storage(
         client = ILOClient(ILOConfig(host=host, username=username, password=password, verify_tls=False, timeout=15))
         discovery = client.get_storage_discovery(deep_smart_storage_scan=True)
         export_paths = export_storage_discovery_snapshot(cfg, discovery, host=host)
+        try:
+            db_persist_storage_inventory(cfg, discovery, host=host)
+        except Exception:
+            pass
         update_storage_latest_state(cfg, discovery=discovery, discovery_paths=export_paths)
         save_kit_config(cfg)
         append_activity_event(
@@ -13963,7 +16208,7 @@ async def read_current_storage(
                     {"label": "Open reports", "href": "/configs"},
                 ],
             ),
-            storage_discovery=discovery.get("summary", {}),
+            storage_discovery=discovery,
             storage_export_paths=export_paths,
         )
     except Exception as e:
@@ -13973,6 +16218,62 @@ async def read_current_storage(
             cfg,
             active_page=return_page,
             error_message=error_text,
+        )
+
+
+@app.post("/repair-storage-selection", response_class=HTMLResponse)
+async def repair_storage_selection(
+    request: Request,
+    return_page: str = Form("storage"),
+):
+    cfg = load_kit_config()
+    storage_target = resolve_storage_target_host(cfg)
+    storage_credentials = resolve_storage_target_credentials(cfg)
+    host = storage_target.get("resolved", "")
+    username = storage_credentials.get("username", "")
+    password = storage_credentials.get("password", "")
+    if not host or not username or not password:
+        return render_page(
+            request,
+            cfg,
+            active_page=return_page,
+            error_message=f"Storage repair failed: {storage_target.get('error') or storage_credentials.get('error') or 'missing current iLO IP, username, or password.'}",
+        )
+    try:
+        clear_storage_plan_selection_state(cfg)
+        client = ILOClient(ILOConfig(host=host, username=username, password=password, verify_tls=False, timeout=15))
+        discovery = client.get_storage_discovery(deep_smart_storage_scan=True)
+        export_paths = export_storage_discovery_snapshot(cfg, discovery, host=host)
+        try:
+            db_persist_storage_inventory(cfg, discovery, host=host)
+        except Exception:
+            pass
+        update_storage_latest_state(cfg, discovery=discovery, discovery_paths=export_paths)
+        save_kit_config(cfg)
+        return render_page(
+            request,
+            cfg,
+            active_page=return_page,
+            action_feedback=build_action_feedback(
+                "Invalid selections cleared",
+                "Cleared the saved storage plan selections and loaded fresh inventory from the current server.",
+                tone="ready",
+                outcomes=[
+                    f"Target: {host}",
+                    "Previous invalid drive selections were removed.",
+                    "Next step: build a new storage plan",
+                ],
+                links=[{"label": "Build storage plan", "href": "/storage#build-storage-plan"}],
+            ),
+            storage_discovery=discovery,
+            storage_export_paths=export_paths,
+        )
+    except Exception as e:
+        return render_page(
+            request,
+            cfg,
+            active_page=return_page,
+            error_message=f"Storage repair failed: {str(e).splitlines()[0]}",
         )
 
 
@@ -14019,16 +16320,28 @@ async def plan_raid_layout(
             "os_drive_paths": os_drive_paths,
             "data_drive_paths": data_drive_paths,
             "hot_spare_path": hot_spare_path,
-            "os_bays": os_bays,
-            "data_bays": data_bays,
-            "hot_spare_bay": hot_spare_bay,
         }
+        if not any(overrides.get(key) for key in ("os_drive_ids", "data_drive_ids", "hot_spare_drive_id", "os_drive_paths", "data_drive_paths", "hot_spare_path")):
+            overrides["os_bays"] = os_bays
+            overrides["data_bays"] = data_bays
+            overrides["hot_spare_bay"] = hot_spare_bay
         if os_raid_level is not None:
             overrides["os_raid_level"] = os_raid_level
         if data_raid_level is not None:
             overrides["data_raid_level"] = data_raid_level
         plan = build_raid_plan(discovery, discovery_paths, overrides=overrides)
         plan_paths = export_raid_plan_snapshot(cfg, plan, discovery_paths)
+        try:
+            db_persist_storage_plan(
+                cfg,
+                discovery=discovery,
+                discovery_paths=discovery_paths,
+                plan=plan,
+                plan_paths=plan_paths,
+                approved=False,
+            )
+        except Exception:
+            pass
         update_storage_latest_state(cfg, discovery=discovery, discovery_paths=discovery_paths, plan=plan, plan_paths=plan_paths)
         save_kit_config(cfg)
         append_activity_event(
@@ -14057,7 +16370,7 @@ async def plan_raid_layout(
                     {"label": "Open reports", "href": "/configs"},
                 ],
             ),
-            storage_discovery=discovery.get("summary", {}),
+            storage_discovery=discovery,
             storage_export_paths=discovery_paths,
             storage_plan=plan,
             storage_plan_paths=plan_paths,
@@ -14083,6 +16396,10 @@ async def approve_storage_plan(
     cfg = load_kit_config()
     storage_target = resolve_storage_target_host(cfg)
     host = storage_target.get("resolved", "")
+    discovery = None
+    discovery_paths = None
+    plan = None
+    plan_paths = None
 
     try:
         if not host:
@@ -14096,6 +16413,7 @@ async def approve_storage_plan(
             raise ValueError("A storage discovery artifact must be selected before approval.")
         if not plan or not plan_paths:
             raise ValueError("A RAID plan artifact must be selected before approval.")
+        validate_storage_plan_drive_paths(plan, discovery)
         if not plan.get("valid", False):
             raise ValueError("Only a valid RAID plan can be approved for a later iLO run.")
         approve_storage_plan_for_cfg(
@@ -14134,17 +16452,94 @@ async def approve_storage_plan(
                 ],
                 links=[{"label": "Run for real", "href": "/execution"}],
             ),
-            storage_discovery=discovery.get("summary", {}) if discovery else None,
+            storage_discovery=discovery if discovery else None,
             storage_export_paths=discovery_paths,
             storage_plan=plan,
             storage_plan_paths=plan_paths,
+        )
+    except Exception as e:
+        error_text = str(e).splitlines()[0]
+        repair_action = None
+        if is_storage_drive_controller_mismatch_error(error_text):
+            try:
+                db_record_known_issue_observation(
+                    cfg,
+                    fingerprint=KNOWN_ISSUE_STORAGE_DRIVE_CONTROLLER_MISMATCH,
+                    title="Storage drive/controller mismatch",
+                    description="A selected storage drive path resolved to a different controller than the saved OS or data controller selection.",
+                    message=error_text,
+                    discovery=discovery,
+                    plan=plan,
+                )
+            except Exception:
+                pass
+            repair_action = {"return_page": return_page}
+        return render_page(
+            request,
+            cfg,
+            active_page=return_page,
+            error_message=f"Storage approval failed: {error_text}",
+            storage_discovery=discovery if discovery else None,
+            storage_export_paths=discovery_paths,
+            storage_plan=plan,
+            storage_plan_paths=plan_paths,
+            storage_repair_action=repair_action,
+        )
+
+
+@app.post("/probe-storage-capabilities", response_class=HTMLResponse)
+async def probe_storage_capabilities(
+    request: Request,
+    return_page: str = Form("storage"),
+):
+    cfg = load_kit_config()
+    storage_target = resolve_storage_target_host(cfg)
+    storage_credentials = resolve_storage_target_credentials(cfg)
+    host = storage_target.get("resolved", "")
+    username = storage_credentials.get("username", "")
+    password = storage_credentials.get("password", "")
+
+    if not host or not username or not password:
+        return render_page(
+            request,
+            cfg,
+            active_page=return_page,
+            error_message=f"Storage capability probe failed: {storage_target.get('error') or storage_credentials.get('error') or 'missing current iLO IP, username, or password.'}",
+        )
+
+    try:
+        client = ILOClient(ILOConfig(host=host, username=username, password=password, verify_tls=False, timeout=15))
+        discovery = client.get_storage_discovery(deep_smart_storage_scan=True)
+        export_paths = export_storage_discovery_snapshot(cfg, discovery, host=host)
+        try:
+            db_persist_storage_inventory(cfg, discovery, host=host)
+        except Exception:
+            pass
+        update_storage_latest_state(cfg, discovery=discovery, discovery_paths=export_paths)
+        save_kit_config(cfg)
+        return render_page(
+            request,
+            cfg,
+            active_page=return_page,
+            action_feedback=build_action_feedback(
+                "Storage capability probe complete",
+                "Read controller metadata, volume collections, and advertised Redfish actions without making storage changes.",
+                tone="ready",
+                outcomes=[
+                    f"Target: {host}",
+                    "No delete or create requests were issued.",
+                    "Review the controller capability table below before approving apply.",
+                ],
+            ),
+            storage_discovery=discovery,
+            storage_export_paths=export_paths,
         )
     except Exception as e:
         return render_page(
             request,
             cfg,
             active_page=return_page,
-            error_message=f"Storage approval failed: {str(e).splitlines()[0]}",
+            error_message=f"Storage capability probe failed: {str(e).splitlines()[0]}",
         )
 
 
@@ -14212,6 +16607,10 @@ async def apply_storage_layout(
     cfg = load_kit_config()
     storage_target = resolve_storage_target_host(cfg)
     host = storage_target.get("resolved", "")
+    discovery = None
+    discovery_paths = None
+    plan = None
+    plan_paths = None
 
     try:
         if not host:
@@ -14223,6 +16622,7 @@ async def apply_storage_layout(
         )
         if not plan_paths:
             raise ValueError("A RAID plan artifact must be selected before apply.")
+        validate_storage_plan_drive_paths(plan, discovery)
         validate_storage_apply_request(
             plan,
             apply_mode,
@@ -14255,11 +16655,32 @@ async def apply_storage_layout(
             storage_apply_paths=apply_paths,
         )
     except Exception as e:
+        error_text = str(e).splitlines()[0]
+        repair_action = None
+        if is_storage_drive_controller_mismatch_error(error_text):
+            try:
+                db_record_known_issue_observation(
+                    cfg,
+                    fingerprint=KNOWN_ISSUE_STORAGE_DRIVE_CONTROLLER_MISMATCH,
+                    title="Storage drive/controller mismatch",
+                    description="A selected storage drive path resolved to a different controller than the saved OS or data controller selection.",
+                    message=error_text,
+                    discovery=discovery,
+                    plan=plan,
+                )
+            except Exception:
+                pass
+            repair_action = {"return_page": return_page}
         return render_page(
             request,
             cfg,
             active_page=return_page,
-            error_message=f"Storage apply failed: {str(e).splitlines()[0]}",
+            error_message=f"Storage apply failed: {error_text}",
+            storage_discovery=discovery.get("summary", {}) if discovery else None,
+            storage_export_paths=discovery_paths,
+            storage_plan=plan,
+            storage_plan_paths=plan_paths,
+            storage_repair_action=repair_action,
         )
 
 

@@ -361,7 +361,7 @@
     }
 
     function stageKeywords(token) {
-        if (token === "ilo") return ["ilo", "dns", "snmp"];
+        if (token === "ilo") return ["validating ilo", "reset ilo", "finish ilo stage", "verify ilo", "dns", "snmp", "local user"];
         if (token === "storage") return ["storage", "raid", "volume", "reboot"];
         if (token === "esxi") return ["esxi", "iso", "kickstart", "virtual media", "boot"];
         return [token];

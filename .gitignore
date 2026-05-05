@@ -9,7 +9,12 @@ artifacts/history/
 artifacts/jobs/
 artifacts/runs/
 artifacts/debug-bundles/
+artifacts/lab-builder.sqlite3
 config/current_kit.txt
 config/kits/*.yml
 offline-wheels/
 media/
+.env
+.env.*
+secrets/
+*.secret

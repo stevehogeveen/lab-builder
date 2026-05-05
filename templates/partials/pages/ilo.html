@@ -6,6 +6,7 @@
     "areas": [],
     "raw_key_groups": [],
 }) %}
+{% set ilo_policy = cfg.get("ilo", {}).get("policy", {}) %}
 <section class="panel space-y-6" x-data='{"tab":"basic","users": {{ cfg.get("ilo", {}).get("additional_users", [])|tojson }} }'>
     <div>
         <h2 class="text-2xl font-bold">iLO setup</h2>
@@ -56,6 +57,99 @@
                     <div class="text-xs text-slate-400 mt-1">Keep it printable and under 40 characters. Many iLO policies use at least 8 characters and 3 character types.</div>
                 </div>
             </div>
+
+            <details class="card card-compact">
+                <summary class="summary-row">
+                    <span class="text-sm font-bold text-slate-300">Standard iLO policy</span>
+                    <span class="status progress">policy</span>
+                </summary>
+                <div class="mt-4 space-y-4">
+                    <div class="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-4">
+                        <label class="result" style="margin-top: 0;"><input type="checkbox" name="ilo_policy_apply_standard_policy" {% if ilo_policy.get("apply_standard_policy") %}checked{% endif %}> Apply standard iLO policy</label>
+                        <label class="result" style="margin-top: 0;"><input type="checkbox" name="ilo_policy_enable_standard_accounts" {% if ilo_policy.get("enable_standard_accounts") %}checked{% endif %}> Standard local accounts</label>
+                        <label class="result" style="margin-top: 0;"><input type="checkbox" name="ilo_policy_enable_license_check" {% if ilo_policy.get("enable_license_check") %}checked{% endif %}> License check</label>
+                        <label class="result" style="margin-top: 0;"><input type="checkbox" name="ilo_policy_enable_auto_reset" {% if ilo_policy.get("enable_auto_reset") %}checked{% endif %}> Auto iLO reset</label>
+                        <label class="result" style="margin-top: 0;"><input type="checkbox" name="ilo_policy_enable_snmp_policy" {% if ilo_policy.get("enable_snmp_policy") %}checked{% endif %}> SNMP/SNMPv3 policy</label>
+                        <label class="result" style="margin-top: 0;"><input type="checkbox" name="ilo_policy_enable_alert_destinations" {% if ilo_policy.get("enable_alert_destinations") %}checked{% endif %}> SNMP alert destinations</label>
+                        <label class="result" style="margin-top: 0;"><input type="checkbox" name="ilo_policy_enable_ipv6_disable" {% if ilo_policy.get("enable_ipv6_disable") %}checked{% endif %}> Disable IPv6 policy</label>
+                        <label class="result" style="margin-top: 0;"><input type="checkbox" name="ilo_policy_enable_time_policy" {% if ilo_policy.get("enable_time_policy") %}checked{% endif %}> SNTP/time policy</label>
+                    </div>
+                    <div class="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-4">
+                        <div>
+                            <label class="block text-sm font-bold text-slate-300 mb-2">Discovery start octet</label>
+                            <input type="number" min="1" max="254" name="ilo_discover_start_octet" value="{{ ilo_policy.get('discover_start_octet', 21) }}" class="input">
+                        </div>
+                        <div>
+                            <label class="block text-sm font-bold text-slate-300 mb-2">Discovery end octet</label>
+                            <input type="number" min="1" max="254" name="ilo_discover_end_octet" value="{{ ilo_policy.get('discover_end_octet', 29) }}" class="input">
+                        </div>
+                        <div>
+                            <label class="block text-sm font-bold text-slate-300 mb-2">Shared admin username</label>
+                            <input type="text" name="ilo_policy_shared_admin_username" value="{{ ilo_policy.get('shared_admin_username', '765CS') }}" class="input">
+                        </div>
+                        <div>
+                            <label class="block text-sm font-bold text-slate-300 mb-2">SNMPv3 username</label>
+                            <input type="text" name="ilo_policy_snmpv3_username" value="{{ ilo_policy.get('snmpv3_username', '765CS') }}" class="input">
+                        </div>
+                        <div>
+                            <label class="block text-sm font-bold text-slate-300 mb-2">{{ cfg.get('site', {}).get('name', 'KIT')|upper }}_Admin password</label>
+                            <input type="password" name="ilo_policy_kit_admin_password" value="{{ ilo_policy.get('kit_admin_password', '') }}" class="input">
+                        </div>
+                        <div>
+                            <label class="block text-sm font-bold text-slate-300 mb-2">{{ cfg.get('site', {}).get('name', 'KIT')|upper }}_OA password</label>
+                            <input type="password" name="ilo_policy_kit_operator_password" value="{{ ilo_policy.get('kit_operator_password', '') }}" class="input">
+                        </div>
+                        <div>
+                            <label class="block text-sm font-bold text-slate-300 mb-2">765CS admin password</label>
+                            <input type="password" name="ilo_policy_shared_admin_password" value="{{ ilo_policy.get('shared_admin_password', '') }}" class="input">
+                        </div>
+                        <div>
+                            <label class="block text-sm font-bold text-slate-300 mb-2">SNMP read community</label>
+                            <input type="password" name="ilo_policy_snmp_read_community" value="{{ ilo_policy.get('snmp_read_community', '') }}" class="input">
+                        </div>
+                        <div>
+                            <label class="block text-sm font-bold text-slate-300 mb-2">SNMPv3 auth protocol</label>
+                            <select class="input" name="ilo_policy_snmpv3_auth_protocol">
+                                <option value="SHA" {% if ilo_policy.get('snmpv3_auth_protocol', 'SHA') == 'SHA' %}selected{% endif %}>SHA</option>
+                                <option value="MD5" {% if ilo_policy.get('snmpv3_auth_protocol', 'SHA') == 'MD5' %}selected{% endif %}>MD5</option>
+                            </select>
+                        </div>
+                        <div>
+                            <label class="block text-sm font-bold text-slate-300 mb-2">SNMPv3 auth passphrase</label>
+                            <input type="password" name="ilo_policy_snmpv3_auth_password" value="{{ ilo_policy.get('snmpv3_auth_password', '') }}" class="input">
+                        </div>
+                        <div>
+                            <label class="block text-sm font-bold text-slate-300 mb-2">SNMPv3 privacy protocol</label>
+                            <select class="input" name="ilo_policy_snmpv3_priv_protocol">
+                                <option value="AES" {% if ilo_policy.get('snmpv3_priv_protocol', 'AES') == 'AES' %}selected{% endif %}>AES</option>
+                                <option value="DES" {% if ilo_policy.get('snmpv3_priv_protocol', 'AES') == 'DES' %}selected{% endif %}>DES</option>
+                            </select>
+                        </div>
+                        <div>
+                            <label class="block text-sm font-bold text-slate-300 mb-2">SNMPv3 privacy passphrase</label>
+                            <input type="password" name="ilo_policy_snmpv3_priv_password" value="{{ ilo_policy.get('snmpv3_priv_password', '') }}" class="input">
+                        </div>
+                    </div>
+                    <div>
+                        <label class="block text-sm font-bold text-slate-300 mb-2">Alert destinations</label>
+                        <input type="text" name="ilo_policy_alert_destinations" value="{{ ', '.join(ilo_policy.get('alert_destinations', [])) }}" class="input">
+                        <div class="text-xs text-slate-400 mt-1">Comma or space separated. The standard policy defaults to `10.245.190.67` and `10.245.190.68`.</div>
+                    </div>
+                    {% if ilo_policy.get("discovered_hosts") %}
+                    <div class="space-y-2">
+                        <div class="font-semibold">Last discovery</div>
+                        <div class="grid grid-cols-1 xl:grid-cols-2 gap-3">
+                            {% for item in ilo_policy.get("discovered_hosts", []) %}
+                            <div class="result" style="margin-top: 0;">
+                                <div class="dashboard-kicker">{{ item.host }}</div>
+                                <div>{% if item.reachable %}HTTPS reachable{% else %}Unreachable{% endif %}{% if item.latency_ms %} | {{ item.latency_ms }} ms{% endif %}{% if item.error %} | {{ item.error }}{% endif %}</div>
+                            </div>
+                            {% endfor %}
+                        </div>
+                    </div>
+                    {% endif %}
+                </div>
+            </details>
 
             {% if ilo_input_review.errors or ilo_input_review.notes %}
             <div class="card card-compact">
@@ -122,6 +216,10 @@
                 <a class="btn" href="/storage">Open storage setup</a>
                 <a class="btn" href="/execution">Open Run Center</a>
             </div>
+        </form>
+        <form hx-post="/discover-ilo-hosts" hx-target="#main-content" hx-swap="outerHTML" class="mt-4" data-action-title="Discovering iLO hosts" data-action-start="Scanning the configured kit subnet range for reachable iLO HTTPS endpoints.">
+            <input type="hidden" name="return_page" value="ilo">
+            <button class="btn action-button" type="submit">Discover iLO hosts</button>
         </form>
         <form hx-post="/export-ilo-inventory" hx-target="#main-content" hx-swap="outerHTML" class="mt-4" data-action-title="Reading current iLO" data-action-start="Connecting to iLO and reading the current settings.">
             <input type="hidden" name="return_page" value="ilo">

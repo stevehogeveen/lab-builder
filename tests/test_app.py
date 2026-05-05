@@ -1280,6 +1280,60 @@ def test_save_ilo_settings_updates_only_ilo_page_fields(client):
     assert cfg["included"]["ilo"] is True
 
 
+def test_save_ilo_settings_persists_standard_policy_fields(client):
+    cfg = main.default_config()
+    cfg["site"]["name"] = "Ilo Policy Kit"
+    cfg["ip_plan"]["gateway"] = "10.10.8.1"
+    main.save_kit_config(cfg)
+
+    response = client.post(
+        "/save-ilo-settings",
+        data={
+            "return_page": "ilo",
+            "ilo_current_ip": "10.10.8.50",
+            "ilo_target_ip": "10.10.8.11",
+            "ilo_gateway": "10.10.8.1",
+            "ilo_hostname": "ilo-policy",
+            "ilo_username": "Administrator",
+            "ilo_password": "secret",
+            "ilo_discover_start_octet": "24",
+            "ilo_discover_end_octet": "27",
+            "ilo_policy_apply_standard_policy": "on",
+            "ilo_policy_enable_standard_accounts": "on",
+            "ilo_policy_enable_license_check": "on",
+            "ilo_policy_enable_snmp_policy": "on",
+            "ilo_policy_enable_alert_destinations": "on",
+            "ilo_policy_enable_ipv6_disable": "on",
+            "ilo_policy_enable_time_policy": "on",
+            "ilo_policy_enable_auto_reset": "on",
+            "ilo_policy_kit_admin_password": "KitAdminPass1!",
+            "ilo_policy_kit_operator_password": "KitOperatorPass1!",
+            "ilo_policy_shared_admin_username": "765CS",
+            "ilo_policy_shared_admin_password": "SharedAdminPass1!",
+            "ilo_policy_snmp_read_community": "ReadCommunity1!",
+            "ilo_policy_snmpv3_username": "765CS",
+            "ilo_policy_snmpv3_auth_protocol": "SHA",
+            "ilo_policy_snmpv3_auth_password": "SnmpAuthPass1!",
+            "ilo_policy_snmpv3_priv_protocol": "AES",
+            "ilo_policy_snmpv3_priv_password": "SnmpPrivPass1!",
+            "ilo_policy_alert_destinations": "10.245.190.67, 10.245.190.68",
+        },
+    )
+
+    assert response.status_code == 200
+    saved = main.load_kit_config("Ilo-Policy-Kit")
+    policy = saved["ilo"]["policy"]
+    assert policy["discover_start_octet"] == 24
+    assert policy["discover_end_octet"] == 27
+    assert policy["kit_admin_password"] == "KitAdminPass1!"
+    assert policy["kit_operator_password"] == "KitOperatorPass1!"
+    assert policy["shared_admin_password"] == "SharedAdminPass1!"
+    assert policy["snmp_read_community"] == "ReadCommunity1!"
+    assert policy["snmpv3_auth_password"] == "SnmpAuthPass1!"
+    assert policy["snmpv3_priv_password"] == "SnmpPrivPass1!"
+    assert policy["alert_destinations"] == ["10.245.190.67", "10.245.190.68"]
+
+
 def test_save_ilo_settings_normalizes_invalid_hostname(client):
     cfg = main.default_config()
     cfg["site"]["name"] = "Ilo Hostname Kit"
@@ -1365,6 +1419,38 @@ def test_save_ilo_settings_persists_additional_users(client):
         {"username": "opsadmin", "password": "ops-pass", "role": "Administrator"},
         {"username": "auditor", "password": "audit-pass", "role": "ReadOnly"},
     ]
+
+
+def test_discover_ilo_hosts_uses_policy_range_and_saves_results(client, monkeypatch):
+    cfg = main.default_config()
+    cfg["site"]["name"] = "Ilo Discover Kit"
+    cfg["shared_network"]["subnet"] = "10.10.8.0/24"
+    cfg["ilo"]["policy"]["discover_start_octet"] = 21
+    cfg["ilo"]["policy"]["discover_end_octet"] = 23
+    cfg["ilo"]["current_ip"] = ""
+    cfg["ilo"]["host"] = ""
+    main.save_kit_config(cfg)
+
+    def fake_probe(host, port, timeout_seconds=0.75):
+        assert port == 443
+        return {
+            "host": host,
+            "port": port,
+            "reachable": host.endswith(".22"),
+            "latency_ms": 12 if host.endswith(".22") else "",
+            "error": "" if host.endswith(".22") else "timed out",
+        }
+
+    monkeypatch.setattr(main, "probe_tcp_port", fake_probe)
+
+    response = client.post("/discover-ilo-hosts", data={"return_page": "ilo"})
+
+    assert response.status_code == 200
+    saved = main.load_kit_config("Ilo-Discover-Kit")
+    discovered = saved["ilo"]["policy"]["discovered_hosts"]
+    assert [item["host"] for item in discovered] == ["10.10.8.21", "10.10.8.22", "10.10.8.23"]
+    assert saved["ilo"]["current_ip"] == "10.10.8.22"
+    assert "10.10.8.22" in response.text
 
 
 def test_save_ilo_settings_rejects_invalid_primary_credentials(client):
@@ -2029,6 +2115,104 @@ def test_read_current_storage_saves_discovery_export_and_renders_summary(client,
     assert '"deep_scan_requested": true' in raw_text
 
 
+def test_storage_page_restores_latest_discovery_and_shows_capability_table(client, monkeypatch):
+    def fake_strftime(fmt):
+        if fmt == "%Y%m%d-%H%M%S":
+            return "20260505-111500"
+        if fmt == "%Y-%m-%d %H:%M:%S":
+            return "2026-05-05 11:15:00"
+        raise AssertionError(f"unexpected strftime format: {fmt}")
+
+    class FakeProbeILOClient(FakeILOClient):
+        def get_storage_discovery(self, deep_smart_storage_scan=False):
+            discovery = super().get_storage_discovery(deep_smart_storage_scan=deep_smart_storage_scan)
+            discovery["summary"]["standard_redfish_storage"]["controllers"][0]["path"] = "/redfish/v1/Systems/1/Storage/DE009000"
+            discovery["raw"]["standard_storage"] = [
+                {
+                    "@odata.id": "/redfish/v1/Systems/1/Storage/DE009000",
+                    "Volumes": {"@odata.id": "/redfish/v1/Systems/1/Storage/DE009000/Volumes"},
+                    "Actions": {
+                        "#Storage.ResetToDefaults": {
+                            "target": "/redfish/v1/Systems/1/Storage/DE009000/Actions/Storage.ResetToDefaults",
+                            "@Redfish.ActionInfo": "/redfish/v1/Systems/1/Storage/DE009000/ResetActionInfo",
+                        }
+                    },
+                }
+            ]
+            return discovery
+
+    monkeypatch.setattr(main.time, "strftime", fake_strftime)
+    monkeypatch.setattr(main, "ILOClient", FakeProbeILOClient)
+
+    cfg = main.default_config()
+    cfg["site"]["name"] = "Capability Kit"
+    cfg["ilo"]["current_ip"] = "10.10.8.60"
+    cfg["ilo"]["host"] = "10.10.8.60"
+    cfg["ilo"]["username"] = "Administrator"
+    cfg["ilo"]["password"] = "kit-password"
+    main.save_kit_config(cfg)
+
+    response = client.post("/read-current-storage", data={"return_page": "storage"})
+    assert response.status_code == 200
+
+    restored = client.get("/storage")
+
+    assert restored.status_code == 200
+    assert "Controller apply capabilities" in restored.text
+    assert "A writable-looking /Volumes path exists, but that alone does not verify create support." in restored.text
+    assert "ResetActionInfo" in restored.text
+
+
+def test_probe_storage_capabilities_is_non_destructive(client, monkeypatch):
+    def fake_strftime(fmt):
+        if fmt == "%Y%m%d-%H%M%S":
+            return "20260505-111700"
+        if fmt == "%Y-%m-%d %H:%M:%S":
+            return "2026-05-05 11:17:00"
+        raise AssertionError(f"unexpected strftime format: {fmt}")
+
+    class FakeProbeILOClient(FakeILOClient):
+        calls: list[tuple[str, bool]] = []
+
+        def get_storage_discovery(self, deep_smart_storage_scan=False):
+            self.__class__.calls.append(("get_storage_discovery", deep_smart_storage_scan))
+            discovery = super().get_storage_discovery(deep_smart_storage_scan=deep_smart_storage_scan)
+            discovery["summary"]["standard_redfish_storage"]["controllers"][0]["path"] = "/redfish/v1/Systems/1/Storage/DE009000"
+            discovery["raw"]["standard_storage"] = [
+                {
+                    "@odata.id": "/redfish/v1/Systems/1/Storage/DE009000",
+                    "Volumes": {"@odata.id": "/redfish/v1/Systems/1/Storage/DE009000/Volumes"},
+                    "Actions": {"#Storage.ResetToDefaults": {"target": "/redfish/v1/Systems/1/Storage/DE009000/Actions/Storage.ResetToDefaults"}},
+                }
+            ]
+            return discovery
+
+        def delete_storage_logical_drive(self, *args, **kwargs):
+            raise AssertionError("capability probe must not delete volumes")
+
+        def create_storage_logical_drive(self, *args, **kwargs):
+            raise AssertionError("capability probe must not create volumes")
+
+    monkeypatch.setattr(main.time, "strftime", fake_strftime)
+    monkeypatch.setattr(main, "ILOClient", FakeProbeILOClient)
+
+    cfg = main.default_config()
+    cfg["site"]["name"] = "Probe Kit"
+    cfg["ilo"]["current_ip"] = "10.10.8.60"
+    cfg["ilo"]["host"] = "10.10.8.60"
+    cfg["ilo"]["username"] = "Administrator"
+    cfg["ilo"]["password"] = "kit-password"
+    main.save_kit_config(cfg)
+
+    response = client.post("/probe-storage-capabilities", data={"return_page": "storage"})
+
+    assert response.status_code == 200
+    assert "Storage capability probe complete" in response.text
+    assert "No delete or create requests were issued." in response.text
+    assert "Controller apply capabilities" in response.text
+    assert FakeProbeILOClient.calls == [("get_storage_discovery", True)]
+
+
 def test_storage_page_requires_manual_current_storage_read(client):
     cfg = main.default_config()
     cfg["site"]["name"] = "Storage Manual Read Kit"
@@ -2515,6 +2699,7 @@ def planner_standard_redfish_apply_discovery(
             },
             "capabilities": {
                 "standard_redfish_storage": True,
+                "standard_redfish_volume_create_verified": True,
                 "hpe_smart_storage": generation == "Gen10+",
                 "standard_storage_path": "/redfish/v1/Systems/1/Storage",
                 "hpe_smart_storage_paths": ["/redfish/v1/Systems/1/SmartStorage"] if generation == "Gen10+" else [],
@@ -7212,6 +7397,62 @@ def test_history_page_shows_applied_dns_snmp_and_reset_states(client):
     assert "iLO reset:" in response.text
 
 
+def test_append_history_entry_marks_older_failed_storage_runs_as_superseded(tmp_path):
+    cfg = main.default_config()
+    cfg["site"]["name"] = "Supersede Kit"
+    main.save_kit_config(cfg)
+
+    old_bundle = tmp_path / "old-run"
+    old_bundle.mkdir(parents=True, exist_ok=True)
+    old_bundle_summary = old_bundle / "summary.yml"
+    old_bundle_summary.write_text(yaml.safe_dump({"status": "Failed"}), encoding="utf-8")
+    old_report = tmp_path / "old-report.yml"
+    old_report.write_text(yaml.safe_dump({"status": "Failed"}), encoding="utf-8")
+
+    main.save_history(
+        "Supersede-Kit",
+        [
+            {
+                "time": "2026-05-05 10:10:00",
+                "scope": "storage",
+                "status": "Approved",
+            },
+            {
+                "time": "2026-05-05 10:00:00",
+                "scope": "storage-apply:wipe_rebuild",
+                "status": "Failed",
+                "current_stage": "Storage apply failed",
+                "run_bundle_dir": str(old_bundle),
+                "run_summary_path": str(old_report),
+            }
+        ],
+    )
+
+    main.append_history_entry(
+        "Supersede-Kit",
+        {
+            "time": "2026-05-05 11:00:00",
+            "scope": "storage-apply:wipe_rebuild",
+            "status": "Completed",
+            "current_stage": "Finished",
+            "run_bundle_dir": str(tmp_path / "new-run"),
+            "run_summary_path": str(tmp_path / "new-report.yml"),
+        },
+    )
+
+    history = main.load_history("Supersede-Kit")
+    assert history[0]["status"] == "Completed"
+    assert history[1]["status"] == "Approved"
+    assert history[2]["status"] == "Superseded"
+    assert history[2]["original_status"] == "Failed"
+    assert history[2]["superseded_by"]["by_time"] == "2026-05-05 11:00:00"
+
+    old_bundle_payload = yaml.safe_load(old_bundle_summary.read_text(encoding="utf-8"))
+    old_report_payload = yaml.safe_load(old_report.read_text(encoding="utf-8"))
+    assert old_bundle_payload["status"] == "Superseded"
+    assert old_report_payload["status"] == "Superseded"
+
+
 def test_run_job_simulation_finishes_as_preview_complete():
     cfg = main.default_config()
     cfg["site"]["name"] = "Preview Job Kit"
@@ -7394,10 +7635,14 @@ def two_controller_gen11_storage_discovery() -> dict:
     data_controller = "/redfish/v1/Systems/1/Storage/DATA"
     return {
         "summary": {
-            "server": {"serial_number": "ABC123"},
+            "server": {
+                "serial_number": "ABC123",
+                "model": "ProLiant DL380 Gen11",
+                "generation": "Gen11",
+            },
             "standard_redfish_storage": {
                 "controllers": [
-                    {"path": os_controller, "name": "HPE boot NVMe controller", "model": "Boot NVMe"},
+                    {"path": os_controller, "name": "HPE MR416i-p Gen11", "model": "MR416i-p Gen11"},
                     {"path": data_controller, "name": "HPE MR416i-o Gen11", "model": "MR416i-o Gen11"},
                 ],
                 "volumes": [],
@@ -7474,7 +7719,81 @@ def test_build_raid_plan_supports_os_and_data_on_different_controllers():
     assert plan["customization"]["selected_data_controller_path"] == "/redfish/v1/Systems/1/Storage/DATA"
     assert {drive["controller_path"] for drive in plan["os_raid1"]["drives"]} == {"/redfish/v1/Systems/1/Storage/BOOT"}
     assert {drive["controller_path"] for drive in plan["data_raid6"]["drives"]} == {"/redfish/v1/Systems/1/Storage/DATA"}
+    assert [array["role"] for array in plan["arrays"]] == ["os", "data"]
+    assert plan["arrays"][0]["selected_drive_ids"] == [
+        "/redfish/v1/Chassis/BOOT/Drives/1",
+        "/redfish/v1/Chassis/BOOT/Drives/2",
+    ]
+    assert plan["arrays"][1]["selected_drive_ids"] == [
+        "/redfish/v1/Chassis/DATA/Drives/3",
+        "/redfish/v1/Chassis/DATA/Drives/4",
+        "/redfish/v1/Chassis/DATA/Drives/5",
+        "/redfish/v1/Chassis/DATA/Drives/6",
+        "/redfish/v1/Chassis/DATA/Drives/7",
+        "/redfish/v1/Chassis/DATA/Drives/8",
+    ]
+    assert any("multi-controller layout" in item for item in plan["profile_advisories"])
     assert plan["hot_spare"]["reserved"] is False
+
+
+def test_choose_storage_apply_platform_blocks_unverified_multi_controller_standard_redfish_create_before_delete():
+    discovery = two_controller_gen11_storage_discovery()
+    discovery["summary"]["capabilities"] = {
+        "standard_redfish_storage": True,
+        "standard_redfish_volume_create_verified": False,
+        "hpe_smart_storage": False,
+        "standard_storage_path": "/redfish/v1/Systems/1/Storage",
+        "hpe_smart_storage_paths": [],
+        "hpe_smart_storage_diagnostics": {"probed_paths": [], "collections": [], "warnings": [], "deep_scan_requested": False, "deep_fallback_ran": False},
+    }
+    discovery["raw"] = {
+        "source_host": "10.10.8.80",
+        "standard_storage": [
+            {
+                "@odata.id": "/redfish/v1/Systems/1/Storage/BOOT",
+                "Volumes": {"@odata.id": "/redfish/v1/Systems/1/Storage/BOOT/Volumes"},
+                "Actions": {"#Storage.ResetToDefaults": {"target": "/redfish/v1/Systems/1/Storage/BOOT/Actions/Storage.ResetToDefaults"}},
+            },
+            {
+                "@odata.id": "/redfish/v1/Systems/1/Storage/DATA",
+                "Volumes": {"@odata.id": "/redfish/v1/Systems/1/Storage/DATA/Volumes"},
+                "Actions": {"#Storage.ResetToDefaults": {"target": "/redfish/v1/Systems/1/Storage/DATA/Actions/Storage.ResetToDefaults"}},
+            },
+        ],
+    }
+    export_paths = {
+        "directory": main.Path("/tmp/storage-plan-test"),
+        "summary": main.Path("/tmp/storage-plan-test/summary.yml"),
+        "raw": main.Path("/tmp/storage-plan-test/raw.json"),
+    }
+    plan = main.build_raid_plan(
+        discovery,
+        export_paths,
+        overrides={
+            "os_controller_path": "/redfish/v1/Systems/1/Storage/BOOT",
+            "data_controller_path": "/redfish/v1/Systems/1/Storage/DATA",
+            "os_raid_level": "RAID1",
+            "data_raid_level": "RAID6",
+            "os_drive_paths": [
+                "/redfish/v1/Chassis/BOOT/Drives/1",
+                "/redfish/v1/Chassis/BOOT/Drives/2",
+            ],
+            "data_drive_paths": [
+                "/redfish/v1/Chassis/DATA/Drives/3",
+                "/redfish/v1/Chassis/DATA/Drives/4",
+                "/redfish/v1/Chassis/DATA/Drives/5",
+                "/redfish/v1/Chassis/DATA/Drives/6",
+                "/redfish/v1/Chassis/DATA/Drives/7",
+                "/redfish/v1/Chassis/DATA/Drives/8",
+            ],
+        },
+    )
+
+    platform = main.choose_storage_apply_platform(discovery, plan)
+
+    assert platform["supported"] is False
+    assert platform["id"] == "standard_redfish_create_unverified"
+    assert "Blocking before delete" in platform["reason"]
 
 
 def test_build_raid_plan_blocks_array_spanning_multiple_controllers():
@@ -7500,6 +7819,91 @@ def test_build_raid_plan_blocks_array_spanning_multiple_controllers():
 
     assert plan["valid"] is False
     assert any("OS array cannot span multiple storage controllers" in blocker for blocker in plan["blockers"])
+
+
+def test_build_raid_plan_does_not_auto_select_standby_spare_or_absent_drives():
+    discovery = two_controller_gen11_storage_discovery()
+    discovery["summary"]["standard_redfish_storage"]["drives"][2]["status"] = "OK / StandbySpare"
+    discovery["summary"]["standard_redfish_storage"]["drives"][3]["status"] = "Absent"
+    discovery_paths = {
+        "directory": main.Path("/tmp/storage-plan-test"),
+        "summary": main.Path("/tmp/storage-plan-test/summary.yml"),
+        "raw": main.Path("/tmp/storage-plan-test/raw.json"),
+    }
+
+    plan = main.build_raid_plan(
+        discovery,
+        discovery_paths,
+        overrides={
+            "os_controller_path": "/redfish/v1/Systems/1/Storage/BOOT",
+            "data_controller_path": "/redfish/v1/Systems/1/Storage/DATA",
+            "os_raid_level": "RAID1",
+            "data_raid_level": "RAID6",
+        },
+    )
+
+    selected_paths = {drive["path"] for drive in plan["os_raid1"]["drives"] + plan["data_raid6"]["drives"]}
+    assert "/redfish/v1/Chassis/DATA/Drives/3" not in selected_paths
+    assert "/redfish/v1/Chassis/DATA/Drives/4" not in selected_paths
+    assert plan["hot_spare"]["drive"] == {}
+    assert any("standby spare" in item.lower() for item in [drive["exclude_reason"] for drive in plan["excluded_drives"]])
+
+
+def test_validate_storage_apply_request_allows_multi_array_multi_controller_plan():
+    discovery = two_controller_gen11_storage_discovery()
+    discovery_paths = {
+        "directory": main.Path("/tmp/storage-plan-test"),
+        "summary": main.Path("/tmp/storage-plan-test/summary.yml"),
+        "raw": main.Path("/tmp/storage-plan-test/raw.json"),
+    }
+    plan = main.build_raid_plan(
+        discovery,
+        discovery_paths,
+        overrides={
+            "os_controller_path": "/redfish/v1/Systems/1/Storage/BOOT",
+            "data_controller_path": "/redfish/v1/Systems/1/Storage/DATA",
+            "os_raid_level": "RAID1",
+            "data_raid_level": "RAID6",
+            "os_drive_paths": [
+                "/redfish/v1/Chassis/BOOT/Drives/1",
+                "/redfish/v1/Chassis/BOOT/Drives/2",
+            ],
+            "data_drive_paths": [
+                "/redfish/v1/Chassis/DATA/Drives/3",
+                "/redfish/v1/Chassis/DATA/Drives/4",
+                "/redfish/v1/Chassis/DATA/Drives/5",
+                "/redfish/v1/Chassis/DATA/Drives/6",
+                "/redfish/v1/Chassis/DATA/Drives/7",
+                "/redfish/v1/Chassis/DATA/Drives/8",
+            ],
+        },
+    )
+
+    main.validate_storage_apply_request(plan, "wipe_rebuild", main.STORAGE_APPLY_CONFIRM_WIPE, True)
+
+
+def test_validate_storage_apply_request_rejects_single_array_mixed_controller_drives():
+    discovery = two_controller_gen11_storage_discovery()
+    discovery_paths = {
+        "directory": main.Path("/tmp/storage-plan-test"),
+        "summary": main.Path("/tmp/storage-plan-test/summary.yml"),
+        "raw": main.Path("/tmp/storage-plan-test/raw.json"),
+    }
+    plan = main.build_raid_plan(
+        discovery,
+        discovery_paths,
+        overrides={
+            "os_controller_path": "/redfish/v1/Systems/1/Storage/BOOT",
+            "data_raid_level": "",
+            "os_drive_paths": [
+                "/redfish/v1/Chassis/BOOT/Drives/1",
+                "/redfish/v1/Chassis/DATA/Drives/3",
+            ],
+        },
+    )
+
+    with pytest.raises(ValueError, match="cannot span multiple storage controllers|but OS array is set to"):
+        main.validate_storage_apply_request(plan, "wipe_rebuild", main.STORAGE_APPLY_CONFIRM_WIPE, True)
 
 
 def test_storage_page_hides_controller_selectors_for_single_controller(client, monkeypatch):
@@ -7680,7 +8084,19 @@ def test_storage_approval_preserves_selected_drive_identities(client, monkeypatc
         "/redfish/v1/Chassis/DE009001/Drives/4",
         "/redfish/v1/Chassis/DE009001/Drives/3",
     ]
+    assert approved_plan["arrays"][0]["selected_drive_ids"] == [
+        "/redfish/v1/Chassis/DE009001/Drives/4",
+        "/redfish/v1/Chassis/DE009001/Drives/3",
+    ]
     assert approved_plan["customization"]["selected_data_drive_ids"] == [
+        "/redfish/v1/Chassis/DE009001/Drives/5",
+        "/redfish/v1/Chassis/DE009001/Drives/6",
+        "/redfish/v1/Chassis/DE009001/Drives/7",
+        "/redfish/v1/Chassis/DE009001/Drives/8",
+        "/redfish/v1/Chassis/DE009001/Drives/9",
+        "/redfish/v1/Chassis/DE009001/Drives/10",
+    ]
+    assert approved_plan["arrays"][1]["selected_drive_ids"] == [
         "/redfish/v1/Chassis/DE009001/Drives/5",
         "/redfish/v1/Chassis/DE009001/Drives/6",
         "/redfish/v1/Chassis/DE009001/Drives/7",
@@ -8853,6 +9269,7 @@ class RecordingStandardRedfishStorageWriteClient(ILOClient):
         self.fail_delete = False
         self.fail_delete_missing = False
         self.fail_post = False
+        self.fail_post_http_once = False
         self.fail_post_connection_once = False
         self.fail_post_connection_always = False
         self.fail_post_timeout_once = False
@@ -8921,6 +9338,12 @@ class RecordingStandardRedfishStorageWriteClient(ILOClient):
                     }
                 )
             raise ILOError(f"POST {path} failed: HTTPSConnectionPool(host='10.10.8.110', port=443): Read timed out. (read timeout=15)")
+        if self.fail_post_http_once:
+            self.fail_post_http_once = False
+            raise ILOError(
+                'POST '
+                f'{path} failed with HTTP 500: {{"error":{{"code":"iLO.0.10.ExtendedInfo","message":"See @Message.ExtendedInfo for more information.","@Message.ExtendedInfo":[{{"MessageArgs":["Unexpected error (84,01,34)"],"MessageId":"iLO.2.37.InternalErrorWithParam"}}]}}}}'
+            )
         if self.fail_post:
             raise ILOError(f"POST {path} failed with HTTP 400: simulated write failure")
         if path.endswith("/Volumes"):
@@ -9179,6 +9602,168 @@ def test_choose_storage_apply_platform_supports_standard_redfish_volumes_backend
     assert platform["reset_target"] == "/redfish/v1/Systems/1/Storage/DE009000/Actions/Storage.ResetToDefaults"
 
 
+def test_choose_storage_apply_platform_accepts_inferred_verified_paths_from_volume_capabilities():
+    discovery = planner_standard_redfish_apply_discovery(existing_volumes=False, generation="Gen11", ilo_version="iLO 6")
+    discovery["summary"]["capabilities"]["standard_redfish_volume_create_verified"] = False
+    discovery["summary"]["capabilities"]["standard_redfish_volume_create_verified_paths"] = []
+    discovery["raw"]["standard_storage"][0]["VolumeCapabilities"] = {
+        "Links": {"Drives@Redfish.RequiredOnCreate": True},
+        "RAIDType@Redfish.AllowableValues": ["RAID1", "RAID5", "RAID6"],
+        "VolumeUsage@Redfish.AllowableValues": ["Data"],
+    }
+    export_paths = {
+        "directory": Path("/tmp"),
+        "summary": Path("/tmp/summary.yml"),
+        "raw": Path("/tmp/raw.json"),
+    }
+    plan = main.build_raid_plan(discovery, export_paths)
+
+    platform = main.choose_storage_apply_platform(discovery, plan)
+
+    assert platform["supported"] is True
+    assert platform["id"] == "standard_redfish_volumes"
+
+
+def test_choose_storage_apply_platform_blocks_unverified_standard_redfish_create_before_delete():
+    discovery = planner_standard_redfish_apply_discovery(existing_volumes=True, generation="Gen11", ilo_version="iLO 6")
+    discovery["summary"]["capabilities"]["standard_redfish_volume_create_verified"] = False
+    export_paths = {
+        "directory": Path("/tmp"),
+        "summary": Path("/tmp/summary.yml"),
+        "raw": Path("/tmp/raw.json"),
+    }
+    plan = main.build_raid_plan(discovery, export_paths)
+
+    platform = main.choose_storage_apply_platform(discovery, plan)
+
+    assert platform["supported"] is False
+    assert platform["id"] == "standard_redfish_create_unverified"
+    assert "Blocking before delete" in platform["reason"]
+
+
+def test_build_storage_controller_capabilities_marks_unverified_standard_redfish_inventory_only():
+    discovery = planner_standard_redfish_apply_discovery(existing_volumes=True, generation="Gen11", ilo_version="iLO 6")
+    discovery["summary"]["capabilities"]["standard_redfish_volume_create_verified"] = False
+
+    rows = main.build_storage_controller_capabilities(discovery)
+
+    assert len(rows) == 1
+    assert rows[0]["controller_path"] == "/redfish/v1/Systems/1/Storage/DE009000"
+    assert rows[0]["can_delete_volumes"] is True
+    assert rows[0]["can_create_volumes"] is False
+    assert rows[0]["create_method"] == "inventory_only"
+    assert rows[0]["verified"] is False
+    assert "not verified" in rows[0]["reason"].lower()
+
+
+def test_build_storage_controller_capabilities_marks_verified_when_volume_capabilities_allow_create():
+    discovery = planner_standard_redfish_apply_discovery(existing_volumes=True, generation="Gen11", ilo_version="iLO 6")
+    discovery["summary"]["capabilities"]["standard_redfish_volume_create_verified"] = False
+    discovery["summary"]["capabilities"]["standard_redfish_volume_create_verified_paths"] = []
+    discovery["raw"]["standard_storage"][0]["VolumeCapabilities"] = {
+        "Links": {"Drives@Redfish.RequiredOnCreate": True},
+        "RAIDType@Redfish.AllowableValues": ["RAID0", "RAID1", "RAID5", "RAID6", "RAID10"],
+        "VolumeUsage@Redfish.AllowableValues": ["Data"],
+    }
+
+    rows = main.build_storage_controller_capabilities(discovery)
+
+    assert len(rows) == 1
+    assert rows[0]["verified"] is True
+    assert rows[0]["can_create_volumes"] is True
+    assert rows[0]["create_method"] == "standard_redfish"
+
+
+def test_execute_standard_redfish_wipe_rebuild_skips_reset_when_controller_is_empty(tmp_path):
+    discovery = planner_standard_redfish_apply_discovery(existing_volumes=False, generation="Gen11", ilo_version="iLO 6")
+    discovery["summary"]["capabilities"]["standard_redfish_volume_create_verified"] = False
+    discovery["summary"]["capabilities"]["standard_redfish_volume_create_verified_paths"] = []
+    discovery["raw"]["standard_storage"][0]["VolumeCapabilities"] = {
+        "Links": {"Drives@Redfish.RequiredOnCreate": True},
+        "RAIDType@Redfish.AllowableValues": ["RAID0", "RAID1", "RAID5", "RAID6", "RAID10"],
+        "VolumeUsage@Redfish.AllowableValues": ["Data"],
+    }
+    export_paths = {
+        "directory": Path("/tmp"),
+        "summary": Path("/tmp/summary.yml"),
+        "raw": Path("/tmp/raw.json"),
+    }
+    plan = main.build_raid_plan(discovery, export_paths)
+    platform = main.choose_storage_apply_platform(discovery, plan)
+
+    class FakeStandardRedfishApplyClient:
+        def __init__(self):
+            self.reset_calls: list[tuple[str, str]] = []
+            self.create_calls: list[tuple[str, str, list[str]]] = []
+
+        def wait_for_storage_device_discovery(self):
+            return {"ready": True, "state": "Idle"}
+
+        def get_standard_storage_volume_capabilities(self, _volumes_path: str):
+            return {
+                "Links": {"Drives@Redfish.RequiredOnCreate": True},
+                "RAIDType@Redfish.AllowableValues": ["RAID1", "RAID6"],
+                "VolumeUsage@Redfish.AllowableValues": ["Data"],
+            }
+
+        def delete_standard_storage_volume(self, volume_path: str):
+            raise AssertionError(f"delete should not be called for empty controller: {volume_path}")
+
+        def reset_standard_storage_to_defaults(self, target: str, reset_type: str = "ResetAll"):
+            self.reset_calls.append((target, reset_type))
+            return {"target": target, "reset_type": reset_type}
+
+        def create_standard_storage_volume(
+            self,
+            volumes_path: str,
+            intent: dict[str, Any],
+            spare_intent: dict[str, Any] | None = None,
+            capabilities: dict[str, Any] | None = None,
+        ):
+            self.create_calls.append((volumes_path, str(intent.get("raid_level") or ""), list(intent.get("drive_paths") or [])))
+            return {
+                "path": f"{volumes_path}/created",
+                "capabilities": capabilities or {},
+                "spare_intent": spare_intent or {},
+            }
+
+    client = FakeStandardRedfishApplyClient()
+    apply_dir = tmp_path / "apply"
+    apply_dir.mkdir(parents=True, exist_ok=True)
+    apply_paths = {
+        "directory": apply_dir,
+        "apply_log": apply_dir / "apply-log.yml",
+        "apply_results": apply_dir / "apply-results.json",
+    }
+    apply_state = {
+        "apply_path": "standard_redfish_volumes",
+        "controller": {"name": "HPE MR416i-o Gen11"},
+        "steps": [],
+        "errors": [],
+        "responses": [],
+    }
+    job = {"logs": []}
+
+    _current_step, responses = main.execute_storage_apply_standard_redfish(
+        client,
+        plan,
+        "wipe_rebuild",
+        platform,
+        "Kit-01",
+        job,
+        apply_state,
+        apply_paths,
+        1,
+        6,
+    )
+
+    assert client.reset_calls == []
+    assert len(client.create_calls) == 2
+    assert responses[0]["device_discovery"]["ready"] is True
+    delete_steps = [step for step in apply_state["steps"] if step["step"] == "Delete existing logical volumes"]
+    assert any("skipped delete/reset" in str(step.get("details") or "").lower() for step in delete_steps)
+
+
 def test_storage_preflight_remaps_controller_path_when_hardware_intent_matches():
     approved = planner_standard_redfish_apply_discovery(existing_volumes=True, generation="Gen11", ilo_version="iLO 6")
     live = remap_standard_redfish_discovery_path(
@@ -9202,6 +9787,19 @@ def test_storage_preflight_remaps_controller_path_when_hardware_intent_matches()
     assert any("Remapped controller path" in item for item in diagnosis["safe_corrections_attempted"])
 
 
+def test_gitignore_covers_local_kits_artifacts_jobs_media_and_secrets():
+    gitignore = Path(".gitignore").read_text(encoding="utf-8")
+
+    assert "config/kits/*.yml" in gitignore
+    assert "artifacts/jobs/" in gitignore
+    assert "artifacts/runs/" in gitignore
+    assert "artifacts/history/" in gitignore
+    assert "artifacts/lab-builder.sqlite3" in gitignore
+    assert "media/" in gitignore
+    assert "secrets/" in gitignore
+    assert ".env" in gitignore
+
+
 def test_storage_preflight_blocks_when_approved_drive_serial_changes():
     approved = planner_standard_redfish_apply_discovery(existing_volumes=False, generation="Gen11", ilo_version="iLO 6")
     for drive in approved["summary"]["standard_redfish_storage"]["drives"]:
@@ -9221,6 +9819,148 @@ def test_storage_preflight_blocks_when_approved_drive_serial_changes():
     assert diagnosis["user_action_required"] is True
     assert any("drive serial changed" in item for item in diagnosis["rejection_reasons"])
     assert "re-approve storage" in diagnosis["recommended_fix"]
+
+
+def test_storage_live_layout_matches_plan_for_multi_controller_layout():
+    discovery = two_controller_gen11_storage_discovery()
+    export_paths = {
+        "directory": Path("/tmp"),
+        "summary": Path("/tmp/summary.yml"),
+        "raw": Path("/tmp/raw.json"),
+    }
+    plan = main.build_raid_plan(
+        discovery,
+        export_paths,
+        overrides={
+            "os_controller_path": "/redfish/v1/Systems/1/Storage/BOOT",
+            "data_controller_path": "/redfish/v1/Systems/1/Storage/DATA",
+            "os_raid_level": "RAID1",
+            "data_raid_level": "RAID6",
+            "os_drive_paths": [
+                "/redfish/v1/Chassis/BOOT/Drives/1",
+                "/redfish/v1/Chassis/BOOT/Drives/2",
+            ],
+            "data_drive_paths": [
+                "/redfish/v1/Chassis/DATA/Drives/3",
+                "/redfish/v1/Chassis/DATA/Drives/4",
+                "/redfish/v1/Chassis/DATA/Drives/5",
+                "/redfish/v1/Chassis/DATA/Drives/6",
+                "/redfish/v1/Chassis/DATA/Drives/7",
+                "/redfish/v1/Chassis/DATA/Drives/8",
+            ],
+            "hot_spare_path": "",
+        },
+    )
+    live = copy.deepcopy(discovery)
+    live["summary"]["standard_redfish_storage"]["volumes"] = [
+        {
+            "path": "/redfish/v1/Systems/1/Storage/BOOT/Volumes/1",
+            "controller_path": "/redfish/v1/Systems/1/Storage/BOOT",
+            "id": "1",
+            "name": "OS",
+            "raid_type": "RAID1",
+            "drive_paths": [
+                "/redfish/v1/Chassis/BOOT/Drives/1",
+                "/redfish/v1/Chassis/BOOT/Drives/2",
+            ],
+            "spare_paths": [],
+            "status": "OK / Enabled",
+        },
+        {
+            "path": "/redfish/v1/Systems/1/Storage/DATA/Volumes/2",
+            "controller_path": "/redfish/v1/Systems/1/Storage/DATA",
+            "id": "2",
+            "name": "DATA",
+            "raid_type": "RAID6",
+            "drive_paths": [
+                "/redfish/v1/Chassis/DATA/Drives/3",
+                "/redfish/v1/Chassis/DATA/Drives/4",
+                "/redfish/v1/Chassis/DATA/Drives/5",
+                "/redfish/v1/Chassis/DATA/Drives/6",
+                "/redfish/v1/Chassis/DATA/Drives/7",
+                "/redfish/v1/Chassis/DATA/Drives/8",
+            ],
+            "spare_paths": [],
+            "status": "OK / Enabled",
+        },
+    ]
+
+    matched, notes = main.storage_live_layout_matches_plan(plan, live)
+
+    assert matched is True
+    assert any("RAID1" in note for note in notes)
+    assert any("RAID6" in note for note in notes)
+
+
+def test_storage_preflight_marks_already_applied_when_live_layout_matches_plan():
+    discovery = two_controller_gen11_storage_discovery()
+    export_paths = {
+        "directory": Path("/tmp"),
+        "summary": Path("/tmp/summary.yml"),
+        "raw": Path("/tmp/raw.json"),
+    }
+    plan = main.build_raid_plan(
+        discovery,
+        export_paths,
+        overrides={
+            "os_controller_path": "/redfish/v1/Systems/1/Storage/BOOT",
+            "data_controller_path": "/redfish/v1/Systems/1/Storage/DATA",
+            "os_raid_level": "RAID1",
+            "data_raid_level": "RAID6",
+            "os_drive_paths": [
+                "/redfish/v1/Chassis/BOOT/Drives/1",
+                "/redfish/v1/Chassis/BOOT/Drives/2",
+            ],
+            "data_drive_paths": [
+                "/redfish/v1/Chassis/DATA/Drives/3",
+                "/redfish/v1/Chassis/DATA/Drives/4",
+                "/redfish/v1/Chassis/DATA/Drives/5",
+                "/redfish/v1/Chassis/DATA/Drives/6",
+                "/redfish/v1/Chassis/DATA/Drives/7",
+                "/redfish/v1/Chassis/DATA/Drives/8",
+            ],
+            "hot_spare_path": "",
+        },
+    )
+    live = copy.deepcopy(discovery)
+    live["summary"]["standard_redfish_storage"]["volumes"] = [
+        {
+            "path": "/redfish/v1/Systems/1/Storage/BOOT/Volumes/1",
+            "controller_path": "/redfish/v1/Systems/1/Storage/BOOT",
+            "id": "1",
+            "name": "OS",
+            "raid_type": "RAID1",
+            "drive_paths": [
+                "/redfish/v1/Chassis/BOOT/Drives/1",
+                "/redfish/v1/Chassis/BOOT/Drives/2",
+            ],
+            "spare_paths": [],
+            "status": "OK / Enabled",
+        },
+        {
+            "path": "/redfish/v1/Systems/1/Storage/DATA/Volumes/2",
+            "controller_path": "/redfish/v1/Systems/1/Storage/DATA",
+            "id": "2",
+            "name": "DATA",
+            "raid_type": "RAID6",
+            "drive_paths": [
+                "/redfish/v1/Chassis/DATA/Drives/3",
+                "/redfish/v1/Chassis/DATA/Drives/4",
+                "/redfish/v1/Chassis/DATA/Drives/5",
+                "/redfish/v1/Chassis/DATA/Drives/6",
+                "/redfish/v1/Chassis/DATA/Drives/7",
+                "/redfish/v1/Chassis/DATA/Drives/8",
+            ],
+            "spare_paths": [],
+            "status": "OK / Enabled",
+        },
+    ]
+
+    remapped_plan, diagnosis = main.storage_preflight_compare_and_remap(plan, live, "wipe_rebuild")
+
+    assert remapped_plan["existing_logical_volumes"]
+    assert diagnosis["status"] == "already_applied"
+    assert "already matches the approved plan" in diagnosis["selected_action"]
 
 
 def test_build_raid_plan_scopes_drives_to_selected_controller_when_multiple_are_detected():
@@ -9291,11 +10031,41 @@ def test_standard_redfish_storage_layout_uses_delete_and_volume_posts():
                         {"@odata.id": "/redfish/v1/Chassis/DE009000/Drives/1"},
                     ]
                 },
-                    "DisplayName": "OS RAID 1 logic",
+                "DisplayName": "OS RAID 1 logic",
+                "VolumeUsage": "Data",
                 "CapacityBytes": 536870912000,
             },
         ),
     ]
+
+
+def test_standard_redfish_volume_payload_omits_out_of_range_capacity_bytes_and_sets_volume_usage():
+    client = RecordingStandardRedfishStorageWriteClient()
+
+    payload = client._standard_volume_payload(
+        {
+            "raid": "RAID1",
+            "label": "OS RAID 1 logical drive",
+            "target_size_gib": 500,
+            "drives": [
+                {"path": "/redfish/v1/Chassis/DE009000/Drives/0"},
+                {"path": "/redfish/v1/Chassis/DE009000/Drives/1"},
+            ],
+        },
+        capabilities={
+            "payload": {
+                "Links": {"Drives@Redfish.RequiredOnCreate": True},
+                "RAIDType@Redfish.AllowableValues": ["RAID1"],
+                "VolumeUsage@Redfish.AllowableValues": ["Data"],
+                "CapacityBytes@Redfish.AllowableNumbers": ["1073741824:479023071232"],
+            }
+        },
+    )
+
+    assert payload["RAIDType"] == "RAID1"
+    assert payload["DisplayName"] == "OS RAID 1 logic"
+    assert payload["VolumeUsage"] == "Data"
+    assert "CapacityBytes" not in payload
 
 
 def test_standard_redfish_delete_treats_resource_missing_as_idempotent_success():
@@ -9382,6 +10152,41 @@ def test_standard_redfish_volume_create_recovers_if_post_times_out_but_volume_ex
     assert create_response["response"]["recovered_after_transport_error"] is True
 
 
+def test_standard_redfish_volume_create_recovers_if_retry_returns_internal_error_but_volume_exists():
+    client = RecordingStandardRedfishStorageWriteClient()
+    client.fail_post_connection_once = True
+    client.fail_post_http_once = True
+    client.simulate_create_side_effect_on_connection_abort = True
+    readback_calls = {"count": 0}
+
+    def delayed_readback(_volumes_path: str, _payload: dict[str, Any]):
+        readback_calls["count"] += 1
+        if readback_calls["count"] <= 5:
+            return {}
+        return client.volume_collection[-1]
+
+    client._find_matching_standard_volume = delayed_readback  # type: ignore[method-assign]
+
+    create_response = client.create_standard_storage_volume(
+        "/redfish/v1/Systems/1/Storage/DE009000/Volumes",
+        {
+            "raid": "RAID6",
+            "label": "Data RAID 6 logical drive",
+            "drives": [
+                {"path": "/redfish/v1/Chassis/DE009000/Drives/0"},
+                {"path": "/redfish/v1/Chassis/DE009000/Drives/1"},
+            ],
+        },
+        capabilities=client.get_standard_storage_volume_capabilities("/redfish/v1/Systems/1/Storage/DE009000/Volumes"),
+    )
+
+    post_calls = [item for item in client.calls if item[0] == "POST"]
+    assert len(post_calls) == 2
+    assert create_response["recovered_after_transport_error"] is True
+    assert create_response["response"]["recovered_after_readback"] is True
+    assert "retry_error" in create_response["response"]
+
+
 def test_run_storage_as_part_of_real_run_supports_standard_redfish_volumes_backend():
     cfg = main.default_config()
     cfg["site"]["name"] = "Std-Storage-Kit"
@@ -9427,34 +10232,36 @@ def test_run_storage_as_part_of_real_run_supports_standard_redfish_volumes_backe
         (
             "POST",
             "/redfish/v1/Systems/1/Storage/DE009000/Volumes",
-            {
-                "RAIDType": "RAID1",
-                "Links": {
-                    "Drives": [
-                        {"@odata.id": "/redfish/v1/Chassis/DE009000/Drives/0"},
-                        {"@odata.id": "/redfish/v1/Chassis/DE009000/Drives/1"},
-                    ]
-                },
+                {
+                    "RAIDType": "RAID1",
+                    "Links": {
+                        "Drives": [
+                            {"@odata.id": "/redfish/v1/Chassis/DE009000/Drives/0"},
+                            {"@odata.id": "/redfish/v1/Chassis/DE009000/Drives/1"},
+                        ]
+                    },
                     "DisplayName": "OS RAID 1 logic",
-                "CapacityBytes": 536870912000,
-            },
-        ),
-        (
-            "POST",
+                    "VolumeUsage": "Data",
+                    "CapacityBytes": 536870912000,
+                },
+            ),
+            (
+                "POST",
             "/redfish/v1/Systems/1/Storage/DE009000/Volumes",
             {
                 "RAIDType": "RAID5",
-                "Links": {
-                    "Drives": [
-                        {"@odata.id": "/redfish/v1/Chassis/DE009000/Drives/2"},
-                        {"@odata.id": "/redfish/v1/Chassis/DE009000/Drives/3"},
-                        {"@odata.id": "/redfish/v1/Chassis/DE009000/Drives/4"},
-                    ]
+                    "Links": {
+                        "Drives": [
+                            {"@odata.id": "/redfish/v1/Chassis/DE009000/Drives/2"},
+                            {"@odata.id": "/redfish/v1/Chassis/DE009000/Drives/3"},
+                            {"@odata.id": "/redfish/v1/Chassis/DE009000/Drives/4"},
+                        ]
+                    },
+                    "DisplayName": "Data RAID 5 log",
+                    "VolumeUsage": "Data",
                 },
-                "DisplayName": "Data RAID 5 log",
-            },
-        ),
-    ]
+            ),
+        ]
 
 
 def test_run_storage_as_part_of_real_run_remaps_stale_controller_path_before_apply():
@@ -9506,6 +10313,108 @@ def test_run_storage_as_part_of_real_run_remaps_stale_controller_path_before_app
     finished_job = main.load_job(cfg["site"]["name"])
     assert any("[REMAP] Storage preflight" in line for line in finished_job["logs"])
     assert finished_job["storage_preflight"]["status"] == "remapped"
+
+
+def test_run_storage_as_part_of_real_run_marks_job_completed_when_layout_is_already_applied():
+    cfg = main.default_config()
+    cfg["site"]["name"] = "Std-Storage-Already-Applied"
+    main.save_kit_config(cfg)
+
+    discovery = two_controller_gen11_storage_discovery()
+    export_paths = main.export_storage_discovery_snapshot(cfg, discovery, host="10.122.142.13")
+    plan = main.build_raid_plan(
+        discovery,
+        export_paths,
+        overrides={
+            "os_controller_path": "/redfish/v1/Systems/1/Storage/BOOT",
+            "data_controller_path": "/redfish/v1/Systems/1/Storage/DATA",
+            "os_raid_level": "RAID1",
+            "data_raid_level": "RAID6",
+            "os_drive_paths": [
+                "/redfish/v1/Chassis/BOOT/Drives/1",
+                "/redfish/v1/Chassis/BOOT/Drives/2",
+            ],
+            "data_drive_paths": [
+                "/redfish/v1/Chassis/DATA/Drives/3",
+                "/redfish/v1/Chassis/DATA/Drives/4",
+                "/redfish/v1/Chassis/DATA/Drives/5",
+                "/redfish/v1/Chassis/DATA/Drives/6",
+                "/redfish/v1/Chassis/DATA/Drives/7",
+                "/redfish/v1/Chassis/DATA/Drives/8",
+            ],
+            "hot_spare_path": "",
+        },
+    )
+    live = copy.deepcopy(discovery)
+    live["summary"]["standard_redfish_storage"]["volumes"] = [
+        {
+            "path": "/redfish/v1/Systems/1/Storage/BOOT/Volumes/1",
+            "controller_path": "/redfish/v1/Systems/1/Storage/BOOT",
+            "id": "1",
+            "name": "OS",
+            "raid_type": "RAID1",
+            "drive_paths": [
+                "/redfish/v1/Chassis/BOOT/Drives/1",
+                "/redfish/v1/Chassis/BOOT/Drives/2",
+            ],
+            "spare_paths": [],
+            "status": "OK / Enabled",
+        },
+        {
+            "path": "/redfish/v1/Systems/1/Storage/DATA/Volumes/2",
+            "controller_path": "/redfish/v1/Systems/1/Storage/DATA",
+            "id": "2",
+            "name": "DATA",
+            "raid_type": "RAID6",
+            "drive_paths": [
+                "/redfish/v1/Chassis/DATA/Drives/3",
+                "/redfish/v1/Chassis/DATA/Drives/4",
+                "/redfish/v1/Chassis/DATA/Drives/5",
+                "/redfish/v1/Chassis/DATA/Drives/6",
+                "/redfish/v1/Chassis/DATA/Drives/7",
+                "/redfish/v1/Chassis/DATA/Drives/8",
+            ],
+            "spare_paths": [],
+            "status": "OK / Enabled",
+        },
+    ]
+    plan_paths = main.export_raid_plan_snapshot(cfg, plan, export_paths)
+    storage_execution = {
+        "discovery_raw_path": str(export_paths["raw"]),
+        "plan_path": str(plan_paths["plan"]),
+        "approved_host": "10.122.142.13",
+    }
+    job = {
+        "status": "Running",
+        "scope": "multi__ilo__storage__esxi",
+        "current_stage": "",
+        "progress_percent": 0,
+        "completed_steps": 0,
+        "total_steps": 32,
+        "logs": [],
+    }
+    main.save_job(cfg["site"]["name"], job)
+    client = RecordingStandardRedfishApplyClient(live)
+
+    result = main.run_storage_as_part_of_real_run(
+        cfg,
+        client,
+        "10.122.142.13",
+        "10.122.142.13",
+        storage_execution,
+        cfg["site"]["name"],
+        job,
+        17,
+        32,
+    )
+
+    assert result["apply_state"]["status"] == "Completed"
+    assert client.calls == []
+    finished_job = main.load_job(cfg["site"]["name"])
+    assert finished_job["status"] == "Completed"
+    assert finished_job["current_stage"] == "Finished"
+    assert finished_job["progress_percent"] == 100
+    assert any("already matches the approved plan" in line for line in finished_job["logs"])
 
 
 def test_run_storage_as_part_of_real_run_powers_on_when_server_starts_off():
@@ -9638,6 +10547,22 @@ def test_dashboard_job_status_lists_passed_and_failed_with_dates(client):
     assert response.text.count("Open log") >= 2
     assert "/tmp/ilo-summary.yml" in response.text
     assert "/tmp/esxi-summary.yml" in response.text
+
+
+def test_dashboard_job_status_ignores_superseded_entries(client):
+    cfg = main.default_config()
+    cfg["site"]["name"] = "Dash Superseded Kit"
+    main.save_kit_config(cfg)
+    history = [
+        {"time": "2026-04-17 10:45:00", "scope": "storage-apply:wipe_rebuild", "status": "Completed", "run_summary_path": "/tmp/storage-ok.yml"},
+        {"time": "2026-04-17 10:30:00", "scope": "storage-apply:wipe_rebuild", "status": "Superseded", "original_status": "Failed", "run_summary_path": "/tmp/storage-failed.yml"},
+        {"time": "2026-04-17 09:15:00", "scope": "ilo", "status": "Completed", "run_summary_path": "/tmp/ilo-summary.yml"},
+    ]
+
+    status = main.build_dashboard_job_status(history)
+
+    assert status["failed"] == []
+    assert any(item["name"] == "Storage" and item["status"] == "Completed" for item in status["passed"])
 
 
 def test_dashboard_keeps_focus_on_kit_status_and_next_steps(client):

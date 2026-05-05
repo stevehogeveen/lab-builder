@@ -21,6 +21,29 @@
             </div>
         </div>
 
+        {% if storage_repair_action %}
+        <div class="card" style="border-color: color-mix(in srgb, var(--bad) 35%, var(--border));">
+            <div class="text-lg font-semibold mb-2">Repair invalid storage selections</div>
+            <div class="text-sm text-slate-400 mb-3">The saved drive/controller selection no longer matches current inventory. Clear the invalid plan selections and reload inventory before building a new plan.</div>
+            <form hx-post="/repair-storage-selection" hx-target="#main-content" hx-swap="outerHTML" data-action-title="Repairing storage selections" data-action-start="Clearing invalid storage selections and loading fresh inventory.">
+                <input type="hidden" name="return_page" value="{{ storage_repair_action.return_page or 'storage' }}">
+                <button class="btn btn-danger action-button" type="submit">Clear invalid selections and reload inventory</button>
+            </form>
+        </div>
+        {% endif %}
+
+        {% if storage_plan_defaults and storage_plan_defaults.profile_advisories %}
+        <div class="card identity-soft-card">
+            <div class="text-lg font-semibold mb-2">Detected hardware profile</div>
+            <div class="text-sm text-slate-400 mb-3">{{ storage_plan_defaults.hardware_profile.profile_name if storage_plan_defaults.hardware_profile else 'Unknown hardware' }}</div>
+            <div class="space-y-2 text-sm">
+                {% for item in storage_plan_defaults.profile_advisories %}
+                <div class="result" style="margin-top: 0;">{{ item }}</div>
+                {% endfor %}
+            </div>
+        </div>
+        {% endif %}
+
         <details class="card identity-soft-card">
             <summary class="summary-row">
                 <span class="text-lg font-semibold">Storage context and last result</span>
@@ -303,9 +326,6 @@
                 <input type="hidden" name="return_page" value="storage">
                 <input type="hidden" name="discovery_raw_path" value="{{ storage_export_paths.raw }}">
                 {% set planning_drives = storage_planning_drives or [] %}
-                {% set selected_os_bays = storage_plan_defaults.customization.selected_os_bays if storage_plan_defaults and storage_plan_defaults.customization else [] %}
-                {% set selected_data_bays = storage_plan_defaults.customization.selected_data_bays if storage_plan_defaults and storage_plan_defaults.customization else [] %}
-                {% set selected_hot_spare_bay = storage_plan_defaults.customization.selected_hot_spare_bay if storage_plan_defaults and storage_plan_defaults.customization else '' %}
                 {% set selected_os_drive_ids = storage_plan_defaults.customization.selected_os_drive_ids if storage_plan_defaults and storage_plan_defaults.customization else [] %}
                 {% set selected_data_drive_ids = storage_plan_defaults.customization.selected_data_drive_ids if storage_plan_defaults and storage_plan_defaults.customization else [] %}
                 {% set selected_hot_spare_drive_id = storage_plan_defaults.customization.selected_hot_spare_drive_id if storage_plan_defaults and storage_plan_defaults.customization else '' %}
@@ -334,15 +354,6 @@
                 {% endif %}
                 {% if not selected_hot_spare_drive_id and storage_plan_defaults and storage_plan_defaults.hot_spare.drive %}
                     {% set selected_hot_spare_drive_id = storage_plan_defaults.hot_spare.drive.drive_identity %}
-                {% endif %}
-                {% if not selected_os_bays and storage_plan_defaults %}
-                    {% set selected_os_bays = storage_plan_defaults.os_raid1.drives | map(attribute='bay') | list %}
-                {% endif %}
-                {% if not selected_data_bays and storage_plan_defaults %}
-                    {% set selected_data_bays = storage_plan_defaults.data_raid6.drives | map(attribute='bay') | list %}
-                {% endif %}
-                {% if not selected_hot_spare_bay and storage_plan_defaults and storage_plan_defaults.hot_spare.drive %}
-                    {% set selected_hot_spare_bay = storage_plan_defaults.hot_spare.drive.bay %}
                 {% endif %}
                 {% if not selected_controller_path and storage_plan_defaults and storage_plan_defaults.source_discovery and storage_plan_defaults.source_discovery.controller %}
                     {% set selected_controller_path = storage_plan_defaults.source_discovery.controller.path %}
@@ -387,8 +398,8 @@
                         <div class="space-y-2">
                             {% for drive in planning_drives if drive.eligible %}
                             <label class="check storage-drive-choice" data-role="os" data-controller-path="{{ drive.controller_path }}" style="{% if selected_os_controller_path and drive.controller_path and drive.controller_path != selected_os_controller_path %}display:none;{% endif %}">
-                                <input type="checkbox" name="os_drive_ids" value="{{ drive.drive_identity }}" {% if drive.drive_identity in selected_os_drive_ids %}checked{% elif drive.path and drive.path in selected_os_drive_paths %}checked{% elif not selected_os_drive_ids and not selected_os_drive_paths and drive.bay in selected_os_bays %}checked{% endif %}>
-                                <span>Bay {{ drive.bay }} | {{ drive.model or drive.name }} | {{ drive.size_gib|round|int }} GiB | {{ drive.serial_number or 'no serial' }} | {{ drive.controller_name or drive.controller_path or 'controller unknown' }}</span>
+                                <input type="checkbox" name="os_drive_paths" value="{{ drive.drive_path or drive.path }}" {% if drive.path and drive.path in selected_os_drive_paths %}checked{% elif drive.drive_identity in selected_os_drive_ids %}checked{% endif %}>
+                                <span>Bay {{ drive.bay }} | {{ drive.size_gib|round|int }} GiB | {{ drive.model or drive.name }} | {{ drive.serial_number or 'no serial' }} | {{ drive.status or 'Unknown' }} | {{ drive.controller_name or drive.controller_path or 'controller unknown' }}</span>
                             </label>
                             {% endfor %}
                         </div>
@@ -421,8 +432,8 @@
                         <div class="space-y-2">
                             {% for drive in planning_drives if drive.eligible %}
                             <label class="check storage-drive-choice" data-role="data" data-controller-path="{{ drive.controller_path }}" style="{% if selected_data_controller_path and drive.controller_path and drive.controller_path != selected_data_controller_path %}display:none;{% endif %}">
-                                <input type="checkbox" name="data_drive_ids" value="{{ drive.drive_identity }}" {% if drive.drive_identity in selected_data_drive_ids %}checked{% elif drive.path and drive.path in selected_data_drive_paths %}checked{% elif not selected_data_drive_ids and not selected_data_drive_paths and drive.bay in selected_data_bays %}checked{% endif %}>
-                                <span>Bay {{ drive.bay }} | {{ drive.model or drive.name }} | {{ drive.size_gib|round|int }} GiB | {{ drive.serial_number or 'no serial' }} | {{ drive.controller_name or drive.controller_path or 'controller unknown' }}</span>
+                                <input type="checkbox" name="data_drive_paths" value="{{ drive.drive_path or drive.path }}" {% if drive.path and drive.path in selected_data_drive_paths %}checked{% elif drive.drive_identity in selected_data_drive_ids %}checked{% endif %}>
+                                <span>Bay {{ drive.bay }} | {{ drive.size_gib|round|int }} GiB | {{ drive.model or drive.name }} | {{ drive.serial_number or 'no serial' }} | {{ drive.status or 'Unknown' }} | {{ drive.controller_name or drive.controller_path or 'controller unknown' }}</span>
                             </label>
                             {% endfor %}
                         </div>
@@ -431,17 +442,21 @@
                         <div class="text-sm font-semibold mb-2">Hot spare</div>
                         <label>
                             <div class="text-sm text-slate-300 mb-1">Spare bay</div>
-                            <select class="input" name="hot_spare_drive_id">
+                            <select class="input storage-spare-filter" name="hot_spare_path" data-controller-source="data_controller_path">
                                 <option value="">No dedicated hot spare</option>
-                                {% for drive in planning_drives if drive.eligible %}
-                                <option value="{{ drive.drive_identity }}" {% if drive.drive_identity == selected_hot_spare_drive_id %}selected{% elif drive.path and drive.path == selected_hot_spare_path %}selected{% elif not selected_hot_spare_drive_id and not selected_hot_spare_path and drive.bay == selected_hot_spare_bay %}selected{% endif %}>Bay {{ drive.bay }} | {{ drive.model or drive.name }} | {{ drive.size_gib|round|int }} GiB | {{ drive.serial_number or 'no serial' }} | {{ drive.controller_name or drive.controller_path or 'controller unknown' }}</option>
+                                {% for drive in planning_drives if drive.spare_eligible %}
+                                <option value="{{ drive.drive_path or drive.path }}" data-controller-path="{{ drive.controller_path }}" {% if drive.path and drive.path == selected_hot_spare_path %}selected{% elif drive.drive_identity == selected_hot_spare_drive_id %}selected{% endif %}>Bay {{ drive.bay }} | {{ drive.size_gib|round|int }} GiB | {{ drive.model or drive.name }} | {{ drive.serial_number or 'no serial' }} | {{ drive.status or 'Unknown' }} | {{ drive.controller_name or drive.controller_path or 'controller unknown' }}</option>
                                 {% endfor %}
                             </select>
                         </label>
+                        {% if planning_drives | selectattr('standby_spare') | list %}
+                        <div class="text-xs text-slate-400 mt-3">Standby spare drives are shown here only and are never auto-selected.</div>
+                        {% endif %}
                     </div>
                 </div>
                 {% endif %}
                 <div class="actions">
+                    <button class="btn action-button" type="submit" formaction="/probe-storage-capabilities" formmethod="post" data-action-title="Probing storage capabilities" data-action-start="Reading controller capabilities without making changes." data-action-complete="Storage capability probe complete." {% if not storage_target.valid or not storage_credentials.valid %}disabled{% endif %}>Probe controller capabilities</button>
                     <button class="btn btn-primary action-button" type="submit" {% if not storage_target.valid %}disabled{% endif %} style="{% if storage_target.valid %}border-color: color-mix(in srgb, var(--ok) 35%, var(--border));{% else %}opacity: 0.55; cursor: not-allowed;{% endif %}">Build storage plan</button>
                 </div>
                 {% if not storage_target.valid %}
@@ -450,20 +465,79 @@
             </form>
             <script>
                 (function () {
-                    document.querySelectorAll('.storage-controller-filter').forEach(function (select) {
-                        function updateChoices() {
-                            var role = select.getAttribute('data-target-role');
-                            var selected = select.value;
-                            document.querySelectorAll('.storage-drive-choice[data-role="' + role + '"]').forEach(function (choice) {
-                                var driveController = choice.getAttribute('data-controller-path') || '';
-                                choice.style.display = (!selected || !driveController || driveController === selected) ? '' : 'none';
+                    function selectedControllerPath(role) {
+                        var select = document.querySelector('.storage-controller-filter[data-target-role="' + role + '"]');
+                        if (select) return select.value || '';
+                        var hidden = document.querySelector('input[type="hidden"][name="' + role + '_controller_path"]');
+                        return hidden ? (hidden.value || '') : '';
+                    }
+
+                    function updateDriveChoices(role) {
+                        var selected = selectedControllerPath(role);
+                        document.querySelectorAll('.storage-drive-choice[data-role="' + role + '"]').forEach(function (choice) {
+                            var driveController = choice.getAttribute('data-controller-path') || '';
+                            var visible = (!selected || !driveController || driveController === selected);
+                            choice.style.display = visible ? '' : 'none';
+                            var input = choice.querySelector('input');
+                            if (input) {
+                                input.disabled = !visible;
+                                if (!visible) input.checked = false;
+                            }
+                        });
+                    }
+
+                    function updateSpareChoices() {
+                        var selected = selectedControllerPath('data');
+                        document.querySelectorAll('.storage-spare-filter').forEach(function (select) {
+                            var keepCurrent = false;
+                            Array.prototype.forEach.call(select.options, function (option) {
+                                if (!option.value) {
+                                    option.hidden = false;
+                                    return;
+                                }
+                                var optionController = option.getAttribute('data-controller-path') || '';
+                                var visible = (!selected || !optionController || optionController === selected);
+                                option.hidden = !visible;
+                                if (visible && option.selected) keepCurrent = true;
                             });
-                        }
-                        select.addEventListener('change', updateChoices);
-                        updateChoices();
+                            if (!keepCurrent) select.value = '';
+                        });
+                    }
+
+                    document.querySelectorAll('.storage-controller-filter').forEach(function (select) {
+                        select.addEventListener('change', function () {
+                            updateDriveChoices(select.getAttribute('data-target-role'));
+                            updateSpareChoices();
+                        });
                     });
+
+                    updateDriveChoices('os');
+                    updateDriveChoices('data');
+                    updateSpareChoices();
                 })();
             </script>
+        </div>
+        {% endif %}
+
+        {% if storage_controller_capabilities %}
+        <div class="card">
+            <div class="text-lg font-semibold mb-2">Controller apply capabilities</div>
+            <div class="text-sm text-slate-400 mb-3">Discovery is non-destructive. A visible <code>/Volumes</code> path does not count as create verification by itself.</div>
+            <table>
+                <thead><tr><th>Controller</th><th>Create</th><th>Delete</th><th>Method</th><th>Verified</th><th>Reason</th></tr></thead>
+                <tbody>
+                {% for row in storage_controller_capabilities %}
+                    <tr>
+                        <td>{{ row.controller_name or row.controller_path }}<br><span class="muted">{{ row.controller_path }}</span></td>
+                        <td>{{ "Yes" if row.can_create_volumes else "No" }}</td>
+                        <td>{{ "Yes" if row.can_delete_volumes else "No" }}</td>
+                        <td>{{ row.create_method }}</td>
+                        <td>{{ "Yes" if row.verified else "No" }}</td>
+                        <td>{{ row.reason }}{% if row.warning %}<br><span class="text-amber-300">{{ row.warning }}</span>{% endif %}{% if row.action_info_paths %}<br><span class="muted">ActionInfo: {{ row.action_info_paths|join(', ') }}</span>{% endif %}</td>
+                    </tr>
+                {% endfor %}
+                </tbody>
+            </table>
         </div>
         {% endif %}
 
@@ -491,7 +565,11 @@
             </div>
             {% endif %}
             <div class="result mb-3">
-                <div><strong>Build the new layout:</strong> {{ storage_plan.planned_layout.os_raid1.raid or "OS RAID" }} on bays {{ storage_plan.planned_layout.os_raid1.bays or "not selected" }}, {{ storage_plan.planned_layout.data_raid6.raid or "Data RAID" }} on bays {{ storage_plan.planned_layout.data_raid6.bays or "not selected" }}, hot spare on bay {{ storage_plan.planned_layout.hot_spare.bay or "not reserved" }}.</div>
+                <div><strong>Build the new layout:</strong></div>
+                {% for array in storage_plan.arrays or [] %}
+                <div>{{ array.role|upper }} | {{ array.controller_name or array.controller_path or "controller not set" }} | {{ array.raid_level or array.raid or "RAID" }} | {% for drive in array.selected_drive_metadata or [] %}Bay {{ drive.bay or "?" }} / {{ drive.serial_number or drive.serial or "no serial" }}{% if not loop.last %}, {% endif %}{% endfor %}</div>
+                {% endfor %}
+                <div>Hot spare: {{ storage_plan.hot_spare.controller_name or storage_plan.hot_spare.controller_path or "not reserved" }} | Bay {{ storage_plan.hot_spare.drive.bay if storage_plan.hot_spare.drive else "none" }} | {{ storage_plan.hot_spare.drive.serial_number if storage_plan.hot_spare.drive else "no serial" }}</div>
                 <div><strong>Apply it during the real run:</strong> {{ "Yes" if storage_review.include_in_ilo_run else "Choose this below if you want it included." }}</div>
             </div>
             <form hx-post="/approve-storage-plan" hx-target="#main-content" hx-swap="outerHTML" data-action-title="Approving storage plan" data-action-start="Saving this storage plan for the real run." data-action-complete="Storage approval saved.">
@@ -584,10 +662,10 @@
                     <div class="mb-2"><strong>Target size:</strong> about {{ storage_plan.os_raid1.target_size_gib }} GiB</div>
                     {% if storage_plan.os_raid1.drives %}
                     <table class="mb-4">
-                        <thead><tr><th>Bay</th><th>Model</th><th>Size GiB</th><th>Media</th><th>Protocol</th></tr></thead>
+                        <thead><tr><th>Bay</th><th>Size GiB</th><th>Model</th><th>Serial</th><th>Status</th><th>Controller</th></tr></thead>
                         <tbody>
                         {% for drive in storage_plan.os_raid1.drives %}
-                            <tr><td>{{ drive.bay }}</td><td>{{ drive.model or drive.name }}</td><td>{{ drive.size_gib }}</td><td>{{ drive.media_type }}</td><td>{{ drive.protocol }}</td></tr>
+                            <tr><td>{{ drive.bay }}</td><td>{{ drive.size_gib }}</td><td>{{ drive.model or drive.name }}</td><td>{{ drive.serial_number or "no serial" }}</td><td>{{ drive.status }}</td><td>{{ drive.controller_name or drive.controller_path }}</td></tr>
                         {% endfor %}
                         </tbody>
                     </table>
@@ -598,10 +676,10 @@
                     <div class="mb-2"><strong>Feasible:</strong> {{ "Yes" if storage_plan.data_raid6.feasible else "No" }}</div>
                     {% if storage_plan.data_raid6.drives %}
                     <table class="mb-4">
-                        <thead><tr><th>Bay</th><th>Model</th><th>Size GiB</th><th>Media</th><th>Protocol</th></tr></thead>
+                        <thead><tr><th>Bay</th><th>Size GiB</th><th>Model</th><th>Serial</th><th>Status</th><th>Controller</th></tr></thead>
                         <tbody>
                         {% for drive in storage_plan.data_raid6.drives %}
-                            <tr><td>{{ drive.bay }}</td><td>{{ drive.model or drive.name }}</td><td>{{ drive.size_gib }}</td><td>{{ drive.media_type }}</td><td>{{ drive.protocol }}</td></tr>
+                            <tr><td>{{ drive.bay }}</td><td>{{ drive.size_gib }}</td><td>{{ drive.model or drive.name }}</td><td>{{ drive.serial_number or "no serial" }}</td><td>{{ drive.status }}</td><td>{{ drive.controller_name or drive.controller_path }}</td></tr>
                         {% endfor %}
                         </tbody>
                     </table>
@@ -611,9 +689,9 @@
                     {% if storage_plan.hot_spare.drive %}
                     <div class="muted mb-2">One compatible data-side spare is reserved for the future applied layout.</div>
                     <table class="mb-4">
-                        <thead><tr><th>Bay</th><th>Model</th><th>Size GiB</th><th>Media</th><th>Protocol</th></tr></thead>
+                        <thead><tr><th>Bay</th><th>Size GiB</th><th>Model</th><th>Serial</th><th>Status</th><th>Controller</th></tr></thead>
                         <tbody>
-                            <tr><td>{{ storage_plan.hot_spare.drive.bay }}</td><td>{{ storage_plan.hot_spare.drive.model or storage_plan.hot_spare.drive.name }}</td><td>{{ storage_plan.hot_spare.drive.size_gib }}</td><td>{{ storage_plan.hot_spare.drive.media_type }}</td><td>{{ storage_plan.hot_spare.drive.protocol }}</td></tr>
+                            <tr><td>{{ storage_plan.hot_spare.drive.bay }}</td><td>{{ storage_plan.hot_spare.drive.size_gib }}</td><td>{{ storage_plan.hot_spare.drive.model or storage_plan.hot_spare.drive.name }}</td><td>{{ storage_plan.hot_spare.drive.serial_number or "no serial" }}</td><td>{{ storage_plan.hot_spare.drive.status }}</td><td>{{ storage_plan.hot_spare.drive.controller_name or storage_plan.hot_spare.drive.controller_path }}</td></tr>
                         </tbody>
                     </table>
                     {% else %}
