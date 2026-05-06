@@ -68,6 +68,11 @@ from app.core.jobs import JobStepRunner
 from app.core.database import DatabaseStore, SQLiteRuntime
 from app.core.stage_registry import StageRegistry
 from app.stages.ilo.adapter import HpeIloRedfishAdapter
+from app.stages.ilo.runtime import (
+    build_snmp_readback_checks as ilo_build_snmp_readback_checks,
+    current_snmp_matches as ilo_current_snmp_matches,
+    verify_final_ilo_state as ilo_verify_final_state,
+)
 from app.stages.ilo.plugin import create_ilo_stage
 from app.stages.esxi.plugin import create_esxi_stage
 from app.stages.storage.plugin import create_storage_stage
@@ -12168,93 +12173,14 @@ def run_ilo_real(cfg: dict):
             or ""
         ).strip()
 
-    def build_snmp_readback_checks(network_protocol_doc: dict[str, Any]) -> list[dict[str, Any]]:
-        snmp_block = network_protocol_doc.get("SNMP") or {}
-        checks: list[dict[str, Any]] = []
-        requested_username = str(active_snmp_user.get("v3_username") or "").strip()
-        if "ProtocolEnabled" in snmp_block:
-            checks.append({
-                "label": "protocol_enabled",
-                "requested": True,
-                "actual": snmp_block.get("ProtocolEnabled"),
-                "matched": snmp_block.get("ProtocolEnabled") is True,
-            })
-        username_key = next(
-            (
-                key
-                for key in ("UserName", "Username", "SNMPv3UserName", "SNMPv3Username")
-                if key in snmp_block
-            ),
-            "",
-        )
-        if username_key and requested_username:
-            checks.append({
-                "label": "username",
-                "requested": requested_username,
-                "actual": str(snmp_block.get(username_key) or "").strip(),
-                "matched": str(snmp_block.get(username_key) or "").strip() == requested_username,
-            })
-        auth_key = next(
-            (key for key in ("AuthProtocol", "SNMPv3AuthProtocol") if key in snmp_block),
-            "",
-        )
-        if auth_key and desired_auth_protocol:
-            checks.append({
-                "label": "auth_protocol",
-                "requested": desired_auth_protocol,
-                "actual": str(snmp_block.get(auth_key) or "").strip(),
-                "matched": str(snmp_block.get(auth_key) or "").strip() == desired_auth_protocol,
-            })
-        priv_key = next(
-            (key for key in ("PrivacyProtocol", "SNMPv3PrivacyProtocol") if key in snmp_block),
-            "",
-        )
-        if priv_key and desired_priv_protocol:
-            checks.append({
-                "label": "privacy_protocol",
-                "requested": desired_priv_protocol,
-                "actual": str(snmp_block.get(priv_key) or "").strip(),
-                "matched": str(snmp_block.get(priv_key) or "").strip() == desired_priv_protocol,
-            })
-        for legacy_key in (
-            "SNMPv1Enabled",
-            "EnableSNMPv1",
-            "SNMPv1RequestsEnabled",
-            "SNMPv1TrapEnabled",
-            "SNMPv1GetEnabled",
-            "SNMPv1SetEnabled",
-            "SNMPv2Enabled",
-            "EnableSNMPv2",
-            "SNMPv2RequestsEnabled",
-            "SNMPv2TrapEnabled",
-            "SNMPv2cEnabled",
-            "EnableSNMPv2c",
-            "SNMPv2cRequestsEnabled",
-            "SNMPv2cTrapEnabled",
-            "CommunityAccessEnabled",
-        ):
-            if legacy_key in snmp_block:
-                checks.append({
-                    "label": legacy_key,
-                    "requested": False,
-                    "actual": snmp_block.get(legacy_key),
-                    "matched": snmp_block.get(legacy_key) is False,
-                })
-        for v3_key in ("SNMPv3RequestsEnabled", "SNMPv3Enabled", "SNMPv3TrapEnabled"):
-            if v3_key in snmp_block:
-                checks.append({
-                    "label": v3_key,
-                    "requested": True,
-                    "actual": snmp_block.get(v3_key),
-                    "matched": snmp_block.get(v3_key) is True,
-                })
-        return checks
-
     def current_snmp_matches(network_protocol_doc: dict[str, Any]) -> bool:
-        if not policy_enabled(cfg, "enable_snmp_policy") or not active_snmp_user.get("v3_username"):
-            return True
-        snmp_checks = build_snmp_readback_checks(network_protocol_doc)
-        return bool(snmp_checks) and all(item.get("matched") for item in snmp_checks)
+        return ilo_current_snmp_matches(
+            network_protocol_doc,
+            snmp_policy_enabled=bool(policy_enabled(cfg, "enable_snmp_policy")),
+            requested_username=str(active_snmp_user.get("v3_username") or ""),
+            desired_auth_protocol=desired_auth_protocol,
+            desired_priv_protocol=desired_priv_protocol,
+        )
 
     def verify_final_ilo_configuration(*, stage_name: str, step_index: int) -> dict[str, Any]:
         update_job(
@@ -12267,33 +12193,39 @@ def run_ilo_real(cfg: dict):
             "[RUNNING] Verifying final iLO state after reset.",
         )
 
-        result: dict[str, Any] = {
-            "hostname_matched": True,
-            "dns_matched": True,
-            "snmp_matched": True,
-            "errors": [],
-        }
-
         try:
             _, network_protocol = client.get_network_protocol()
         except Exception as e:
             network_protocol = {}
-            result["errors"].append(f"network_protocol={str(e).splitlines()[0]}")
+            network_protocol_error = str(e).splitlines()[0]
+        else:
+            network_protocol_error = ""
 
         try:
             iface = client.get_active_manager_interface()
         except Exception as e:
             iface = {}
-            result["errors"].append(f"active_interface={str(e).splitlines()[0]}")
+            active_interface_error = str(e).splitlines()[0]
+        else:
+            active_interface_error = ""
 
-        actual_hostname = str(
-            network_protocol.get("HostName")
-            or iface.get("HostName")
-            or ""
-        ).strip()
+        result = ilo_verify_final_state(
+            network_protocol_doc=network_protocol,
+            iface_doc=iface,
+            desired_hostname=desired_hostname,
+            shared_dns=shared_dns,
+            snmp_policy_enabled=bool(policy_enabled(cfg, "enable_snmp_policy")),
+            requested_username=str(active_snmp_user.get("v3_username") or ""),
+            desired_auth_protocol=desired_auth_protocol,
+            desired_priv_protocol=desired_priv_protocol,
+        )
+        if network_protocol_error:
+            result.setdefault("errors", []).append(f"network_protocol={network_protocol_error}")
+        if active_interface_error:
+            result.setdefault("errors", []).append(f"active_interface={active_interface_error}")
+
         hostname_expected = str(desired_hostname or "").strip()
         if hostname_expected:
-            result["hostname_matched"] = actual_hostname == hostname_expected
             update_job(
                 kit_name,
                 job,
@@ -12306,21 +12238,11 @@ def run_ilo_real(cfg: dict):
                     if result["hostname_matched"]
                     else "[FAILED] Final hostname did not match: "
                 )
-                + f"expected={hostname_expected} actual={actual_hostname or '(empty)'}",
+                + f"expected={hostname_expected} actual={result.get('actual_hostname') or '(empty)'}",
             )
 
-        actual_dns = [
-            item
-            for item in (
-                iface.get("StaticNameServers")
-                or iface.get("NameServers")
-                or []
-            )
-            if str(item or "").strip() and str(item).strip() not in {"0.0.0.0", "::"}
-        ]
-        requested_dns = [str(item).strip() for item in shared_dns if str(item).strip()]
+        requested_dns = list(result.get("requested_dns") or [])
         if requested_dns:
-            result["dns_matched"] = actual_dns[: len(requested_dns)] == requested_dns
             update_job(
                 kit_name,
                 job,
@@ -12333,13 +12255,12 @@ def run_ilo_real(cfg: dict):
                     if result["dns_matched"]
                     else "[FAILED] Final DNS did not match: "
                 )
-                + f"expected={requested_dns} actual={actual_dns}",
+                + f"expected={requested_dns} actual={result.get('actual_dns') or []}",
             )
 
-        snmp_block = network_protocol.get("SNMP") or {}
-        snmp_checks = build_snmp_readback_checks(network_protocol)
+        snmp_block = result.get("snmp_block") or {}
+        snmp_checks = list(result.get("snmp_checks") or [])
         if policy_enabled(cfg, "enable_snmp_policy") and active_snmp_user.get("v3_username"):
-            result["snmp_matched"] = bool(snmp_checks) and all(item.get("matched") for item in snmp_checks)
             update_job(
                 kit_name,
                 job,
@@ -12355,7 +12276,7 @@ def run_ilo_real(cfg: dict):
                 + f"checks={snmp_checks or '(no readable SNMP fields found)'} | raw={snmp_block}",
             )
 
-        all_matched = result["hostname_matched"] and result["dns_matched"] and result["snmp_matched"] and not result["errors"]
+        all_matched = result["matched"]
         update_job(
             kit_name,
             job,
@@ -12369,7 +12290,6 @@ def run_ilo_real(cfg: dict):
                 else "[FAILED] Post-reset verification found one or more mismatches."
             ),
         )
-        result["matched"] = all_matched
         return result
 
     def wait_for_ilo_reset_completion(expected_ip: str, *, stage_name: str, step_index: int, start_timeout: int = 90, return_timeout: int = 300, poll_interval: int = 5):

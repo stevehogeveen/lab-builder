@@ -12,6 +12,7 @@ from app.esxi.kickstart import build_kickstart, redact_kickstart_text
 from app.core.config import build_default_ip_plan
 from app.core.models import KitConfigModel
 from app.core.stage_registry import StageRegistry, CallableStagePlugin
+from app.stages.ilo.runtime import build_snmp_readback_checks, current_snmp_matches, verify_final_ilo_state
 import app.ilo as ilo_module
 import app.main as main
 from app.debug_bundle import redact_value
@@ -11302,3 +11303,85 @@ def test_get_steps_for_scope_uses_registry_titles():
     steps = main.get_steps_for_scope(main.default_config(), "ilo")
     assert steps[0] == "Preview iLO target and sign-in"
     assert "policy and account changes" in steps[2]
+
+
+def test_build_snmp_readback_checks_captures_expected_v3_fields():
+    checks = build_snmp_readback_checks(
+        {
+            "SNMP": {
+                "ProtocolEnabled": True,
+                "SNMPv3Username": "ops-user",
+                "SNMPv3AuthProtocol": "SHA",
+                "SNMPv3PrivacyProtocol": "AES",
+                "SNMPv1Enabled": False,
+                "SNMPv3Enabled": True,
+            }
+        },
+        requested_username="ops-user",
+        desired_auth_protocol="SHA",
+        desired_priv_protocol="AES",
+    )
+
+    labels = {item["label"]: item for item in checks}
+    assert labels["protocol_enabled"]["matched"] is True
+    assert labels["username"]["matched"] is True
+    assert labels["auth_protocol"]["matched"] is True
+    assert labels["privacy_protocol"]["matched"] is True
+    assert labels["SNMPv1Enabled"]["matched"] is True
+    assert labels["SNMPv3Enabled"]["matched"] is True
+
+
+def test_current_snmp_matches_requires_matching_checks_when_policy_enabled():
+    network_protocol = {
+        "SNMP": {
+            "ProtocolEnabled": True,
+            "SNMPv3Username": "ops-user",
+            "SNMPv3AuthProtocol": "SHA",
+            "SNMPv3PrivacyProtocol": "AES",
+            "SNMPv3Enabled": True,
+        }
+    }
+
+    assert current_snmp_matches(
+        network_protocol,
+        snmp_policy_enabled=True,
+        requested_username="ops-user",
+        desired_auth_protocol="SHA",
+        desired_priv_protocol="AES",
+    ) is True
+    assert current_snmp_matches(
+        network_protocol,
+        snmp_policy_enabled=True,
+        requested_username="ops-user",
+        desired_auth_protocol="SHA",
+        desired_priv_protocol="DES",
+    ) is False
+
+
+def test_verify_final_ilo_state_reports_hostname_dns_and_snmp_mismatches():
+    result = verify_final_ilo_state(
+        network_protocol_doc={
+            "HostName": "ilo-a",
+            "SNMP": {
+                "ProtocolEnabled": True,
+                "SNMPv3Username": "ops-user",
+                "SNMPv3AuthProtocol": "SHA",
+                "SNMPv3PrivacyProtocol": "AES",
+                "SNMPv3Enabled": True,
+            },
+        },
+        iface_doc={
+            "StaticNameServers": ["1.1.1.1", "8.8.8.8"],
+        },
+        desired_hostname="ilo-b",
+        shared_dns=["9.9.9.9"],
+        snmp_policy_enabled=True,
+        requested_username="ops-user",
+        desired_auth_protocol="SHA",
+        desired_priv_protocol="DES",
+    )
+
+    assert result["hostname_matched"] is False
+    assert result["dns_matched"] is False
+    assert result["snmp_matched"] is False
+    assert result["matched"] is False
