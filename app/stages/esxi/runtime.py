@@ -2,8 +2,9 @@ from __future__ import annotations
 
 import os
 import socket
+from datetime import datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 from urllib.parse import quote, urlparse
 
 import requests
@@ -270,3 +271,233 @@ def probe_tcp_port(host: str, port: int, *, timeout_seconds: float = 0.75) -> di
 def url_host_port(url: str) -> tuple[str, str]:
     parsed = urlparse(str(url or ""))
     return parsed.hostname or "", str(parsed.port or "")
+
+
+def build_esxi_runtime_status(
+    cfg: dict[str, Any],
+    review: dict[str, Any],
+    *,
+    sanitize_kit_name: Callable[[str], str],
+    load_job: Callable[[str], dict[str, Any]],
+    probe_tcp_port_fn: Callable[[str, int], dict[str, Any]],
+    client_factory: Callable[[str, str, str], Any],
+) -> dict[str, Any]:
+    enabled = os.getenv("LAB_BUILDER_LIVE_RUN_CENTER_CHECKS", "1").strip().lower() not in {"0", "false", "no", "skip", "disabled"}
+    kit_name = sanitize_kit_name(cfg.get("site", {}).get("name", "Kit-01"))
+    job = load_job(kit_name)
+    target_ip = str(review.get("management_ip") or "").strip()
+    current_media_url = str(review.get("virtual_media_url") or "")
+    last_media_url = str(job.get("esxi_iso_url") or "")
+    current_host, current_port = url_host_port(current_media_url)
+    last_host, last_port = url_host_port(last_media_url)
+    stale_media_host = bool(last_host and current_host and (last_host, last_port) != (current_host, current_port))
+    result: dict[str, Any] = {
+        "enabled": enabled,
+        "target_ip": target_ip,
+        "management_port": 443,
+        "management_reachable": False,
+        "management_probe": {},
+        "ilo_power_state": "",
+        "ilo_post_state": "",
+        "ilo_boot_progress": "",
+        "virtual_media_inserted": "",
+        "virtual_media_image": "",
+        "last_job_status": str(job.get("status") or ""),
+        "last_job_stage": str(job.get("current_stage") or ""),
+        "last_management_result": dict(job.get("esxi_management_network") or {}),
+        "last_media_url": last_media_url,
+        "current_media_url": current_media_url,
+        "stale_media_host": stale_media_host,
+        "summary": "Live runtime checks are disabled.",
+        "recommended_action": "Set LAB_BUILDER_LIVE_RUN_CENTER_CHECKS=1 to show live ESXi reachability in Run Center.",
+    }
+    if not enabled:
+        return result
+    probe = probe_tcp_port_fn(target_ip, 443)
+    result["management_probe"] = probe
+    result["management_reachable"] = bool(probe.get("reachable"))
+    if probe.get("reachable"):
+        result["summary"] = f"ESXi management is currently reachable at {target_ip}:443."
+        result["recommended_action"] = "No action required for reachability."
+        return result
+    try:
+        ilo_cfg = cfg.get("ilo", {}) or {}
+        host = str(ilo_cfg.get("current_ip") or ilo_cfg.get("host") or "").strip()
+        username = str(ilo_cfg.get("username") or "").strip()
+        password = str(ilo_cfg.get("password") or "")
+        if host and username and password:
+            client = client_factory(host, username, password)
+            system_path = client.get_system_path() if hasattr(client, "get_system_path") else "/redfish/v1/Systems/1"
+            system = client.get_system(system_path) if hasattr(client, "get_system") else client._get(system_path)
+            result["ilo_power_state"] = str(system.get("PowerState") or "")
+            result["ilo_post_state"] = str((((system.get("Oem") or {}).get("Hpe") or {}).get("PostState")) or "")
+            result["ilo_boot_progress"] = str((system.get("BootProgress") or {}).get("LastState") or "")
+            media = client.get_virtual_media() if hasattr(client, "get_virtual_media") else []
+            mounted = next((item for item in media if item.get("Inserted")), {})
+            if mounted:
+                result["virtual_media_inserted"] = "yes"
+                result["virtual_media_image"] = str(mounted.get("Image") or "")
+            else:
+                result["virtual_media_inserted"] = "no"
+    except Exception as exc:
+        result["ilo_error"] = str(exc).splitlines()[0]
+    if result.get("ilo_power_state", "").lower() == "off":
+        result["summary"] = f"ESXi management is not reachable because the server is currently Off in iLO."
+        result["recommended_action"] = "Power the server On or start an ESXi run when you are ready."
+    elif result.get("ilo_power_state"):
+        result["summary"] = (
+            f"ESXi management is not reachable. iLO reports PowerState={result.get('ilo_power_state')} "
+            f"PostState={result.get('ilo_post_state') or 'unknown'}."
+        )
+        result["recommended_action"] = "Check iLO console, management NIC mapping, and ESXi network settings."
+    else:
+        result["summary"] = f"ESXi management is not reachable at {target_ip}:443."
+        result["recommended_action"] = "Check power state, cabling/VLAN, and ESXi management IP settings."
+    if stale_media_host:
+        result["recommended_action"] += f" Last run used media host {last_host}:{last_port or 'default'}; next run will use {current_host}:{current_port or 'default'}."
+    return result
+
+
+def get_esxi_effective_values(
+    cfg: dict[str, Any],
+    *,
+    validate_esxi_hostname_fn: Callable[[str], list[str]],
+    build_esxi_password_policy_check_fn: Callable[[str], dict[str, Any]],
+    normalize_esxi_version_fn: Callable[[Any], str],
+) -> dict[str, Any]:
+    esxi_cfg = cfg.get("esxi", {}) or {}
+    try:
+        version = normalize_esxi_version_fn(esxi_cfg.get("version"))
+    except ValueError:
+        version = str(esxi_cfg.get("version") or "").strip()
+    values = {
+        "version": version,
+        "base_iso_path": str(esxi_cfg.get("base_iso_path") or "").strip(),
+        "hostname": str(esxi_cfg.get("hostname") or "").strip(),
+        "management_ip": str(esxi_cfg.get("management_ip") or cfg.get("ip_plan", {}).get("esxi") or "").strip(),
+        "subnet_mask": str(esxi_cfg.get("subnet_mask") or "").strip(),
+        "gateway": str(esxi_cfg.get("gateway") or cfg.get("ip_plan", {}).get("gateway") or "").strip(),
+        "dns_servers": [x.strip() for x in (esxi_cfg.get("dns_servers") or cfg.get("shared_network", {}).get("dns_servers") or []) if x and str(x).strip()],
+        "root_password": str(esxi_cfg.get("root_password") or ""),
+        "vlan_id": str(esxi_cfg.get("vlan_id") or "").strip(),
+        "ntp_server": str(esxi_cfg.get("ntp_server") or "").strip(),
+        "enable_ssh": bool(esxi_cfg.get("enable_ssh", True)),
+        "disable_ipv6": bool(esxi_cfg.get("disable_ipv6", True)),
+        "debug_no_reboot": bool(esxi_cfg.get("debug_no_reboot", False)),
+    }
+    missing: list[str] = []
+    if not values["hostname"]:
+        missing.append("hostname")
+    if not values["management_ip"]:
+        missing.append("management IP")
+    if not values["subnet_mask"]:
+        missing.append("subnet mask")
+    if not values["gateway"]:
+        missing.append("gateway")
+    if not values["root_password"]:
+        missing.append("root password")
+    version_errors = []
+    try:
+        normalize_esxi_version_fn(values["version"])
+    except ValueError as exc:
+        version_errors.append(str(exc))
+    hostname_errors = [] if not values["hostname"] else validate_esxi_hostname_fn(values["hostname"])
+    password_check = build_esxi_password_policy_check_fn(values["root_password"]) if values["root_password"] else {
+        "valid": False,
+        "errors": [],
+        "notes": [],
+        "class_count": 0,
+        "length": 0,
+    }
+    values["missing_fields"] = missing
+    values["hostname_valid"] = not hostname_errors
+    values["hostname_errors"] = hostname_errors
+    values["hostname_warnings"] = (
+        ["If you later join this host to Active Directory, keep the short name under 15 characters to avoid NetBIOS name changes."]
+        if values["hostname"] and len(values["hostname"].split(".", 1)[0]) >= 15
+        else []
+    )
+    values["root_password_policy_valid"] = bool(password_check.get("valid"))
+    values["root_password_errors"] = list(password_check.get("errors") or [])
+    values["root_password_notes"] = list(password_check.get("notes") or [])
+    values["root_password_class_count"] = int(password_check.get("class_count") or 0)
+    values["root_password_length"] = int(password_check.get("length") or 0)
+    values["validation_errors"] = list(version_errors) + list(hostname_errors) + list(password_check.get("errors") or [])
+    values["validation_notes"] = list(values["hostname_warnings"]) + list(password_check.get("notes") or [])
+    return values
+
+
+def build_esxi_install_review(
+    cfg: dict[str, Any],
+    *,
+    run_stamp: str | None = None,
+    include_runtime: bool = False,
+    sanitize_kit_name: Callable[[str], str],
+    resolve_ilo_control_host: Callable[[dict[str, Any]], str],
+    get_esxi_effective_values_fn: Callable[[dict[str, Any]], dict[str, Any]],
+    resolve_esxi_base_iso_path_fn: Callable[[dict[str, Any]], Path],
+    validate_esxi_base_iso_fn: Callable[[Path, str], None],
+    detect_public_base_url_details_fn: Callable[[str, str], dict[str, str]],
+    build_esxi_iso_url_fn: Callable[[dict[str, Any], Path, str], str],
+    build_esxi_install_target_review_fn: Callable[[dict[str, Any]], dict[str, Any]],
+    build_esxi_runtime_status_fn: Callable[[dict[str, Any], dict[str, Any]], dict[str, Any]],
+    datetime_cls: Any = datetime,
+    exports_dir: Path | None = None,
+) -> dict[str, Any]:
+    kit_name = sanitize_kit_name(cfg.get("site", {}).get("name", "Kit-01"))
+    login_ip = resolve_ilo_control_host(cfg)
+    stamp = (run_stamp or datetime_cls.now().strftime("%Y%m%d-%H%M%S")).strip()
+    output_name = f"esxi-{stamp}"
+    output_root = Path(exports_dir) if exports_dir is not None else Path("artifacts/exports")
+    output_iso = output_root / "esxi-isos" / kit_name / output_name / f"{output_name}.iso"
+    values = get_esxi_effective_values_fn(cfg)
+    base_iso_path = resolve_esxi_base_iso_path_fn(cfg)
+    validate_esxi_base_iso_fn(base_iso_path, values["version"])
+    runtime_public_base_url = str((cfg.get("_runtime", {}) or {}).get("public_base_url") or "")
+    try:
+        public_base_url = detect_public_base_url_details_fn(login_ip, runtime_public_base_url=runtime_public_base_url)
+    except TypeError as exc:
+        if "runtime_public_base_url" not in str(exc):
+            raise
+        public_base_url = detect_public_base_url_details_fn(login_ip)
+    iso_url = build_esxi_iso_url_fn(cfg, output_iso, login_ip)
+    review = {
+        "run_stamp": stamp,
+        "source_label": "Saved kit values from the ESXi Setup page and shared defaults",
+        "manual_defaults_label": "Manual test script defaults are not used by Run Center",
+        "version": values["version"],
+        "base_iso_path": str(base_iso_path),
+        "output_iso_path": str(output_iso),
+        "virtual_media_url": iso_url,
+        "virtual_media_base_url": public_base_url.get("url", ""),
+        "virtual_media_base_url_source": public_base_url.get("source", ""),
+        "virtual_media_base_url_host": public_base_url.get("host", ""),
+        "virtual_media_base_url_port": public_base_url.get("port", ""),
+        "virtual_media_base_url_probe_target": public_base_url.get("probe_target", ""),
+        "hostname": values["hostname"],
+        "management_ip": values["management_ip"],
+        "subnet_mask": values["subnet_mask"],
+        "gateway": values["gateway"],
+        "dns_servers": values["dns_servers"],
+        "root_password_saved": bool(values["root_password"]),
+        "vlan_id": values["vlan_id"],
+        "ntp_server": values["ntp_server"],
+        "enable_ssh": values["enable_ssh"],
+        "disable_ipv6": values["disable_ipv6"],
+        "debug_no_reboot": values["debug_no_reboot"],
+        "install_target": build_esxi_install_target_review_fn(cfg),
+        "missing_fields": list(values["missing_fields"]),
+        "validation_errors": list(values["validation_errors"]),
+        "validation_notes": list(values["validation_notes"]),
+    }
+    if include_runtime:
+        review["runtime_status"] = build_esxi_runtime_status_fn(cfg, review)
+    return review
+
+
+def esxi_password_policy_valid(
+    password: str,
+    *,
+    build_esxi_password_policy_check_fn: Callable[[str], dict[str, Any]],
+) -> bool:
+    return bool(build_esxi_password_policy_check_fn(password).get("valid"))
