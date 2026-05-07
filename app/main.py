@@ -76,13 +76,17 @@ from app.modules.ilo.routes import (
 )
 from app.modules.storage.routes import (
     approve_storage_plan_handler,
+    apply_storage_layout_handler,
     clear_storage_approval_handler,
+    download_storage_artifact_handler,
     plan_raid_layout_handler,
     probe_storage_capabilities_handler,
     read_current_storage_handler,
+    reboot_storage_now_handler,
     repair_storage_selection_handler,
     save_storage_target_handler,
     storage_page_handler,
+    view_storage_artifact_handler,
 )
 from app.stages.ilo.runtime import (
     build_snmp_readback_checks as ilo_build_snmp_readback_checks,
@@ -14571,84 +14575,30 @@ async def apply_storage_layout(
     acknowledge_apply: str | None = Form(None),
     typed_confirmation: str = Form(""),
 ):
-    cfg = load_kit_config()
-    storage_target = resolve_storage_target_host(cfg)
-    host = storage_target.get("resolved", "")
-    discovery = None
-    discovery_paths = None
-    plan = None
-    plan_paths = None
-
-    try:
-        if not host:
-            raise ValueError(storage_target.get("error"))
-        discovery, discovery_paths, plan, plan_paths = restore_storage_page_state(
-            discovery_raw_path=discovery_raw_path,
-            raid_plan_path=raid_plan_path,
-            expected_host=host,
-        )
-        if not plan_paths:
-            raise ValueError("A RAID plan artifact must be selected before apply.")
-        validate_storage_plan_drive_paths(plan, discovery)
-        validate_storage_apply_request(
-            plan,
-            apply_mode,
-            typed_confirmation,
-            acknowledged=acknowledge_apply == "on",
-        )
-        apply_paths = initialize_storage_apply_artifacts(cfg, plan, plan_paths)
-        initialize_background_job(cfg["site"]["name"], f"storage-apply:{apply_mode}")
-        start_storage_apply_background(cfg, discovery_raw_path, raid_plan_path, apply_mode, apply_paths)
-        return render_page(
-            request,
-            cfg,
-            active_page=return_page,
-            action_feedback=build_action_feedback(
-                "Storage apply started",
-                f"Applying the approved storage plan in {apply_mode.replace('_', ' ')} mode.",
-                tone="progress",
-                status_label="Running",
-                outcomes=[
-                    f"Target: {host}",
-                    f"Run folder: {apply_paths['directory']}",
-                ],
-                details=["Use the storage progress card and the live log below to follow each step."],
-                links=[{"label": "Jump to storage progress", "href": "/storage#storage-progress-card"}],
-            ),
-            storage_discovery=discovery.get("summary", {}) if discovery else None,
-            storage_export_paths=discovery_paths,
-            storage_plan=plan,
-            storage_plan_paths=plan_paths,
-            storage_apply_paths=apply_paths,
-        )
-    except Exception as e:
-        error_text = str(e).splitlines()[0]
-        repair_action = None
-        if is_storage_drive_controller_mismatch_error(error_text):
-            try:
-                db_record_known_issue_observation(
-                    cfg,
-                    fingerprint=KNOWN_ISSUE_STORAGE_DRIVE_CONTROLLER_MISMATCH,
-                    title="Storage drive/controller mismatch",
-                    description="A selected storage drive path resolved to a different controller than the saved OS or data controller selection.",
-                    message=error_text,
-                    discovery=discovery,
-                    plan=plan,
-                )
-            except Exception:
-                pass
-            repair_action = {"return_page": return_page}
-        return render_page(
-            request,
-            cfg,
-            active_page=return_page,
-            error_message=f"Storage apply failed: {error_text}",
-            storage_discovery=discovery.get("summary", {}) if discovery else None,
-            storage_export_paths=discovery_paths,
-            storage_plan=plan,
-            storage_plan_paths=plan_paths,
-            storage_repair_action=repair_action,
-        )
+    return await apply_storage_layout_handler(
+        request,
+        runtime={
+            "load_kit_config": load_kit_config,
+            "resolve_storage_target_host": resolve_storage_target_host,
+            "restore_storage_page_state": restore_storage_page_state,
+            "validate_storage_plan_drive_paths": validate_storage_plan_drive_paths,
+            "validate_storage_apply_request": validate_storage_apply_request,
+            "initialize_storage_apply_artifacts": initialize_storage_apply_artifacts,
+            "initialize_background_job": initialize_background_job,
+            "start_storage_apply_background": start_storage_apply_background,
+            "build_action_feedback": build_action_feedback,
+            "render_page": render_page,
+            "is_storage_drive_controller_mismatch_error": is_storage_drive_controller_mismatch_error,
+            "db_record_known_issue_observation": db_record_known_issue_observation,
+            "known_issue_storage_drive_controller_mismatch": KNOWN_ISSUE_STORAGE_DRIVE_CONTROLLER_MISMATCH,
+        },
+        return_page=return_page,
+        discovery_raw_path=discovery_raw_path,
+        raid_plan_path=raid_plan_path,
+        apply_mode=apply_mode,
+        acknowledge_apply=acknowledge_apply,
+        typed_confirmation=typed_confirmation,
+    )
 
 
 @app.post("/reboot-storage-now", response_class=HTMLResponse)
@@ -14659,68 +14609,24 @@ async def reboot_storage_now(
     raid_plan_path: str = Form(""),
     apply_artifact_dir: str = Form(""),
 ):
-    cfg = load_kit_config()
-    storage_target = resolve_storage_target_host(cfg)
-    host = storage_target.get("resolved", "")
-    discovery = None
-    discovery_paths = None
-    plan = None
-    plan_paths = None
-    apply_paths = None
-
-    try:
-        if not host:
-            raise ValueError(storage_target.get("error"))
-        discovery, discovery_paths, plan, plan_paths = restore_storage_page_state(
-            discovery_raw_path=discovery_raw_path,
-            raid_plan_path=raid_plan_path,
-            expected_host=host,
-        )
-        if not apply_artifact_dir:
-            raise ValueError("A storage apply run folder is required before reboot can be requested.")
-        apply_paths = storage_apply_paths_from_directory(apply_artifact_dir)
-        workflow_state = load_storage_workflow_state(apply_paths) or {}
-        apply_state = workflow_state.get("apply", {}) or {}
-        reboot_state = workflow_state.get("reboot", {}) or {}
-        if apply_state.get("status") not in {"Completed", "Staged"}:
-            raise ValueError("Reboot Now is only available after a completed storage apply run.")
-        if not apply_state.get("reboot_required"):
-            raise ValueError("Reboot Now is not available because the current storage run does not require reboot.")
-        if reboot_state.get("status") == "Running":
-            raise ValueError("A storage reboot workflow is already running for this storage run.")
-        initialize_background_job(cfg["site"]["name"], "storage-reboot")
-        start_storage_reboot_background(cfg, discovery_raw_path, raid_plan_path, apply_paths)
-        return render_page(
-            request,
-            cfg,
-            active_page=return_page,
-            action_feedback=build_action_feedback(
-                "Restart requested",
-                "Requested the server restart so the staged storage changes can continue.",
-                tone="progress",
-                status_label="Running",
-                outcomes=[f"Run folder: {apply_paths['directory']}"],
-                details=["The storage progress card will now track restart and post-reboot validation."],
-                links=[{"label": "Jump to storage progress", "href": "/storage#storage-progress-card"}],
-            ),
-            storage_discovery=discovery.get("summary", {}) if discovery else None,
-            storage_export_paths=discovery_paths,
-            storage_plan=plan,
-            storage_plan_paths=plan_paths,
-            storage_apply_paths=apply_paths,
-        )
-    except Exception as e:
-        return render_page(
-            request,
-            cfg,
-            active_page=return_page,
-            error_message=f"Storage reboot failed: {str(e).splitlines()[0]}",
-            storage_discovery=discovery.get("summary", {}) if discovery else None,
-            storage_export_paths=discovery_paths,
-            storage_plan=plan,
-            storage_plan_paths=plan_paths,
-            storage_apply_paths=apply_paths,
-        )
+    return await reboot_storage_now_handler(
+        request,
+        runtime={
+            "load_kit_config": load_kit_config,
+            "resolve_storage_target_host": resolve_storage_target_host,
+            "restore_storage_page_state": restore_storage_page_state,
+            "storage_apply_paths_from_directory": storage_apply_paths_from_directory,
+            "load_storage_workflow_state": load_storage_workflow_state,
+            "initialize_background_job": initialize_background_job,
+            "start_storage_reboot_background": start_storage_reboot_background,
+            "render_page": render_page,
+            "build_action_feedback": build_action_feedback,
+        },
+        return_page=return_page,
+        discovery_raw_path=discovery_raw_path,
+        raid_plan_path=raid_plan_path,
+        apply_artifact_dir=apply_artifact_dir,
+    )
 
 
 @app.post("/view-storage-artifact", response_class=HTMLResponse)
@@ -14734,42 +14640,23 @@ async def view_storage_artifact(
     artifact_title: str = Form(""),
     apply_artifact_dir: str = Form(""),
 ):
-    cfg = load_kit_config()
-    ilo_cfg = cfg.get("ilo", {})
-    host = (ilo_cfg.get("current_ip") or ilo_cfg.get("host") or "").strip()
-
-    try:
-        discovery, discovery_paths, plan, plan_paths = restore_storage_page_state(
-            discovery_raw_path=discovery_raw_path,
-            raid_plan_path=raid_plan_path,
-            expected_host=host,
-        )
-        apply_paths = storage_apply_paths_from_directory(apply_artifact_dir) if apply_artifact_dir else None
-        selected_artifact_path, viewer_title = storage_artifact_target(
-            artifact_kind,
-            discovery_paths,
-            plan_paths,
-            artifact_path_text=artifact_path,
-            artifact_title=artifact_title,
-        )
-        viewer_content = selected_artifact_path.read_text(encoding="utf-8")
-        if selected_artifact_path.suffix.lower() == ".json":
-            viewer_content = json.dumps(json.loads(viewer_content), indent=2, sort_keys=False)
-        return render_page(
-            request,
-            cfg,
-            active_page=return_page,
-            message=f"Viewing storage artifact {selected_artifact_path}",
-            config_view_title=viewer_title,
-            config_view_content=viewer_content,
-            storage_discovery=discovery.get("summary", {}) if discovery else None,
-            storage_export_paths=discovery_paths,
-            storage_plan=plan,
-            storage_plan_paths=plan_paths,
-            storage_apply_paths=apply_paths,
-        )
-    except Exception as e:
-        return render_page(request, cfg, active_page=return_page, error_message=f"Storage artifact view failed: {str(e).splitlines()[0]}")
+    return await view_storage_artifact_handler(
+        request,
+        runtime={
+            "load_kit_config": load_kit_config,
+            "restore_storage_page_state": restore_storage_page_state,
+            "storage_apply_paths_from_directory": storage_apply_paths_from_directory,
+            "storage_artifact_target": storage_artifact_target,
+            "render_page": render_page,
+        },
+        return_page=return_page,
+        discovery_raw_path=discovery_raw_path,
+        raid_plan_path=raid_plan_path,
+        artifact_kind=artifact_kind,
+        artifact_path=artifact_path,
+        artifact_title=artifact_title,
+        apply_artifact_dir=apply_artifact_dir,
+    )
 
 
 @app.post("/download-storage-artifact")
@@ -14782,27 +14669,20 @@ async def download_storage_artifact(
     artifact_title: str = Form(""),
     apply_artifact_dir: str = Form(""),
 ):
-    del return_page
-    del artifact_title
-    del apply_artifact_dir
-    cfg = load_kit_config()
-    ilo_cfg = cfg.get("ilo", {})
-    host = (ilo_cfg.get("current_ip") or ilo_cfg.get("host") or "").strip()
-
-    discovery, discovery_paths, plan, plan_paths = restore_storage_page_state(
+    return await download_storage_artifact_handler(
+        runtime={
+            "load_kit_config": load_kit_config,
+            "restore_storage_page_state": restore_storage_page_state,
+            "storage_artifact_target": storage_artifact_target,
+        },
+        return_page=return_page,
         discovery_raw_path=discovery_raw_path,
         raid_plan_path=raid_plan_path,
-        expected_host=host,
+        artifact_kind=artifact_kind,
+        artifact_path=artifact_path,
+        artifact_title=artifact_title,
+        apply_artifact_dir=apply_artifact_dir,
     )
-    del discovery, plan
-    selected_artifact_path, _ = storage_artifact_target(
-        artifact_kind,
-        discovery_paths,
-        plan_paths,
-        artifact_path_text=artifact_path,
-    )
-    media_type = "application/json" if selected_artifact_path.suffix.lower() == ".json" else "text/yaml; charset=utf-8"
-    return FileResponse(path=selected_artifact_path, filename=selected_artifact_path.name, media_type=media_type)
 
 
 @app.post("/view-current-kit-config", response_class=HTMLResponse)
