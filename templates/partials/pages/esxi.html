@@ -62,6 +62,85 @@
                     <span class="block text-xs text-slate-400 mt-1">Leave the installer visible on the iLO console.</span>
                 </span>
             </label>
+            <details class="card card-compact">
+                <summary class="summary-row">
+                    <span class="text-sm font-bold text-slate-300">Post-install policy</span>
+                    <span class="status progress">preview</span>
+                </summary>
+                {% set post_policy = esxi_page_review.post_config_preview.policy if esxi_page_review.post_config_preview else {} %}
+                <div class="grid grid-cols-1 md:grid-cols-2 gap-3 mt-3">
+                    <div>
+                        <label class="block text-sm font-bold text-slate-300 mb-2">Post-config transport</label>
+                        <select name="esxi_post_transport" class="input">
+                            {% set post_transport = cfg.get('esxi', {}).get('post_config_transport', 'dry_run') %}
+                            <option value="dry_run" {% if post_transport != 'ssh' %}selected{% endif %}>Dry run (plan only)</option>
+                            <option value="ssh" {% if post_transport == 'ssh' %}selected{% endif %}>Live SSH apply</option>
+                        </select>
+                    </div>
+                    <div>
+                        <label class="block text-sm font-bold text-slate-300 mb-2">Discovery start octet</label>
+                        <input type="text" name="esxi_post_discovery_start_octet" value="{{ post_policy.get('discovery_start_octet', 31) }}" class="input">
+                    </div>
+                    <div>
+                        <label class="block text-sm font-bold text-slate-300 mb-2">Discovery end octet</label>
+                        <input type="text" name="esxi_post_discovery_end_octet" value="{{ post_policy.get('discovery_end_octet', 33) }}" class="input">
+                    </div>
+                    <div>
+                        <label class="block text-sm font-bold text-slate-300 mb-2">Hostname override (optional)</label>
+                        <input type="text" name="esxi_post_hostname_override" value="{{ cfg.get('esxi', {}).get('post_config_hostname_override', '') }}" class="input">
+                    </div>
+                    <div>
+                        <label class="block text-sm font-bold text-slate-300 mb-2">Domain override (optional)</label>
+                        <input type="text" name="esxi_post_domain_override" value="{{ cfg.get('esxi', {}).get('post_config_domain_override', '') }}" class="input">
+                    </div>
+                    <div>
+                        <label class="block text-sm font-bold text-slate-300 mb-2">DNS 1 override (optional)</label>
+                        <input type="text" name="esxi_post_dns1_override" value="{{ cfg.get('esxi', {}).get('post_config_dns1_override', '') }}" class="input">
+                    </div>
+                    <div>
+                        <label class="block text-sm font-bold text-slate-300 mb-2">DNS 2 override (optional)</label>
+                        <input type="text" name="esxi_post_dns2_override" value="{{ cfg.get('esxi', {}).get('post_config_dns2_override', '') }}" class="input">
+                    </div>
+                    <div class="md:col-span-2">
+                        <label class="block text-sm font-bold text-slate-300 mb-2">WUG SNMPv3 target</label>
+                        <input type="text" name="esxi_post_wug_snmp_target" value="{{ post_policy.get('wug_snmp_target', '') }}" class="input">
+                    </div>
+                    <div class="md:col-span-2">
+                        <label class="block text-sm font-bold text-slate-300 mb-2">WUG notraps</label>
+                        <input type="text" name="esxi_post_wug_notraps" value="{{ post_policy.get('wug_notraps', '') }}" class="input">
+                    </div>
+                    <div>
+                        <label class="block text-sm font-bold text-slate-300 mb-2">WUGMon password (optional update)</label>
+                        <input type="password" name="esxi_post_secret_wug_password" value="" class="input" placeholder="Leave blank to keep saved value">
+                    </div>
+                    <div>
+                        <label class="block text-sm font-bold text-slate-300 mb-2">SNMPv3 auth password (optional update)</label>
+                        <input type="password" name="esxi_post_secret_snmpv3_auth_password" value="" class="input" placeholder="Leave blank to keep saved value">
+                    </div>
+                    <div>
+                        <label class="block text-sm font-bold text-slate-300 mb-2">SNMPv3 privacy password (optional update)</label>
+                        <input type="password" name="esxi_post_secret_snmpv3_priv_password" value="" class="input" placeholder="Leave blank to keep saved value">
+                    </div>
+                    <div>
+                        <label class="block text-sm font-bold text-slate-300 mb-2">Kit root password (optional update)</label>
+                        <input type="password" name="esxi_post_secret_kit_root_password" value="" class="input" placeholder="Leave blank to keep saved value">
+                    </div>
+                    <div>
+                        <label class="block text-sm font-bold text-slate-300 mb-2">S-VMSERVICE password (optional update)</label>
+                        <input type="password" name="esxi_post_secret_svmservice_password" value="" class="input" placeholder="Leave blank to keep saved value">
+                    </div>
+                    <div>
+                        <label class="block text-sm font-bold text-slate-300 mb-2">LocalTech password (optional update)</label>
+                        <input type="password" name="esxi_post_secret_localtech_password" value="" class="input" placeholder="Leave blank to keep saved value">
+                    </div>
+                </div>
+                <div class="space-y-2 mt-3">
+                    <label class="check card card-compact"><input type="checkbox" name="esxi_post_allow_datastore_create" {% if post_policy.get('allow_datastore_create') %}checked{% endif %}><span>Create LOCAL-S2 only when eligible disk rules are met</span></label>
+                    <label class="check card card-compact"><input type="checkbox" name="esxi_post_allow_single_mgmt_uplink_override" {% if post_policy.get('allow_single_mgmt_uplink_override') %}checked{% endif %}><span>Allow single management uplink override</span></label>
+                    <label class="check card card-compact"><input type="checkbox" name="esxi_post_configure_only_no_reboot" {% if post_policy.get('configure_only_no_reboot') %}checked{% endif %}><span>Configure-only mode (do not auto reboot)</span></label>
+                    <label class="check card card-compact"><input type="checkbox" name="esxi_post_reboot_confirmed" {% if post_policy.get('reboot_confirmed') %}checked{% endif %}><span>Reboot approved after post-config apply</span></label>
+                </div>
+            </details>
             <div>
                 <label class="block text-sm font-bold text-slate-300 mb-2">Server name</label>
                 {% if esxi_field_errors.hostname %}
@@ -169,6 +248,28 @@
                 {% endif %}
             </div>
             {% endfor %}
+        </div>
+        {% endif %}
+        {% if esxi_page_review.post_config_preview %}
+        <div class="mt-6 card card-compact">
+            <div class="font-semibold mb-2">ESXi post-install preview</div>
+            {% set post = esxi_page_review.post_config_preview %}
+            {% set postv = esxi_page_review.post_config_validation %}
+            <div class="result" style="margin-top:0;">Connection targets: {{ post.plan.connection_targets|join(', ') or 'None' }}</div>
+            <div class="result">Management uplinks: {{ post.plan.network_plan.preferred_mgmt_uplinks|join(', ') or 'None' }}</div>
+            <div class="result">Datastore rename: {{ post.plan.datastore_plan.rename_local_datastore_from or 'N/A' }} -> {{ post.plan.datastore_plan.rename_local_datastore_to }}</div>
+            <div class="result">LOCAL-S2 create allowed: {{ 'Yes' if post.plan.datastore_plan.create_local_s2_allowed else 'No' }}</div>
+            <div class="result">Hostname/domain: {{ post.plan.identity.hostname }} / {{ post.plan.identity.domain }}</div>
+            <div class="result">DNS: {{ post.plan.identity.dns_servers|join(', ') }}</div>
+            <div class="result">NTP target: {{ post.plan.ntp.server or 'Not set' }}</div>
+            <div class="result">SNMP target: {{ post.plan.snmp_wug.snmpv3.target or 'Not set' }}</div>
+            <div class="result">Reboot required after apply: {{ 'Yes' if post.plan.reboot.required_after_apply else 'No' }}</div>
+            {% if postv.errors %}
+            <div class="field-error mt-3">{{ postv.errors|join(' ') }}</div>
+            {% endif %}
+            {% if postv.warnings %}
+            <div class="text-xs text-slate-400 mt-2">{{ postv.warnings|join(' | ') }}</div>
+            {% endif %}
         </div>
         {% endif %}
     </section>

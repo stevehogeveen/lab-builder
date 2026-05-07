@@ -2,6 +2,9 @@ from __future__ import annotations
 
 import os
 import socket
+import ipaddress
+import shutil
+import subprocess
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Callable
@@ -501,3 +504,489 @@ def esxi_password_policy_valid(
     build_esxi_password_policy_check_fn: Callable[[str], dict[str, Any]],
 ) -> bool:
     return bool(build_esxi_password_policy_check_fn(password).get("valid"))
+
+
+def _default_esxi_post_config_policy() -> dict[str, Any]:
+    return {
+        "enabled": True,
+        "discovery_start_octet": 31,
+        "discovery_end_octet": 33,
+        "allow_discovery_range": True,
+        "allow_single_mgmt_uplink_override": False,
+        "allow_vm_network_recreate": False,
+        "allow_role_privilege_prune": False,
+        "allow_datastore_create": False,
+        "configure_only_no_reboot": True,
+        "reboot_confirmed": False,
+        "wug_snmp_target": "10.10.10.10@162/wutvpmonitor/priv/trap",
+        "wug_notraps": "tcp,udp,vmkernel,hostd,vpxa",
+        "wug_account_username": "WUGMon",
+        "virtual_managers_role_name": "VirtualManagers",
+    }
+
+
+def ensure_esxi_post_config_policy(cfg: dict[str, Any]) -> dict[str, Any]:
+    esxi_cfg = cfg.setdefault("esxi", {})
+    policy = esxi_cfg.setdefault("post_config_policy", {})
+    defaults = _default_esxi_post_config_policy()
+    for key, value in defaults.items():
+        policy.setdefault(key, value)
+    return policy
+
+
+def ensure_esxi_post_config_secrets(cfg: dict[str, Any]) -> dict[str, Any]:
+    esxi_cfg = cfg.setdefault("esxi", {})
+    secrets = esxi_cfg.setdefault("post_config_secrets", {})
+    secrets.setdefault("wug_password", "")
+    secrets.setdefault("snmpv3_auth_password", "")
+    secrets.setdefault("snmpv3_priv_password", "")
+    secrets.setdefault("kit_root_password", "")
+    secrets.setdefault("svmservice_password", "")
+    secrets.setdefault("localtech_password", "")
+    return secrets
+
+
+def _subnet_host_from_offset(subnet_cidr: str, offset: int) -> str:
+    network = ipaddress.ip_network(str(subnet_cidr), strict=False)
+    host_int = int(network.network_address) + int(offset)
+    return str(ipaddress.ip_address(host_int))
+
+
+def build_esxi_post_config_preview(cfg: dict[str, Any]) -> dict[str, Any]:
+    policy = ensure_esxi_post_config_policy(cfg)
+    secrets = ensure_esxi_post_config_secrets(cfg)
+    esxi_cfg = cfg.get("esxi", {}) or {}
+    inv = dict(esxi_cfg.get("post_config_inventory") or {})
+    kit_id = str((cfg.get("site") or {}).get("name") or "KIT").strip().replace(" ", "-")
+    support_unit = str((cfg.get("site") or {}).get("support_unit") or "SUPPORT").strip().replace(" ", "-")
+    host_bay = str((cfg.get("site") or {}).get("host_bay") or "1").strip()
+    mgmt_ip = str(esxi_cfg.get("management_ip") or cfg.get("ip_plan", {}).get("esxi") or "").strip()
+    subnet = str((cfg.get("shared_network") or {}).get("subnet") or "").strip()
+    target_hosts: list[str] = []
+    if mgmt_ip:
+        target_hosts.append(mgmt_ip)
+    if policy.get("allow_discovery_range") and subnet:
+        start = int(policy.get("discovery_start_octet") or 31)
+        end = int(policy.get("discovery_end_octet") or 33)
+        lo, hi = (start, end) if start <= end else (end, start)
+        for octet in range(lo, hi + 1):
+            try:
+                host = _subnet_host_from_offset(subnet, octet)
+                if host not in target_hosts:
+                    target_hosts.append(host)
+            except Exception:
+                continue
+
+    hostname = f"{support_unit}-{kit_id}-VP0000{host_bay}"
+    domain = f"{kit_id}.forces.mil.ca"
+    dns1 = _subnet_host_from_offset(subnet, 61) if subnet else ""
+    dns2 = str((cfg.get("ip_plan") or {}).get("domestic_dc_ip") or "")
+
+    datastores = list(inv.get("datastores") or [])
+    disks = list(inv.get("scsi_disks") or [])
+    nics = list(inv.get("physical_nics") or [])
+    one_gig_nics = [item for item in nics if str(item.get("speed_mbps") or "") in {"1000", "1000.0"}]
+    nic_uplinks = [str(item.get("name") or "") for item in one_gig_nics if str(item.get("name") or "").strip()]
+    if len(nic_uplinks) < 2:
+        nic_uplinks = [str(item.get("name") or "") for item in nics if str(item.get("name") or "").strip()][:2]
+
+    large_unused_disks = [
+        item
+        for item in disks
+        if float(item.get("size_gb") or 0) > 1500 and not bool(item.get("in_use"))
+    ]
+    local_small_ds = next(
+        (
+            item
+            for item in datastores
+            if float(item.get("capacity_gb") or 0) < 500 and str(item.get("name") or "").strip()
+        ),
+        {},
+    )
+    rename_target = f"LOCAL-S{host_bay}"
+    create_local_s2_allowed = bool(policy.get("allow_datastore_create")) and len(datastores) <= 1 and bool(large_unused_disks)
+
+    plan = {
+        "connection_targets": target_hosts,
+        "ceip_opt_in_value": 2,
+        "datastore_plan": {
+            "existing_datastores": datastores,
+            "scsi_disks": disks,
+            "rename_local_datastore_from": str(local_small_ds.get("name") or ""),
+            "rename_local_datastore_to": rename_target,
+            "create_local_s2_allowed": create_local_s2_allowed,
+            "create_local_s2_reason": (
+                "Enabled and one eligible >1500GB unused disk found."
+                if create_local_s2_allowed
+                else "Requires explicit allow_datastore_create with a single-datastore baseline and eligible disk."
+            ),
+            "create_local_s2_disk": (large_unused_disks[0] if large_unused_disks else {}),
+        },
+        "network_plan": {
+            "detected_nics": nics,
+            "preferred_mgmt_uplinks": nic_uplinks,
+            "min_mgmt_uplinks_required": 2,
+            "single_uplink_override_enabled": bool(policy.get("allow_single_mgmt_uplink_override")),
+            "vm_network_recreate_enabled": bool(policy.get("allow_vm_network_recreate")),
+        },
+        "advanced_settings": {
+            "UserVars.HostClientCEIPOptIn": 2,
+            "Config.HostAgent.plugins.hostsvc.esxAdminsGroup": f"{kit_id}VirtualAdmins",
+            "Syslog.global.logDir": f"[{rename_target}] /SystemLog",
+            "UserVars.HostClientWelcomeMessage": "Access to this computer system is restricted to AUTHORIZED PERSONNEL. Acces a ce systeme d'ordinateurs est limite au PERSONNEL AUTORISE.",
+        },
+        "ntp": {
+            "server": str(esxi_cfg.get("ntp_server") or cfg.get("ip_plan", {}).get("gateway") or ""),
+            "service": "ntpd",
+            "enable": True,
+            "start": True,
+            "current": dict(inv.get("ntp") or {}),
+        },
+        "identity": {
+            "hostname": str(esxi_cfg.get("post_config_hostname_override") or hostname),
+            "domain": str(esxi_cfg.get("post_config_domain_override") or domain),
+            "dns_servers": [
+                str(esxi_cfg.get("post_config_dns1_override") or dns1),
+                str(esxi_cfg.get("post_config_dns2_override") or dns2),
+            ],
+        },
+        "snmp_wug": {
+            "account_username": str(esxi_cfg.get("wug_account_username") or policy.get("wug_account_username") or "WUGMon"),
+            "account_password_present": bool(secrets.get("wug_password")),
+            "snmpv3": {
+                "loglevel": "warning",
+                "auth_protocol": "SHA1",
+                "priv_protocol": "AES128",
+                "target": str(esxi_cfg.get("wug_snmp_target") or policy.get("wug_snmp_target") or ""),
+                "syslocation": kit_id,
+                "notraps": str(esxi_cfg.get("wug_notraps") or policy.get("wug_notraps") or ""),
+                "enable": True,
+                "auth_password_present": bool(secrets.get("snmpv3_auth_password")),
+                "priv_password_present": bool(secrets.get("snmpv3_priv_password")),
+            },
+        },
+        "roles_accounts": {
+            "role_name": str(policy.get("virtual_managers_role_name") or "VirtualManagers"),
+            "accounts": [
+                {"username": f"{kit_id}root", "role": "Admin", "password_present": bool(secrets.get("kit_root_password"))},
+                {"username": "S-VMSERVICE", "role": "Admin", "password_present": bool(secrets.get("svmservice_password"))},
+                {"username": "LocalTech", "role": str(policy.get("virtual_managers_role_name") or "VirtualManagers"), "password_present": bool(secrets.get("localtech_password"))},
+            ],
+            "safe_privilege_prune_enabled": bool(policy.get("allow_role_privilege_prune")),
+        },
+        "reboot": {
+            "required_after_apply": True,
+            "configure_only_no_reboot": bool(policy.get("configure_only_no_reboot")),
+            "reboot_confirmed": bool(policy.get("reboot_confirmed")),
+        },
+    }
+    warnings: list[str] = []
+    if len(nic_uplinks) < 2 and not bool(policy.get("allow_single_mgmt_uplink_override")):
+        warnings.append("Less than two management uplinks were selected; set override only when hardware constraints require it.")
+    if len(datastores) > 1:
+        warnings.append("Multiple datastores already exist; automatic LOCAL-S2 creation remains blocked.")
+    if not mgmt_ip:
+        warnings.append("Management IP is not saved yet; discovery range fallback will be used.")
+    return {
+        "enabled": bool(policy.get("enabled")),
+        "policy": dict(policy),
+        "inventory": inv,
+        "plan": plan,
+        "warnings": warnings,
+    }
+
+
+def validate_esxi_post_config_preview(preview: dict[str, Any]) -> dict[str, Any]:
+    errors: list[str] = []
+    warnings: list[str] = list(preview.get("warnings") or [])
+    plan = dict(preview.get("plan") or {})
+    targets = list(plan.get("connection_targets") or [])
+    if not targets:
+        errors.append("No ESXi connection target could be resolved from management IP or discovery range.")
+    ntp_server = str(((plan.get("ntp") or {}).get("server") or "")).strip()
+    if not ntp_server:
+        errors.append("NTP server is empty. Set ESXi NTP or kit gateway.")
+    dns_servers = [str(item or "").strip() for item in list((plan.get("identity") or {}).get("dns_servers") or [])]
+    if not dns_servers or not dns_servers[0]:
+        errors.append("Primary DNS server is empty.")
+    network_plan = dict(plan.get("network_plan") or {})
+    uplinks = [item for item in list(network_plan.get("preferred_mgmt_uplinks") or []) if str(item).strip()]
+    if len(uplinks) < 2 and not bool(network_plan.get("single_uplink_override_enabled")):
+        errors.append("At least two management uplinks are required unless the single-uplink override is enabled.")
+    ds_plan = dict(plan.get("datastore_plan") or {})
+    if bool(ds_plan.get("create_local_s2_allowed")) and not ds_plan.get("create_local_s2_disk"):
+        errors.append("LOCAL-S2 creation is enabled but no eligible >1500GB unused disk was found.")
+    snmp_wug = dict(plan.get("snmp_wug") or {})
+    snmpv3 = dict(snmp_wug.get("snmpv3") or {})
+    if not bool(snmp_wug.get("account_password_present")):
+        warnings.append("WUGMon password is not set in ESXi post-config secrets.")
+    if not bool(snmpv3.get("auth_password_present")):
+        warnings.append("SNMPv3 auth password is not set in ESXi post-config secrets.")
+    if not bool(snmpv3.get("priv_password_present")):
+        warnings.append("SNMPv3 privacy password is not set in ESXi post-config secrets.")
+    return {"ok": not errors, "errors": errors, "warnings": warnings}
+
+
+def build_esxi_post_config_actions(preview: dict[str, Any]) -> list[dict[str, Any]]:
+    plan = dict(preview.get("plan") or {})
+    ds_plan = dict(plan.get("datastore_plan") or {})
+    network_plan = dict(plan.get("network_plan") or {})
+    identity = dict(plan.get("identity") or {})
+    ntp = dict(plan.get("ntp") or {})
+    advanced = dict(plan.get("advanced_settings") or {})
+    snmp = dict((plan.get("snmp_wug") or {}).get("snmpv3") or {})
+    roles_accounts = dict(plan.get("roles_accounts") or {})
+    actions: list[dict[str, Any]] = [
+        {"id": "discover_connection", "label": "Connect/discover ESXi host", "desired": {"targets": list(plan.get("connection_targets") or [])}, "destructive": False},
+        {"id": "ceip", "label": "Disable CEIP", "desired": {"UserVars.HostClientCEIPOptIn": 2}, "destructive": False},
+        {"id": "datastore_rename", "label": "Rename local datastore", "desired": {"from": ds_plan.get("rename_local_datastore_from"), "to": ds_plan.get("rename_local_datastore_to")}, "destructive": False},
+        {"id": "datastore_create_local_s2", "label": "Create LOCAL-S2 datastore", "desired": {"allowed": bool(ds_plan.get("create_local_s2_allowed")), "disk": dict(ds_plan.get("create_local_s2_disk") or {})}, "destructive": True},
+        {"id": "vswitch0_uplinks", "label": "Attach management uplinks to vSwitch0", "desired": {"uplinks": list(network_plan.get("preferred_mgmt_uplinks") or [])}, "destructive": False},
+        {"id": "vm_network_pg", "label": "Ensure VM Network port group", "desired": {"recreate_allowed": bool(network_plan.get("vm_network_recreate_enabled"))}, "destructive": False},
+        {"id": "identity_dns", "label": "Apply hostname/domain/DNS", "desired": {"hostname": identity.get("hostname"), "domain": identity.get("domain"), "dns_servers": list(identity.get("dns_servers") or [])}, "destructive": False},
+        {"id": "ntp", "label": "Apply NTP and start ntpd", "desired": {"server": ntp.get("server"), "service": "ntpd"}, "destructive": False},
+        {"id": "advanced_settings", "label": "Apply advanced settings", "desired": dict(advanced), "destructive": False},
+        {"id": "snmp_wug", "label": "Apply WUG/SNMP policy", "desired": dict(snmp), "destructive": False},
+        {"id": "roles_accounts", "label": "Apply roles/accounts policy", "desired": dict(roles_accounts), "destructive": False},
+    ]
+    return actions
+
+
+def execute_esxi_post_config_actions(
+    cfg: dict[str, Any],
+    *,
+    preview: dict[str, Any],
+    validation: dict[str, Any],
+    run_action_fn: Callable[[str, dict[str, Any]], dict[str, Any]] | None = None,
+) -> dict[str, Any]:
+    policy = dict((preview.get("policy") or {}))
+    actions = build_esxi_post_config_actions(preview)
+    results: list[dict[str, Any]] = []
+    warnings = list(validation.get("warnings") or [])
+    errors = list(validation.get("errors") or [])
+    mode = "dry_run" if run_action_fn is None else str((cfg.get("esxi") or {}).get("post_config_transport") or "live")
+    if not validation.get("ok"):
+        return {
+            "ok": False,
+            "mode": mode,
+            "actions": actions,
+            "results": [],
+            "warnings": warnings,
+            "errors": errors,
+            "reboot_required": False,
+            "reboot_performed": False,
+        }
+    for action in actions:
+        action_id = str(action.get("id") or "")
+        if action_id == "datastore_create_local_s2" and not bool((action.get("desired") or {}).get("allowed")):
+            results.append({"id": action_id, "status": "skipped", "reason": "creation_not_allowed_or_not_eligible"})
+            continue
+        if run_action_fn is None:
+            results.append({"id": action_id, "status": "planned", "mode": "dry_run"})
+            continue
+        try:
+            action_result = dict(run_action_fn(action_id, dict(action.get("desired") or {})) or {})
+            results.append({"id": action_id, "status": str(action_result.get("status") or "applied"), "details": action_result})
+        except Exception as exc:
+            results.append({"id": action_id, "status": "failed", "error": str(exc).splitlines()[0]})
+            errors.append(f"{action_id}: {str(exc).splitlines()[0]}")
+    reboot_required = True
+    reboot_performed = False
+    if reboot_required:
+        if bool(policy.get("configure_only_no_reboot")):
+            warnings.append("Configure-only mode is enabled; reboot was intentionally skipped.")
+        elif bool(policy.get("reboot_confirmed")):
+            reboot_performed = True
+        else:
+            warnings.append("Reboot required but not confirmed; set reboot confirmation before restart.")
+    return {
+        "ok": not errors,
+        "mode": mode,
+        "actions": actions,
+        "results": results,
+        "warnings": warnings,
+        "errors": errors,
+        "reboot_required": reboot_required,
+        "reboot_performed": reboot_performed,
+    }
+
+
+def _shell_quote(value: str) -> str:
+    return "'" + str(value).replace("'", "'\"'\"'") + "'"
+
+
+def build_esxi_post_config_ssh_run_action(
+    cfg: dict[str, Any],
+    preview: dict[str, Any],
+    *,
+    command_runner: Callable[[list[str]], tuple[int, str, str]] | None = None,
+) -> Callable[[str, dict[str, Any]], dict[str, Any]]:
+    esxi_cfg = cfg.get("esxi", {}) or {}
+    secrets = ensure_esxi_post_config_secrets(cfg)
+    host = str(esxi_cfg.get("management_ip") or cfg.get("ip_plan", {}).get("esxi") or "").strip()
+    if not host:
+        raise RuntimeError("ESXi SSH transport cannot start because management IP is empty.")
+    username = "root"
+    password = str(esxi_cfg.get("root_password") or "").strip()
+    if not password:
+        raise RuntimeError("ESXi SSH transport cannot start because root password is empty.")
+    if command_runner is None:
+        use_sshpass = shutil.which("sshpass")
+        if not use_sshpass:
+            raise RuntimeError(
+                "ESXi live SSH transport requires sshpass for password-based root login. "
+                "Install sshpass or configure key/agent access and provide a custom command runner."
+            )
+
+        def _default_runner(cmd: list[str]) -> tuple[int, str, str]:
+            proc = subprocess.run(cmd, capture_output=True, text=True, check=False)
+            return proc.returncode, str(proc.stdout or ""), str(proc.stderr or "")
+
+        command_runner = _default_runner
+
+    plan = dict(preview.get("plan") or {})
+    identity = dict(plan.get("identity") or {})
+    ntp = dict(plan.get("ntp") or {})
+    advanced = dict(plan.get("advanced_settings") or {})
+    ds_plan = dict(plan.get("datastore_plan") or {})
+    network_plan = dict(plan.get("network_plan") or {})
+    snmp_wug = dict(plan.get("snmp_wug") or {})
+    snmpv3 = dict(snmp_wug.get("snmpv3") or {})
+    roles_accounts = dict(plan.get("roles_accounts") or {})
+
+    def run_ssh(remote_command: str) -> dict[str, Any]:
+        cmd = [
+            "sshpass",
+            "-p",
+            password,
+            "ssh",
+            "-o",
+            "StrictHostKeyChecking=no",
+            "-o",
+            "UserKnownHostsFile=/dev/null",
+            f"{username}@{host}",
+            remote_command,
+        ]
+        code, out, err = command_runner(cmd)
+        if code != 0:
+            raise RuntimeError((err or out or f"ssh command failed ({code})").splitlines()[0])
+        return {"status": "applied", "command": remote_command, "stdout": out.splitlines()[-1] if out else ""}
+
+    def runner(action_id: str, desired: dict[str, Any]) -> dict[str, Any]:
+        if action_id == "discover_connection":
+            return run_ssh("vmware -vl")
+        if action_id == "ceip":
+            return run_ssh("esxcli system settings advanced set -o /UserVars/HostClientCEIPOptIn -i 2")
+        if action_id == "datastore_rename":
+            src = str(desired.get("from") or "").strip()
+            dst = str(desired.get("to") or "").strip()
+            if not src or not dst:
+                return {"status": "skipped", "reason": "missing_datastore_names"}
+            return run_ssh(f"esxcli storage filesystem rename -l {_shell_quote(src)} -n {_shell_quote(dst)}")
+        if action_id == "datastore_create_local_s2":
+            if not bool(desired.get("allowed")):
+                return {"status": "skipped", "reason": "not_allowed"}
+            disk = dict(desired.get("disk") or {})
+            disk_name = str(disk.get('name') or "").strip()
+            if not disk_name:
+                return {"status": "skipped", "reason": "missing_disk_name"}
+            return run_ssh(f"vmkfstools -C vmfs6 -S LOCAL-S2 {_shell_quote('/vmfs/devices/disks/' + disk_name)}")
+        if action_id == "vswitch0_uplinks":
+            uplinks = [str(item).strip() for item in list(desired.get("uplinks") or []) if str(item).strip()]
+            if not uplinks:
+                return {"status": "skipped", "reason": "no_uplinks"}
+            commands = [f"esxcli network vswitch standard uplink add -u {_shell_quote(u)} -v vSwitch0 || true" for u in uplinks]
+            commands.append("esxcli network ip interface set -i vmk0 -m true")
+            return run_ssh(" ; ".join(commands))
+        if action_id == "vm_network_pg":
+            return run_ssh("esxcli network vswitch standard portgroup add -p 'VM Network' -v vSwitch0 || true")
+        if action_id == "identity_dns":
+            hostname = str(identity.get("hostname") or "").strip()
+            domain = str(identity.get("domain") or "").strip()
+            dns_servers = [str(item).strip() for item in list(identity.get("dns_servers") or []) if str(item).strip()]
+            cmd = []
+            if hostname:
+                cmd.append(f"esxcli system hostname set --host={_shell_quote(hostname)}")
+            if domain:
+                cmd.append(f"esxcli system hostname set --domain={_shell_quote(domain)}")
+            if dns_servers:
+                cmd.append(f"esxcli network ip dns server add --server={_shell_quote(dns_servers[0])} || true")
+                if len(dns_servers) > 1:
+                    cmd.append(f"esxcli network ip dns server add --server={_shell_quote(dns_servers[1])} || true")
+            if not cmd:
+                return {"status": "skipped", "reason": "no_identity_changes"}
+            return run_ssh(" ; ".join(cmd))
+        if action_id == "ntp":
+            server = str(ntp.get("server") or "").strip()
+            if not server:
+                return {"status": "skipped", "reason": "no_ntp_server"}
+            return run_ssh(
+                f"esxcli system ntp set --server={_shell_quote(server)} ; "
+                "esxcli system ntp set --enabled=true ; "
+                "esxcli network firewall ruleset set -e true -r ntpClient ; "
+                "esxcli system ntp get"
+            )
+        if action_id == "advanced_settings":
+            admins_group = str(advanced.get("Config.HostAgent.plugins.hostsvc.esxAdminsGroup") or "").strip()
+            log_dir = str(advanced.get("Syslog.global.logDir") or "").strip()
+            welcome = str(advanced.get("UserVars.HostClientWelcomeMessage") or "").strip()
+            cmd = [
+                "esxcli system settings advanced set -o /UserVars/HostClientCEIPOptIn -i 2",
+            ]
+            if admins_group:
+                cmd.append(f"esxcli system settings advanced set -o /Config/HostAgent/plugins/hostsvc/esxAdminsGroup -s {_shell_quote(admins_group)}")
+            if log_dir:
+                cmd.append(f"esxcli system syslog config set --logdir={_shell_quote(log_dir)}")
+            if welcome:
+                cmd.append(f"esxcli system settings advanced set -o /UserVars/HostClientWelcomeMessage -s {_shell_quote(welcome)}")
+            return run_ssh(" ; ".join(cmd))
+        if action_id == "snmp_wug":
+            wug_user = str(snmp_wug.get("account_username") or "WUGMon").strip()
+            wug_pwd = str(secrets.get("wug_password") or "")
+            auth_pwd = str(secrets.get("snmpv3_auth_password") or "")
+            priv_pwd = str(secrets.get("snmpv3_priv_password") or "")
+            target = str(snmpv3.get("target") or "").strip()
+            notraps = str(snmpv3.get("notraps") or "").strip()
+            syslocation = str(snmpv3.get("syslocation") or "").strip()
+            if not (wug_pwd and auth_pwd and priv_pwd):
+                return {"status": "skipped", "reason": "missing_snmp_or_wug_secrets"}
+            cmd = [
+                f"esxcli system account add -i {_shell_quote(wug_user)} -p {_shell_quote(wug_pwd)} -c {_shell_quote(wug_pwd)} || true",
+                f"esxcli system permission set -i {_shell_quote(wug_user)} -r ReadOnly || true",
+                "esxcli system snmp set --loglevel warning --authentication SHA1 --privacy AES128",
+            ]
+            if target:
+                cmd.append(f"esxcli system snmp set --targets {_shell_quote(target)}")
+            if notraps:
+                cmd.append(f"esxcli system snmp set --notraps {_shell_quote(notraps)}")
+            if syslocation:
+                cmd.append(f"esxcli system snmp set --syslocation {_shell_quote(syslocation)}")
+            cmd.append(f"esxcli system snmp hash --auth-hash {_shell_quote(auth_pwd)} --priv-hash {_shell_quote(priv_pwd)}")
+            cmd.append("esxcli system snmp set --enable true")
+            cmd.append("esxcli system snmp get")
+            return run_ssh(" ; ".join(cmd))
+        if action_id == "roles_accounts":
+            role_name = str(roles_accounts.get("role_name") or "VirtualManagers").strip()
+            accounts = list(roles_accounts.get("accounts") or [])
+            kit_root_pwd = str(secrets.get("kit_root_password") or "")
+            svm_pwd = str(secrets.get("svmservice_password") or "")
+            localtech_pwd = str(secrets.get("localtech_password") or "")
+            if not role_name:
+                return {"status": "skipped", "reason": "missing_role_name"}
+            cmd = [f"vim-cmd vimsvc/auth/roles | grep -q {_shell_quote(role_name)} || vim-cmd vimsvc/auth/role_add {_shell_quote(role_name)}"]
+            for acct in accounts:
+                user = str(acct.get("username") or "").strip()
+                role = str(acct.get("role") or "").strip()
+                if not user or not role:
+                    continue
+                if user.endswith("root") and kit_root_pwd:
+                    cmd.append(f"esxcli system account add -i {_shell_quote(user)} -p {_shell_quote(kit_root_pwd)} -c {_shell_quote(kit_root_pwd)} || true")
+                elif user == "S-VMSERVICE" and svm_pwd:
+                    cmd.append(f"esxcli system account add -i {_shell_quote(user)} -p {_shell_quote(svm_pwd)} -c {_shell_quote(svm_pwd)} || true")
+                elif user == "LocalTech" and localtech_pwd:
+                    cmd.append(f"esxcli system account add -i {_shell_quote(user)} -p {_shell_quote(localtech_pwd)} -c {_shell_quote(localtech_pwd)} || true")
+                cmd.append(f"vim-cmd vimsvc/auth/entity_permission_add vim.Folder:ha-folder-root {_shell_quote(user)} false {_shell_quote(role)} true || true")
+            return run_ssh(" ; ".join(cmd))
+        raise RuntimeError(f"Unsupported ESXi post-config action: {action_id}")
+
+    return runner

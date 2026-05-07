@@ -65,6 +65,12 @@ class EsxiConfigModel(BaseModel):
     dns_servers: list[str] = Field(default_factory=list)
     root_password: str = ""
     debug_no_reboot: bool = False
+    post_config_policy: dict[str, Any] = Field(default_factory=dict)
+    post_config_inventory: dict[str, Any] = Field(default_factory=dict)
+    post_config_hostname_override: str = ""
+    post_config_domain_override: str = ""
+    post_config_dns1_override: str = ""
+    post_config_dns2_override: str = ""
 
 
 class StoragePlanModel(BaseModel):

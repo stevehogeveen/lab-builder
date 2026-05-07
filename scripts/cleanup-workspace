@@ -1,0 +1,15 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+cd "$(dirname "$0")/.."
+
+echo "Cleaning generated workspace content..."
+
+# Keep tracked examples while removing volatile runtime exports.
+rm -rf artifacts/exports/*
+rm -rf .pytest_cache
+
+# Remove Python bytecode caches anywhere in the repo.
+find . -type d -name "__pycache__" -prune -exec rm -rf {} +
+
+echo "Cleanup complete."

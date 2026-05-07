@@ -10946,6 +10946,187 @@ def test_save_esxi_settings_rejects_invalid_hostname_and_password(client):
     assert saved["esxi"]["root_password"] == "Valid1Pass!"
 
 
+def test_esxi_post_config_preview_builds_targets_and_templates():
+    cfg = main.default_config()
+    cfg["site"]["name"] = "Kit-77"
+    cfg.setdefault("site", {})["support_unit"] = "NSWAN"
+    cfg.setdefault("site", {})["host_bay"] = "2"
+    cfg["shared_network"]["subnet"] = "10.10.8.0/24"
+    cfg["esxi"]["management_ip"] = "10.10.8.10"
+    cfg["ip_plan"]["domestic_dc_ip"] = "10.10.8.200"
+    cfg["esxi"]["post_config_inventory"] = {
+        "datastores": [{"name": "datastore1", "capacity_gb": 200}],
+        "scsi_disks": [{"name": "naa.5001", "size_gb": 2000, "in_use": False}],
+        "physical_nics": [{"name": "vmnic0", "speed_mbps": 1000}, {"name": "vmnic1", "speed_mbps": 1000}],
+    }
+    main.ensure_esxi_post_config_policy(cfg)["allow_datastore_create"] = True
+
+    preview = main.build_esxi_post_config_preview(cfg)
+
+    assert preview["plan"]["connection_targets"][0] == "10.10.8.10"
+    assert "10.10.8.31" in preview["plan"]["connection_targets"]
+    assert preview["plan"]["identity"]["hostname"] == "NSWAN-Kit-77-VP00002"
+    assert preview["plan"]["identity"]["domain"] == "Kit-77.forces.mil.ca"
+    assert preview["plan"]["datastore_plan"]["create_local_s2_allowed"] is True
+
+
+def test_esxi_post_config_validation_flags_missing_ntp_and_uplink_policy():
+    preview = {
+        "warnings": [],
+        "plan": {
+            "connection_targets": ["10.10.8.10"],
+            "ntp": {"server": ""},
+            "identity": {"dns_servers": ["", "10.10.8.200"]},
+            "network_plan": {"preferred_mgmt_uplinks": ["vmnic0"], "single_uplink_override_enabled": False},
+            "datastore_plan": {"create_local_s2_allowed": False},
+        },
+    }
+    result = main.validate_esxi_post_config_preview(preview)
+    assert result["ok"] is False
+    assert any("NTP server is empty" in item for item in result["errors"])
+    assert any("Primary DNS server is empty" in item for item in result["errors"])
+    assert any("At least two management uplinks are required" in item for item in result["errors"])
+
+
+def test_save_esxi_settings_persists_post_config_policy_fields(client):
+    cfg = main.default_config()
+    cfg["site"]["name"] = "ESXi Post Policy Kit"
+    main.save_kit_config(cfg)
+
+    response = client.post(
+        "/save-esxi-settings",
+        data={
+            "return_page": "esxi",
+            "esxi_hostname": "esxi-post",
+            "esxi_root_password": "Valid1Pass!",
+            "esxi_post_discovery_start_octet": "41",
+            "esxi_post_discovery_end_octet": "44",
+            "esxi_post_allow_datastore_create": "on",
+            "esxi_post_allow_single_mgmt_uplink_override": "on",
+            "esxi_post_wug_snmp_target": "10.0.0.5@162/wug/priv/trap",
+            "esxi_post_hostname_override": "manual-host",
+        },
+    )
+
+    assert response.status_code == 200
+    saved = main.load_kit_config("ESXi-Post-Policy-Kit")
+    policy = saved["esxi"]["post_config_policy"]
+    assert policy["discovery_start_octet"] == 41
+    assert policy["discovery_end_octet"] == 44
+    assert policy["allow_datastore_create"] is True
+    assert policy["allow_single_mgmt_uplink_override"] is True
+    assert policy["wug_snmp_target"] == "10.0.0.5@162/wug/priv/trap"
+    assert saved["esxi"]["post_config_hostname_override"] == "manual-host"
+
+
+def test_esxi_post_config_executor_dry_run_marks_actions_planned():
+    cfg = main.default_config()
+    cfg["site"]["name"] = "Kit-99"
+    cfg["shared_network"]["subnet"] = "10.10.8.0/24"
+    cfg["esxi"]["management_ip"] = "10.10.8.10"
+    cfg["esxi"]["post_config_inventory"] = {
+        "datastores": [{"name": "datastore1", "capacity_gb": 200}],
+        "scsi_disks": [{"name": "naa.5001", "size_gb": 1800, "in_use": False}],
+        "physical_nics": [{"name": "vmnic0", "speed_mbps": 1000}, {"name": "vmnic1", "speed_mbps": 1000}],
+    }
+    main.ensure_esxi_post_config_policy(cfg)["allow_datastore_create"] = True
+    preview = main.build_esxi_post_config_preview(cfg)
+    validation = main.validate_esxi_post_config_preview(preview)
+
+    result = main.execute_esxi_post_config_actions(cfg, preview=preview, validation=validation, run_action_fn=None)
+
+    assert result["ok"] is True
+    assert result["mode"] == "dry_run"
+    assert result["reboot_required"] is True
+    assert all(item["status"] in {"planned", "skipped"} for item in result["results"])
+
+
+def test_esxi_post_config_executor_blocks_on_validation_errors():
+    cfg = main.default_config()
+    preview = {"policy": {}, "plan": {}, "warnings": []}
+    validation = {"ok": False, "errors": ["missing values"], "warnings": []}
+
+    result = main.execute_esxi_post_config_actions(cfg, preview=preview, validation=validation, run_action_fn=None)
+
+    assert result["ok"] is False
+    assert result["results"] == []
+    assert result["errors"] == ["missing values"]
+
+
+def test_save_esxi_settings_persists_reboot_confirmed_flag(client):
+    cfg = main.default_config()
+    cfg["site"]["name"] = "ESXi Reboot Confirm Kit"
+    main.save_kit_config(cfg)
+
+    response = client.post(
+        "/save-esxi-settings",
+        data={
+            "return_page": "esxi",
+            "esxi_hostname": "esxi-reboot",
+            "esxi_root_password": "Valid1Pass!",
+            "esxi_post_reboot_confirmed": "on",
+        },
+    )
+
+    assert response.status_code == 200
+    saved = main.load_kit_config("ESXi-Reboot-Confirm-Kit")
+    assert saved["esxi"]["post_config_policy"]["reboot_confirmed"] is True
+
+
+def test_build_esxi_post_config_ssh_run_action_requires_transport_prerequisites():
+    cfg = main.default_config()
+    cfg["esxi"]["management_ip"] = "10.10.8.10"
+    cfg["esxi"]["root_password"] = "Valid1Pass!"
+    preview = main.build_esxi_post_config_preview(cfg)
+    with pytest.raises(RuntimeError):
+        main.build_esxi_post_config_ssh_run_action(cfg, preview)
+
+
+def test_esxi_post_config_ssh_run_action_dispatches_with_custom_runner():
+    cfg = main.default_config()
+    cfg["esxi"]["management_ip"] = "10.10.8.10"
+    cfg["esxi"]["root_password"] = "Valid1Pass!"
+    cfg["shared_network"]["subnet"] = "10.10.8.0/24"
+    cfg["esxi"]["post_config_inventory"] = {
+        "datastores": [{"name": "datastore1", "capacity_gb": 200}],
+        "scsi_disks": [{"name": "naa.5001", "size_gb": 1800, "in_use": False}],
+        "physical_nics": [{"name": "vmnic0", "speed_mbps": 1000}, {"name": "vmnic1", "speed_mbps": 1000}],
+    }
+    preview = main.build_esxi_post_config_preview(cfg)
+    seen = []
+
+    def fake_runner(cmd: list[str]) -> tuple[int, str, str]:
+        seen.append(cmd)
+        return 0, "ok\n", ""
+
+    run_action = main.build_esxi_post_config_ssh_run_action(cfg, preview, command_runner=fake_runner)
+    result = run_action("ceip", {"UserVars.HostClientCEIPOptIn": 2})
+    assert result["status"] == "applied"
+    assert seen
+    assert seen[0][0] == "sshpass"
+
+
+def test_save_esxi_settings_persists_post_config_transport_and_secrets(client):
+    cfg = main.default_config()
+    cfg["site"]["name"] = "ESXi Transport Kit"
+    main.save_kit_config(cfg)
+
+    response = client.post(
+        "/save-esxi-settings",
+        data={
+            "return_page": "esxi",
+            "esxi_hostname": "esxi-transport",
+            "esxi_root_password": "Valid1Pass!",
+            "esxi_post_transport": "ssh",
+            "esxi_post_secret_wug_password": "WUGSecret1!",
+        },
+    )
+    assert response.status_code == 200
+    saved = main.load_kit_config("ESXi-Transport-Kit")
+    assert saved["esxi"]["post_config_transport"] == "ssh"
+    assert saved["esxi"]["post_config_secrets"]["wug_password"] == "WUGSecret1!"
+
+
 def test_report_center_lists_storage_reports_and_view_report(client):
     cfg = main.default_config()
     cfg["site"]["name"] = "Report Kit"

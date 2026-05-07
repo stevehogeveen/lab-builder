@@ -74,9 +74,14 @@ from app.stages.ilo.runtime import (
     verify_final_ilo_state as ilo_verify_final_state,
 )
 from app.stages.esxi.runtime import (
+    build_esxi_post_config_ssh_run_action as esxi_build_post_config_ssh_run_action,
+    build_esxi_post_config_actions as esxi_build_post_config_actions,
+    build_esxi_post_config_preview as esxi_build_post_config_preview,
     build_esxi_install_review as esxi_build_install_review,
     build_esxi_iso_url as esxi_build_iso_url,
     build_esxi_runtime_status as esxi_build_runtime_status,
+    execute_esxi_post_config_actions as esxi_execute_post_config_actions,
+    ensure_esxi_post_config_policy as esxi_ensure_post_config_policy,
     detect_public_base_url as esxi_detect_public_base_url,
     detect_public_base_url_details as esxi_detect_public_base_url_details,
     discover_esxi_base_isos as esxi_discover_base_isos,
@@ -89,6 +94,7 @@ from app.stages.esxi.runtime import (
     resolve_esxi_base_iso_path as esxi_resolve_base_iso_path,
     url_host_port as esxi_url_host_port,
     validate_esxi_base_iso as esxi_validate_base_iso,
+    validate_esxi_post_config_preview as esxi_validate_post_config_preview,
     verify_esxi_virtual_media_url as esxi_verify_virtual_media_url,
 )
 from app.stages.ilo.plugin import create_ilo_stage
@@ -2530,6 +2536,8 @@ def build_esxi_page_review(cfg: dict[str, Any]) -> dict[str, Any]:
     output_name = f"esxi-{stamp}"
     output_iso = EXPORTS_DIR / "esxi-isos" / kit_name / output_name / f"{output_name}.iso"
     values = get_esxi_effective_values(cfg)
+    post_config_preview = build_esxi_post_config_preview(cfg)
+    post_config_validation = validate_esxi_post_config_preview(post_config_preview)
     review = {
         "run_stamp": stamp,
         "source_label": "Saved kit values from the ESXi Setup page and shared defaults",
@@ -2563,6 +2571,8 @@ def build_esxi_page_review(cfg: dict[str, Any]) -> dict[str, Any]:
         "missing_fields": list(values["missing_fields"]),
         "validation_errors": list(values["validation_errors"]),
         "validation_notes": list(values["validation_notes"]),
+        "post_config_preview": post_config_preview,
+        "post_config_validation": post_config_validation,
     }
     try:
         base_iso = resolve_esxi_base_iso_path(cfg)
@@ -9862,6 +9872,51 @@ def get_esxi_effective_values(cfg: dict[str, Any]) -> dict[str, Any]:
     )
 
 
+def ensure_esxi_post_config_policy(cfg: dict[str, Any]) -> dict[str, Any]:
+    return esxi_ensure_post_config_policy(cfg)
+
+
+def build_esxi_post_config_preview(cfg: dict[str, Any]) -> dict[str, Any]:
+    ensure_esxi_post_config_policy(cfg)
+    return esxi_build_post_config_preview(cfg)
+
+
+def validate_esxi_post_config_preview(preview: dict[str, Any]) -> dict[str, Any]:
+    return esxi_validate_post_config_preview(preview)
+
+
+def build_esxi_post_config_actions(preview: dict[str, Any]) -> list[dict[str, Any]]:
+    return esxi_build_post_config_actions(preview)
+
+
+def execute_esxi_post_config_actions(
+    cfg: dict[str, Any],
+    *,
+    preview: dict[str, Any],
+    validation: dict[str, Any],
+    run_action_fn: Callable[[str, dict[str, Any]], dict[str, Any]] | None = None,
+) -> dict[str, Any]:
+    return esxi_execute_post_config_actions(
+        cfg,
+        preview=preview,
+        validation=validation,
+        run_action_fn=run_action_fn,
+    )
+
+
+def build_esxi_post_config_ssh_run_action(
+    cfg: dict[str, Any],
+    preview: dict[str, Any],
+    *,
+    command_runner: Callable[[list[str]], tuple[int, str, str]] | None = None,
+) -> Callable[[str, dict[str, Any]], dict[str, Any]]:
+    return esxi_build_post_config_ssh_run_action(
+        cfg,
+        preview,
+        command_runner=command_runner,
+    )
+
+
 def build_esxi_install_review(cfg: dict, *, run_stamp: str | None = None, include_runtime: bool = False) -> dict[str, Any]:
     return esxi_build_install_review(
         cfg,
@@ -11248,12 +11303,81 @@ def run_esxi_real(cfg: dict, run_stamp: str | None = None):
 
         ready_result = wait_for_esxi_management_ready(management_ip, on_poll=on_esxi_wait_poll)
         job["esxi_management_network"] = dict(ready_result or {})
+        post_preview = build_esxi_post_config_preview(cfg)
+        post_validation = validate_esxi_post_config_preview(post_preview)
+        post_actions = build_esxi_post_config_actions(post_preview)
+        requested_transport = str((cfg.get("esxi", {}) or {}).get("post_config_transport") or "dry_run").strip().lower()
+        post_run_action_fn: Callable[[str, dict[str, Any]], dict[str, Any]] | None = None
+        transport_note = ""
+        if requested_transport == "ssh":
+            try:
+                post_run_action_fn = build_esxi_post_config_ssh_run_action(cfg, post_preview)
+                transport_note = "live-ssh"
+            except Exception as transport_exc:
+                transport_note = f"dry-run-fallback ({str(transport_exc).splitlines()[0]})"
+                update_job(
+                    kit_name,
+                    job,
+                    "Running",
+                    "Apply ESXi post-config policy",
+                    12,
+                    total,
+                    f"[WARN] ESXi post-config transport requested SSH but is not available: {str(transport_exc).splitlines()[0]}. Falling back to dry-run planning.",
+                )
+        else:
+            transport_note = "dry-run"
+        post_execution = execute_esxi_post_config_actions(
+            cfg,
+            preview=post_preview,
+            validation=post_validation,
+            run_action_fn=post_run_action_fn,
+        )
+        post_execution["transport_mode"] = transport_note
+        job["esxi_post_config_preview"] = post_preview
+        job["esxi_post_config_validation"] = post_validation
+        job["esxi_post_config_actions"] = post_actions
+        job["esxi_post_config_execution"] = post_execution
         save_job(kit_name, job)
+        trace_payload["post_config"] = {
+            "preview": post_preview,
+            "validation": post_validation,
+            "actions": post_actions,
+            "execution": post_execution,
+        }
         trace_payload["result"] = {
             "status": "Completed",
             "management_ready": ready_result,
+            "post_config": {
+                "ok": bool(post_execution.get("ok")),
+                "reboot_required": bool(post_execution.get("reboot_required")),
+                "reboot_performed": bool(post_execution.get("reboot_performed")),
+            },
         }
         save_esxi_trace(trace_path, trace_payload)
+        if post_execution.get("errors"):
+            update_job(
+                kit_name,
+                job,
+                "Running",
+                "Apply ESXi post-config policy",
+                12,
+                total,
+                f"[WARN] ESXi post-config policy reported errors: {' | '.join(post_execution.get('errors') or [])}",
+            )
+        else:
+            update_job(
+                kit_name,
+                job,
+                "Running",
+                "Apply ESXi post-config policy",
+                12,
+                total,
+                (
+                    "[OK] ESXi post-config policy staged. "
+                    f"actions={len(post_actions)} reboot_required={'yes' if post_execution.get('reboot_required') else 'no'} "
+                    f"reboot_performed={'yes' if post_execution.get('reboot_performed') else 'no'}"
+                ),
+            )
         update_job(
             kit_name,
             job,
@@ -11272,7 +11396,13 @@ def run_esxi_real(cfg: dict, run_stamp: str | None = None):
             workflow="esxi",
             summary="Built the custom ESXi installer ISO, booted the server from it, and confirmed ESXi answered on the configured management IP.",
             target=management_ip,
-            details=[f"ISO: {output_iso}", f"Base ISO: {base_iso_path}"],
+            details=[
+                f"ISO: {output_iso}",
+                f"Base ISO: {base_iso_path}",
+                f"Post-config actions: {len(post_actions)}",
+                f"Post-config reboot required: {'Yes' if post_execution.get('reboot_required') else 'No'}",
+                f"Post-config reboot performed: {'Yes' if post_execution.get('reboot_performed') else 'No'}",
+            ],
         )
     except Exception as e:
         detail = str(e).splitlines()[0]
@@ -13885,14 +14015,70 @@ async def save_esxi_settings_route(
     esxi_hostname: str = Form(""),
     esxi_root_password: str = Form(""),
     esxi_debug_no_reboot: str | None = Form(None),
+    esxi_post_discovery_start_octet: str = Form("31"),
+    esxi_post_discovery_end_octet: str = Form("33"),
+    esxi_post_allow_datastore_create: str | None = Form(None),
+    esxi_post_allow_single_mgmt_uplink_override: str | None = Form(None),
+    esxi_post_configure_only_no_reboot: str | None = Form(None),
+    esxi_post_reboot_confirmed: str | None = Form(None),
+    esxi_post_wug_snmp_target: str = Form(""),
+    esxi_post_wug_notraps: str = Form(""),
+    esxi_post_hostname_override: str = Form(""),
+    esxi_post_domain_override: str = Form(""),
+    esxi_post_dns1_override: str = Form(""),
+    esxi_post_dns2_override: str = Form(""),
+    esxi_post_transport: str = Form("dry_run"),
+    esxi_post_secret_wug_password: str = Form(""),
+    esxi_post_secret_snmpv3_auth_password: str = Form(""),
+    esxi_post_secret_snmpv3_priv_password: str = Form(""),
+    esxi_post_secret_kit_root_password: str = Form(""),
+    esxi_post_secret_svmservice_password: str = Form(""),
+    esxi_post_secret_localtech_password: str = Form(""),
     included_esxi: str | None = Form(None),
 ):
     cfg = load_kit_config()
+    policy = ensure_esxi_post_config_policy(cfg)
+    secrets = cfg.setdefault("esxi", {}).setdefault("post_config_secrets", {})
     cfg["esxi"]["version"] = normalize_esxi_version(esxi_version)
     cfg["esxi"]["base_iso_path"] = esxi_base_iso_path.strip()
     cfg["esxi"]["hostname"] = esxi_hostname
     cfg["esxi"]["root_password"] = esxi_root_password
     cfg["esxi"]["debug_no_reboot"] = esxi_debug_no_reboot == "on"
+    try:
+        policy["discovery_start_octet"] = max(1, min(int(esxi_post_discovery_start_octet or "31"), 254))
+    except ValueError:
+        policy["discovery_start_octet"] = 31
+    try:
+        policy["discovery_end_octet"] = max(1, min(int(esxi_post_discovery_end_octet or "33"), 254))
+    except ValueError:
+        policy["discovery_end_octet"] = 33
+    policy["allow_datastore_create"] = esxi_post_allow_datastore_create == "on"
+    policy["allow_single_mgmt_uplink_override"] = esxi_post_allow_single_mgmt_uplink_override == "on"
+    policy["configure_only_no_reboot"] = esxi_post_configure_only_no_reboot == "on"
+    policy["reboot_confirmed"] = esxi_post_reboot_confirmed == "on"
+    if esxi_post_wug_snmp_target.strip():
+        policy["wug_snmp_target"] = esxi_post_wug_snmp_target.strip()
+    if esxi_post_wug_notraps.strip():
+        policy["wug_notraps"] = esxi_post_wug_notraps.strip()
+    cfg["esxi"]["post_config_hostname_override"] = esxi_post_hostname_override.strip()
+    cfg["esxi"]["post_config_domain_override"] = esxi_post_domain_override.strip()
+    cfg["esxi"]["post_config_dns1_override"] = esxi_post_dns1_override.strip()
+    cfg["esxi"]["post_config_dns2_override"] = esxi_post_dns2_override.strip()
+    cfg["esxi"]["post_config_transport"] = "ssh" if esxi_post_transport.strip().lower() == "ssh" else "dry_run"
+    if esxi_post_secret_wug_password:
+        secrets["wug_password"] = esxi_post_secret_wug_password
+    if esxi_post_secret_snmpv3_auth_password:
+        secrets["snmpv3_auth_password"] = esxi_post_secret_snmpv3_auth_password
+    if esxi_post_secret_snmpv3_priv_password:
+        secrets["snmpv3_priv_password"] = esxi_post_secret_snmpv3_priv_password
+    if esxi_post_secret_kit_root_password:
+        secrets["kit_root_password"] = esxi_post_secret_kit_root_password
+    if esxi_post_secret_svmservice_password:
+        secrets["svmservice_password"] = esxi_post_secret_svmservice_password
+    if esxi_post_secret_localtech_password:
+        secrets["localtech_password"] = esxi_post_secret_localtech_password
+    cfg["esxi"]["post_config_secrets"] = dict(secrets)
+    cfg["esxi"]["post_config_policy"] = dict(policy)
     if included_esxi is not None:
         cfg["included"]["esxi"] = included_esxi == "on"
     cfg = apply_ip_plan(cfg)
