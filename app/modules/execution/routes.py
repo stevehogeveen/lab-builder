@@ -174,6 +174,8 @@ async def execute_scope_handler(
         msg = "Real storage automation started in the background. Check Job Monitor for live progress and logs."
     elif scope == "esxi":
         msg = "Real ESXi automation started in the background. Check Job Monitor for live progress and logs."
+    elif scope == "windows":
+        msg = "Windows safe execution started in the background. It validates and records the staged install plan without deploying a VM."
     elif scope.startswith("multi__"):
         msg = "Real selected-stage automation started in the background. Check Job Monitor for live progress and logs."
     else:
@@ -278,4 +280,3 @@ async def execute_preview_scope_handler(
         active_page=return_page,
         message=f"Preview started for scope: {scope}. No real changes will be made.",
     )
-

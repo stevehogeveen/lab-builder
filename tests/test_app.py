@@ -3363,6 +3363,66 @@ def test_execute_real_scope_starts_existing_ilo_path(client, monkeypatch):
     assert started["started"] is True
 
 
+def test_prepare_execute_windows_offers_safe_real_run(client):
+    cfg = main.default_config()
+    cfg["site"]["name"] = "Windows Safe Execute Kit"
+    cfg["included"]["windows"] = True
+    cfg["windows"]["admin_password"] = "secret"
+    cfg["windows"]["source_image_path"] = "/tmp/windows-template.ova"
+    cfg["windows"]["source_image_kind"] = "ova"
+    cfg["windows"]["install_plan"] = {"ready": True, "warnings": []}
+    main.save_kit_config(cfg)
+
+    response = client.post(
+        "/prepare-execute",
+        data={"scope": "windows", "return_page": "execution"},
+    )
+
+    assert response.status_code == 200
+    assert "Dry-run apply" in response.text
+
+
+def test_execute_real_scope_starts_windows_safe_path(client, monkeypatch):
+    cfg = main.default_config()
+    cfg["site"]["name"] = "Windows Safe Real Run Kit"
+    cfg["included"]["windows"] = True
+    cfg["windows"]["admin_password"] = "secret"
+    cfg["windows"]["source_image_path"] = "/tmp/windows-template.ova"
+    cfg["windows"]["source_image_kind"] = "ova"
+    cfg["windows"]["install_plan"] = {"ready": True, "warnings": []}
+    main.save_kit_config(cfg)
+
+    started: dict[str, object] = {}
+
+    class FakeThread:
+        def __init__(self, target=None, args=(), daemon=None):
+            started["target"] = target
+            started["args"] = args
+            started["daemon"] = daemon
+
+        def start(self):
+            started["started"] = True
+
+    monkeypatch.setattr(main.threading, "Thread", FakeThread)
+
+    response = client.post(
+        "/execute",
+        data={
+            "scope": "windows",
+            "confirm_checkbox": "on",
+            "confirm_phrase": "EXECUTE",
+            "return_page": "execution",
+        },
+    )
+
+    assert response.status_code == 200
+    assert "Windows safe execution started in the background." in response.text
+    assert started["target"] is main.execute_real_job_in_background
+    assert started["args"][1] == "windows"
+    assert started["daemon"] is True
+    assert started["started"] is True
+
+
 def test_execute_real_scope_starts_esxi_path(client, monkeypatch):
     cfg = main.default_config()
     cfg["site"]["name"] = "Real ESXi Execute Kit"
@@ -11653,3 +11713,38 @@ def test_verify_final_ilo_state_reports_hostname_dns_and_snmp_mismatches():
     assert result["dns_matched"] is False
     assert result["snmp_matched"] is False
     assert result["matched"] is False
+
+
+def test_upload_windows_image_rejects_non_ova_ovf(client):
+    cfg = main.default_config()
+    cfg["site"]["name"] = "Windows Upload Kit"
+    main.save_kit_config(cfg)
+    response = client.post(
+        "/upload-windows-image",
+        data={"return_page": "windows"},
+        files={"windows_image": ("bad.iso", b"fake", "application/octet-stream")},
+    )
+    assert response.status_code == 200
+    assert "Only .ova or .ovf uploads are supported." in response.text
+
+
+def test_upload_windows_image_and_plan_dry_run(client):
+    cfg = main.default_config()
+    cfg["site"]["name"] = "Windows Plan Kit"
+    cfg["windows"]["vm_name"] = "win-plan"
+    cfg["windows"]["admin_password"] = "Secret123!"
+    main.save_kit_config(cfg)
+    upload = client.post(
+        "/upload-windows-image",
+        data={"return_page": "windows"},
+        files={"windows_image": ("template.ova", b"ova-bytes", "application/octet-stream")},
+    )
+    assert upload.status_code == 200
+    assert "Windows image uploaded" in upload.text
+    plan = client.post("/plan-windows-install", data={"return_page": "windows"})
+    assert plan.status_code == 200
+    assert "Windows install plan preview" in plan.text
+    saved = main.load_kit_config("Windows-Plan-Kit")
+    install_plan = saved["windows"].get("install_plan") or {}
+    assert install_plan.get("mode") == "dry_run"
+    assert install_plan.get("ready") is True

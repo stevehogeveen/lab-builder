@@ -96,6 +96,7 @@ from app.modules.configs.routes import (
 )
 from app.modules.qnap.routes import save_qnap_settings_handler
 from app.modules.windows.routes import save_windows_settings_handler
+from app.modules.windows.routes import plan_windows_install_handler, upload_windows_image_handler
 from app.modules.execution.routes import (
     download_built_esxi_iso_handler,
     download_latest_debug_bundle_handler,
@@ -153,6 +154,7 @@ from app.stages.esxi.runtime import (
 from app.stages.ilo.plugin import create_ilo_stage
 from app.stages.esxi.plugin import create_esxi_stage
 from app.stages.storage.plugin import create_storage_stage
+from app.stages.windows.plugin import create_windows_stage
 from app.stages.storage.runtime import (
     approve_storage_plan_for_cfg as storage_approve_plan_for_cfg,
     build_storage_change_summary as storage_build_change_summary,
@@ -536,6 +538,7 @@ def build_stage_registry(cfg: dict[str, Any] | None = None) -> StageRegistry:
         create_ilo_stage(),
         create_storage_stage(),
         create_esxi_stage(),
+        create_windows_stage(),
     ])
     # Touch the plugins through their enabled hooks so tests can validate registry wiring
     registry.enabled({"cfg": context_cfg})
@@ -2948,6 +2951,31 @@ def build_validation_checks(cfg: dict[str, Any], workflow: str) -> list[dict[str
                     href="/windows",
                 )
             )
+            image_path = str(windows_cfg.get("source_image_path") or "").strip()
+            image_kind = str(windows_cfg.get("source_image_kind") or "").strip().lower()
+            image_ready = bool(image_path and image_kind in {"ova", "ovf"} and Path(image_path).exists())
+            checks.append(
+                validation_check(
+                    "Windows source image",
+                    image_ready,
+                    "Ready" if image_ready else "Upload an OVA/OVF image first.",
+                    why="Windows VM install planning needs a local OVA/OVF source artifact.",
+                    fix="Open the Windows page and upload an OVA/OVF image.",
+                    href="/windows",
+                )
+            )
+            install_plan = windows_cfg.get("install_plan", {}) or {}
+            plan_ready = bool(install_plan.get("ready"))
+            checks.append(
+                validation_check(
+                    "Install plan preview",
+                    plan_ready,
+                    "Ready" if plan_ready else "Run the dry-run install planner and resolve warnings.",
+                    why="Dry-run planning validates saved VM/image inputs before execution.",
+                    fix="Open the Windows page and run Plan Windows install (dry-run).",
+                    href="/windows",
+                )
+            )
         if workflow == "qnap":
             qnap_cfg = cfg.get("qnap", {}) or {}
             checks.append(
@@ -3368,6 +3396,19 @@ def execution_mode_for_scope(scope: str) -> dict[str, str]:
             "run_note": "This is the live path. Real changes may be made.",
             "live_intro": "Live progress below is tracking a real run.",
         }
+    if scope == "windows":
+        return {
+            "key": "real",
+            "label": "Safe execution",
+            "badge": "Dry-run apply",
+            "summary": "This path validates the uploaded OVA/OVF install inputs and records an execution log without deploying a VM yet.",
+            "what_this_does": "Runs the Windows stage validation/apply simulation from the saved install plan.",
+            "real_changes": "No",
+            "next_step": "Use this to verify run behavior before enabling hypervisor-side deployment.",
+            "run_button": "Start Windows safe execution",
+            "run_note": "This stage currently performs validation only and does not deploy a VM.",
+            "live_intro": "Live progress below is tracking a safe Windows stage execution.",
+        }
     return {
         "key": "preview",
         "label": "Preview / safety mode",
@@ -3453,6 +3494,15 @@ def build_execution_launch_options(cfg: dict[str, Any], scope: str) -> dict[str,
                 "scope": "esxi",
                 "label": "Run for real",
                 "summary": "Builds the custom ESXi installer ISO, mounts it through virtual media, sets one-time boot, and starts the real ESXi boot sequence.",
+            },
+        }
+    if scope == "windows":
+        return {
+            "preview": preview_option,
+            "real": {
+                "scope": "windows",
+                "label": "Run safe Windows stage",
+                "summary": "Validates uploaded OVA/OVF source and saved install plan, then records the stage run without deploying a VM.",
             },
         }
     if scope == "storage":
@@ -9750,7 +9800,7 @@ def execute_real_job_in_background(cfg: dict, scope: str):
                     return
                 mark_stage("esxi", "completed")
             return
-        if scope in {"ilo", "storage", "esxi"}:
+        if scope in {"ilo", "storage", "esxi", "windows"}:
             stage = registry.get(scope)
             if stage is None:
                 raise RuntimeError(f"Stage registry entry is missing for scope: {scope}")
@@ -9761,6 +9811,7 @@ def execute_real_job_in_background(cfg: dict, scope: str):
                     "ilo": lambda _job: run_ilo_real(cfg),
                     "storage": lambda _job: _execute_storage_stage(cfg, kit_name, mark_stage),
                     "esxi": lambda _job: _execute_esxi_stage(cfg, kit_name),
+                    "windows": lambda _job: _execute_windows_stage(cfg, kit_name),
                 },
             }
             stage.execute(context, load_job(kit_name))
@@ -9776,6 +9827,8 @@ def execute_real_job_in_background(cfg: dict, scope: str):
             stage_to_fail = "esxi"
         elif "storage" in current_stage or "reboot" in current_stage:
             stage_to_fail = "storage"
+        elif "windows" in current_stage:
+            stage_to_fail = "windows"
         elif "ilo" in current_stage:
             stage_to_fail = "ilo"
         if stage_to_fail:
@@ -9830,6 +9883,36 @@ def _execute_esxi_stage(cfg: dict[str, Any], kit_name: str) -> None:
     promote_final_ilo_endpoint(cfg)
     save_kit_config(cfg)
     run_esxi_real(cfg, run_stamp=str((cfg.get("_runtime", {}) or {}).get("esxi_run_stamp") or "").strip() or None)
+
+
+def _execute_windows_stage(cfg: dict[str, Any], kit_name: str) -> None:
+    cfg = apply_ip_plan(cfg)
+    windows_cfg = cfg.get("windows", {}) or {}
+    plan = windows_cfg.get("install_plan", {}) or {}
+    image_path = str(windows_cfg.get("source_image_path") or "").strip()
+    image_kind = str(windows_cfg.get("source_image_kind") or "").strip().lower()
+    warnings = list(plan.get("warnings") or [])
+
+    total = 5
+    job = load_job(kit_name)
+    update_job(kit_name, job, "Running", "Validate Windows image", 1, total, "[RUNNING] Validating uploaded Windows OVA/OVF image.")
+    if not image_path or not Path(image_path).exists() or image_kind not in {"ova", "ovf"}:
+        raise RuntimeError("Windows safe execution blocked: upload a valid OVA/OVF image first.")
+
+    job = load_job(kit_name)
+    update_job(kit_name, job, "Running", "Validate Windows plan", 2, total, "[RUNNING] Validating Windows dry-run install plan.")
+    if not bool(plan):
+        raise RuntimeError("Windows safe execution blocked: run Plan Windows install (dry-run) first.")
+    if not bool(plan.get("ready")):
+        detail = "; ".join(warnings) if warnings else "planner reported unresolved warnings"
+        raise RuntimeError(f"Windows safe execution blocked: install plan is not ready ({detail}).")
+
+    job = load_job(kit_name)
+    update_job(kit_name, job, "Running", "Record install inputs", 3, total, f"[INFO] VM={plan.get('vm_name') or '(not set)'} image={windows_cfg.get('source_image_name') or image_path}")
+    job = load_job(kit_name)
+    update_job(kit_name, job, "Running", "Simulate deployment", 4, total, "[INFO] Safe mode: no VM deployment actions are executed in this stage yet.")
+    job = load_job(kit_name)
+    update_job(kit_name, job, "Complete", "Windows safe stage complete", 5, total, "[OK] Windows safe execution completed. No VM changes were made.")
 
 
 def resolve_esxi_base_iso_path(cfg: dict) -> Path:
@@ -13949,6 +14032,47 @@ async def save_windows_settings_route(
         windows_vm_name=windows_vm_name,
         windows_admin_password=windows_admin_password,
         included_windows=included_windows,
+    )
+
+
+@app.post("/upload-windows-image", response_class=HTMLResponse)
+async def upload_windows_image_route(
+    request: Request,
+    return_page: str = Form("windows"),
+    windows_image: UploadFile = File(...),
+):
+    return await upload_windows_image_handler(
+        request,
+        runtime={
+            "load_kit_config": load_kit_config,
+            "windows_upload_root": EXPORTS_DIR / "windows-images",
+            "sanitize_kit_name": sanitize_kit_name,
+            "time_str": lambda: time.strftime("%Y%m%d-%H%M%S"),
+            "save_kit_config": save_kit_config,
+            "append_activity_event": append_activity_event,
+            "render_page": render_page,
+            "build_action_feedback": build_action_feedback,
+        },
+        return_page=return_page,
+        windows_image=windows_image,
+    )
+
+
+@app.post("/plan-windows-install", response_class=HTMLResponse)
+async def plan_windows_install_route(
+    request: Request,
+    return_page: str = Form("windows"),
+):
+    return await plan_windows_install_handler(
+        request,
+        runtime={
+            "load_kit_config": load_kit_config,
+            "save_kit_config": save_kit_config,
+            "append_activity_event": append_activity_event,
+            "render_page": render_page,
+            "build_action_feedback": build_action_feedback,
+        },
+        return_page=return_page,
     )
 
 

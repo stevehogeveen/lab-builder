@@ -110,6 +110,7 @@ class KitConfigModel(BaseModel):
     iosafe: dict[str, Any] = Field(default_factory=dict)
     cisco_switch: dict[str, Any] = Field(default_factory=dict)
     storage: StoragePlanModel = Field(default_factory=StoragePlanModel)
+    netapp: dict[str, Any] = Field(default_factory=dict)
 
 
 class JobStatusModel(BaseModel):
