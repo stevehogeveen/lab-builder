@@ -1,0 +1,20 @@
+name: ilo
+title: iLO
+description: Configure HPE iLO users, SNMP, time, IPv6, virtual media, and power actions.
+enabled: true
+routes:
+  prefix: /ilo
+navigation:
+  section: Setup
+  label: iLO Setup
+  href: /ilo
+  active_page: ilo
+capabilities:
+  - discover
+  - plan
+  - validate
+  - preview
+  - apply
+  - status
+  - repair
+

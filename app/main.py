@@ -66,8 +66,18 @@ from app.core.config import (
 )
 from app.core.jobs import JobStepRunner
 from app.core.database import DatabaseStore, SQLiteRuntime
+from app.core.registry import load_modules
 from app.core.stage_registry import StageRegistry
 from app.stages.ilo.adapter import HpeIloRedfishAdapter
+from app.modules.ilo.routes import (
+    discover_ilo_hosts_handler,
+    ilo_page_handler,
+    save_ilo_settings_handler,
+)
+from app.modules.storage.routes import (
+    save_storage_target_handler,
+    storage_page_handler,
+)
 from app.stages.ilo.runtime import (
     build_snmp_readback_checks as ilo_build_snmp_readback_checks,
     current_snmp_matches as ilo_current_snmp_matches,
@@ -141,6 +151,7 @@ ILO_LIVE_EXPORT_DIR = EXPORTS_DIR / "ilo" / "live"
 STORAGE_RAID_EXPORT_DIR = EXPORTS_DIR / "storage-raid"
 BUILD_OUTPUT_DIR = EXPORTS_DIR / "builds"
 DEBUG_BUNDLES_DIR = ARTIFACTS_DIR / "debug-bundles"
+MODULES_DIR = BASE_DIR / "app" / "modules"
 STORAGE_APPLY_CONFIRM_CREATE = "CREATE STORAGE"
 STORAGE_APPLY_CONFIRM_WIPE = "WIPE STORAGE"
 KNOWN_ISSUE_STORAGE_DRIVE_CONTROLLER_MISMATCH = "storage_drive_controller_mismatch"
@@ -402,6 +413,7 @@ def db_persist_storage_inventory(cfg: dict[str, Any], discovery: dict[str, Any],
 
 app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
 templates = Jinja2Templates(directory=str(TEMPLATES_DIR))
+load_modules(app, modules_dir=MODULES_DIR)
 
 # Keep template names centralized so full-page and HTMX responses stay aligned.
 PAGE_TEMPLATE = "index.html"
@@ -443,6 +455,14 @@ PAGE_META = {
     "qnap": {
         "title": "QNAP",
         "subtitle": "Review inherited network settings and local QNAP overrides.",
+    },
+    "netapp": {
+        "title": "NetApp",
+        "subtitle": "NetApp module scaffold and policy workflow.",
+    },
+    "cisco": {
+        "title": "Cisco",
+        "subtitle": "Cisco module scaffold and policy workflow.",
     },
     "configuration": {
         "title": "Global Settings",
@@ -13253,6 +13273,7 @@ def render_page(
         "history": history,
         "latest_ilo_history": latest_ilo_history,
         "section_states": summarize_section_states(cfg),
+        "module_navigation": list(getattr(app.state, "module_navigation", []) or []),
     }
 
     # HTMX requests should only replace the main content region, never the app shell.
@@ -13364,8 +13385,13 @@ async def global_settings_page(request: Request):
 
 @app.get("/ilo", response_class=HTMLResponse)
 async def ilo_page(request: Request):
-    cfg = load_kit_config()
-    return render_page(request, cfg, active_page="ilo")
+    return await ilo_page_handler(
+        request,
+        runtime={
+            "load_kit_config": load_kit_config,
+            "render_page": render_page,
+        },
+    )
 
 
 @app.get("/esxi", response_class=HTMLResponse)
@@ -13400,8 +13426,13 @@ async def configs_page(request: Request):
 
 @app.get("/storage", response_class=HTMLResponse)
 async def storage_page(request: Request):
-    cfg = load_kit_config()
-    return render_page(request, cfg, active_page="storage")
+    return await storage_page_handler(
+        request,
+        runtime={
+            "load_kit_config": load_kit_config,
+            "render_page": render_page,
+        },
+    )
 
 
 @app.post("/save-storage-target", response_class=HTMLResponse)
@@ -13413,46 +13444,24 @@ async def save_storage_target(
     storage_password: str = Form(""),
     storage_target_mode: str = Form("override"),
 ):
-    cfg = load_kit_config()
-    storage_cfg = ensure_storage_config(cfg)
-    if storage_target_mode == "defaults":
-        storage_cfg["target_host_override"] = ""
-        storage_cfg["username"] = ""
-        storage_cfg["password"] = ""
-    else:
-        storage_cfg["target_host_override"] = storage_target_host.strip()
-        storage_cfg["username"] = storage_username.strip()
-        storage_cfg["password"] = storage_password
-    refresh_storage_approval_from_saved_state(cfg)
-    save_kit_config(cfg)
-    target = resolve_storage_target_host(cfg)
-    using_defaults = storage_target_mode == "defaults"
-    append_activity_event(
-        cfg["site"]["name"],
-        "storage_target_saved",
-        workflow="storage",
-        summary=f"Storage review will use {target.get('resolved') or 'no resolved host yet'}.",
-        target=target.get("resolved", ""),
-        details=[
-            f"Address source: {target.get('source') or 'Not resolved'}",
-            f"Username source: {resolve_storage_target_credentials(cfg).get('username_source') or 'Not resolved'}",
-        ],
-    )
-    return render_page(
+    return await save_storage_target_handler(
         request,
-        cfg,
-        active_page=return_page,
-        action_feedback=build_action_feedback(
-            "Storage target updated",
-            "Storage setup will now use the selected server address and sign-in details.",
-            tone="ready",
-            outcomes=[
-                f"Server address: {target.get('resolved') or 'Not resolved yet'}",
-                "Using iLO defaults." if using_defaults else "Using the entered address and sign-in details.",
-                "Next step: Display current storage setup",
-            ],
-            links=[{"label": "Open storage setup", "href": "/storage"}],
-        ),
+        runtime={
+            "load_kit_config": load_kit_config,
+            "ensure_storage_config": ensure_storage_config,
+            "refresh_storage_approval_from_saved_state": refresh_storage_approval_from_saved_state,
+            "save_kit_config": save_kit_config,
+            "resolve_storage_target_host": resolve_storage_target_host,
+            "resolve_storage_target_credentials": resolve_storage_target_credentials,
+            "append_activity_event": append_activity_event,
+            "render_page": render_page,
+            "build_action_feedback": build_action_feedback,
+        },
+        return_page=return_page,
+        storage_target_host=storage_target_host,
+        storage_username=storage_username,
+        storage_password=storage_password,
+        storage_target_mode=storage_target_mode,
     )
 
 
@@ -13862,147 +13871,70 @@ async def save_ilo_settings_route(
     ilo_policy_snmpv3_priv_password: str = Form(""),
     ilo_policy_alert_destinations: str = Form("10.245.190.67, 10.245.190.68"),
 ):
-    cfg = load_kit_config()
-    form = await request.form()
-    cfg["ilo"]["current_ip"] = ilo_current_ip.strip()
-    cfg["ilo"]["host"] = cfg["ilo"]["current_ip"]
-    if ilo_target_ip.strip():
-        cfg["ilo"]["target_ip"] = ilo_target_ip.strip()
-        cfg["ip_plan"]["ilo"] = ilo_target_ip.strip()
-    cfg["ilo"]["gateway"] = (ilo_gateway.strip() or cfg.get("ip_plan", {}).get("gateway", "") or "").strip()
-    normalized_hostname = normalize_ilo_hostname(ilo_hostname)
-    cfg["ilo"]["hostname"] = normalized_hostname
-    cfg["ilo"]["username"] = ilo_username
-    cfg["ilo"]["password"] = ilo_password
-    cfg["ilo"]["additional_users"] = extract_ilo_additional_users_from_form(form)
-    existing_policy = normalize_ilo_policy((cfg.get("ilo") or {}).get("policy"))
-    existing_policy.update(
-        {
-            "discover_start_octet": ilo_discover_start_octet,
-            "discover_end_octet": ilo_discover_end_octet,
-            "apply_standard_policy": ilo_policy_apply_standard_policy == "on",
-            "enable_standard_accounts": ilo_policy_enable_standard_accounts == "on",
-            "enable_license_check": ilo_policy_enable_license_check == "on",
-            "enable_snmp_policy": ilo_policy_enable_snmp_policy == "on",
-            "enable_alert_destinations": ilo_policy_enable_alert_destinations == "on",
-            "enable_ipv6_disable": ilo_policy_enable_ipv6_disable == "on",
-            "enable_time_policy": ilo_policy_enable_time_policy == "on",
-            "enable_auto_reset": ilo_policy_enable_auto_reset == "on",
-            "kit_admin_password": ilo_policy_kit_admin_password,
-            "kit_operator_password": ilo_policy_kit_operator_password,
-            "shared_admin_username": ilo_policy_shared_admin_username.strip() or "765CS",
-            "shared_admin_password": ilo_policy_shared_admin_password,
-            "snmp_read_community": ilo_policy_snmp_read_community,
-            "snmpv3_username": ilo_policy_snmpv3_username.strip() or "765CS",
-            "snmpv3_auth_protocol": ilo_policy_snmpv3_auth_protocol.strip() or "SHA",
-            "snmpv3_auth_password": ilo_policy_snmpv3_auth_password,
-            "snmpv3_priv_protocol": ilo_policy_snmpv3_priv_protocol.strip() or "AES",
-            "snmpv3_priv_password": ilo_policy_snmpv3_priv_password,
-            "alert_destinations": [
-                item.strip()
-                for item in re.split(r"[\s,]+", str(ilo_policy_alert_destinations or "").strip())
-                if item.strip()
-            ],
-        }
-    )
-    cfg["ilo"]["policy"] = normalize_ilo_policy(existing_policy)
-    cfg.setdefault("shared_snmp", {})["read_community"] = ilo_policy_snmp_read_community
-    cfg["included"]["ilo"] = True
-    ilo_input_review = build_ilo_input_review(cfg, include_policy_validation=True)
-    if ilo_input_review["errors"]:
-        return render_page(
-            request,
-            cfg,
-            active_page=return_page,
-            message=(f"Normalized iLO hostname to: {normalized_hostname}" if ilo_hostname.strip() and ilo_hostname.strip() != normalized_hostname else None),
-            action_feedback=build_action_feedback(
-                "iLO setup needs attention",
-                "Fix the iLO user names or passwords before saving this page.",
-                tone="pending",
-                outcomes=[
-                    f"Current iLO address: {cfg['ilo'].get('current_ip') or 'Not set'}",
-                    f"Planned final IP: {cfg['ilo'].get('target_ip') or 'Unchanged'}",
-                    f"Hostname: {normalized_hostname or 'Not set'}",
-                ],
-                details=list(ilo_input_review["errors"]) + list(ilo_input_review["notes"]),
-            ),
-        )
-    try:
-        cfg = apply_ip_plan(cfg)
-    except Exception as e:
-        return render_page(request, cfg, active_page=return_page, error_message=f"Could not save iLO setup: {e}")
-    save_kit_config(cfg)
-    append_activity_event(
-        cfg["site"]["name"],
-        "ilo_settings_saved",
-        workflow="ilo",
-        summary="Saved the current iLO address and planned iLO settings.",
-        target=cfg["ilo"].get("current_ip") or cfg["ilo"].get("host") or "",
-        details=[
-            f"Planned final IP: {cfg['ilo'].get('target_ip') or 'Unchanged'}",
-            f"Gateway: {cfg['ilo'].get('gateway') or 'Not set'}",
-            f"Hostname: {normalized_hostname or 'Not set'}",
-        ],
-    )
-    return render_page(
+    return await save_ilo_settings_handler(
         request,
-        cfg,
-        active_page=return_page,
-        message=(f"Normalized iLO hostname to: {normalized_hostname}" if ilo_hostname.strip() and ilo_hostname.strip() != normalized_hostname else None),
-        action_feedback=build_action_feedback(
-            "iLO setup saved",
-            "Updated the saved iLO target and local sign-in settings for this kit.",
-            tone="ready",
-        outcomes=[
-            f"Target: {cfg['ilo'].get('current_ip') or cfg['ilo'].get('host', '') or 'Not set'}",
-            f"Planned final IP: {cfg['ilo'].get('target_ip') or 'Unchanged'}",
-            f"Gateway: {cfg['ilo'].get('gateway') or 'Not set'}",
-        ],
-        links=[{"label": "Open Storage setup", "href": "/storage"}, {"label": "Review run prep", "href": "/execution"}],
-    ),
-)
+        runtime={
+            "load_kit_config": load_kit_config,
+            "render_page": render_page,
+            "normalize_ilo_hostname": normalize_ilo_hostname,
+            "extract_ilo_additional_users_from_form": extract_ilo_additional_users_from_form,
+            "normalize_ilo_policy": normalize_ilo_policy,
+            "build_ilo_discovery_targets": build_ilo_discovery_targets,
+            "probe_tcp_port": probe_tcp_port,
+            "build_ilo_input_review": build_ilo_input_review,
+            "build_action_feedback": build_action_feedback,
+            "apply_ip_plan": apply_ip_plan,
+            "save_kit_config": save_kit_config,
+            "append_activity_event": append_activity_event,
+        },
+        return_page=return_page,
+        ilo_current_ip=ilo_current_ip,
+        ilo_target_ip=ilo_target_ip,
+        ilo_gateway=ilo_gateway,
+        ilo_hostname=ilo_hostname,
+        ilo_username=ilo_username,
+        ilo_password=ilo_password,
+        ilo_discover_start_octet=ilo_discover_start_octet,
+        ilo_discover_end_octet=ilo_discover_end_octet,
+        ilo_policy_apply_standard_policy=ilo_policy_apply_standard_policy,
+        ilo_policy_enable_standard_accounts=ilo_policy_enable_standard_accounts,
+        ilo_policy_enable_license_check=ilo_policy_enable_license_check,
+        ilo_policy_enable_snmp_policy=ilo_policy_enable_snmp_policy,
+        ilo_policy_enable_alert_destinations=ilo_policy_enable_alert_destinations,
+        ilo_policy_enable_ipv6_disable=ilo_policy_enable_ipv6_disable,
+        ilo_policy_enable_time_policy=ilo_policy_enable_time_policy,
+        ilo_policy_enable_auto_reset=ilo_policy_enable_auto_reset,
+        ilo_policy_kit_admin_password=ilo_policy_kit_admin_password,
+        ilo_policy_kit_operator_password=ilo_policy_kit_operator_password,
+        ilo_policy_shared_admin_username=ilo_policy_shared_admin_username,
+        ilo_policy_shared_admin_password=ilo_policy_shared_admin_password,
+        ilo_policy_snmp_read_community=ilo_policy_snmp_read_community,
+        ilo_policy_snmpv3_username=ilo_policy_snmpv3_username,
+        ilo_policy_snmpv3_auth_protocol=ilo_policy_snmpv3_auth_protocol,
+        ilo_policy_snmpv3_auth_password=ilo_policy_snmpv3_auth_password,
+        ilo_policy_snmpv3_priv_protocol=ilo_policy_snmpv3_priv_protocol,
+        ilo_policy_snmpv3_priv_password=ilo_policy_snmpv3_priv_password,
+        ilo_policy_alert_destinations=ilo_policy_alert_destinations,
+    )
 
 
 @app.post("/discover-ilo-hosts", response_class=HTMLResponse)
 async def discover_ilo_hosts_route(request: Request, return_page: str = Form("ilo")):
-    cfg = load_kit_config()
-    policy = normalize_ilo_policy((cfg.get("ilo") or {}).get("policy"))
-    targets = build_ilo_discovery_targets(cfg)
-    results = [probe_tcp_port(target, 443, timeout_seconds=0.75) for target in targets]
-    policy["discovered_hosts"] = results
-    cfg["ilo"]["policy"] = normalize_ilo_policy(policy)
-    reachable = [item for item in results if item.get("reachable")]
-    current_ip = str((cfg.get("ilo") or {}).get("current_ip") or "").strip()
-    if len(reachable) == 1 and (not current_ip or current_ip == str((cfg.get("ip_plan") or {}).get("ilo") or "").strip() or current_ip not in {item.get("host") for item in reachable}):
-        cfg["ilo"]["current_ip"] = str(reachable[0].get("host") or "")
-        cfg["ilo"]["host"] = cfg["ilo"]["current_ip"]
-    save_kit_config(cfg)
-    append_activity_event(
-        cfg["site"]["name"],
-        "ilo_hosts_discovered",
-        workflow="ilo",
-        summary="Scanned the kit subnet for reachable iLO HTTPS endpoints.",
-        target=str((reachable[0] if reachable else {}).get("host") or ""),
-        details=[
-            f"Subnet: {cfg.get('shared_network', {}).get('subnet') or 'Not set'}",
-            f"Octet range: {policy.get('discover_start_octet')}..{policy.get('discover_end_octet')}",
-            f"Reachable hosts: {', '.join(item.get('host', '') for item in reachable) or 'None'}",
-        ],
-    )
-    return render_page(
+    return await discover_ilo_hosts_handler(
         request,
-        cfg,
-        active_page=return_page,
-        action_feedback=build_action_feedback(
-            "iLO discovery complete",
-            "Scanned the configured subnet range for reachable iLO HTTPS endpoints.",
-            tone="ready" if reachable else "pending",
-            outcomes=[
-                f"Scanned hosts: {len(results)}",
-                f"Reachable: {', '.join(item.get('host', '') for item in reachable) or 'None'}",
-                f"Range: {policy.get('discover_start_octet')}..{policy.get('discover_end_octet')}",
-            ],
-        ),
+        runtime={
+            "load_kit_config": load_kit_config,
+            "render_page": render_page,
+            "normalize_ilo_hostname": normalize_ilo_hostname,
+            "extract_ilo_additional_users_from_form": extract_ilo_additional_users_from_form,
+            "normalize_ilo_policy": normalize_ilo_policy,
+            "build_ilo_discovery_targets": build_ilo_discovery_targets,
+            "probe_tcp_port": probe_tcp_port,
+            "save_kit_config": save_kit_config,
+            "append_activity_event": append_activity_event,
+            "build_action_feedback": build_action_feedback,
+        },
+        return_page=return_page,
     )
 
 

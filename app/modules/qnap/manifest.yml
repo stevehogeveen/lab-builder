@@ -1,0 +1,20 @@
+name: qnap
+title: QNAP
+description: QNAP setup and validation workflow.
+enabled: true
+routes:
+  prefix: /qnap
+navigation:
+  section: More Setup
+  label: QNAP Setup
+  href: /qnap
+  active_page: qnap
+capabilities:
+  - discover
+  - plan
+  - validate
+  - preview
+  - apply
+  - status
+  - repair
+

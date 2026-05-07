@@ -1,0 +1,20 @@
+name: esxi_install
+title: ESXi Install
+description: Build, mount, and boot ESXi installer media.
+enabled: true
+routes:
+  prefix: /esxi
+navigation:
+  section: Setup
+  label: ESXi Setup
+  href: /esxi
+  active_page: esxi
+capabilities:
+  - discover
+  - plan
+  - validate
+  - preview
+  - apply
+  - status
+  - repair
+

@@ -1,0 +1,20 @@
+name: storage
+title: Storage
+description: Storage discovery, planning, approval, and apply workflows.
+enabled: true
+routes:
+  prefix: /storage
+navigation:
+  section: Setup
+  label: Storage setup
+  href: /storage
+  active_page: storage
+capabilities:
+  - discover
+  - plan
+  - validate
+  - preview
+  - apply
+  - status
+  - repair
+

@@ -3,14 +3,22 @@ import copy
 import pytest
 import yaml
 import requests
+import shutil
 from pathlib import Path
 from typing import Any
+from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from app.ilo import ILOClient, ILOConfig, ILOError
 from app.esxi.kickstart import build_kickstart, redact_kickstart_text
 from app.core.config import build_default_ip_plan
 from app.core.models import KitConfigModel
+from app.core.registry import (
+    apply_module_enable_overrides,
+    discover_module_manifests,
+    module_navigation,
+    load_modules,
+)
 from app.core.stage_registry import StageRegistry, CallableStagePlugin
 from app.stages.ilo.runtime import build_snmp_readback_checks, current_snmp_matches, verify_final_ilo_state
 import app.ilo as ilo_module
@@ -11078,8 +11086,12 @@ def test_build_esxi_post_config_ssh_run_action_requires_transport_prerequisites(
     cfg["esxi"]["management_ip"] = "10.10.8.10"
     cfg["esxi"]["root_password"] = "Valid1Pass!"
     preview = main.build_esxi_post_config_preview(cfg)
-    with pytest.raises(RuntimeError):
-        main.build_esxi_post_config_ssh_run_action(cfg, preview)
+    if shutil.which("sshpass"):
+        run_action = main.build_esxi_post_config_ssh_run_action(cfg, preview)
+        assert callable(run_action)
+    else:
+        with pytest.raises(RuntimeError):
+            main.build_esxi_post_config_ssh_run_action(cfg, preview)
 
 
 def test_esxi_post_config_ssh_run_action_dispatches_with_custom_runner():
@@ -11478,6 +11490,81 @@ def test_build_stage_registry_contains_core_stages():
     assert registry.get("ilo") is not None
     assert registry.get("storage") is not None
     assert registry.get("esxi") is not None
+
+
+def test_module_manifest_discovery_and_navigation():
+    modules_dir = main.BASE_DIR / "app" / "modules"
+    manifests = discover_module_manifests(modules_dir)
+    names = {item["name"] for item in manifests}
+    assert "ilo" in names
+    assert "storage" in names
+    assert "netapp" in names
+    nav = module_navigation(manifests)
+    assert any(item["name"] == "netapp" and item["href"] == "/modules/netapp" for item in nav)
+
+
+def test_netapp_module_route_renders_without_breaking_legacy_routes(client):
+    response = client.get("/modules/netapp")
+    assert response.status_code == 200
+    assert "NetApp setup" in response.text
+    dashboard = client.get("/dashboard")
+    assert dashboard.status_code == 200
+    assert "Lab Builder Dashboard" in dashboard.text
+
+
+def test_cisco_module_route_renders_without_breaking_legacy_routes(client):
+    response = client.get("/modules/cisco")
+    assert response.status_code == 200
+    assert "Cisco setup" in response.text
+    dashboard = client.get("/dashboard")
+    assert dashboard.status_code == 200
+
+
+def test_apply_module_enable_overrides_env(monkeypatch):
+    manifests = [
+        {"name": "ilo", "enabled": True},
+        {"name": "netapp", "enabled": True},
+        {"name": "cisco", "enabled": True},
+    ]
+    monkeypatch.setenv("LAB_BUILDER_DISABLED_MODULES", "netapp")
+    monkeypatch.setenv("LAB_BUILDER_ENABLED_MODULES", "ilo,cisco")
+    updated = apply_module_enable_overrides(manifests)
+    enabled = {item["name"]: item["enabled"] for item in updated}
+    assert enabled["ilo"] is True
+    assert enabled["cisco"] is True
+    assert enabled["netapp"] is False
+
+
+def test_load_modules_skips_disabled_module(tmp_path):
+    app = FastAPI()
+    modules_dir = tmp_path / "modules"
+    disabled = modules_dir / "disabledmod"
+    disabled.mkdir(parents=True, exist_ok=True)
+    (disabled / "manifest.yml").write_text(
+        yaml.safe_dump(
+            {
+                "name": "disabledmod",
+                "title": "Disabled",
+                "enabled": False,
+                "routes": {"prefix": "/modules/disabledmod"},
+                "navigation": {"label": "Disabled", "href": "/modules/disabledmod", "active_page": "disabledmod"},
+            },
+            sort_keys=False,
+        ),
+        encoding="utf-8",
+    )
+    (disabled / "routes.py").write_text(
+        "from fastapi import FastAPI\n"
+        "def register_module_routes(app: FastAPI) -> None:\n"
+        "    app.state.disabled_route_registered = True\n",
+        encoding="utf-8",
+    )
+    (modules_dir / "__init__.py").write_text("", encoding="utf-8")
+    (disabled / "__init__.py").write_text("", encoding="utf-8")
+
+    manifests = load_modules(app, modules_dir=modules_dir, package_root="modules")
+    assert len(manifests) == 1
+    assert getattr(app.state, "disabled_route_registered", False) is False
 
 
 def test_get_steps_for_scope_uses_registry_titles():

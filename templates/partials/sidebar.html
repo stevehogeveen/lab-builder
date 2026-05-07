@@ -35,4 +35,15 @@
         {% endif %}
     </div>
     {% endif %}
+
+    {% if module_navigation %}
+    <div class="nav-group">
+        <div class="nav-label">Modules</div>
+        {% for item in module_navigation %}
+        {% if item.active_page not in ['ilo', 'storage', 'esxi', 'windows', 'qnap'] %}
+        <a class="nav-link{% if active_page == item.active_page %} nav-link-active{% endif %}" href="{{ item.href }}">{{ item.label }}</a>
+        {% endif %}
+        {% endfor %}
+    </div>
+    {% endif %}
 </aside>

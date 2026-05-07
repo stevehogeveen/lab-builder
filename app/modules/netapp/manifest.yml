@@ -1,0 +1,20 @@
+name: netapp
+title: NetApp
+description: NetApp ONTAP discovery and configuration workflow.
+enabled: true
+routes:
+  prefix: /modules/netapp
+navigation:
+  section: More Setup
+  label: NetApp Setup
+  href: /modules/netapp
+  active_page: netapp
+capabilities:
+  - discover
+  - plan
+  - validate
+  - preview
+  - apply
+  - status
+  - repair
+

@@ -1,0 +1,20 @@
+name: windows
+title: Windows
+description: Windows post-install and service configuration workflow.
+enabled: true
+routes:
+  prefix: /windows
+navigation:
+  section: More Setup
+  label: Windows Setup
+  href: /windows
+  active_page: windows
+capabilities:
+  - discover
+  - plan
+  - validate
+  - preview
+  - apply
+  - status
+  - repair
+

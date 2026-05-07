@@ -1,0 +1,20 @@
+name: esxi_config
+title: ESXi Config
+description: Post-install ESXi policy and host configuration.
+enabled: true
+routes:
+  prefix: /esxi
+navigation:
+  section: Setup
+  label: ESXi Config
+  href: /esxi
+  active_page: esxi
+capabilities:
+  - discover
+  - plan
+  - validate
+  - preview
+  - apply
+  - status
+  - repair
+

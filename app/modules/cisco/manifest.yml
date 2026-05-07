@@ -1,0 +1,20 @@
+name: cisco
+title: Cisco
+description: Cisco switch setup and validation workflow.
+enabled: true
+routes:
+  prefix: /modules/cisco
+navigation:
+  section: More Setup
+  label: Cisco Setup
+  href: /modules/cisco
+  active_page: cisco
+capabilities:
+  - discover
+  - plan
+  - validate
+  - preview
+  - apply
+  - status
+  - repair
+
