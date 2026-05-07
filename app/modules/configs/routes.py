@@ -35,6 +35,47 @@ async def view_latest_live_summary_handler(request: Request, runtime: ConfigsRun
     )
 
 
+async def load_kit_handler(
+    request: Request,
+    runtime: ConfigsRuntime,
+    selected_kit: str = Form(...),
+    return_page: str = Form("dashboard"),
+):
+    runtime["set_current_kit_name"](selected_kit)
+    cfg = runtime["load_kit_config"](selected_kit)
+    if str(return_page).strip().lower() == "kits":
+        return_page = "dashboard"
+    return runtime["render_page"](request, cfg, active_page=return_page, message=f"Loaded kit: {selected_kit}")
+
+
+async def new_kit_handler(
+    request: Request,
+    runtime: ConfigsRuntime,
+    new_kit_name: str = Form(...),
+    return_page: str = Form("dashboard"),
+):
+    name = runtime["sanitize_kit_name"](new_kit_name)
+    cfg = runtime["default_config"]()
+    cfg["site"]["name"] = name
+    runtime["save_kit_config"](cfg)
+    runtime["save_job"](
+        name,
+        {
+            "status": "Idle",
+            "scope": "",
+            "current_stage": "",
+            "progress_percent": 0,
+            "completed_steps": 0,
+            "total_steps": 0,
+            "logs": [],
+        },
+    )
+    runtime["save_history"](name, [])
+    if str(return_page).strip().lower() == "kits":
+        return_page = "dashboard"
+    return runtime["render_page"](request, cfg, active_page=return_page, message=f"Created new kit: {name}")
+
+
 async def download_latest_live_summary_handler(runtime: ConfigsRuntime):
     latest = runtime["latest_live_inventory_export"]()
     if not latest:

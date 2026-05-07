@@ -85,11 +85,15 @@ from app.modules.configs.routes import (
     export_ilo_config_handler,
     export_ilo_inventory_handler,
     import_kit_config_handler,
+    load_kit_handler,
+    new_kit_handler,
     view_current_kit_config_handler,
     view_ilo_config_snapshot_handler,
     view_latest_live_summary_handler,
     view_report_handler,
 )
+from app.modules.qnap.routes import save_qnap_settings_handler
+from app.modules.windows.routes import save_windows_settings_handler
 from app.modules.execution.routes import (
     download_built_esxi_iso_handler,
     download_latest_debug_bundle_handler,
@@ -13515,32 +13519,33 @@ async def history_page(request: Request):
 
 @app.post("/load-kit", response_class=HTMLResponse)
 async def load_kit_route(request: Request, selected_kit: str = Form(...), return_page: str = Form("dashboard")):
-    set_current_kit_name(selected_kit)
-    cfg = load_kit_config(selected_kit)
-    if str(return_page).strip().lower() == "kits":
-        return_page = "dashboard"
-    return render_page(request, cfg, active_page=return_page, message=f"Loaded kit: {selected_kit}")
+    return await load_kit_handler(
+        request,
+        runtime={
+            "set_current_kit_name": set_current_kit_name,
+            "load_kit_config": load_kit_config,
+            "render_page": render_page,
+        },
+        selected_kit=selected_kit,
+        return_page=return_page,
+    )
 
 
 @app.post("/new-kit", response_class=HTMLResponse)
 async def new_kit_route(request: Request, new_kit_name: str = Form(...), return_page: str = Form("dashboard")):
-    name = sanitize_kit_name(new_kit_name)
-    cfg = default_config()
-    cfg["site"]["name"] = name
-    save_kit_config(cfg)
-    save_job(name, {
-        "status": "Idle",
-        "scope": "",
-        "current_stage": "",
-        "progress_percent": 0,
-        "completed_steps": 0,
-        "total_steps": 0,
-        "logs": [],
-    })
-    save_history(name, [])
-    if str(return_page).strip().lower() == "kits":
-        return_page = "dashboard"
-    return render_page(request, cfg, active_page=return_page, message=f"Created new kit: {name}")
+    return await new_kit_handler(
+        request,
+        runtime={
+            "sanitize_kit_name": sanitize_kit_name,
+            "default_config": default_config,
+            "save_kit_config": save_kit_config,
+            "save_job": save_job,
+            "save_history": save_history,
+            "render_page": render_page,
+        },
+        new_kit_name=new_kit_name,
+        return_page=return_page,
+    )
 
 
 @app.post("/save-config", response_class=HTMLResponse)
@@ -14108,32 +14113,20 @@ async def save_windows_settings_route(
     windows_admin_password: str = Form(""),
     included_windows: str | None = Form(None),
 ):
-    cfg = load_kit_config()
-    cfg["windows"]["vm_name"] = windows_vm_name
-    cfg["windows"]["admin_password"] = windows_admin_password
-    cfg["included"]["windows"] = included_windows == "on"
-    cfg = apply_ip_plan(cfg)
-    save_kit_config(cfg)
-    append_activity_event(
-        cfg["site"]["name"],
-        "windows_settings_saved",
-        workflow="windows",
-        summary="Saved the Windows setup values for this kit.",
-        target=cfg["windows"].get("ip_address") or cfg.get("ip_plan", {}).get("windows", ""),
-    )
-    return render_page(
+    return await save_windows_settings_handler(
         request,
-        cfg,
-        active_page=return_page,
-        action_feedback=build_action_feedback(
-            "Windows setup saved",
-            "Updated the local Windows setup values for this kit.",
-            tone="ready",
-            outcomes=[
-                f"VM name: {cfg['windows'].get('vm_name', '') or 'Not set'}",
-                f"Target: {cfg['windows'].get('ip_address', '') or cfg.get('ip_plan', {}).get('windows', '') or 'Not set'}",
-            ],
-        ),
+        runtime={
+            "load_kit_config": load_kit_config,
+            "apply_ip_plan": apply_ip_plan,
+            "save_kit_config": save_kit_config,
+            "append_activity_event": append_activity_event,
+            "render_page": render_page,
+            "build_action_feedback": build_action_feedback,
+        },
+        return_page=return_page,
+        windows_vm_name=windows_vm_name,
+        windows_admin_password=windows_admin_password,
+        included_windows=included_windows,
     )
 
 
@@ -14146,33 +14139,21 @@ async def save_qnap_settings_route(
     qnap_password: str = Form(""),
     included_qnap: str | None = Form(None),
 ):
-    cfg = load_kit_config()
-    cfg["qnap"]["hostname"] = qnap_hostname
-    cfg["qnap"]["username"] = qnap_username
-    cfg["qnap"]["password"] = qnap_password
-    cfg["included"]["qnap"] = included_qnap == "on"
-    cfg = apply_ip_plan(cfg)
-    save_kit_config(cfg)
-    append_activity_event(
-        cfg["site"]["name"],
-        "qnap_settings_saved",
-        workflow="qnap",
-        summary="Saved the QNAP setup values for this kit.",
-        target=cfg["qnap"].get("ip") or cfg.get("ip_plan", {}).get("qnap", ""),
-    )
-    return render_page(
+    return await save_qnap_settings_handler(
         request,
-        cfg,
-        active_page=return_page,
-        action_feedback=build_action_feedback(
-            "QNAP setup saved",
-            "Updated the local QNAP setup values for this kit.",
-            tone="ready",
-            outcomes=[
-                f"Hostname: {cfg['qnap'].get('hostname', '') or 'Not set'}",
-                f"Target: {cfg['qnap'].get('ip', '') or cfg.get('ip_plan', {}).get('qnap', '') or 'Not set'}",
-            ],
-        ),
+        runtime={
+            "load_kit_config": load_kit_config,
+            "apply_ip_plan": apply_ip_plan,
+            "save_kit_config": save_kit_config,
+            "append_activity_event": append_activity_event,
+            "render_page": render_page,
+            "build_action_feedback": build_action_feedback,
+        },
+        return_page=return_page,
+        qnap_hostname=qnap_hostname,
+        qnap_username=qnap_username,
+        qnap_password=qnap_password,
+        included_qnap=included_qnap,
     )
 
 
