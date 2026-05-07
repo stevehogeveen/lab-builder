@@ -86,6 +86,16 @@ from app.modules.configs.routes import (
     view_latest_live_summary_handler,
     view_report_handler,
 )
+from app.modules.execution.routes import (
+    download_built_esxi_iso_handler,
+    download_latest_debug_bundle_handler,
+    download_run_summary_handler,
+    execute_preview_scope_handler,
+    execute_scope_handler,
+    prepare_execute_handler,
+    retry_storage_stage_handler,
+    view_run_summary_handler,
+)
 from app.modules.storage.routes import (
     approve_storage_plan_handler,
     apply_storage_layout_handler,
@@ -14786,43 +14796,37 @@ async def view_run_summary(
     scope: str = Form(...),
     return_page: str = Form("execution"),
 ):
-    cfg = load_kit_config()
-    summary = build_run_summary(cfg, scope)
-    return render_page(
+    return await view_run_summary_handler(
         request,
-        cfg,
-        active_page=return_page,
-        action_feedback=build_action_feedback(
-            "Run summary ready",
-            "Built a concise review of the selected run that you can print or export.",
-            tone="ready",
-            outcomes=[
-                f"Scope: {scope}",
-                f"Target server: {summary.get('target_server') or 'Not set'}",
-                f"Included stages: {', '.join(summary.get('final_summary', {}).get('will_run', []))}",
-            ],
-        ),
-        config_view_title=f"Run Summary: {scope}",
-        config_view_content=yaml.safe_dump(summary, sort_keys=False),
-        execution_preview=build_execution_review(cfg, scope).get("detail_text"),
-        execution_review=build_execution_review(cfg, scope),
-        confirm_scope=scope,
+        runtime={
+            "load_kit_config": load_kit_config,
+            "build_run_summary": build_run_summary,
+            "build_execution_review": build_execution_review,
+            "render_page": render_page,
+            "build_action_feedback": build_action_feedback,
+            "yaml_safe_dump": yaml.safe_dump,
+        },
+        scope=scope,
+        return_page=return_page,
     )
 
 
 @app.post("/download-run-summary")
 async def download_run_summary(scope: str = Form(...)):
-    cfg = load_kit_config()
-    path = write_run_summary_artifact(cfg, scope)
-    return FileResponse(path=path, filename=path.name, media_type="application/x-yaml")
+    return await download_run_summary_handler(
+        runtime={
+            "load_kit_config": load_kit_config,
+            "write_run_summary_artifact": write_run_summary_artifact,
+        },
+        scope=scope,
+    )
 
 
 @app.get("/debug-bundles/latest")
 async def download_latest_debug_bundle():
-    path = DEBUG_BUNDLES_DIR / "latest-failure.txt"
-    if not path.exists():
-        return HTMLResponse("No debug bundle has been generated yet.", status_code=404)
-    return FileResponse(path=path, filename="latest-failure.txt", media_type="text/plain")
+    return await download_latest_debug_bundle_handler(
+        runtime={"debug_bundles_dir": DEBUG_BUNDLES_DIR}
+    )
 
 
 def resolve_built_esxi_iso_path(kit_name: str, output_name: str) -> Path:
@@ -14851,11 +14855,15 @@ def append_esxi_iso_access_log(path: Path, request: Request) -> None:
 
 @app.api_route("/esxi-built-iso/{kit_name}/{output_name}.iso", methods=["GET", "HEAD"])
 async def download_built_esxi_iso(request: Request, kit_name: str, output_name: str):
-    path = resolve_built_esxi_iso_path(kit_name, output_name)
-    if not path.exists():
-        return HTMLResponse(f"Built ESXi ISO not found: {path}", status_code=404)
-    append_esxi_iso_access_log(path, request)
-    return FileResponse(path=path, filename=path.name, media_type="application/octet-stream")
+    return await download_built_esxi_iso_handler(
+        request,
+        runtime={
+            "resolve_built_esxi_iso_path": resolve_built_esxi_iso_path,
+            "append_esxi_iso_access_log": append_esxi_iso_access_log,
+        },
+        kit_name=kit_name,
+        output_name=output_name,
+    )
 
 
 @app.post("/prepare-execute", response_class=HTMLResponse)
@@ -14865,23 +14873,19 @@ async def prepare_execute(
     selected_scopes: list[str] = Form([]),
     return_page: str = Form("execution"),
 ):
-    cfg = load_kit_config()
-    apply_request_public_base_url(cfg, request)
-    scope = normalize_run_center_scope(scope, selected_scopes)
-    preview_error = None
-    try:
-        validate_execution_scope(cfg, scope)
-    except Exception as e:
-        preview_error = str(e).splitlines()[0]
-    review = build_execution_review(cfg, scope)
-    return render_page(
+    return await prepare_execute_handler(
         request,
-        cfg,
-        active_page=return_page,
-        execution_preview=review.get("detail_text"),
-        execution_review=review,
-        confirm_scope=scope,
-        error_message=preview_error,
+        runtime={
+            "load_kit_config": load_kit_config,
+            "apply_request_public_base_url": apply_request_public_base_url,
+            "normalize_run_center_scope": normalize_run_center_scope,
+            "validate_execution_scope": validate_execution_scope,
+            "build_execution_review": build_execution_review,
+            "render_page": render_page,
+        },
+        scope=scope,
+        selected_scopes=selected_scopes,
+        return_page=return_page,
     )
 
 
@@ -14895,82 +14899,26 @@ async def execute_scope(
     esxi_run_stamp: str = Form(""),
     return_page: str = Form("execution"),
 ):
-    cfg = load_kit_config()
-    apply_request_public_base_url(cfg, request)
-    scope = normalize_run_center_scope(scope, selected_scopes)
-    launch_options = build_execution_launch_options(cfg, scope)
-    real_launch = launch_options.get("real")
-    if not real_launch:
-        return render_page(
-            request,
-            cfg,
-            active_page=return_page,
-            error_message="Execution blocked: a real run is not available for the selected stages.",
-            execution_preview=build_execution_review(cfg, scope).get("detail_text"),
-            execution_review=build_execution_review(cfg, scope),
-            confirm_scope=scope,
-        )
-    scope = str(real_launch.get("scope") or scope)
-    runtime = dict(cfg.get("_runtime", {}) or {})
-    if esxi_run_stamp.strip():
-        runtime["esxi_run_stamp"] = esxi_run_stamp.strip()
-    if runtime:
-        cfg["_runtime"] = runtime
-    try:
-        validate_execution_scope(cfg, scope)
-    except Exception as e:
-        return render_page(
-            request,
-            cfg,
-            active_page=return_page,
-            error_message=f"Execution blocked: {str(e).splitlines()[0]}",
-            execution_preview=build_execution_review(cfg, scope).get("detail_text"),
-            execution_review=build_execution_review(cfg, scope),
-            confirm_scope=scope,
-        )
-
-    if confirm_checkbox != "on":
-        return render_page(
-            request,
-            cfg,
-            active_page=return_page,
-            error_message="Execution blocked: you must check the confirmation box.",
-            execution_preview=build_execution_review(cfg, scope).get("detail_text"),
-            execution_review=build_execution_review(cfg, scope),
-            confirm_scope=scope,
-        )
-
-    if confirm_phrase.strip().upper() != "EXECUTE":
-        return render_page(
-            request,
-            cfg,
-            active_page=return_page,
-            error_message='Execution blocked: confirmation phrase must be exactly EXECUTE.',
-            execution_preview=build_execution_review(cfg, scope).get("detail_text"),
-            execution_review=build_execution_review(cfg, scope),
-            confirm_scope=scope,
-        )
-
-    initialize_background_job(cfg["site"]["name"], scope)
-    threading.Thread(
-        target=execute_real_job_in_background,
-        args=(cfg, scope),
-        daemon=True,
-    ).start()
-
-    msg = "Execution started."
-    if scope == "ilo":
-        msg = "Real iLO automation started in the background. Check Job Monitor for live progress and logs."
-    elif scope == "storage":
-        msg = "Real storage automation started in the background. Check Job Monitor for live progress and logs."
-    elif scope == "esxi":
-        msg = "Real ESXi automation started in the background. Check Job Monitor for live progress and logs."
-    elif scope.startswith("multi__"):
-        msg = "Real selected-stage automation started in the background. Check Job Monitor for live progress and logs."
-    else:
-        msg = f"Preview started for scope: {scope}. No real changes will be made."
-
-    return render_page(request, cfg, active_page=return_page, message=msg)
+    return await execute_scope_handler(
+        request,
+        runtime={
+            "load_kit_config": load_kit_config,
+            "apply_request_public_base_url": apply_request_public_base_url,
+            "normalize_run_center_scope": normalize_run_center_scope,
+            "build_execution_launch_options": build_execution_launch_options,
+            "validate_execution_scope": validate_execution_scope,
+            "build_execution_review": build_execution_review,
+            "initialize_background_job": initialize_background_job,
+            "execute_real_job_in_background": execute_real_job_in_background,
+            "render_page": render_page,
+        },
+        scope=scope,
+        selected_scopes=selected_scopes,
+        confirm_phrase=confirm_phrase,
+        confirm_checkbox=confirm_checkbox,
+        esxi_run_stamp=esxi_run_stamp,
+        return_page=return_page,
+    )
 
 
 @app.post("/retry-storage-stage", response_class=HTMLResponse)
@@ -14978,47 +14926,19 @@ async def retry_storage_stage(
     request: Request,
     return_page: str = Form("execution"),
 ):
-    cfg = load_kit_config()
-    apply_request_public_base_url(cfg, request)
-    scope = "storage"
-    review = build_execution_review(cfg, scope)
-    launch_options = build_execution_launch_options(cfg, scope)
-    real_launch = launch_options.get("real")
-    if not real_launch:
-        return render_page(
-            request,
-            cfg,
-            active_page=return_page,
-            error_message="Storage retry blocked: a real storage run is not currently available.",
-            execution_preview=review.get("detail_text"),
-            execution_review=review,
-            confirm_scope=scope,
-        )
-    scope = str(real_launch.get("scope") or scope)
-    try:
-        validate_execution_scope(cfg, scope)
-    except Exception as e:
-        return render_page(
-            request,
-            cfg,
-            active_page=return_page,
-            error_message=f"Storage retry blocked: {str(e).splitlines()[0]}",
-            execution_preview=review.get("detail_text"),
-            execution_review=review,
-            confirm_scope=scope,
-        )
-
-    initialize_background_job(cfg["site"]["name"], scope)
-    threading.Thread(
-        target=execute_real_job_in_background,
-        args=(cfg, scope),
-        daemon=True,
-    ).start()
-    return render_page(
+    return await retry_storage_stage_handler(
         request,
-        cfg,
-        active_page=return_page,
-        message="Storage retry started. Follow the Live job panel for step-by-step progress.",
+        runtime={
+            "load_kit_config": load_kit_config,
+            "apply_request_public_base_url": apply_request_public_base_url,
+            "build_execution_review": build_execution_review,
+            "build_execution_launch_options": build_execution_launch_options,
+            "validate_execution_scope": validate_execution_scope,
+            "initialize_background_job": initialize_background_job,
+            "execute_real_job_in_background": execute_real_job_in_background,
+            "render_page": render_page,
+        },
+        return_page=return_page,
     )
 
 
@@ -15029,47 +14949,19 @@ async def execute_preview_scope(
     selected_scopes: list[str] = Form([]),
     return_page: str = Form("execution"),
 ):
-    cfg = load_kit_config()
-    scope = normalize_run_center_scope(scope, selected_scopes)
-    try:
-        validate_execution_scope(cfg, scope)
-    except Exception as e:
-        review = build_execution_review(cfg, scope)
-        return render_page(
-            request,
-            cfg,
-            active_page=return_page,
-            error_message=f"Preview blocked: {str(e).splitlines()[0]}",
-            execution_preview=review.get("detail_text"),
-            execution_review=review,
-            confirm_scope=scope,
-        )
-
-    save_job(
-        cfg["site"]["name"],
-        {
-            "status": "Preview queued",
-            "execution_mode": "preview",
-            "execution_mode_label": "Preview / safety mode",
-            "scope": scope,
-            "current_stage": "Queued",
-            "progress_percent": 0,
-            "completed_steps": 0,
-            "total_steps": 0,
-            "logs": [f"[QUEUED] Preview / safety mode requested for scope: {scope}"],
-            "root_scope": scope,
-            "stage_statuses": initialize_stage_statuses(scope, cfg),
-        },
-    )
-    threading.Thread(
-        target=execute_preview_job_in_background,
-        args=(cfg, scope),
-        daemon=True,
-    ).start()
-
-    return render_page(
+    return await execute_preview_scope_handler(
         request,
-        cfg,
-        active_page=return_page,
-        message=f"Preview started for scope: {scope}. No real changes will be made.",
+        runtime={
+            "load_kit_config": load_kit_config,
+            "normalize_run_center_scope": normalize_run_center_scope,
+            "validate_execution_scope": validate_execution_scope,
+            "build_execution_review": build_execution_review,
+            "render_page": render_page,
+            "save_job": save_job,
+            "initialize_stage_statuses": initialize_stage_statuses,
+            "execute_preview_job_in_background": execute_preview_job_in_background,
+        },
+        scope=scope,
+        selected_scopes=selected_scopes,
+        return_page=return_page,
     )
