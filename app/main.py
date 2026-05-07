@@ -75,11 +75,15 @@ from app.modules.ilo.routes import (
     save_ilo_settings_handler,
 )
 from app.modules.configs.routes import (
+    autofill_ip_plan_handler,
     download_current_kit_config_handler,
     download_ilo_config_snapshot_handler,
     download_latest_live_raw_handler,
     download_latest_live_summary_handler,
     download_report_handler,
+    export_ad_hoc_ilo_inventory_handler,
+    export_ilo_config_handler,
+    export_ilo_inventory_handler,
     import_kit_config_handler,
     view_current_kit_config_handler,
     view_ilo_config_snapshot_handler,
@@ -14178,95 +14182,54 @@ async def autofill_ip_plan(
     return_page: str = Form("configuration"),
     shared_subnet: str = Form("10.10.8.0/24"),
 ):
-    cfg = load_kit_config()
-    try:
-        cfg["shared_network"]["subnet"] = shared_subnet
-        cfg["ip_plan"] = build_default_ip_plan(shared_subnet)
-        cfg = apply_ip_plan(cfg)
-        save_kit_config(cfg)
-        return render_page(request, cfg, active_page=return_page, message="Default IP plan generated and applied.")
-    except Exception as e:
-        return render_page(request, cfg, active_page=return_page, error_message=f"IP plan generation failed: {e}")
+    return await autofill_ip_plan_handler(
+        request,
+        runtime={
+            "load_kit_config": load_kit_config,
+            "build_default_ip_plan": build_default_ip_plan,
+            "apply_ip_plan": apply_ip_plan,
+            "save_kit_config": save_kit_config,
+            "render_page": render_page,
+        },
+        return_page=return_page,
+        shared_subnet=shared_subnet,
+    )
 
 
 @app.post("/export-ilo-config", response_class=HTMLResponse)
 async def export_ilo_config(request: Request, return_page: str = Form("configs")):
-    cfg = load_kit_config()
-    try:
-        snapshot_path = export_ilo_config_snapshot(cfg)
-        return render_page(
-            request,
-            cfg,
-            active_page=return_page,
-            message=f"Exported iLO config snapshot to {snapshot_path}",
-        )
-    except Exception as e:
-        return render_page(request, cfg, active_page=return_page, error_message=f"iLO config export failed: {e}")
+    return await export_ilo_config_handler(
+        request,
+        runtime={
+            "load_kit_config": load_kit_config,
+            "export_ilo_config_snapshot": export_ilo_config_snapshot,
+            "render_page": render_page,
+        },
+        return_page=return_page,
+    )
 
 
 @app.post("/export-ilo-inventory", response_class=HTMLResponse)
 async def export_ilo_inventory(request: Request, return_page: str = Form("configs")):
-    cfg = load_kit_config()
-    ilo_cfg = cfg.get("ilo", {})
-    host = (ilo_cfg.get("current_ip") or ilo_cfg.get("host") or "").strip()
-    username = (ilo_cfg.get("username") or "").strip()
-    password = ilo_cfg.get("password", "")
-
-    if not host and policy_enabled(cfg, "discover_enabled"):
-        policy = normalize_ilo_policy((cfg.get("ilo") or {}).get("policy"))
-        discovered = [probe_tcp_port(target, 443, timeout_seconds=0.75) for target in build_ilo_discovery_targets(cfg)]
-        policy["discovered_hosts"] = discovered
-        reachable = [item for item in discovered if item.get("reachable")]
-        cfg["ilo"]["policy"] = normalize_ilo_policy(policy)
-        if reachable:
-            host = str(reachable[0].get("host") or "")
-            cfg["ilo"]["current_ip"] = host
-            cfg["ilo"]["host"] = host
-        save_kit_config(cfg)
-
-    if not host or not username or not password:
-        error_text = "Current iLO config fetch failed: missing current iLO IP, username, or password."
-        return render_page(
-            request,
-            cfg,
-            active_page=return_page,
-            error_message=error_text,
-        )
-
-    try:
-        client = ILOClient(ILOConfig(host=host, username=username, password=password, verify_tls=False, timeout=15))
-        inventory = client.get_current_config_snapshot()
-        export_paths = export_ilo_inventory_snapshot(cfg, inventory)
-        try:
-            db_persist_ilo_inventory(cfg, inventory, source_host=host)
-        except Exception:
-            pass
-        yaml_text = export_paths["summary"].read_text(encoding="utf-8")
-        return render_page(
-            request,
-            cfg,
-            active_page=return_page,
-            action_feedback=build_action_feedback(
-                "Current iLO inventory captured",
-                "Read the live iLO state and saved a fresh summary and raw export.",
-                tone="ready",
-                outcomes=[
-                    f"Target: {host}",
-                    f"Saved under: {export_paths['summary'].parent}",
-                ],
-                links=[{"label": "Open artifacts page", "href": "/configs"}],
+    return await export_ilo_inventory_handler(
+        request,
+        runtime={
+            "load_kit_config": load_kit_config,
+            "policy_enabled": policy_enabled,
+            "normalize_ilo_policy": normalize_ilo_policy,
+            "probe_tcp_port": probe_tcp_port,
+            "build_ilo_discovery_targets": build_ilo_discovery_targets,
+            "save_kit_config": save_kit_config,
+            "build_ilo_client": lambda *, host, username, password: ILOClient(
+                ILOConfig(host=host, username=username, password=password, verify_tls=False, timeout=15)
             ),
-            config_view_title=f"Latest Live Summary: {export_paths['summary'].parent.name}",
-            config_view_content=yaml_text,
-        )
-    except Exception as e:
-        error_text = f"Current iLO config fetch failed: {str(e).splitlines()[0]}"
-        return render_page(
-            request,
-            cfg,
-            active_page=return_page,
-            error_message=error_text,
-        )
+            "export_ilo_inventory_snapshot": export_ilo_inventory_snapshot,
+            "db_persist_ilo_inventory": db_persist_ilo_inventory,
+            "render_page": render_page,
+            "build_action_feedback": build_action_feedback,
+        },
+        return_page=return_page,
+    )
 
 
 @app.post("/export-ad-hoc-ilo-inventory", response_class=HTMLResponse)
@@ -14279,71 +14242,26 @@ async def export_ad_hoc_ilo_inventory(
     ad_hoc_ilo_label: str = Form(""),
     save_to_current_kit: str | None = Form(None),
 ):
-    cfg = load_kit_config()
-    host = ad_hoc_ilo_host.strip()
-    username = ad_hoc_ilo_username.strip()
-    password = ad_hoc_ilo_password
-    label = ad_hoc_ilo_label.strip()
-
-    if not host or not username or not password:
-        error_text = "Ad hoc iLO inventory export failed: missing iLO IP/hostname, username, or password."
-        return render_page(
-            request,
-            cfg,
-            active_page=return_page,
-            error_message=error_text,
-        )
-
-    try:
-        client = ILOClient(ILOConfig(host=host, username=username, password=password, verify_tls=False, timeout=15))
-        inventory = client.get_current_config_snapshot()
-        export_paths = export_ilo_inventory_snapshot(
-            cfg,
-            inventory,
-            label=label,
-            source_host=host,
-        )
-        try:
-            db_persist_ilo_inventory(cfg, inventory, source_host=host)
-        except Exception:
-            pass
-
-        saved_msg = ""
-        if save_to_current_kit == "on":
-            cfg["ilo"]["host"] = host
-            cfg["ilo"]["current_ip"] = host
-            cfg["ilo"]["username"] = username
-            cfg["ilo"]["password"] = password
-            save_kit_config(cfg)
-            saved_msg = " Saved these connection values to the current kit."
-
-        yaml_text = export_paths["summary"].read_text(encoding="utf-8")
-        return render_page(
-            request,
-            cfg,
-            active_page=return_page,
-            action_feedback=build_action_feedback(
-                "Ad hoc iLO inventory captured",
-                "Read the live iLO state from the temporary target and saved fresh exports.",
-                tone="ready",
-                outcomes=[
-                    f"Target: {host}",
-                    f"Saved under: {export_paths['summary'].parent}",
-                    saved_msg.strip() or "Current kit settings were left unchanged.",
-                ],
-                links=[{"label": "Open artifacts page", "href": "/configs"}],
+    return await export_ad_hoc_ilo_inventory_handler(
+        request,
+        runtime={
+            "load_kit_config": load_kit_config,
+            "build_ilo_client": lambda *, host, username, password: ILOClient(
+                ILOConfig(host=host, username=username, password=password, verify_tls=False, timeout=15)
             ),
-            config_view_title=f"Latest Live Summary: {export_paths['summary'].parent.name}",
-            config_view_content=yaml_text,
-        )
-    except Exception as e:
-        error_text = f"Ad hoc iLO inventory export failed: {str(e).splitlines()[0]}"
-        return render_page(
-            request,
-            cfg,
-            active_page=return_page,
-            error_message=error_text,
-        )
+            "export_ilo_inventory_snapshot": export_ilo_inventory_snapshot,
+            "db_persist_ilo_inventory": db_persist_ilo_inventory,
+            "save_kit_config": save_kit_config,
+            "render_page": render_page,
+            "build_action_feedback": build_action_feedback,
+        },
+        return_page=return_page,
+        ad_hoc_ilo_host=ad_hoc_ilo_host,
+        ad_hoc_ilo_username=ad_hoc_ilo_username,
+        ad_hoc_ilo_password=ad_hoc_ilo_password,
+        ad_hoc_ilo_label=ad_hoc_ilo_label,
+        save_to_current_kit=save_to_current_kit,
+    )
 
 
 @app.post("/view-latest-live-summary", response_class=HTMLResponse)
