@@ -39,6 +39,24 @@ class StorageModuleService:
             storage_cfg["password"] = str(payload.get("storage_password") or "")
         return {"cfg": cfg, "using_defaults": storage_target_mode == "defaults"}
 
+    def resolve_storage_access(self, cfg: dict[str, Any], payload: dict[str, Any]) -> dict[str, Any]:
+        resolve_storage_target_host = payload["resolve_storage_target_host"]
+        resolve_storage_target_credentials = payload["resolve_storage_target_credentials"]
+        storage_target = resolve_storage_target_host(cfg)
+        storage_credentials = resolve_storage_target_credentials(cfg)
+        host = str(storage_target.get("resolved") or "")
+        username = str(storage_credentials.get("username") or "")
+        password = str(storage_credentials.get("password") or "")
+        valid = bool(host and username and password)
+        return {
+            "valid": valid,
+            "host": host,
+            "username": username,
+            "password": password,
+            "storage_target": storage_target,
+            "storage_credentials": storage_credentials,
+        }
+
 
 def default_storage_module_service() -> StorageModuleService:
     return StorageModuleService()

@@ -75,6 +75,9 @@ from app.modules.ilo.routes import (
     save_ilo_settings_handler,
 )
 from app.modules.storage.routes import (
+    probe_storage_capabilities_handler,
+    read_current_storage_handler,
+    repair_storage_selection_handler,
     save_storage_target_handler,
     storage_page_handler,
 )
@@ -14373,68 +14376,25 @@ async def read_current_storage(
     request: Request,
     return_page: str = Form("storage"),
 ):
-    cfg = load_kit_config()
-    storage_target = resolve_storage_target_host(cfg)
-    storage_credentials = resolve_storage_target_credentials(cfg)
-    host = storage_target.get("resolved", "")
-    username = storage_credentials.get("username", "")
-    password = storage_credentials.get("password", "")
-
-    if not host or not username or not password:
-        return render_page(
-            request,
-            cfg,
-            active_page=return_page,
-            error_message=f"Storage discovery failed: {storage_target.get('error') or storage_credentials.get('error') or 'missing current iLO IP, username, or password.'}",
-        )
-
-    try:
-        client = ILOClient(ILOConfig(host=host, username=username, password=password, verify_tls=False, timeout=15))
-        discovery = client.get_storage_discovery(deep_smart_storage_scan=True)
-        export_paths = export_storage_discovery_snapshot(cfg, discovery, host=host)
-        try:
-            db_persist_storage_inventory(cfg, discovery, host=host)
-        except Exception:
-            pass
-        update_storage_latest_state(cfg, discovery=discovery, discovery_paths=export_paths)
-        save_kit_config(cfg)
-        append_activity_event(
-            cfg["site"]["name"],
-            "storage_discovered",
-            workflow="storage",
-            state="discovered",
-            summary="Read the current storage layout and saved a fresh discovery snapshot.",
-            target=host,
-            details=[f"Run folder: {export_paths['directory']}"],
-        )
-        return render_page(
-            request,
-            cfg,
-            active_page=return_page,
-            action_feedback=build_action_feedback(
-                "Current storage setup loaded",
-                "Read what is on the server and displayed the current storage setup.",
-                tone="ready",
-                outcomes=[
-                    "The current storage layout is now ready to review.",
-                    "Next step: Build storage plan",
-                ],
-                links=[
-                    {"label": "Build storage plan", "href": "/storage#build-storage-plan"},
-                    {"label": "Open reports", "href": "/configs"},
-                ],
+    return await read_current_storage_handler(
+        request,
+        runtime={
+            "load_kit_config": load_kit_config,
+            "resolve_storage_target_host": resolve_storage_target_host,
+            "resolve_storage_target_credentials": resolve_storage_target_credentials,
+            "build_ilo_client": lambda *, host, username, password: ILOClient(
+                ILOConfig(host=host, username=username, password=password, verify_tls=False, timeout=15)
             ),
-            storage_discovery=discovery,
-            storage_export_paths=export_paths,
-        )
-    except Exception as e:
-        error_text = f"Storage discovery failed: {str(e).splitlines()[0]}"
-        return render_page(
-            request,
-            cfg,
-            active_page=return_page,
-            error_message=error_text,
-        )
+            "export_storage_discovery_snapshot": export_storage_discovery_snapshot,
+            "db_persist_storage_inventory": db_persist_storage_inventory,
+            "update_storage_latest_state": update_storage_latest_state,
+            "save_kit_config": save_kit_config,
+            "append_activity_event": append_activity_event,
+            "render_page": render_page,
+            "build_action_feedback": build_action_feedback,
+        },
+        return_page=return_page,
+    )
 
 
 @app.post("/repair-storage-selection", response_class=HTMLResponse)
@@ -14442,55 +14402,25 @@ async def repair_storage_selection(
     request: Request,
     return_page: str = Form("storage"),
 ):
-    cfg = load_kit_config()
-    storage_target = resolve_storage_target_host(cfg)
-    storage_credentials = resolve_storage_target_credentials(cfg)
-    host = storage_target.get("resolved", "")
-    username = storage_credentials.get("username", "")
-    password = storage_credentials.get("password", "")
-    if not host or not username or not password:
-        return render_page(
-            request,
-            cfg,
-            active_page=return_page,
-            error_message=f"Storage repair failed: {storage_target.get('error') or storage_credentials.get('error') or 'missing current iLO IP, username, or password.'}",
-        )
-    try:
-        clear_storage_plan_selection_state(cfg)
-        client = ILOClient(ILOConfig(host=host, username=username, password=password, verify_tls=False, timeout=15))
-        discovery = client.get_storage_discovery(deep_smart_storage_scan=True)
-        export_paths = export_storage_discovery_snapshot(cfg, discovery, host=host)
-        try:
-            db_persist_storage_inventory(cfg, discovery, host=host)
-        except Exception:
-            pass
-        update_storage_latest_state(cfg, discovery=discovery, discovery_paths=export_paths)
-        save_kit_config(cfg)
-        return render_page(
-            request,
-            cfg,
-            active_page=return_page,
-            action_feedback=build_action_feedback(
-                "Invalid selections cleared",
-                "Cleared the saved storage plan selections and loaded fresh inventory from the current server.",
-                tone="ready",
-                outcomes=[
-                    f"Target: {host}",
-                    "Previous invalid drive selections were removed.",
-                    "Next step: build a new storage plan",
-                ],
-                links=[{"label": "Build storage plan", "href": "/storage#build-storage-plan"}],
+    return await repair_storage_selection_handler(
+        request,
+        runtime={
+            "load_kit_config": load_kit_config,
+            "resolve_storage_target_host": resolve_storage_target_host,
+            "resolve_storage_target_credentials": resolve_storage_target_credentials,
+            "clear_storage_plan_selection_state": clear_storage_plan_selection_state,
+            "build_ilo_client": lambda *, host, username, password: ILOClient(
+                ILOConfig(host=host, username=username, password=password, verify_tls=False, timeout=15)
             ),
-            storage_discovery=discovery,
-            storage_export_paths=export_paths,
-        )
-    except Exception as e:
-        return render_page(
-            request,
-            cfg,
-            active_page=return_page,
-            error_message=f"Storage repair failed: {str(e).splitlines()[0]}",
-        )
+            "export_storage_discovery_snapshot": export_storage_discovery_snapshot,
+            "db_persist_storage_inventory": db_persist_storage_inventory,
+            "update_storage_latest_state": update_storage_latest_state,
+            "save_kit_config": save_kit_config,
+            "render_page": render_page,
+            "build_action_feedback": build_action_feedback,
+        },
+        return_page=return_page,
+    )
 
 
 @app.post("/plan-raid-layout", response_class=HTMLResponse)
@@ -14708,55 +14638,24 @@ async def probe_storage_capabilities(
     request: Request,
     return_page: str = Form("storage"),
 ):
-    cfg = load_kit_config()
-    storage_target = resolve_storage_target_host(cfg)
-    storage_credentials = resolve_storage_target_credentials(cfg)
-    host = storage_target.get("resolved", "")
-    username = storage_credentials.get("username", "")
-    password = storage_credentials.get("password", "")
-
-    if not host or not username or not password:
-        return render_page(
-            request,
-            cfg,
-            active_page=return_page,
-            error_message=f"Storage capability probe failed: {storage_target.get('error') or storage_credentials.get('error') or 'missing current iLO IP, username, or password.'}",
-        )
-
-    try:
-        client = ILOClient(ILOConfig(host=host, username=username, password=password, verify_tls=False, timeout=15))
-        discovery = client.get_storage_discovery(deep_smart_storage_scan=True)
-        export_paths = export_storage_discovery_snapshot(cfg, discovery, host=host)
-        try:
-            db_persist_storage_inventory(cfg, discovery, host=host)
-        except Exception:
-            pass
-        update_storage_latest_state(cfg, discovery=discovery, discovery_paths=export_paths)
-        save_kit_config(cfg)
-        return render_page(
-            request,
-            cfg,
-            active_page=return_page,
-            action_feedback=build_action_feedback(
-                "Storage capability probe complete",
-                "Read controller metadata, volume collections, and advertised Redfish actions without making storage changes.",
-                tone="ready",
-                outcomes=[
-                    f"Target: {host}",
-                    "No delete or create requests were issued.",
-                    "Review the controller capability table below before approving apply.",
-                ],
+    return await probe_storage_capabilities_handler(
+        request,
+        runtime={
+            "load_kit_config": load_kit_config,
+            "resolve_storage_target_host": resolve_storage_target_host,
+            "resolve_storage_target_credentials": resolve_storage_target_credentials,
+            "build_ilo_client": lambda *, host, username, password: ILOClient(
+                ILOConfig(host=host, username=username, password=password, verify_tls=False, timeout=15)
             ),
-            storage_discovery=discovery,
-            storage_export_paths=export_paths,
-        )
-    except Exception as e:
-        return render_page(
-            request,
-            cfg,
-            active_page=return_page,
-            error_message=f"Storage capability probe failed: {str(e).splitlines()[0]}",
-        )
+            "export_storage_discovery_snapshot": export_storage_discovery_snapshot,
+            "db_persist_storage_inventory": db_persist_storage_inventory,
+            "update_storage_latest_state": update_storage_latest_state,
+            "save_kit_config": save_kit_config,
+            "render_page": render_page,
+            "build_action_feedback": build_action_feedback,
+        },
+        return_page=return_page,
+    )
 
 
 @app.post("/clear-storage-approval", response_class=HTMLResponse)
