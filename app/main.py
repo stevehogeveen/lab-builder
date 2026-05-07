@@ -75,6 +75,9 @@ from app.modules.ilo.routes import (
     save_ilo_settings_handler,
 )
 from app.modules.storage.routes import (
+    approve_storage_plan_handler,
+    clear_storage_approval_handler,
+    plan_raid_layout_handler,
     probe_storage_capabilities_handler,
     read_current_storage_handler,
     repair_storage_selection_handler,
@@ -14443,92 +14446,38 @@ async def plan_raid_layout(
     data_bays: list[str] = Form([]),
     hot_spare_bay: str = Form(""),
 ):
-    cfg = load_kit_config()
-    storage_target = resolve_storage_target_host(cfg)
-    host = storage_target.get("resolved", "")
-    if not host:
-        return render_page(
-            request,
-            cfg,
-            active_page=return_page,
-            error_message=f"RAID planning failed: {storage_target.get('error')}",
-        )
-
-    try:
-        discovery, discovery_paths = load_storage_discovery_artifact(discovery_raw_path, expected_host=host)
-        overrides = {
-            "controller_path": controller_path,
-            "os_controller_path": os_controller_path,
-            "data_controller_path": data_controller_path,
-            "os_drive_ids": os_drive_ids,
-            "data_drive_ids": data_drive_ids,
-            "hot_spare_drive_id": hot_spare_drive_id,
-            "os_drive_paths": os_drive_paths,
-            "data_drive_paths": data_drive_paths,
-            "hot_spare_path": hot_spare_path,
-        }
-        if not any(overrides.get(key) for key in ("os_drive_ids", "data_drive_ids", "hot_spare_drive_id", "os_drive_paths", "data_drive_paths", "hot_spare_path")):
-            overrides["os_bays"] = os_bays
-            overrides["data_bays"] = data_bays
-            overrides["hot_spare_bay"] = hot_spare_bay
-        if os_raid_level is not None:
-            overrides["os_raid_level"] = os_raid_level
-        if data_raid_level is not None:
-            overrides["data_raid_level"] = data_raid_level
-        plan = build_raid_plan(discovery, discovery_paths, overrides=overrides)
-        plan_paths = export_raid_plan_snapshot(cfg, plan, discovery_paths)
-        try:
-            db_persist_storage_plan(
-                cfg,
-                discovery=discovery,
-                discovery_paths=discovery_paths,
-                plan=plan,
-                plan_paths=plan_paths,
-                approved=False,
-            )
-        except Exception:
-            pass
-        update_storage_latest_state(cfg, discovery=discovery, discovery_paths=discovery_paths, plan=plan, plan_paths=plan_paths)
-        save_kit_config(cfg)
-        append_activity_event(
-            cfg["site"]["name"],
-            "storage_plan_built",
-            workflow="storage",
-            state="planned",
-            summary="Built a proposed storage layout from the latest discovery snapshot.",
-            target=host,
-            details=[f"Plan saved to: {plan_paths['plan']}"],
-        )
-        return render_page(
-            request,
-            cfg,
-            active_page=return_page,
-            action_feedback=build_action_feedback(
-                "Storage plan ready",
-                "Built the new layout from the latest storage read.",
-                tone="ready",
-                outcomes=[
-                    "This is still a preview. No storage changes were made.",
-                    "Next step: Approve this plan",
-                ],
-                links=[
-                    {"label": "Approve this plan", "href": "/storage#approve-storage-plan"},
-                    {"label": "Open reports", "href": "/configs"},
-                ],
-            ),
-            storage_discovery=discovery,
-            storage_export_paths=discovery_paths,
-            storage_plan=plan,
-            storage_plan_paths=plan_paths,
-        )
-    except Exception as e:
-        error_text = f"RAID planning failed: {str(e).splitlines()[0]}"
-        return render_page(
-            request,
-            cfg,
-            active_page=return_page,
-            error_message=error_text,
-        )
+    return await plan_raid_layout_handler(
+        request,
+        runtime={
+            "load_kit_config": load_kit_config,
+            "resolve_storage_target_host": resolve_storage_target_host,
+            "load_storage_discovery_artifact": load_storage_discovery_artifact,
+            "build_raid_plan": build_raid_plan,
+            "export_raid_plan_snapshot": export_raid_plan_snapshot,
+            "db_persist_storage_plan": db_persist_storage_plan,
+            "update_storage_latest_state": update_storage_latest_state,
+            "save_kit_config": save_kit_config,
+            "append_activity_event": append_activity_event,
+            "render_page": render_page,
+            "build_action_feedback": build_action_feedback,
+        },
+        return_page=return_page,
+        discovery_raw_path=discovery_raw_path,
+        controller_path=controller_path,
+        os_controller_path=os_controller_path,
+        data_controller_path=data_controller_path,
+        os_raid_level=os_raid_level,
+        data_raid_level=data_raid_level,
+        os_drive_ids=os_drive_ids,
+        data_drive_ids=data_drive_ids,
+        hot_spare_drive_id=hot_spare_drive_id,
+        os_drive_paths=os_drive_paths,
+        data_drive_paths=data_drive_paths,
+        hot_spare_path=hot_spare_path,
+        os_bays=os_bays,
+        data_bays=data_bays,
+        hot_spare_bay=hot_spare_bay,
+    )
 
 
 @app.post("/approve-storage-plan", response_class=HTMLResponse)
@@ -14539,98 +14488,27 @@ async def approve_storage_plan(
     raid_plan_path: str = Form(""),
     include_in_ilo_run: str | None = Form(None),
 ):
-    cfg = load_kit_config()
-    storage_target = resolve_storage_target_host(cfg)
-    host = storage_target.get("resolved", "")
-    discovery = None
-    discovery_paths = None
-    plan = None
-    plan_paths = None
-
-    try:
-        if not host:
-            raise ValueError(storage_target.get("error"))
-        discovery, discovery_paths, plan, plan_paths = restore_storage_page_state(
-            discovery_raw_path=discovery_raw_path,
-            raid_plan_path=raid_plan_path,
-            expected_host=host,
-        )
-        if not discovery or not discovery_paths:
-            raise ValueError("A storage discovery artifact must be selected before approval.")
-        if not plan or not plan_paths:
-            raise ValueError("A RAID plan artifact must be selected before approval.")
-        validate_storage_plan_drive_paths(plan, discovery)
-        if not plan.get("valid", False):
-            raise ValueError("Only a valid RAID plan can be approved for a later iLO run.")
-        approve_storage_plan_for_cfg(
-            cfg,
-            discovery=discovery,
-            discovery_paths=discovery_paths,
-            plan=plan,
-            plan_paths=plan_paths,
-            include_in_ilo_run=include_in_ilo_run == "on",
-        )
-        cfg["included"]["storage"] = cfg["storage"]["include_in_ilo_run"]
-        save_kit_config(cfg)
-        append_activity_event(
-            cfg["site"]["name"],
-            "storage_plan_approved",
-            workflow="storage",
-            state="approved",
-            summary="Approved the current storage plan for use in a later iLO run.",
-            target=cfg["storage"]["approval"].get("host") or host,
-            details=[
-                f"Plan: {plan_paths['plan']}",
-                f"Included in iLO run: {'Yes' if cfg['storage']['include_in_ilo_run'] else 'No'}",
-            ],
-        )
-        return render_page(
-            request,
-            cfg,
-            active_page=return_page,
-            action_feedback=build_action_feedback(
-                "Storage approved",
-                "The current storage plan is approved for the real run.",
-                tone="ready",
-                outcomes=[
-                    f"Apply it during the real run: {'Yes' if cfg['storage']['include_in_ilo_run'] else 'No'}",
-                    "Next step: Run for real",
-                ],
-                links=[{"label": "Run for real", "href": "/execution"}],
-            ),
-            storage_discovery=discovery if discovery else None,
-            storage_export_paths=discovery_paths,
-            storage_plan=plan,
-            storage_plan_paths=plan_paths,
-        )
-    except Exception as e:
-        error_text = str(e).splitlines()[0]
-        repair_action = None
-        if is_storage_drive_controller_mismatch_error(error_text):
-            try:
-                db_record_known_issue_observation(
-                    cfg,
-                    fingerprint=KNOWN_ISSUE_STORAGE_DRIVE_CONTROLLER_MISMATCH,
-                    title="Storage drive/controller mismatch",
-                    description="A selected storage drive path resolved to a different controller than the saved OS or data controller selection.",
-                    message=error_text,
-                    discovery=discovery,
-                    plan=plan,
-                )
-            except Exception:
-                pass
-            repair_action = {"return_page": return_page}
-        return render_page(
-            request,
-            cfg,
-            active_page=return_page,
-            error_message=f"Storage approval failed: {error_text}",
-            storage_discovery=discovery if discovery else None,
-            storage_export_paths=discovery_paths,
-            storage_plan=plan,
-            storage_plan_paths=plan_paths,
-            storage_repair_action=repair_action,
-        )
+    return await approve_storage_plan_handler(
+        request,
+        runtime={
+            "load_kit_config": load_kit_config,
+            "resolve_storage_target_host": resolve_storage_target_host,
+            "restore_storage_page_state": restore_storage_page_state,
+            "validate_storage_plan_drive_paths": validate_storage_plan_drive_paths,
+            "approve_storage_plan_for_cfg": approve_storage_plan_for_cfg,
+            "save_kit_config": save_kit_config,
+            "append_activity_event": append_activity_event,
+            "render_page": render_page,
+            "build_action_feedback": build_action_feedback,
+            "is_storage_drive_controller_mismatch_error": is_storage_drive_controller_mismatch_error,
+            "db_record_known_issue_observation": db_record_known_issue_observation,
+            "known_issue_storage_drive_controller_mismatch": KNOWN_ISSUE_STORAGE_DRIVE_CONTROLLER_MISMATCH,
+        },
+        return_page=return_page,
+        discovery_raw_path=discovery_raw_path,
+        raid_plan_path=raid_plan_path,
+        include_in_ilo_run=include_in_ilo_run,
+    )
 
 
 @app.post("/probe-storage-capabilities", response_class=HTMLResponse)
@@ -14665,47 +14543,21 @@ async def clear_storage_approval(
     discovery_raw_path: str = Form(""),
     raid_plan_path: str = Form(""),
 ):
-    cfg = load_kit_config()
-    storage_target = resolve_storage_target_host(cfg)
-    host = storage_target.get("resolved", "")
-    if not host:
-        return render_page(
-            request,
-            cfg,
-            active_page=return_page,
-            error_message=f"Storage approval clear failed: {storage_target.get('error')}",
-        )
-    discovery, discovery_paths, plan, plan_paths = restore_storage_page_state(
+    return await clear_storage_approval_handler(
+        request,
+        runtime={
+            "load_kit_config": load_kit_config,
+            "resolve_storage_target_host": resolve_storage_target_host,
+            "restore_storage_page_state": restore_storage_page_state,
+            "clear_storage_approval_for_cfg": clear_storage_approval_for_cfg,
+            "save_kit_config": save_kit_config,
+            "append_activity_event": append_activity_event,
+            "render_page": render_page,
+            "build_action_feedback": build_action_feedback,
+        },
+        return_page=return_page,
         discovery_raw_path=discovery_raw_path,
         raid_plan_path=raid_plan_path,
-        expected_host=host,
-    )
-    clear_storage_approval_for_cfg(cfg)
-    cfg["included"]["storage"] = False
-    cfg["storage"]["include_in_ilo_run"] = False
-    save_kit_config(cfg)
-    append_activity_event(
-        cfg["site"]["name"],
-        "storage_plan_unapproved",
-        workflow="storage",
-        state="stale",
-        summary="Removed approval from the current storage plan so it must be reviewed again.",
-        target=host,
-    )
-    return render_page(
-        request,
-        cfg,
-        active_page=return_page,
-        action_feedback=build_action_feedback(
-            "Approval removed",
-            "This storage plan now needs review again before it can be used in a real run.",
-            tone="ready",
-            outcomes=["Next step: Review the plan and approve it again if it still looks right."],
-        ),
-        storage_discovery=discovery.get("summary", {}) if discovery else None,
-        storage_export_paths=discovery_paths,
-        storage_plan=plan,
-        storage_plan_paths=plan_paths,
     )
 
 

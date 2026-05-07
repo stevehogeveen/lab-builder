@@ -57,6 +57,38 @@ class StorageModuleService:
             "storage_credentials": storage_credentials,
         }
 
+    def build_plan_overrides(self, payload: dict[str, Any]) -> dict[str, Any]:
+        overrides: dict[str, Any] = {
+            "controller_path": payload.get("controller_path", ""),
+            "os_controller_path": payload.get("os_controller_path", ""),
+            "data_controller_path": payload.get("data_controller_path", ""),
+            "os_drive_ids": payload.get("os_drive_ids", []),
+            "data_drive_ids": payload.get("data_drive_ids", []),
+            "hot_spare_drive_id": payload.get("hot_spare_drive_id", ""),
+            "os_drive_paths": payload.get("os_drive_paths", []),
+            "data_drive_paths": payload.get("data_drive_paths", []),
+            "hot_spare_path": payload.get("hot_spare_path", ""),
+        }
+        if not any(
+            overrides.get(key)
+            for key in (
+                "os_drive_ids",
+                "data_drive_ids",
+                "hot_spare_drive_id",
+                "os_drive_paths",
+                "data_drive_paths",
+                "hot_spare_path",
+            )
+        ):
+            overrides["os_bays"] = payload.get("os_bays", [])
+            overrides["data_bays"] = payload.get("data_bays", [])
+            overrides["hot_spare_bay"] = payload.get("hot_spare_bay", "")
+        if payload.get("os_raid_level") is not None:
+            overrides["os_raid_level"] = payload.get("os_raid_level")
+        if payload.get("data_raid_level") is not None:
+            overrides["data_raid_level"] = payload.get("data_raid_level")
+        return overrides
+
 
 def default_storage_module_service() -> StorageModuleService:
     return StorageModuleService()
