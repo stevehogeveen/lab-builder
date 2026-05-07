@@ -74,6 +74,18 @@ from app.modules.ilo.routes import (
     ilo_page_handler,
     save_ilo_settings_handler,
 )
+from app.modules.configs.routes import (
+    download_current_kit_config_handler,
+    download_ilo_config_snapshot_handler,
+    download_latest_live_raw_handler,
+    download_latest_live_summary_handler,
+    download_report_handler,
+    import_kit_config_handler,
+    view_current_kit_config_handler,
+    view_ilo_config_snapshot_handler,
+    view_latest_live_summary_handler,
+    view_report_handler,
+)
 from app.modules.storage.routes import (
     approve_storage_plan_handler,
     apply_storage_layout_handler,
@@ -14326,55 +14338,38 @@ async def export_ad_hoc_ilo_inventory(
 
 @app.post("/view-latest-live-summary", response_class=HTMLResponse)
 async def view_latest_live_summary(request: Request, return_page: str = Form("configs")):
-    cfg = load_kit_config()
-    latest = latest_live_inventory_export()
-    if not latest:
-        error_text = f"No live inventory exports found under {ILO_LIVE_EXPORT_DIR}"
-        return render_page(
-            request,
-            cfg,
-            active_page=return_page,
-            error_message=error_text,
-        )
-
-    return render_page(
+    return await view_latest_live_summary_handler(
         request,
-        cfg,
-        active_page=return_page,
-        action_feedback=build_action_feedback(
-            "Latest live summary opened",
-            "Showing the newest saved live inventory summary for this kit.",
-            tone="ready",
-            outcomes=[f"Source folder: {latest['directory']}"],
-        ),
-        config_view_title=f"Latest Live Summary: {latest['directory'].name}",
-        config_view_content=latest["summary"].read_text(encoding="utf-8"),
+        runtime={
+            "load_kit_config": load_kit_config,
+            "latest_live_inventory_export": latest_live_inventory_export,
+            "ilo_live_export_dir": ILO_LIVE_EXPORT_DIR,
+            "render_page": render_page,
+            "build_action_feedback": build_action_feedback,
+        },
+        return_page=return_page,
     )
 
 
 @app.post("/download-latest-live-summary")
 async def download_latest_live_summary():
-    latest = latest_live_inventory_export()
-    if not latest:
-        return HTMLResponse(f"No live inventory exports found under {ILO_LIVE_EXPORT_DIR}", status_code=404)
-    return FileResponse(
-        path=latest["summary"],
-        filename=f"{latest['directory'].parent.name}-{latest['directory'].name}-summary.yml",
-        media_type="application/x-yaml",
-        headers=live_inventory_download_headers(latest),
+    return await download_latest_live_summary_handler(
+        runtime={
+            "latest_live_inventory_export": latest_live_inventory_export,
+            "ilo_live_export_dir": ILO_LIVE_EXPORT_DIR,
+            "live_inventory_download_headers": live_inventory_download_headers,
+        }
     )
 
 
 @app.post("/download-latest-live-raw")
 async def download_latest_live_raw():
-    latest = latest_live_inventory_export()
-    if not latest:
-        return HTMLResponse(f"No live inventory exports found under {ILO_LIVE_EXPORT_DIR}", status_code=404)
-    return FileResponse(
-        path=latest["raw"],
-        filename=f"{latest['directory'].parent.name}-{latest['directory'].name}-raw.json",
-        media_type="application/json",
-        headers=live_inventory_download_headers(latest),
+    return await download_latest_live_raw_handler(
+        runtime={
+            "latest_live_inventory_export": latest_live_inventory_export,
+            "ilo_live_export_dir": ILO_LIVE_EXPORT_DIR,
+            "live_inventory_download_headers": live_inventory_download_headers,
+        }
     )
 
 
@@ -14687,26 +14682,25 @@ async def download_storage_artifact(
 
 @app.post("/view-current-kit-config", response_class=HTMLResponse)
 async def view_current_kit_config(request: Request, return_page: str = Form("configs")):
-    cfg = load_kit_config()
-    try:
-        snapshot_path = export_current_kit_config_snapshot(cfg)
-        return render_page(
-            request,
-            cfg,
-            active_page=return_page,
-            message=f"Generated current kit config snapshot at {snapshot_path}",
-            config_view_title=f"Current Kit Config: {snapshot_path.name}",
-            config_view_content=snapshot_path.read_text(encoding="utf-8"),
-        )
-    except Exception as e:
-        return render_page(request, cfg, active_page=return_page, error_message=f"Current kit config view failed: {e}")
+    return await view_current_kit_config_handler(
+        request,
+        runtime={
+            "load_kit_config": load_kit_config,
+            "export_current_kit_config_snapshot": export_current_kit_config_snapshot,
+            "render_page": render_page,
+        },
+        return_page=return_page,
+    )
 
 
 @app.post("/download-current-kit-config")
 async def download_current_kit_config():
-    cfg = load_kit_config()
-    snapshot_path = export_current_kit_config_snapshot(cfg)
-    return FileResponse(path=snapshot_path, filename=snapshot_path.name, media_type="application/x-yaml")
+    return await download_current_kit_config_handler(
+        runtime={
+            "load_kit_config": load_kit_config,
+            "export_current_kit_config_snapshot": export_current_kit_config_snapshot,
+        }
+    )
 
 
 @app.post("/import-kit-config", response_class=HTMLResponse)
@@ -14715,66 +14709,46 @@ async def import_kit_config(
     return_page: str = Form("configs"),
     import_file: UploadFile = File(...),
 ):
-    current_cfg = load_kit_config()
-    try:
-        raw = await import_file.read()
-        if not raw:
-            raise ValueError("The uploaded file was empty.")
-        imported = yaml.safe_load(raw.decode("utf-8")) or {}
-        if not isinstance(imported, dict):
-            raise ValueError("The uploaded file must contain a YAML or JSON object.")
-        imported = merge_defaults(imported)
-        imported_name = sanitize_kit_name(imported.get("site", {}).get("name", "") or current_cfg.get("site", {}).get("name", "Kit-01"))
-        imported.setdefault("site", {})["name"] = imported_name
-        save_kit_config(imported)
-        imported_snapshot = current_build_output_dir(imported) / f"imported-config-{time.strftime('%Y%m%d-%H%M%S')}.yml"
-        imported_snapshot.write_text(yaml.safe_dump(imported, sort_keys=False), encoding="utf-8")
-        cfg = load_kit_config(imported_name)
-        return render_page(
-            request,
-            cfg,
-            active_page=return_page,
-            action_feedback=build_action_feedback(
-                "Config imported",
-                "Loaded the uploaded config into the app and switched the current kit to it.",
-                tone="ready",
-                status_label="Imported",
-                outcomes=[
-                    f"Current kit: {imported_name}",
-                    f"Build folder: {current_build_output_dir(cfg)}",
-                ],
-                links=[
-                    {"label": "Open Global Settings", "href": "/global-settings"},
-                    {"label": "Open Run Center", "href": "/execution"},
-                ],
-            ),
-        )
-    except Exception as e:
-        return render_page(request, current_cfg, active_page=return_page, error_message=f"Config import failed: {str(e).splitlines()[0]}")
+    return await import_kit_config_handler(
+        request,
+        runtime={
+            "load_kit_config": load_kit_config,
+            "yaml_safe_load": yaml.safe_load,
+            "merge_defaults": merge_defaults,
+            "sanitize_kit_name": sanitize_kit_name,
+            "save_kit_config": save_kit_config,
+            "current_build_output_dir": current_build_output_dir,
+            "yaml_safe_dump": yaml.safe_dump,
+            "time_str": lambda: time.strftime("%Y%m%d-%H%M%S"),
+            "render_page": render_page,
+            "build_action_feedback": build_action_feedback,
+        },
+        return_page=return_page,
+        import_file=import_file,
+    )
 
 
 @app.post("/view-ilo-config-snapshot", response_class=HTMLResponse)
 async def view_ilo_config_snapshot(request: Request, return_page: str = Form("configs")):
-    cfg = load_kit_config()
-    try:
-        snapshot_path = export_ilo_config_snapshot(cfg)
-        return render_page(
-            request,
-            cfg,
-            active_page=return_page,
-            message=f"Generated iLO config snapshot at {snapshot_path}",
-            config_view_title=f"iLO Config Snapshot: {snapshot_path.name}",
-            config_view_content=snapshot_path.read_text(encoding="utf-8"),
-        )
-    except Exception as e:
-        return render_page(request, cfg, active_page=return_page, error_message=f"iLO config snapshot view failed: {e}")
+    return await view_ilo_config_snapshot_handler(
+        request,
+        runtime={
+            "load_kit_config": load_kit_config,
+            "export_ilo_config_snapshot": export_ilo_config_snapshot,
+            "render_page": render_page,
+        },
+        return_page=return_page,
+    )
 
 
 @app.post("/download-ilo-config-snapshot")
 async def download_ilo_config_snapshot():
-    cfg = load_kit_config()
-    snapshot_path = export_ilo_config_snapshot(cfg)
-    return FileResponse(path=snapshot_path, filename=snapshot_path.name, media_type="application/x-yaml")
+    return await download_ilo_config_snapshot_handler(
+        runtime={
+            "load_kit_config": load_kit_config,
+            "export_ilo_config_snapshot": export_ilo_config_snapshot,
+        }
+    )
 
 
 @app.post("/view-report", response_class=HTMLResponse)
@@ -14783,31 +14757,27 @@ async def view_report(
     return_page: str = Form("configs"),
     report_path: str = Form(...),
 ):
-    cfg = load_kit_config()
-    try:
-        path = safe_report_path(report_path)
-        return render_page(
-            request,
-            cfg,
-            active_page=return_page,
-            action_feedback=build_action_feedback(
-                "Report opened",
-                "Showing the selected saved report.",
-                tone="ready",
-                outcomes=[f"Source: {path}"],
-            ),
-            config_view_title=f"Report: {path.name}",
-            config_view_content=path.read_text(encoding="utf-8"),
-        )
-    except Exception as e:
-        return render_page(request, cfg, active_page=return_page, error_message=f"Report view failed: {str(e).splitlines()[0]}")
+    return await view_report_handler(
+        request,
+        runtime={
+            "load_kit_config": load_kit_config,
+            "safe_report_path": safe_report_path,
+            "render_page": render_page,
+            "build_action_feedback": build_action_feedback,
+        },
+        return_page=return_page,
+        report_path=report_path,
+    )
 
 
 @app.post("/download-report")
 async def download_report(report_path: str = Form(...)):
-    path = safe_report_path(report_path)
-    media_type = "application/json" if path.suffix.lower() == ".json" else "text/yaml; charset=utf-8"
-    return FileResponse(path=path, filename=path.name, media_type=media_type)
+    return await download_report_handler(
+        runtime={
+            "safe_report_path": safe_report_path,
+        },
+        report_path=report_path,
+    )
 
 
 @app.post("/view-run-summary", response_class=HTMLResponse)
