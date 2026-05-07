@@ -87,6 +87,8 @@ from app.modules.configs.routes import (
     import_kit_config_handler,
     load_kit_handler,
     new_kit_handler,
+    save_config_handler,
+    save_global_settings_handler,
     view_current_kit_config_handler,
     view_ilo_config_snapshot_handler,
     view_latest_live_summary_handler,
@@ -13607,165 +13609,80 @@ async def save_config_route(
     cisco_switch_username: str = Form(""),
     cisco_switch_password: str = Form(""),
 ):
-    existing_cfg = load_kit_config()
-    form = await request.form()
-    previous_subnet = existing_cfg.get("shared_network", {}).get("subnet", "")
-    previous_plan = existing_cfg.get("ip_plan", {})
-    submitted_plan = {
-        "gateway": gateway_ip,
-        "switch": switch_ip,
-        "esxi": esxi_ip,
-        "ilo": ilo_target_ip or ilo_ip,
-        "windows": windows_ip,
-        "qnap": qnap_ip,
-        "iosafe": iosafe_ip,
-    }
-    if shared_subnet != previous_subnet:
-        same_as_previous_plan = all(submitted_plan.get(key, "") == previous_plan.get(key, "") for key in DEFAULT_IP_OFFSETS)
-        if same_as_previous_plan:
-            submitted_plan = build_default_ip_plan(shared_subnet)
-
-    resolved_ilo_target_ip = ilo_target_ip or ilo_ip
-    resolved_ilo_current_ip = ilo_current_ip or resolved_ilo_target_ip
-    cfg = {
-        "site": {
-            "name": sanitize_kit_name(site_name),
+    return await save_config_handler(
+        request,
+        runtime={
+            "load_kit_config": load_kit_config,
+            "default_ip_offsets": DEFAULT_IP_OFFSETS,
+            "build_default_ip_plan": build_default_ip_plan,
+            "sanitize_kit_name": sanitize_kit_name,
+            "extract_snmp_users_from_form": extract_snmp_users_from_form,
+            "normalize_ilo_hostname": normalize_ilo_hostname,
+            "extract_ilo_additional_users_from_form": extract_ilo_additional_users_from_form,
+            "merge_defaults": merge_defaults,
+            "build_snmp_input_review": build_snmp_input_review,
+            "build_ilo_input_review": build_ilo_input_review,
+            "apply_ip_plan": apply_ip_plan,
+            "save_kit_config": save_kit_config,
+            "append_activity_event": append_activity_event,
+            "render_page": render_page,
+            "build_action_feedback": build_action_feedback,
         },
-        "shared_network": {
-            "subnet": shared_subnet,
-            "dns_servers": [dns1, dns2, dns3, dns4],
-        },
-        "ip_plan": {
-            "gateway": submitted_plan["gateway"],
-            "switch": submitted_plan["switch"],
-            "esxi": submitted_plan["esxi"],
-            "ilo": submitted_plan["ilo"],
-            "windows": submitted_plan["windows"],
-            "qnap": submitted_plan["qnap"],
-            "iosafe": submitted_plan["iosafe"],
-        },
-        "shared_snmp": {
-            "v3_username": snmp_v3_username,
-            "v3_auth_protocol": snmp_v3_auth_protocol,
-            "v3_auth_password": snmp_v3_auth_password,
-            "v3_priv_protocol": snmp_v3_priv_protocol,
-            "v3_priv_password": snmp_v3_priv_password,
-            "read_community": str((existing_cfg.get("shared_snmp") or {}).get("read_community") or ""),
-            "users": extract_snmp_users_from_form(
-                form,
-                primary_username=snmp_v3_username,
-                primary_auth_protocol=snmp_v3_auth_protocol,
-                primary_auth_password=snmp_v3_auth_password,
-                primary_priv_protocol=snmp_v3_priv_protocol,
-                primary_priv_password=snmp_v3_priv_password,
-            ),
-        },
-        "included": {
-            "ilo": included_ilo == "on",
-            "esxi": included_esxi == "on",
-            "windows": included_windows == "on",
-            "qnap": included_qnap == "on",
-            "iosafe": included_iosafe == "on",
-            "cisco_switch": included_cisco_switch == "on",
-            "storage": included_storage == "on",
-        },
-        "section_completion": {
-            "basics": section_basics_complete == "true",
-            "network": section_network_complete == "true",
-            "included": section_included_complete == "true",
-            "credentials": section_credentials_complete == "true",
-        },
-        "ilo": {
-            "host": resolved_ilo_current_ip,
-            "current_ip": resolved_ilo_current_ip,
-            "target_ip": resolved_ilo_target_ip,
-            "subnet_mask": ilo_subnet_mask,
-            "gateway": ilo_gateway,
-            "dns_servers": [ilo_dns1, ilo_dns2, ilo_dns3, ilo_dns4],
-            "hostname": normalize_ilo_hostname(ilo_hostname),
-            "username": ilo_username,
-            "password": ilo_password,
-            "additional_users": extract_ilo_additional_users_from_form(form),
-            "policy": dict((existing_cfg.get("ilo") or {}).get("policy") or {}),
-        },
-        "esxi": {
-            "hostname": esxi_hostname,
-            "root_password": esxi_root_password,
-        },
-        "windows": {
-            "vm_name": windows_vm_name,
-            "admin_password": windows_admin_password,
-        },
-        "qnap": {
-            "hostname": qnap_hostname,
-            "username": qnap_username,
-            "password": qnap_password,
-        },
-        "iosafe": {
-            "hostname": iosafe_hostname,
-            "username": iosafe_username,
-            "password": iosafe_password,
-        },
-        "cisco_switch": {
-            "hostname": cisco_switch_hostname,
-            "username": cisco_switch_username,
-            "password": cisco_switch_password,
-        },
-    }
-
-    cfg = merge_defaults(cfg)
-    cfg["storage"]["include_in_ilo_run"] = cfg.get("included", {}).get("storage", False)
-    snmp_input_review = build_snmp_input_review(cfg)
-    ilo_input_review = build_ilo_input_review(cfg, include_policy_validation=False)
-    combined_errors = list(snmp_input_review["errors"]) + list(ilo_input_review["errors"])
-    combined_notes = list(snmp_input_review["notes"]) + list(ilo_input_review["notes"])
-    if combined_errors:
-        return render_page(
-            request,
-            cfg,
-            active_page=return_page,
-            action_feedback=build_action_feedback(
-                "Kit needs attention",
-                "Fix the iLO or SNMP saved values before saving this page.",
-                tone="pending",
-                outcomes=[
-                    f"Kit: {cfg['site']['name']}",
-                    f"Shared subnet: {cfg['shared_network'].get('subnet', '') or 'Not set'}",
-                ],
-                details=combined_errors + combined_notes,
-            ),
-        )
-
-    try:
-        cfg = apply_ip_plan(cfg)
-        save_kit_config(cfg)
-        append_activity_event(
-            cfg["site"]["name"],
-            "global_settings_saved",
-            workflow="global_settings",
-            summary="Shared defaults were updated for this kit.",
-            target=cfg["site"]["name"],
-            details=[
-                f"Shared subnet: {cfg['shared_network'].get('subnet', '') or 'Not set'}",
-                f"Gateway: {cfg['ip_plan'].get('gateway', '') or 'Not set'}",
-            ],
-        )
-        return render_page(
-            request,
-            cfg,
-            active_page=return_page,
-            action_feedback=build_action_feedback(
-                "Kit saved",
-                f"Saved the kit and refreshed the shared address plan for {cfg['site']['name']}.",
-                tone="ready",
-                outcomes=[
-                    f"Kit: {cfg['site']['name']}",
-                    f"Shared subnet: {cfg['shared_network'].get('subnet', '') or 'Not set'}",
-                ],
-            ),
-        )
-    except Exception as e:
-        return render_page(request, cfg, active_page=return_page, error_message=f"Could not apply IP plan: {e}")
+        return_page=return_page,
+        site_name=site_name,
+        shared_subnet=shared_subnet,
+        gateway_ip=gateway_ip,
+        switch_ip=switch_ip,
+        esxi_ip=esxi_ip,
+        ilo_ip=ilo_ip,
+        ilo_target_ip=ilo_target_ip,
+        windows_ip=windows_ip,
+        qnap_ip=qnap_ip,
+        iosafe_ip=iosafe_ip,
+        dns1=dns1,
+        dns2=dns2,
+        dns3=dns3,
+        dns4=dns4,
+        snmp_v3_username=snmp_v3_username,
+        snmp_v3_auth_protocol=snmp_v3_auth_protocol,
+        snmp_v3_auth_password=snmp_v3_auth_password,
+        snmp_v3_priv_protocol=snmp_v3_priv_protocol,
+        snmp_v3_priv_password=snmp_v3_priv_password,
+        included_ilo=included_ilo,
+        included_esxi=included_esxi,
+        included_windows=included_windows,
+        included_qnap=included_qnap,
+        included_iosafe=included_iosafe,
+        included_cisco_switch=included_cisco_switch,
+        included_storage=included_storage,
+        section_basics_complete=section_basics_complete,
+        section_network_complete=section_network_complete,
+        section_included_complete=section_included_complete,
+        section_credentials_complete=section_credentials_complete,
+        ilo_current_ip=ilo_current_ip,
+        ilo_subnet_mask=ilo_subnet_mask,
+        ilo_gateway=ilo_gateway,
+        ilo_dns1=ilo_dns1,
+        ilo_dns2=ilo_dns2,
+        ilo_dns3=ilo_dns3,
+        ilo_dns4=ilo_dns4,
+        ilo_hostname=ilo_hostname,
+        ilo_username=ilo_username,
+        ilo_password=ilo_password,
+        esxi_hostname=esxi_hostname,
+        esxi_root_password=esxi_root_password,
+        windows_vm_name=windows_vm_name,
+        windows_admin_password=windows_admin_password,
+        qnap_hostname=qnap_hostname,
+        qnap_username=qnap_username,
+        qnap_password=qnap_password,
+        iosafe_hostname=iosafe_hostname,
+        iosafe_username=iosafe_username,
+        iosafe_password=iosafe_password,
+        cisco_switch_hostname=cisco_switch_hostname,
+        cisco_switch_username=cisco_switch_username,
+        cisco_switch_password=cisco_switch_password,
+    )
 
 
 @app.post("/save-global-settings", response_class=HTMLResponse)
@@ -13798,87 +13715,45 @@ async def save_global_settings_route(
     included_cisco_switch: str | None = Form(None),
     included_storage: str | None = Form(None),
 ):
-    cfg = load_kit_config()
-    form = await request.form()
-    cfg["site"]["name"] = sanitize_kit_name(site_name)
-    cfg["shared_network"]["subnet"] = shared_subnet
-    cfg["shared_network"]["dns_servers"] = [dns1, dns2, dns3, dns4]
-    cfg["shared_snmp"] = {
-        "v3_username": snmp_v3_username,
-        "v3_auth_protocol": snmp_v3_auth_protocol,
-        "v3_auth_password": snmp_v3_auth_password,
-        "v3_priv_protocol": snmp_v3_priv_protocol,
-        "v3_priv_password": snmp_v3_priv_password,
-        "users": extract_snmp_users_from_form(
-            form,
-            primary_username=snmp_v3_username,
-            primary_auth_protocol=snmp_v3_auth_protocol,
-            primary_auth_password=snmp_v3_auth_password,
-            primary_priv_protocol=snmp_v3_priv_protocol,
-            primary_priv_password=snmp_v3_priv_password,
-        ),
-    }
-    cfg["included"].update(
-        {
-            "ilo": included_ilo == "on",
-            "esxi": included_esxi == "on",
-            "windows": included_windows == "on",
-            "qnap": included_qnap == "on",
-            "iosafe": included_iosafe == "on",
-            "cisco_switch": included_cisco_switch == "on",
-            "storage": included_storage == "on",
-        }
+    return await save_global_settings_handler(
+        request,
+        runtime={
+            "load_kit_config": load_kit_config,
+            "sanitize_kit_name": sanitize_kit_name,
+            "extract_snmp_users_from_form": extract_snmp_users_from_form,
+            "build_snmp_input_review": build_snmp_input_review,
+            "apply_ip_plan": apply_ip_plan,
+            "save_kit_config": save_kit_config,
+            "render_page": render_page,
+            "build_action_feedback": build_action_feedback,
+        },
+        return_page=return_page,
+        site_name=site_name,
+        shared_subnet=shared_subnet,
+        gateway_ip=gateway_ip,
+        switch_ip=switch_ip,
+        esxi_ip=esxi_ip,
+        ilo_target_ip=ilo_target_ip,
+        windows_ip=windows_ip,
+        qnap_ip=qnap_ip,
+        iosafe_ip=iosafe_ip,
+        dns1=dns1,
+        dns2=dns2,
+        dns3=dns3,
+        dns4=dns4,
+        snmp_v3_username=snmp_v3_username,
+        snmp_v3_auth_protocol=snmp_v3_auth_protocol,
+        snmp_v3_auth_password=snmp_v3_auth_password,
+        snmp_v3_priv_protocol=snmp_v3_priv_protocol,
+        snmp_v3_priv_password=snmp_v3_priv_password,
+        included_ilo=included_ilo,
+        included_esxi=included_esxi,
+        included_windows=included_windows,
+        included_qnap=included_qnap,
+        included_iosafe=included_iosafe,
+        included_cisco_switch=included_cisco_switch,
+        included_storage=included_storage,
     )
-    cfg["storage"]["include_in_ilo_run"] = cfg["included"]["storage"]
-    snmp_input_review = build_snmp_input_review(cfg)
-    if snmp_input_review["errors"]:
-        return render_page(
-            request,
-            cfg,
-            active_page=return_page,
-            action_feedback=build_action_feedback(
-                "Shared defaults need attention",
-                "Fix the SNMPv3 user or passwords before saving this page.",
-                tone="pending",
-                outcomes=[
-                    f"Kit: {cfg['site'].get('name', '') or 'Unknown'}",
-                    f"Shared subnet: {cfg['shared_network'].get('subnet', '') or 'Not set'}",
-                ],
-                details=list(snmp_input_review["errors"]) + list(snmp_input_review["notes"]),
-            ),
-        )
-    cfg["ip_plan"].update(
-        {
-            "gateway": gateway_ip,
-            "switch": switch_ip,
-            "esxi": esxi_ip,
-            "ilo": ilo_target_ip,
-            "windows": windows_ip,
-            "qnap": qnap_ip,
-            "iosafe": iosafe_ip,
-        }
-    )
-    cfg["ilo"]["target_ip"] = ilo_target_ip
-    try:
-        cfg = apply_ip_plan(cfg)
-        save_kit_config(cfg)
-        return render_page(
-            request,
-            cfg,
-            active_page=return_page,
-            action_feedback=build_action_feedback(
-                "Shared defaults saved",
-                "Updated the global settings that feed the workflow pages.",
-                tone="ready",
-                outcomes=[
-                    f"Kit: {cfg['site'].get('name', '') or 'Unknown'}",
-                    f"Shared subnet: {cfg['shared_network'].get('subnet', '') or 'Not set'}",
-                ],
-                links=[{"label": "Review iLO", "href": "/ilo"}, {"label": "Review Storage / RAID", "href": "/storage"}],
-            ),
-        )
-    except Exception as e:
-        return render_page(request, cfg, active_page=return_page, error_message=f"Could not save global settings: {e}")
 
 
 @app.post("/save-ilo-settings", response_class=HTMLResponse)
