@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import re
 from typing import Any
 
 import requests
@@ -65,7 +66,7 @@ class NetAppClient:
         return self._records("/api/cluster/nodes", params={"fields": "name,model,version,uuid"})
 
     def get_ports(self) -> list[dict[str, Any]]:
-        return self._records("/api/network/ethernet/ports", params={"fields": "name,node,ipspace,broadcast_domain,mtu,state,speed"})
+        return self._records("/api/network/ethernet/ports", params={"fields": "name,node,ipspace,broadcast_domain,mtu,state,speed,type,enabled,mac_address"})
 
     def get_aggregates(self) -> list[dict[str, Any]]:
         return self._records("/api/storage/aggregates", params={"fields": "name,node,space,state,uuid"})
@@ -91,6 +92,27 @@ class NetAppClient:
     def get_broadcast_domains(self) -> list[dict[str, Any]]:
         return self._records("/api/network/ethernet/broadcast-domains", params={"fields": "name,ipspace,mtu,ports"})
 
+    def get_subnets(self) -> list[dict[str, Any]]:
+        return self._records("/api/network/ip/subnets", params={"fields": "name,ipspace,subnet,broadcast_domain,ranges,gateway"})
+
+    def get_ntp_servers(self) -> list[dict[str, Any]]:
+        return self._records("/api/cluster/ntp/servers", params={"fields": "server,is_preferred,version"})
+
+    def get_autosupport(self) -> dict[str, Any]:
+        return self._get("/api/support/autosupport")
+
+    def get_users(self) -> list[dict[str, Any]]:
+        return self._records("/api/security/accounts", params={"fields": "name,applications,authentication_methods,owner,role,locked"})
+
+    def get_interface_groups(self) -> list[dict[str, Any]]:
+        groups: list[dict[str, Any]] = []
+        for port in self.get_ports():
+            port_type = str(port.get("type") or "").strip().lower()
+            name = str(port.get("name") or "").strip()
+            if port_type == "if_group" or re.match(r"^a\d+[a-z]?$", name):
+                groups.append(port)
+        return groups
+
     def build_discovery_summary(self) -> dict[str, Any]:
         warnings: list[str] = []
         cluster = self.get_cluster()
@@ -99,6 +121,8 @@ class NetAppClient:
         broadcast_domains = self.get_broadcast_domains()
         aggregates = self.get_aggregates()
         svms = self.get_svms()
+        subnets = self.get_subnets()
+        interface_groups = self.get_interface_groups()
         licenses = self.get_licenses()
         protocol_services = self.get_protocol_services()
 
@@ -119,6 +143,21 @@ class NetAppClient:
                 enabled_protocols.append("iscsi")
         if not licenses:
             warnings.append("No license records were returned; protocol availability may be incomplete.")
+        try:
+            autosupport = self.get_autosupport()
+        except NetAppError:
+            autosupport = {}
+            warnings.append("AutoSupport settings could not be read through REST API.")
+        try:
+            ntp_servers = self.get_ntp_servers()
+        except NetAppError:
+            ntp_servers = []
+            warnings.append("NTP server settings could not be read through REST API.")
+        try:
+            users = self.get_users()
+        except NetAppError:
+            users = []
+            warnings.append("User account settings could not be read through REST API.")
 
         version = str(cluster.get("version", {}).get("full") or cluster.get("version", {}).get("generation") or "")
         cluster_name = str(cluster.get("name") or "")
@@ -130,7 +169,17 @@ class NetAppClient:
             "node_names": node_names,
             "node_models": node_models,
             "available_ports": available_ports,
+            "physical_ports": sorted({item for item in available_ports if item and ":" in item}),
+            "nodes": node_names,
             "existing_broadcast_domains": [str(item.get("name") or "") for item in broadcast_domains if str(item.get("name") or "").strip()],
+            "subnets": [str(item.get("name") or "") for item in subnets if str(item.get("name") or "").strip()],
+            "existing_interface_groups": sorted(
+                {
+                    f"{str((item.get('node') or {}).get('name') or '').strip()}:{str(item.get('name') or '').strip()}".strip(":")
+                    for item in interface_groups
+                    if str(item.get("name") or "").strip()
+                }
+            ),
             "aggregates": [str(item.get("name") or "") for item in aggregates if str(item.get("name") or "").strip()],
             "svms": [str(item.get("name") or "") for item in svms if str(item.get("name") or "").strip()],
             "enabled_protocols": enabled_protocols,
@@ -140,11 +189,16 @@ class NetAppClient:
                 "nodes": nodes,
                 "ports": ports,
                 "broadcast_domains": broadcast_domains,
+                "subnets": subnets,
+                "interface_groups": interface_groups,
                 "aggregates": aggregates,
                 "svms": svms,
                 "volumes": self.get_volumes(),
                 "interfaces": self.get_network_interfaces(),
                 "licenses": licenses,
                 "protocol_services": protocol_services,
+                "autosupport": autosupport,
+                "ntp_servers": ntp_servers,
+                "users": users,
             },
         }

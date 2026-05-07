@@ -48,8 +48,48 @@
                     <input type="text" name="iosafe_ip" value="{{ cfg.get('ip_plan', {}).get('iosafe', '') }}" class="input">
                 </div>
                 <div>
+                    <label class="block text-sm font-bold text-slate-300 mb-2">NetApp address</label>
+                    <input type="text" name="netapp_ip" value="{{ cfg.get('ip_plan', {}).get('netapp', cfg.get('netapp', {}).get('host', '')) }}" class="input">
+                </div>
+                <div>
                     <label class="block text-sm font-bold text-slate-300 mb-2">Switch address</label>
                     <input type="text" name="switch_ip" value="{{ cfg.get('ip_plan', {}).get('switch', '') }}" class="input">
+                </div>
+            </div>
+        </section>
+
+        <section class="card">
+            <div class="text-lg font-semibold mb-3">NetApp</div>
+            <div class="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-4">
+                <div>
+                    <label class="block text-sm font-bold text-slate-300 mb-2">Host</label>
+                    <input type="text" name="netapp_host" value="{{ cfg.get('netapp', {}).get('host', '') }}" class="input">
+                </div>
+                <div>
+                    <label class="block text-sm font-bold text-slate-300 mb-2">Username</label>
+                    <input type="text" name="netapp_username" value="{{ cfg.get('netapp', {}).get('username', 'admin') }}" class="input">
+                </div>
+                <div>
+                    <label class="block text-sm font-bold text-slate-300 mb-2">Password</label>
+                    <input type="password" name="netapp_password" value="{{ cfg.get('netapp', {}).get('password', '') }}" class="input">
+                </div>
+                <div>
+                    <label class="block text-sm font-bold text-slate-300 mb-2">Storage protocol</label>
+                    <select name="netapp_storage_protocol" class="input">
+                        {% set protocol = (cfg.get('netapp', {}).get('storage_protocol', 'nfs') | lower) %}
+                        <option value="nfs" {% if protocol == 'nfs' %}selected{% endif %}>NFS</option>
+                        <option value="iscsi" {% if protocol == 'iscsi' %}selected{% endif %}>iSCSI</option>
+                    </select>
+                </div>
+            </div>
+            <div class="grid grid-cols-1 xl:grid-cols-2 gap-4 mt-4">
+                <div>
+                    <label class="block text-sm font-bold text-slate-300 mb-2">iSCSI command template (editable)</label>
+                    <textarea name="netapp_iscsi_commands" class="input" rows="10">{{ cfg.get('netapp', {}).get('command_templates', {}).get('iscsi', '') }}</textarea>
+                </div>
+                <div>
+                    <label class="block text-sm font-bold text-slate-300 mb-2">NFS command template (editable)</label>
+                    <textarea name="netapp_nfs_commands" class="input" rows="10">{{ cfg.get('netapp', {}).get('command_templates', {}).get('nfs', '') }}</textarea>
                 </div>
             </div>
         </section>
@@ -192,6 +232,7 @@
                 <label class="check"><input type="checkbox" name="included_qnap" {% if cfg.get('included', {}).get('qnap') %}checked{% endif %}> QNAP setup</label>
                 <label class="check"><input type="checkbox" name="included_iosafe" {% if cfg.get('included', {}).get('iosafe') %}checked{% endif %}> ioSafe setup</label>
                 <label class="check"><input type="checkbox" name="included_cisco_switch" {% if cfg.get('included', {}).get('cisco_switch') %}checked{% endif %}> Cisco switch setup</label>
+                <label class="check"><input type="checkbox" name="included_netapp" {% if cfg.get('included', {}).get('netapp') %}checked{% endif %}> NetApp setup</label>
             </div>
         </details>
 

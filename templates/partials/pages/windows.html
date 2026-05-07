@@ -60,12 +60,95 @@
                     <label class="block text-sm font-bold text-slate-300 mb-2">Administrator password</label>
                     <input type="password" name="windows_admin_password" value="{{ cfg.get('windows', {}).get('admin_password', '') }}" class="bg-slate-800 border border-slate-600 rounded-lg p-2 w-full">
                 </div>
+                <div class="grid grid-cols-1 md:grid-cols-2 gap-3">
+                    <div>
+                        <label class="block text-sm font-bold text-slate-300 mb-2">vSphere / ESXi host</label>
+                        <input type="text" name="windows_vsphere_host" value="{{ cfg.get('windows', {}).get('vsphere_host', '') }}" class="bg-slate-800 border border-slate-600 rounded-lg p-2 w-full">
+                    </div>
+                    <div>
+                        <label class="block text-sm font-bold text-slate-300 mb-2">vSphere username</label>
+                        <input type="text" name="windows_vsphere_username" value="{{ cfg.get('windows', {}).get('vsphere_username', '') }}" class="bg-slate-800 border border-slate-600 rounded-lg p-2 w-full">
+                    </div>
+                    <div>
+                        <label class="block text-sm font-bold text-slate-300 mb-2">vSphere password</label>
+                        <input type="password" name="windows_vsphere_password" value="" placeholder="Leave blank to keep saved value" class="bg-slate-800 border border-slate-600 rounded-lg p-2 w-full">
+                    </div>
+                    <div>
+                        <label class="block text-sm font-bold text-slate-300 mb-2">Datacenter</label>
+                        <input type="text" name="windows_vsphere_datacenter" value="{{ cfg.get('windows', {}).get('vsphere_datacenter', '') }}" class="bg-slate-800 border border-slate-600 rounded-lg p-2 w-full">
+                    </div>
+                    <div>
+                        <label class="block text-sm font-bold text-slate-300 mb-2">Datastore</label>
+                        <input type="text" name="windows_vsphere_datastore" value="{{ cfg.get('windows', {}).get('vsphere_datastore', '') }}" class="bg-slate-800 border border-slate-600 rounded-lg p-2 w-full">
+                    </div>
+                    <div>
+                        <label class="block text-sm font-bold text-slate-300 mb-2">VM network</label>
+                        <input type="text" name="windows_vsphere_network" value="{{ cfg.get('windows', {}).get('vsphere_network', '') }}" class="bg-slate-800 border border-slate-600 rounded-lg p-2 w-full">
+                    </div>
+                    <div>
+                        <label class="block text-sm font-bold text-slate-300 mb-2">VM folder</label>
+                        <input type="text" name="windows_vsphere_folder" value="{{ cfg.get('windows', {}).get('vsphere_folder', '') }}" class="bg-slate-800 border border-slate-600 rounded-lg p-2 w-full">
+                    </div>
+                    <div>
+                        <label class="block text-sm font-bold text-slate-300 mb-2">Resource pool</label>
+                        <input type="text" name="windows_vsphere_resource_pool" value="{{ cfg.get('windows', {}).get('vsphere_resource_pool', '') }}" class="bg-slate-800 border border-slate-600 rounded-lg p-2 w-full">
+                    </div>
+                    <div>
+                        <label class="block text-sm font-bold text-slate-300 mb-2">WinRM username</label>
+                        <input type="text" name="windows_winrm_username" value="{{ cfg.get('windows', {}).get('winrm_username', 'Administrator') }}" class="bg-slate-800 border border-slate-600 rounded-lg p-2 w-full">
+                    </div>
+                    <div>
+                        <label class="block text-sm font-bold text-slate-300 mb-2">WinRM password</label>
+                        <input type="password" name="windows_winrm_password" value="" placeholder="Leave blank to keep saved value" class="bg-slate-800 border border-slate-600 rounded-lg p-2 w-full">
+                    </div>
+                    <div>
+                        <label class="block text-sm font-bold text-slate-300 mb-2">WinRM port</label>
+                        <input type="text" name="windows_winrm_port" value="{{ cfg.get('windows', {}).get('winrm_port', 5986) }}" class="bg-slate-800 border border-slate-600 rounded-lg p-2 w-full">
+                    </div>
+                    <label class="check" style="align-self: end;"><input type="checkbox" name="windows_winrm_use_https" {% if cfg.get('windows', {}).get('winrm_use_https', True) %}checked{% endif %}> Use HTTPS for WinRM</label>
+                </div>
                 <label class="check"><input type="checkbox" name="included_windows" {% if cfg.get('included', {}).get('windows') %}checked{% endif %}> Include Windows in this kit</label>
                 <div class="actions">
                     <button class="btn btn-danger" type="submit">Save Windows setup</button>
                     <a class="btn" href="/global-settings">Adjust global defaults</a>
                 </div>
             </form>
+            <div class="actions mt-3">
+                <form hx-post="/probe-windows-vsphere" hx-target="#main-content" hx-swap="outerHTML">
+                    <input type="hidden" name="return_page" value="windows">
+                    <button class="btn" type="submit">Probe vSphere</button>
+                </form>
+                <form hx-post="/probe-windows-winrm" hx-target="#main-content" hx-swap="outerHTML">
+                    <input type="hidden" name="return_page" value="windows">
+                    <button class="btn" type="submit">Probe WinRM</button>
+                </form>
+            </div>
+            <div class="grid grid-cols-1 md:grid-cols-2 gap-3 mt-3">
+                {% set vsphere_probe = cfg.get('windows', {}).get('last_vsphere_probe', {}) or {} %}
+                <div class="result" style="margin-top: 0;">
+                    <div class="font-semibold">Last vSphere probe</div>
+                    <div>{{ 'Connected' if vsphere_probe.get('connected') else 'Not connected yet' }}</div>
+                    {% if vsphere_probe.get('product') %}
+                    <div class="text-slate-400 mt-1">{{ vsphere_probe.get('product') }} | API {{ vsphere_probe.get('api_version') or 'unknown' }}</div>
+                    {% elif vsphere_probe.get('error') %}
+                    <div class="text-slate-400 mt-1">{{ vsphere_probe.get('error') }}</div>
+                    {% else %}
+                    <div class="text-slate-400 mt-1">Save vSphere target values, then probe inventory.</div>
+                    {% endif %}
+                </div>
+                {% set winrm_probe = cfg.get('windows', {}).get('last_winrm_probe', {}) or {} %}
+                <div class="result" style="margin-top: 0;">
+                    <div class="font-semibold">Last WinRM probe</div>
+                    <div>{{ 'Connected' if winrm_probe.get('connected') else 'Not connected yet' }}</div>
+                    {% if winrm_probe.get('endpoint') %}
+                    <div class="text-slate-400 mt-1">{{ winrm_probe.get('endpoint') }} | status {{ winrm_probe.get('status_code') }}</div>
+                    {% elif winrm_probe.get('error') %}
+                    <div class="text-slate-400 mt-1">{{ winrm_probe.get('error') }}</div>
+                    {% else %}
+                    <div class="text-slate-400 mt-1">After deployment, probe the guest WinRM endpoint.</div>
+                    {% endif %}
+                </div>
+            </div>
             <hr class="my-4 border-slate-700">
             <div class="text-sm font-semibold mb-2">Windows source image (OVA/OVF)</div>
             <form hx-post="/upload-windows-image" hx-target="#main-content" hx-swap="outerHTML" enctype="multipart/form-data" class="space-y-3">

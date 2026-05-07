@@ -21,6 +21,7 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
 from app.ilo import ILOClient, ILOConfig, ILOError
+from app.windows import VsphereClient, VsphereConfig, WinRMClient, WinRMConfig
 from app.esxi.builder import build_custom_iso
 from app.esxi.models import EsxiBuildSpec
 from app.debug_bundle import create_debug_bundle
@@ -95,8 +96,13 @@ from app.modules.configs.routes import (
     view_report_handler,
 )
 from app.modules.qnap.routes import save_qnap_settings_handler
-from app.modules.windows.routes import save_windows_settings_handler
-from app.modules.windows.routes import plan_windows_install_handler, upload_windows_image_handler
+from app.modules.windows.routes import (
+    plan_windows_install_handler,
+    probe_windows_vsphere_handler,
+    probe_windows_winrm_handler,
+    save_windows_settings_handler,
+    upload_windows_image_handler,
+)
 from app.modules.execution.routes import (
     download_built_esxi_iso_handler,
     download_latest_debug_bundle_handler,
@@ -471,6 +477,7 @@ DEFAULT_IP_OFFSETS = {
     "windows": 20,
     "qnap": 30,
     "iosafe": 31,
+    "netapp": 40,
 }
 PAGE_META = {
     "dashboard": {
@@ -528,7 +535,7 @@ PAGE_META = {
 }
 
 STORAGE_APPROVAL_CONFIRM = "APPROVE STORAGE"
-RUN_CENTER_STAGE_KEYS = ["ilo", "storage", "esxi", "windows", "qnap", "iosafe", "cisco_switch"]
+RUN_CENTER_STAGE_KEYS = ["ilo", "storage", "esxi", "windows", "qnap", "iosafe", "cisco_switch", "netapp"]
 DEFAULT_KIT_NAME = "Kit-01"
 
 
@@ -1870,6 +1877,7 @@ def build_dashboard_job_status(history: list[dict[str, Any]]) -> dict[str, Any]:
         ("esxi", "ESXi", ["esxi"]),
         ("windows", "Windows", ["windows"]),
         ("qnap", "QNAP", ["qnap"]),
+        ("netapp", "NetApp", ["netapp"]),
     ]
     passed: list[dict[str, str]] = []
     failed: list[dict[str, str]] = []
@@ -2362,6 +2370,7 @@ def build_run_checklist(job: dict[str, Any], cfg: dict[str, Any]) -> list[dict[s
         "qnap": "QNAP",
         "iosafe": "ioSafe",
         "cisco_switch": "Cisco Switch",
+        "netapp": "NetApp",
     }
     scope = str(job.get("root_scope") or job.get("scope") or "").strip().lower()
     selected = run_center_scope_keys(scope, cfg) if scope else []
@@ -2798,7 +2807,7 @@ def build_validation_checks(cfg: dict[str, Any], workflow: str) -> list[dict[str
                 href="/ilo",
             )
         )
-    if workflow in {"ilo", "esxi", "windows", "qnap"}:
+    if workflow in {"ilo", "esxi", "windows", "qnap", "netapp"}:
         checks.append(
             validation_check(
                 "Shared defaults",
@@ -2867,11 +2876,12 @@ def build_validation_checks(cfg: dict[str, Any], workflow: str) -> list[dict[str
                     href="/storage#storage-review-start",
                 )
             )
-    if workflow in {"esxi", "windows", "qnap"}:
+    if workflow in {"esxi", "windows", "qnap", "netapp"}:
         target_map = {
             "esxi": cfg.get("esxi", {}).get("management_ip") or cfg.get("ip_plan", {}).get("esxi", ""),
             "windows": cfg.get("windows", {}).get("ip_address") or cfg.get("ip_plan", {}).get("windows", ""),
             "qnap": cfg.get("qnap", {}).get("ip") or cfg.get("ip_plan", {}).get("qnap", ""),
+            "netapp": cfg.get("netapp", {}).get("host") or cfg.get("ip_plan", {}).get("netapp", ""),
         }
         checks.append(
             validation_check(
@@ -2988,6 +2998,29 @@ def build_validation_checks(cfg: dict[str, Any], workflow: str) -> list[dict[str
                     href="/qnap",
                 )
             )
+        if workflow == "netapp":
+            netapp_cfg = cfg.get("netapp", {}) or {}
+            protocol = str(netapp_cfg.get("storage_protocol") or "nfs").strip().lower()
+            checks.append(
+                validation_check(
+                    "Saved credentials",
+                    bool(str(netapp_cfg.get("username") or "").strip() and str(netapp_cfg.get("password") or "")),
+                    "Ready" if (str(netapp_cfg.get("username") or "").strip() and str(netapp_cfg.get("password") or "")) else "NetApp username or password is missing.",
+                    why="Read-only discovery still needs credentials to query ONTAP REST APIs.",
+                    fix="Open Global Settings and save NetApp credentials.",
+                    href="/global-settings",
+                )
+            )
+            checks.append(
+                validation_check(
+                    "Storage protocol",
+                    protocol in {"nfs", "iscsi"},
+                    protocol.upper() if protocol in {"nfs", "iscsi"} else "Storage protocol must be nfs or iscsi.",
+                    why="Adaptive validation depends on the desired storage protocol.",
+                    fix="Set NetApp storage protocol to NFS or iSCSI in Global Settings.",
+                    href="/global-settings",
+                )
+            )
     return checks
 
 
@@ -3041,6 +3074,7 @@ def build_workflow_contexts(cfg: dict[str, Any], job: dict[str, Any], history: l
         ("esxi", "ESXi", (cfg.get("esxi", {}).get("management_ip") or cfg.get("ip_plan", {}).get("esxi") or "").strip(), (cfg.get("esxi", {}).get("hostname") or "").strip()),
         ("windows", "Windows", (cfg.get("windows", {}).get("ip_address") or cfg.get("ip_plan", {}).get("windows") or "").strip(), (cfg.get("windows", {}).get("vm_name") or "").strip()),
         ("qnap", "QNAP", (cfg.get("qnap", {}).get("ip") or cfg.get("ip_plan", {}).get("qnap") or "").strip(), (cfg.get("qnap", {}).get("hostname") or "").strip()),
+        ("netapp", "NetApp", (cfg.get("netapp", {}).get("host") or cfg.get("ip_plan", {}).get("netapp") or "").strip(), (cfg.get("netapp", {}).get("storage_protocol") or "nfs").strip().upper()),
     ]:
         checks = build_validation_checks(cfg, key)
         state, label, tone = checks_status(checks)
@@ -3075,7 +3109,7 @@ def build_recommended_next_step(cfg: dict[str, Any], workflow_contexts: dict[str
         return {"title": "Set the iLO target", "summary": "Start on the iLO page and save the current iLO address and credentials first.", "href": "/ilo"}
     if cfg.get("included", {}).get("storage") and workflow_contexts["storage"]["state"] in {"not_started", "discovered", "planned", "stale"}:
         return {"title": "Finish storage review", "summary": "Go to Storage / RAID, confirm the current server, and approve the exact storage plan before the final run.", "href": "/storage"}
-    for key in ["esxi", "windows", "qnap"]:
+    for key in ["esxi", "windows", "qnap", "netapp"]:
         if cfg.get("included", {}).get(key) and workflow_contexts[key]["state"] in {"not_started", "failed"}:
             return {"title": f"Review {workflow_contexts[key]['name']} setup", "summary": f"Open the {workflow_contexts[key]['name']} page and finish the saved setup values.", "href": workflow_contexts[key]["review_href"]}
     return {"title": "Review the run", "summary": "Open Run Center to review the included stages, checks, and warnings before starting.", "href": "/execution"}
@@ -3557,7 +3591,7 @@ def build_run_center_readiness_matrix(cfg: dict[str, Any], scope: str) -> list[d
         }
     ]
 
-    for key, name in [("ilo", "iLO"), ("storage", "Storage"), ("esxi", "ESXi"), ("windows", "Windows"), ("qnap", "QNAP")]:
+    for key, name in [("ilo", "iLO"), ("storage", "Storage"), ("esxi", "ESXi"), ("windows", "Windows"), ("qnap", "QNAP"), ("netapp", "NetApp")]:
         included = stage_in_scope(key)
         if not included:
             continue
@@ -8681,6 +8715,12 @@ def build_execution_review(cfg: dict, scope: str):
             "summary": "Run the saved switch management setup and template-driven changes.",
             "review_href": "/global-settings",
         },
+        "netapp": {
+            "name": "NetApp",
+            "target": cfg["netapp"].get("host", "") or cfg.get("ip_plan", {}).get("netapp", "") or "Not set",
+            "summary": "Run read-only ONTAP discovery and dry-run validation warnings against desired protocol settings.",
+            "review_href": "/modules/netapp",
+        },
         "storage": {
             "name": "Storage / RAID",
             "target": storage_review.get("approval", {}).get("host") or storage_review.get("latest", {}).get("host") or "Not set",
@@ -8737,7 +8777,7 @@ def build_execution_review(cfg: dict, scope: str):
             return []
         if key == "storage":
             return build_validation_checks(cfg, "storage")
-        if key in {"ilo", "esxi", "windows", "qnap"}:
+        if key in {"ilo", "esxi", "windows", "qnap", "netapp"}:
             return build_validation_checks(cfg, key)
         return []
 
@@ -8756,6 +8796,9 @@ def build_execution_review(cfg: dict, scope: str):
             return f"Saved Windows VM {cfg['windows'].get('vm_name') or '(not set)'} at {cfg['windows'].get('ip_address') or cfg.get('ip_plan', {}).get('windows', '') or 'Not set'}"
         if key == "qnap":
             return f"Saved QNAP host {cfg['qnap'].get('hostname') or '(not set)'} at {cfg['qnap'].get('ip') or cfg.get('ip_plan', {}).get('qnap', '') or 'Not set'}"
+        if key == "netapp":
+            protocol = str(cfg.get("netapp", {}).get("storage_protocol") or "nfs").upper()
+            return f"Saved NetApp target {cfg['netapp'].get('host') or cfg.get('ip_plan', {}).get('netapp', '') or 'Not set'} with protocol {protocol}"
         if key == "storage":
             approval = storage_review.get("approval", {}) or {}
             plan_summary = approval.get("plan_summary", {}) or {}
@@ -8825,6 +8868,14 @@ def build_execution_review(cfg: dict, scope: str):
                 f"Hostname: {qnap_cfg.get('hostname') or 'Not set'}",
                 f"Username: {qnap_cfg.get('username') or 'Not set'}",
                 f"Password: {'Saved' if qnap_cfg.get('password') else 'Missing'}",
+            ]
+        if key == "netapp":
+            netapp_cfg = cfg.get("netapp", {}) or {}
+            return [
+                f"Target host: {netapp_cfg.get('host') or cfg.get('ip_plan', {}).get('netapp') or 'Not set'}",
+                f"Username: {netapp_cfg.get('username') or 'Not set'}",
+                f"Password: {'Saved' if netapp_cfg.get('password') else 'Missing'}",
+                f"Storage protocol: {str(netapp_cfg.get('storage_protocol') or 'nfs').upper()}",
             ]
         if key == "storage":
             approval = storage_review.get("approval", {}) or {}
@@ -8925,6 +8976,8 @@ def build_execution_review(cfg: dict, scope: str):
             return ["Global Settings", "Saved Windows VM details"]
         if key == "qnap":
             return ["Global Settings", "Saved QNAP host details"]
+        if key == "netapp":
+            return ["Global Settings", "Saved NetApp host and credentials", "Read-only ONTAP discovery"]
         return ["Saved workspace settings"]
 
     def stage_restart_expected(key: str) -> bool:
@@ -8994,6 +9047,14 @@ def build_execution_review(cfg: dict, scope: str):
                 "before": f"Current target {cfg['qnap'].get('ip') or cfg.get('ip_plan', {}).get('qnap') or 'Not set'}",
                 "after": f"Apply the saved QNAP host details for {cfg['qnap'].get('hostname') or 'the selected NAS'}",
                 "verify": "Use the saved hostname and sign-in details during the run.",
+            }
+        if key == "netapp":
+            protocol = str(cfg.get("netapp", {}).get("storage_protocol") or "nfs").upper()
+            return {
+                "name": "NetApp",
+                "before": f"Current target {cfg['netapp'].get('host') or cfg.get('ip_plan', {}).get('netapp') or 'Not set'}",
+                "after": f"Run read-only discovery and dry-run validation for protocol {protocol}",
+                "verify": "Review discovery warnings and suggestions before enabling any write phase.",
             }
         return {
             "name": components[key]["name"],
@@ -9257,7 +9318,7 @@ def build_execution_review(cfg: dict, scope: str):
     if scope == "included":
         included = cfg.get("included", {})
         lines.append("Will act on all included components in this kit:")
-        for key in ["ilo", "esxi", "windows", "qnap", "iosafe", "cisco_switch"]:
+        for key in ["ilo", "esxi", "windows", "qnap", "iosafe", "cisco_switch", "netapp"]:
             if included.get(key):
                 lines.append(f"- {components[key]['name']} -> {components[key]['target']}")
                 included_stages.append(stage_entry(key, True))
@@ -9322,7 +9383,7 @@ def build_execution_review(cfg: dict, scope: str):
     will_not_run: list[str] = []
     if scope == "included":
         included_cfg = cfg.get("included", {})
-        for key in ["ilo", "esxi", "windows", "qnap", "iosafe", "cisco_switch"]:
+        for key in ["ilo", "esxi", "windows", "qnap", "iosafe", "cisco_switch", "netapp"]:
             if not included_cfg.get(key):
                 will_not_run.append(components[key]["name"])
         if not included_cfg.get("storage"):
@@ -9494,6 +9555,8 @@ def get_steps_for_scope(cfg: dict, scope: str):
             steps.append("Preview ioSafe actions")
         if included.get("cisco_switch"):
             steps.append("Preview Cisco switch actions")
+        if included.get("netapp"):
+            steps.append("Preview NetApp discovery and validation actions")
         steps.append("Preview complete - ready for real included-kit execution")
         return steps
     if scope.startswith("multi__"):
@@ -9507,6 +9570,7 @@ def get_steps_for_scope(cfg: dict, scope: str):
                     "qnap": "Preview QNAP actions",
                     "iosafe": "Preview ioSafe actions",
                     "cisco_switch": "Preview Cisco switch actions",
+                    "netapp": "Preview NetApp discovery and validation actions",
                 }.get(key, f"Preview {key} actions")
             )
             steps.append(label)
@@ -13226,6 +13290,7 @@ def render_page(
     storage_plan_paths: dict[str, Path] | None = None,
     storage_apply_paths: dict[str, Path] | None = None,
     storage_repair_action: dict[str, str] | None = None,
+    extra_context: dict[str, Any] | None = None,
 ):
     active_page = normalize_page_name(active_page)
     page_meta = PAGE_META[active_page]
@@ -13401,6 +13466,8 @@ def render_page(
         "section_states": summarize_section_states(cfg),
         "module_navigation": list(getattr(app.state, "module_navigation", []) or []),
     }
+    if extra_context:
+        context.update(dict(extra_context))
 
     # HTMX requests should only replace the main content region, never the app shell.
     template_name = MAIN_CONTENT_TEMPLATE if request.headers.get("HX-Request") == "true" else PAGE_TEMPLATE
@@ -13648,6 +13715,7 @@ async def save_config_route(
     windows_ip: str = Form(...),
     qnap_ip: str = Form(...),
     iosafe_ip: str = Form(...),
+    netapp_ip: str = Form(""),
     dns1: str = Form(""),
     dns2: str = Form(""),
     dns3: str = Form(""),
@@ -13664,6 +13732,7 @@ async def save_config_route(
     included_iosafe: str | None = Form(None),
     included_cisco_switch: str | None = Form(None),
     included_storage: str | None = Form(None),
+    included_netapp: str | None = Form(None),
     section_basics_complete: str = Form("false"),
     section_network_complete: str = Form("false"),
     section_included_complete: str = Form("false"),
@@ -13691,6 +13760,12 @@ async def save_config_route(
     cisco_switch_hostname: str = Form(""),
     cisco_switch_username: str = Form(""),
     cisco_switch_password: str = Form(""),
+    netapp_host: str = Form(""),
+    netapp_username: str = Form("admin"),
+    netapp_password: str = Form(""),
+    netapp_storage_protocol: str = Form("nfs"),
+    netapp_iscsi_commands: str = Form(""),
+    netapp_nfs_commands: str = Form(""),
 ):
     return await save_config_handler(
         request,
@@ -13722,6 +13797,7 @@ async def save_config_route(
         windows_ip=windows_ip,
         qnap_ip=qnap_ip,
         iosafe_ip=iosafe_ip,
+        netapp_ip=netapp_ip,
         dns1=dns1,
         dns2=dns2,
         dns3=dns3,
@@ -13738,6 +13814,7 @@ async def save_config_route(
         included_iosafe=included_iosafe,
         included_cisco_switch=included_cisco_switch,
         included_storage=included_storage,
+        included_netapp=included_netapp,
         section_basics_complete=section_basics_complete,
         section_network_complete=section_network_complete,
         section_included_complete=section_included_complete,
@@ -13765,6 +13842,12 @@ async def save_config_route(
         cisco_switch_hostname=cisco_switch_hostname,
         cisco_switch_username=cisco_switch_username,
         cisco_switch_password=cisco_switch_password,
+        netapp_host=netapp_host,
+        netapp_username=netapp_username,
+        netapp_password=netapp_password,
+        netapp_storage_protocol=netapp_storage_protocol,
+        netapp_iscsi_commands=netapp_iscsi_commands,
+        netapp_nfs_commands=netapp_nfs_commands,
     )
 
 
@@ -13781,6 +13864,7 @@ async def save_global_settings_route(
     windows_ip: str = Form(...),
     qnap_ip: str = Form(...),
     iosafe_ip: str = Form(...),
+    netapp_ip: str = Form(""),
     dns1: str = Form(""),
     dns2: str = Form(""),
     dns3: str = Form(""),
@@ -13797,6 +13881,13 @@ async def save_global_settings_route(
     included_iosafe: str | None = Form(None),
     included_cisco_switch: str | None = Form(None),
     included_storage: str | None = Form(None),
+    included_netapp: str | None = Form(None),
+    netapp_host: str = Form(""),
+    netapp_username: str = Form("admin"),
+    netapp_password: str = Form(""),
+    netapp_storage_protocol: str = Form("nfs"),
+    netapp_iscsi_commands: str = Form(""),
+    netapp_nfs_commands: str = Form(""),
 ):
     return await save_global_settings_handler(
         request,
@@ -13820,6 +13911,7 @@ async def save_global_settings_route(
         windows_ip=windows_ip,
         qnap_ip=qnap_ip,
         iosafe_ip=iosafe_ip,
+        netapp_ip=netapp_ip,
         dns1=dns1,
         dns2=dns2,
         dns3=dns3,
@@ -13836,6 +13928,13 @@ async def save_global_settings_route(
         included_iosafe=included_iosafe,
         included_cisco_switch=included_cisco_switch,
         included_storage=included_storage,
+        included_netapp=included_netapp,
+        netapp_host=netapp_host,
+        netapp_username=netapp_username,
+        netapp_password=netapp_password,
+        netapp_storage_protocol=netapp_storage_protocol,
+        netapp_iscsi_commands=netapp_iscsi_commands,
+        netapp_nfs_commands=netapp_nfs_commands,
     )
 
 
@@ -14016,6 +14115,18 @@ async def save_windows_settings_route(
     return_page: str = Form("windows"),
     windows_vm_name: str = Form(""),
     windows_admin_password: str = Form(""),
+    windows_vsphere_host: str = Form(""),
+    windows_vsphere_username: str = Form(""),
+    windows_vsphere_password: str = Form(""),
+    windows_vsphere_datacenter: str = Form(""),
+    windows_vsphere_datastore: str = Form(""),
+    windows_vsphere_network: str = Form(""),
+    windows_vsphere_folder: str = Form(""),
+    windows_vsphere_resource_pool: str = Form(""),
+    windows_winrm_username: str = Form("Administrator"),
+    windows_winrm_password: str = Form(""),
+    windows_winrm_port: str = Form("5986"),
+    windows_winrm_use_https: str | None = Form(None),
     included_windows: str | None = Form(None),
 ):
     return await save_windows_settings_handler(
@@ -14031,6 +14142,18 @@ async def save_windows_settings_route(
         return_page=return_page,
         windows_vm_name=windows_vm_name,
         windows_admin_password=windows_admin_password,
+        windows_vsphere_host=windows_vsphere_host,
+        windows_vsphere_username=windows_vsphere_username,
+        windows_vsphere_password=windows_vsphere_password,
+        windows_vsphere_datacenter=windows_vsphere_datacenter,
+        windows_vsphere_datastore=windows_vsphere_datastore,
+        windows_vsphere_network=windows_vsphere_network,
+        windows_vsphere_folder=windows_vsphere_folder,
+        windows_vsphere_resource_pool=windows_vsphere_resource_pool,
+        windows_winrm_username=windows_winrm_username,
+        windows_winrm_password=windows_winrm_password,
+        windows_winrm_port=windows_winrm_port,
+        windows_winrm_use_https=windows_winrm_use_https,
         included_windows=included_windows,
     )
 
@@ -14071,6 +14194,51 @@ async def plan_windows_install_route(
             "append_activity_event": append_activity_event,
             "render_page": render_page,
             "build_action_feedback": build_action_feedback,
+            "validate_ovf_inputs": VsphereClient.validate_ovf_inputs,
+        },
+        return_page=return_page,
+    )
+
+
+@app.post("/probe-windows-vsphere", response_class=HTMLResponse)
+async def probe_windows_vsphere_route(request: Request, return_page: str = Form("windows")):
+    return await probe_windows_vsphere_handler(
+        request,
+        runtime={
+            "load_kit_config": load_kit_config,
+            "save_kit_config": save_kit_config,
+            "render_page": render_page,
+            "build_action_feedback": build_action_feedback,
+            "build_vsphere_client": lambda windows_cfg: VsphereClient(
+                VsphereConfig(
+                    host=str(windows_cfg.get("vsphere_host") or ""),
+                    username=str(windows_cfg.get("vsphere_username") or ""),
+                    password=str(windows_cfg.get("vsphere_password") or ""),
+                )
+            ),
+        },
+        return_page=return_page,
+    )
+
+
+@app.post("/probe-windows-winrm", response_class=HTMLResponse)
+async def probe_windows_winrm_route(request: Request, return_page: str = Form("windows")):
+    return await probe_windows_winrm_handler(
+        request,
+        runtime={
+            "load_kit_config": load_kit_config,
+            "save_kit_config": save_kit_config,
+            "render_page": render_page,
+            "build_action_feedback": build_action_feedback,
+            "build_winrm_client": lambda windows_cfg, host: WinRMClient(
+                WinRMConfig(
+                    host=host,
+                    username=str(windows_cfg.get("winrm_username") or ""),
+                    password=str(windows_cfg.get("winrm_password") or ""),
+                    port=int(windows_cfg.get("winrm_port") or 5986),
+                    use_https=bool(windows_cfg.get("winrm_use_https", True)),
+                )
+            ),
         },
         return_page=return_page,
     )

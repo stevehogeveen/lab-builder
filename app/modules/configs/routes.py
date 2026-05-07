@@ -90,6 +90,7 @@ async def save_config_handler(
     windows_ip: str = Form(...),
     qnap_ip: str = Form(...),
     iosafe_ip: str = Form(...),
+    netapp_ip: str = Form(""),
     dns1: str = Form(""),
     dns2: str = Form(""),
     dns3: str = Form(""),
@@ -106,6 +107,7 @@ async def save_config_handler(
     included_iosafe: str | None = Form(None),
     included_cisco_switch: str | None = Form(None),
     included_storage: str | None = Form(None),
+    included_netapp: str | None = Form(None),
     section_basics_complete: str = Form("false"),
     section_network_complete: str = Form("false"),
     section_included_complete: str = Form("false"),
@@ -133,6 +135,12 @@ async def save_config_handler(
     cisco_switch_hostname: str = Form(""),
     cisco_switch_username: str = Form(""),
     cisco_switch_password: str = Form(""),
+    netapp_host: str = Form(""),
+    netapp_username: str = Form("admin"),
+    netapp_password: str = Form(""),
+    netapp_storage_protocol: str = Form("nfs"),
+    netapp_iscsi_commands: str = Form(""),
+    netapp_nfs_commands: str = Form(""),
 ):
     existing_cfg = runtime["load_kit_config"]()
     form = await request.form()
@@ -146,6 +154,7 @@ async def save_config_handler(
         "windows": windows_ip,
         "qnap": qnap_ip,
         "iosafe": iosafe_ip,
+        "netapp": netapp_ip,
     }
     if shared_subnet != previous_subnet:
         same_as_previous_plan = all(submitted_plan.get(key, "") == previous_plan.get(key, "") for key in runtime["default_ip_offsets"])
@@ -164,6 +173,7 @@ async def save_config_handler(
             "windows": submitted_plan["windows"],
             "qnap": submitted_plan["qnap"],
             "iosafe": submitted_plan["iosafe"],
+            "netapp": submitted_plan["netapp"],
         },
         "shared_snmp": {
             "v3_username": snmp_v3_username,
@@ -189,6 +199,7 @@ async def save_config_handler(
             "iosafe": included_iosafe == "on",
             "cisco_switch": included_cisco_switch == "on",
             "storage": included_storage == "on",
+            "netapp": included_netapp == "on",
         },
         "section_completion": {
             "basics": section_basics_complete == "true",
@@ -217,6 +228,16 @@ async def save_config_handler(
             "hostname": cisco_switch_hostname,
             "username": cisco_switch_username,
             "password": cisco_switch_password,
+        },
+        "netapp": {
+            "host": netapp_host,
+            "username": netapp_username,
+            "password": netapp_password,
+            "storage_protocol": netapp_storage_protocol if netapp_storage_protocol in {"nfs", "iscsi"} else "nfs",
+            "command_templates": {
+                "iscsi": netapp_iscsi_commands,
+                "nfs": netapp_nfs_commands,
+            },
         },
     }
     cfg = runtime["merge_defaults"](cfg)
@@ -286,6 +307,7 @@ async def save_global_settings_handler(
     windows_ip: str = Form(...),
     qnap_ip: str = Form(...),
     iosafe_ip: str = Form(...),
+    netapp_ip: str = Form(""),
     dns1: str = Form(""),
     dns2: str = Form(""),
     dns3: str = Form(""),
@@ -302,6 +324,13 @@ async def save_global_settings_handler(
     included_iosafe: str | None = Form(None),
     included_cisco_switch: str | None = Form(None),
     included_storage: str | None = Form(None),
+    included_netapp: str | None = Form(None),
+    netapp_host: str = Form(""),
+    netapp_username: str = Form("admin"),
+    netapp_password: str = Form(""),
+    netapp_storage_protocol: str = Form("nfs"),
+    netapp_iscsi_commands: str = Form(""),
+    netapp_nfs_commands: str = Form(""),
 ):
     cfg = runtime["load_kit_config"]()
     form = await request.form()
@@ -332,6 +361,7 @@ async def save_global_settings_handler(
             "iosafe": included_iosafe == "on",
             "cisco_switch": included_cisco_switch == "on",
             "storage": included_storage == "on",
+            "netapp": included_netapp == "on",
         }
     )
     cfg["storage"]["include_in_ilo_run"] = cfg["included"]["storage"]
@@ -361,6 +391,19 @@ async def save_global_settings_handler(
             "windows": windows_ip,
             "qnap": qnap_ip,
             "iosafe": iosafe_ip,
+            "netapp": netapp_ip,
+        }
+    )
+    cfg["netapp"].update(
+        {
+            "host": netapp_host,
+            "username": netapp_username,
+            "password": netapp_password,
+            "storage_protocol": netapp_storage_protocol if netapp_storage_protocol in {"nfs", "iscsi"} else "nfs",
+            "command_templates": {
+                "iscsi": netapp_iscsi_commands,
+                "nfs": netapp_nfs_commands,
+            },
         }
     )
     cfg["ilo"]["target_ip"] = ilo_target_ip

@@ -213,7 +213,7 @@
                             <input type="checkbox" name="selected_scopes" value="included" {% if 'included' in selected_values %}checked{% endif %}>
                             <span>Whole run</span>
                         </label>
-                        {% for item in [('ilo', 'iLO'), ('storage', 'Storage'), ('esxi', 'ESXi'), ('windows', 'Windows'), ('qnap', 'QNAP'), ('iosafe', 'ioSafe'), ('cisco_switch', 'Cisco Switch')] %}
+                        {% for item in [('ilo', 'iLO'), ('storage', 'Storage'), ('esxi', 'ESXi'), ('windows', 'Windows'), ('qnap', 'QNAP'), ('iosafe', 'ioSafe'), ('cisco_switch', 'Cisco Switch'), ('netapp', 'NetApp')] %}
                         <label class="check card card-compact">
                             <input type="checkbox" name="selected_scopes" value="{{ item[0] }}" {% if item[0] in selected_values %}checked{% endif %}>
                             <span>{{ item[1] }}</span>

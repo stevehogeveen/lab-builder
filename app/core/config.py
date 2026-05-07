@@ -15,6 +15,7 @@ DEFAULT_IP_OFFSETS = {
     "windows": 20,
     "qnap": 30,
     "iosafe": 31,
+    "netapp": 40,
 }
 DEFAULT_KIT_NAME = "Kit-01"
 
@@ -126,6 +127,7 @@ def default_config() -> dict[str, Any]:
             "windows": "10.10.8.20",
             "qnap": "10.10.8.30",
             "iosafe": "10.10.8.31",
+            "netapp": "10.10.8.40",
         },
         included={
             "ilo": True,
@@ -153,6 +155,20 @@ def default_config() -> dict[str, Any]:
             "source_image_path": "",
             "source_image_name": "",
             "source_image_kind": "",
+            "vsphere_host": "",
+            "vsphere_username": "",
+            "vsphere_password": "",
+            "vsphere_datacenter": "",
+            "vsphere_datastore": "",
+            "vsphere_network": "",
+            "vsphere_folder": "",
+            "vsphere_resource_pool": "",
+            "winrm_username": "Administrator",
+            "winrm_password": "",
+            "winrm_port": 5986,
+            "winrm_use_https": True,
+            "last_vsphere_probe": {},
+            "last_winrm_probe": {},
             "install_plan": {},
         },
         qnap={"hostname": "qnap01", "ip": "", "username": "admin", "password": ""},
@@ -161,6 +177,10 @@ def default_config() -> dict[str, Any]:
             "username": "admin",
             "password": "",
             "storage_protocol": "nfs",
+            "command_templates": {
+                "iscsi": "",
+                "nfs": "",
+            },
             "desired": {},
             "discovery": {},
             "validation": {},

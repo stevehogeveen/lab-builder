@@ -91,15 +91,72 @@ def test_netapp_action_endpoints_return_mock_data(client):
 
     response = client.post("/modules/netapp/plan")
     assert response.status_code == 200
-    assert response.json()["action"] == "plan"
+    body = response.json()
+    assert body["action"] == "plan"
+    assert isinstance(body.get("stages"), list)
+    stage_names = [str(item.get("name")) for item in body.get("stages", [])]
+    assert "NetApp Stage 1: Discover" in stage_names
 
     response = client.post("/modules/netapp/apply", json={"job": {"job_id": "test-job"}})
     assert response.status_code == 200
-    assert response.json()["action"] == "apply"
+    apply_body = response.json()
+    assert apply_body["action"] == "apply"
+    assert apply_body["result"] == "blocked"
 
     response = client.get("/modules/netapp/status")
     assert response.status_code == 200
     assert response.json()["action"] == "status"
+
+
+def test_netapp_plan_includes_validate_and_plan_stage_order_when_host_is_set(client):
+    cfg = main.load_kit_config()
+    cfg["netapp"]["host"] = "10.10.8.40"
+    cfg["netapp"]["username"] = "admin"
+    cfg["netapp"]["password"] = "secret"
+    cfg["netapp"]["storage_protocol"] = "iscsi"
+    main.save_kit_config(cfg)
+
+    response = client.post("/modules/netapp/plan")
+    assert response.status_code == 200
+    body = response.json()
+    assert body["action"] == "plan"
+    stage_names = [str(item.get("name")) for item in body.get("stages", [])]
+    assert "NetApp Stage 1: Discover" in stage_names
+    if body.get("ok"):
+        assert "NetApp Stage 2: Validate" in stage_names
+        assert "NetApp Stage 3: Plan" in stage_names
+
+
+def test_netapp_service_renders_editable_command_template_tokens():
+    service = main.NetAppModuleService() if hasattr(main, "NetAppModuleService") else None
+    if service is None:
+        from app.modules.netapp.service import NetAppModuleService
+
+        service = NetAppModuleService()
+    context = {
+        "cfg": {
+            "site": {"name": "DOP-X70-Test"},
+            "shared_network": {"subnet": "10.10.10.0/24"},
+            "ip_plan": {"gateway": "10.10.10.1"},
+            "netapp": {
+                "host": "",
+                "username": "admin",
+                "password": "",
+                "storage_protocol": "iscsi",
+                "command_templates": {
+                    "iscsi": "vserver create -vserver <<SVM_NAME>>\nnet int create -address <<SUBNET>>.43 -netmask <<SUBNET_MASK>>",
+                    "nfs": "",
+                },
+                "desired": {"svm_name": "DOP-X70-Test-SVM"},
+            },
+        }
+    }
+
+    settings = service.settings_context(context)
+    commands = service._render_command_template(settings["command_templates"]["iscsi"], service._template_values(context, settings["desired"]))
+
+    assert "vserver create -vserver DOP-X70-Test-SVM" in commands
+    assert "net int create -address 10.10.10.43 -netmask 255.255.255.0" in commands
 
 
 def test_disabled_netapp_does_not_break_other_modules(tmp_path, monkeypatch):

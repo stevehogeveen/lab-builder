@@ -1,13 +1,233 @@
 <section class="panel space-y-6">
     <div>
         <h2 class="text-2xl font-bold">NetApp setup</h2>
-        <div class="text-sm text-slate-400">Module scaffold loaded. NetApp discover/plan/validate/apply actions are isolated in <code>app/modules/netapp/</code>.</div>
+        <div class="text-sm text-slate-400">Adaptive discovery + validation only. No create/delete/modify operations are executed in this phase.</div>
     </div>
-    <div class="card card-compact">
-        <div class="font-semibold mb-2">Current status</div>
-        <div class="result" style="margin-top:0;">NetApp module is registered through the module registry.</div>
-        <div class="result">Routes: <code>/modules/netapp</code></div>
-        <div class="result">Service: <code>app/modules/netapp/service.py</code> (stub methods)</div>
-    </div>
-</section>
 
+    {% set payload = netapp_payload or {} %}
+    {% set plan = payload.get('plan', {}) %}
+    {% set discovery = payload.get('discovery', {}) %}
+    {% set adaptive = plan.get('adaptive_discovery', {}) %}
+    {% set profile = plan.get('protocol_profile', {}) %}
+    {% set workflow = payload.get('stages', []) %}
+    {% set validation = plan.get('validation', {}) %}
+    {% set warnings = payload.get('warnings', []) %}
+    {% set suggestions = payload.get('suggestions', []) %}
+    {% set settings = netapp_settings or {} %}
+    {% set desired = settings.get('desired', {}) %}
+    {% set templates = settings.get('command_templates', {}) %}
+
+    <section class="card card-compact">
+        <div class="font-semibold mb-3">Plan inputs</div>
+        <form hx-post="/modules/netapp/save-settings" hx-target="#main-content" hx-swap="outerHTML" class="space-y-4">
+            <div class="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-4">
+                <div>
+                    <label class="block text-sm font-bold text-slate-300 mb-2">Cluster management IP</label>
+                    <input class="input" name="netapp_host" value="{{ cfg.get('netapp', {}).get('host', '') }}">
+                </div>
+                <div>
+                    <label class="block text-sm font-bold text-slate-300 mb-2">Username</label>
+                    <input class="input" name="netapp_username" value="{{ cfg.get('netapp', {}).get('username', 'admin') }}">
+                </div>
+                <div>
+                    <label class="block text-sm font-bold text-slate-300 mb-2">Password</label>
+                    <input class="input" type="password" name="netapp_password" value="{{ cfg.get('netapp', {}).get('password', '') }}">
+                </div>
+                <div>
+                    <label class="block text-sm font-bold text-slate-300 mb-2">Storage protocol</label>
+                    {% set protocol_value = cfg.get('netapp', {}).get('storage_protocol', desired.get('storage_protocol', 'nfs')) %}
+                    <select class="input" name="netapp_storage_protocol">
+                        <option value="nfs" {% if protocol_value == 'nfs' %}selected{% endif %}>NFS</option>
+                        <option value="iscsi" {% if protocol_value == 'iscsi' %}selected{% endif %}>iSCSI</option>
+                    </select>
+                </div>
+            </div>
+
+            <div class="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-4">
+                <div>
+                    <label class="block text-sm font-bold text-slate-300 mb-2">Cluster name</label>
+                    <input class="input" name="cluster_name" value="{{ desired.get('cluster_name', '') }}">
+                </div>
+                <div>
+                    <label class="block text-sm font-bold text-slate-300 mb-2">SVM name</label>
+                    <input class="input" name="svm_name" value="{{ desired.get('svm_name', '') }}">
+                </div>
+                <div>
+                    <label class="block text-sm font-bold text-slate-300 mb-2">Data broadcast domain</label>
+                    <input class="input" name="data_broadcast_domain" value="{{ desired.get('data_broadcast_domain', 'Data') }}">
+                </div>
+                <div>
+                    <label class="block text-sm font-bold text-slate-300 mb-2">MTU</label>
+                    <input class="input" name="target_mtu" value="{{ desired.get('target_mtu', 9000) }}">
+                </div>
+            </div>
+
+            <div class="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-4">
+                <div>
+                    <label class="block text-sm font-bold text-slate-300 mb-2">Required nodes</label>
+                    <textarea class="input" name="required_nodes" rows="3">{{ (desired.get('required_nodes') or []) | join('\n') }}</textarea>
+                </div>
+                <div>
+                    <label class="block text-sm font-bold text-slate-300 mb-2">Expected ports</label>
+                    <textarea class="input" name="expected_ports" rows="3">{{ (desired.get('expected_ports') or []) | join('\n') }}</textarea>
+                </div>
+                <div>
+                    <label class="block text-sm font-bold text-slate-300 mb-2">Aggregate A</label>
+                    <input class="input" name="aggregate_node_01" value="{{ desired.get('aggregate_node_01', 'aggr_01') }}">
+                </div>
+                <div>
+                    <label class="block text-sm font-bold text-slate-300 mb-2">Aggregate B</label>
+                    <input class="input" name="aggregate_node_02" value="{{ desired.get('aggregate_node_02', 'aggr_02') }}">
+                </div>
+                <div>
+                    <label class="block text-sm font-bold text-slate-300 mb-2">Aggregate disk count</label>
+                    <input class="input" name="aggregate_diskcount" value="{{ desired.get('aggregate_diskcount', 11) }}">
+                </div>
+                <div>
+                    <label class="block text-sm font-bold text-slate-300 mb-2">Aggregate RAID type</label>
+                    <input class="input" name="aggregate_raidtype" value="{{ desired.get('aggregate_raidtype', 'raid_dp') }}">
+                </div>
+            </div>
+
+            <details class="card card-compact">
+                <summary class="summary-row"><span class="text-sm font-bold text-slate-300">Management, users, and VMware inputs</span><span class="status progress">editable</span></summary>
+                <div class="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-4 mt-4">
+                    <div><label class="block text-sm font-bold text-slate-300 mb-2">SVM mgmt LIF</label><input class="input" name="svm_mgmt_lif" value="{{ desired.get('svm_mgmt_lif', '') }}"></div>
+                    <div><label class="block text-sm font-bold text-slate-300 mb-2">SVM mgmt IP</label><input class="input" name="svm_mgmt_ip" value="{{ desired.get('svm_mgmt_ip', '') }}"></div>
+                    <div><label class="block text-sm font-bold text-slate-300 mb-2">Management subnet</label><input class="input" name="management_subnet" value="{{ desired.get('management_subnet', '') }}"></div>
+                    <div><label class="block text-sm font-bold text-slate-300 mb-2">Management gateway</label><input class="input" name="management_gateway" value="{{ desired.get('management_gateway', '') }}"></div>
+                    <div><label class="block text-sm font-bold text-slate-300 mb-2">Management netmask</label><input class="input" name="management_netmask" value="{{ desired.get('management_netmask', '255.255.255.0') }}"></div>
+                    <div><label class="block text-sm font-bold text-slate-300 mb-2">AutoSupport from</label><input class="input" name="autosupport_from" value="{{ desired.get('autosupport_from', '') }}"></div>
+                    <div><label class="block text-sm font-bold text-slate-300 mb-2">AutoSupport to</label><input class="input" name="autosupport_to" value="{{ desired.get('autosupport_to', '') }}"></div>
+                    <div><label class="block text-sm font-bold text-slate-300 mb-2">AutoSupport mail hosts</label><textarea class="input" name="autosupport_mail_hosts" rows="3">{{ (desired.get('autosupport_mail_hosts') or []) | join('\n') }}</textarea></div>
+                    <div><label class="block text-sm font-bold text-slate-300 mb-2">NTP servers</label><textarea class="input" name="ntp_servers" rows="3">{{ (desired.get('ntp_servers') or []) | join('\n') }}</textarea></div>
+                    <div><label class="block text-sm font-bold text-slate-300 mb-2">Required users</label><textarea class="input" name="required_users" rows="3">{{ (desired.get('required_users') or []) | join('\n') }}</textarea></div>
+                    <div><label class="block text-sm font-bold text-slate-300 mb-2">ESXi hosts</label><textarea class="input" name="esxi_hosts" rows="3">{{ (desired.get('esxi_hosts') or []) | join('\n') }}</textarea></div>
+                </div>
+            </details>
+
+            <details class="card card-compact">
+                <summary class="summary-row"><span class="text-sm font-bold text-slate-300">iSCSI profile</span><span class="status progress">editable</span></summary>
+                {% set iscsi = desired.get('iscsi', {}) %}
+                <div class="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-4 mt-4">
+                    <div><label class="block text-sm font-bold text-slate-300 mb-2">Subnet name</label><input class="input" name="iscsi_subnet" value="{{ iscsi.get('subnet', 'iSCSI') }}"></div>
+                    <div><label class="block text-sm font-bold text-slate-300 mb-2">Subnet CIDR</label><input class="input" name="iscsi_subnet_cidr" value="{{ iscsi.get('subnet_cidr', '192.168.1.0/24') }}"></div>
+                    <div><label class="block text-sm font-bold text-slate-300 mb-2">Gateway</label><input class="input" name="iscsi_gateway" value="{{ iscsi.get('gateway', '192.168.1.1') }}"></div>
+                    <div><label class="block text-sm font-bold text-slate-300 mb-2">IP range</label><input class="input" name="iscsi_ip_range" value="{{ iscsi.get('ip_range', '192.168.1.11-192.168.1.60') }}"></div>
+                    <div><label class="block text-sm font-bold text-slate-300 mb-2">Portset</label><input class="input" name="iscsi_portset" value="{{ iscsi.get('portset', 'iSCSI') }}"></div>
+                    <div><label class="block text-sm font-bold text-slate-300 mb-2">Igroup</label><input class="input" name="iscsi_igroup" value="{{ iscsi.get('igroup', '') }}"></div>
+                    <div><label class="block text-sm font-bold text-slate-300 mb-2">LUN</label><input class="input" name="iscsi_lun" value="{{ iscsi.get('lun', 'esxi_lun01') }}"></div>
+                    <div><label class="block text-sm font-bold text-slate-300 mb-2">VMFS datastore</label><input class="input" name="iscsi_vmfs_datastore" value="{{ iscsi.get('vmfs_datastore', 'vmfs_ds01') }}"></div>
+                    <div class="xl:col-span-2"><label class="block text-sm font-bold text-slate-300 mb-2">IQNs</label><textarea class="input" name="iscsi_iqns" rows="4">{{ (iscsi.get('iqns') or []) | join('\n') }}</textarea></div>
+                </div>
+            </details>
+
+            <details class="card card-compact">
+                <summary class="summary-row"><span class="text-sm font-bold text-slate-300">NFS profile and command templates</span><span class="status progress">editable</span></summary>
+                {% set nfs = desired.get('nfs', {}) %}
+                <div class="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-4 mt-4">
+                    <div><label class="block text-sm font-bold text-slate-300 mb-2">Volume</label><input class="input" name="nfs_volume" value="{{ nfs.get('volume', 'esxi_datastore_01') }}"></div>
+                    <div><label class="block text-sm font-bold text-slate-300 mb-2">Export policy</label><input class="input" name="nfs_export_policy" value="{{ nfs.get('export_policy', 'esxi_nfs_policy') }}"></div>
+                    <div><label class="block text-sm font-bold text-slate-300 mb-2">Mount path</label><input class="input" name="nfs_mount_path" value="{{ nfs.get('mount_path', '/esxi_datastore_01') }}"></div>
+                    <div><label class="block text-sm font-bold text-slate-300 mb-2">ESXi mount targets</label><textarea class="input" name="nfs_esxi_mount_targets" rows="3">{{ (nfs.get('esxi_mount_targets') or []) | join('\n') }}</textarea></div>
+                    <div class="xl:col-span-2"><label class="block text-sm font-bold text-slate-300 mb-2">iSCSI command template</label><textarea class="input" name="netapp_iscsi_commands" rows="10">{{ templates.get('iscsi', '') }}</textarea></div>
+                    <div class="xl:col-span-2"><label class="block text-sm font-bold text-slate-300 mb-2">NFS command template</label><textarea class="input" name="netapp_nfs_commands" rows="10">{{ templates.get('nfs', '') }}</textarea></div>
+                </div>
+            </details>
+
+            <div class="actions">
+                <button class="btn btn-primary action-button" type="submit">Save NetApp plan inputs</button>
+            </div>
+        </form>
+    </section>
+
+    <section class="card card-compact">
+        <div class="font-semibold mb-3">Discovery summary</div>
+        <div class="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-3">
+            <div class="card card-compact"><div class="text-xs text-slate-400">Cluster</div><div class="font-semibold">{{ adaptive.get('cluster_name') or discovery.get('cluster_name') or 'Not detected' }}</div></div>
+            <div class="card card-compact"><div class="text-xs text-slate-400">ONTAP version</div><div class="font-semibold">{{ adaptive.get('ontap_version') or discovery.get('ontap_version') or 'Not detected' }}</div></div>
+            <div class="card card-compact"><div class="text-xs text-slate-400">Nodes</div><div class="font-semibold">{{ (adaptive.get('nodes') or discovery.get('node_names') or []) | join(', ') or 'None' }}</div></div>
+            <div class="card card-compact"><div class="text-xs text-slate-400">Node models</div><div class="font-semibold">{{ (adaptive.get('node_models') or discovery.get('node_models') or []) | join(', ') or 'None' }}</div></div>
+        </div>
+        <div class="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-3 mt-3">
+            <div class="card card-compact"><div class="text-xs text-slate-400">Physical ports</div><div class="text-sm">{{ (adaptive.get('physical_ports') or discovery.get('physical_ports') or []) | join(', ') or 'None' }}</div></div>
+            <div class="card card-compact"><div class="text-xs text-slate-400">Interface groups</div><div class="text-sm">{{ (adaptive.get('interface_groups') or discovery.get('existing_interface_groups') or []) | join(', ') or 'None' }}</div></div>
+            <div class="card card-compact"><div class="text-xs text-slate-400">Broadcast domains</div><div class="text-sm">{{ (adaptive.get('broadcast_domains') or discovery.get('existing_broadcast_domains') or []) | join(', ') or 'None' }}</div></div>
+            <div class="card card-compact"><div class="text-xs text-slate-400">Aggregates</div><div class="text-sm">{{ (adaptive.get('aggregates') or discovery.get('aggregates') or []) | join(', ') or 'None' }}</div></div>
+            <div class="card card-compact"><div class="text-xs text-slate-400">SVMs</div><div class="text-sm">{{ (discovery.get('svms') or []) | join(', ') or 'None' }}</div></div>
+            <div class="card card-compact"><div class="text-xs text-slate-400">Enabled protocols</div><div class="text-sm">{{ (adaptive.get('svm_protocols') or discovery.get('enabled_protocols') or []) | join(', ') or 'None' }}</div></div>
+        </div>
+    </section>
+
+    <section class="card card-compact">
+        <div class="font-semibold mb-3">Execution order (dry-run)</div>
+        <div class="space-y-2">
+            {% for item in workflow %}
+            <div class="result" style="margin-top: 0;">
+                <strong>{{ item.get('name', '') }}:</strong> {{ 'OK' if item.get('ok') else 'Needs review' }}
+                {% if item.get('steps') %}
+                <div class="mt-1 text-sm text-slate-400">{{ item.get('steps')|join(' | ') }}</div>
+                {% endif %}
+            </div>
+            {% endfor %}
+        </div>
+    </section>
+
+    <section class="card card-compact">
+        <div class="font-semibold mb-3">Protocol profile</div>
+        <div class="result" style="margin-top: 0;">
+            <strong>Selected profile:</strong> {{ (profile.get('selected_protocol') or cfg.get('netapp', {}).get('storage_protocol', 'nfs')) | upper }}
+        </div>
+        {% if profile.get('actions') %}
+        <div class="space-y-2 mt-3">
+            {% for action in profile.get('actions', []) %}
+            <div class="result" style="margin-top: 0;">
+                <strong>{{ action.get('name') }}</strong> - {{ action.get('type') }} / {{ action.get('status') }}
+            </div>
+            {% endfor %}
+        </div>
+        {% endif %}
+        {% if profile.get('command_preview') %}
+        <details class="mt-3" open>
+            <summary class="summary-row"><span class="text-sm font-bold text-slate-300">Rendered command preview</span><span class="status progress">dry-run</span></summary>
+            <div class="codeblock mt-3">
+{% for cmd in profile.get('command_preview', []) %}{{ cmd }}
+{% endfor %}
+            </div>
+        </details>
+        {% endif %}
+        {% if plan %}
+        <details class="mt-3">
+            <summary class="summary-row"><span class="text-sm font-bold text-slate-300">Plan defaults</span><span class="status progress">preview</span></summary>
+            <pre class="codeblock mt-3">{{ plan | tojson(indent=2) }}</pre>
+        </details>
+        {% endif %}
+    </section>
+
+    {% if warnings %}
+    <section class="card card-compact">
+        <div class="font-semibold mb-3">Warnings</div>
+        <div class="space-y-2">
+            {% for item in warnings %}
+            <div class="result" style="margin-top:0; border-color: color-mix(in srgb, var(--warn) 45%, var(--border)); background: color-mix(in srgb, var(--warn) 10%, transparent);">{{ item }}</div>
+            {% endfor %}
+        </div>
+    </section>
+    {% endif %}
+
+    {% if suggestions %}
+    <section class="card card-compact">
+        <div class="font-semibold mb-3">Suggestions</div>
+        <div class="space-y-2">
+            {% for item in suggestions %}
+            <div class="text-sm text-slate-300">{{ loop.index }}. {{ item }}</div>
+            {% endfor %}
+        </div>
+    </section>
+    {% endif %}
+
+    <section class="card card-compact">
+        <div class="font-semibold mb-2">Raw validation snapshot</div>
+        <pre class="codeblock">{{ validation | tojson(indent=2) }}</pre>
+    </section>
+</section>

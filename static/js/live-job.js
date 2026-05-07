@@ -284,7 +284,7 @@
     }
 
     function parseScopeStages(scope, currentStage) {
-        const orderedTokens = ["ilo", "storage", "esxi", "windows", "qnap", "iosafe", "cisco_switch"];
+        const orderedTokens = ["ilo", "storage", "esxi", "windows", "qnap", "iosafe", "cisco_switch", "netapp"];
         const labels = {
             ilo: "iLO",
             storage: "Storage",
@@ -293,6 +293,7 @@
             qnap: "QNAP",
             iosafe: "ioSafe",
             cisco_switch: "Cisco Switch",
+            netapp: "NetApp",
         };
         const chosen = [];
         const raw = String(scope || "");
@@ -312,6 +313,7 @@
             if (stage.includes("qnap")) chosen.push("qnap");
             if (stage.includes("iosafe")) chosen.push("iosafe");
             if (stage.includes("cisco")) chosen.push("cisco_switch");
+            if (stage.includes("netapp")) chosen.push("netapp");
         }
         return chosen.map(function (token) {
             return { token: token, label: labels[token] || token };
@@ -326,6 +328,7 @@
         if (stage.includes("qnap")) return "qnap";
         if (stage.includes("iosafe")) return "iosafe";
         if (stage.includes("cisco")) return "cisco_switch";
+        if (stage.includes("netapp")) return "netapp";
         if (stage.includes("ilo")) return "ilo";
         return "";
     }

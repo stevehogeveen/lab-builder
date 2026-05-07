@@ -113,7 +113,7 @@
     <section class="card identity-hero-card">
         <div class="text-lg font-semibold mb-3">Continue setup</div>
         <div class="dashboard-step-grid">
-            {% for key in ["global_settings", "ilo", "storage", "esxi", "execution"] %}
+            {% for key in ["global_settings", "ilo", "storage", "netapp", "esxi", "execution"] %}
             {% set item = workflow_contexts.get(key.replace('global_settings', 'ilo'), {}) if key == 'global_settings' else workflow_contexts.get(key, {}) %}
             <a class="card block dashboard-step-card" href="{% if key == 'global_settings' %}/global-settings{% elif key == 'execution' %}/execution{% else %}{{ item.review_href }}{% endif %}">
                 <div class="dashboard-step-header">

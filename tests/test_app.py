@@ -10,6 +10,7 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from app.ilo import ILOClient, ILOConfig, ILOError
+from app.windows import VsphereClient
 from app.esxi.kickstart import build_kickstart, redact_kickstart_text
 from app.core.config import build_default_ip_plan
 from app.core.models import KitConfigModel
@@ -1548,13 +1549,34 @@ def test_save_esxi_windows_and_qnap_page_settings(client):
     main.save_kit_config(cfg)
 
     client.post("/save-esxi-settings", data={"return_page": "esxi", "esxi_hostname": "esxi-lab", "esxi_root_password": "Valid1Pass!"})
-    client.post("/save-windows-settings", data={"return_page": "windows", "windows_vm_name": "win-lab", "windows_admin_password": "secret", "included_windows": "on"})
+    client.post(
+        "/save-windows-settings",
+        data={
+            "return_page": "windows",
+            "windows_vm_name": "win-lab",
+            "windows_admin_password": "secret",
+            "windows_vsphere_host": "esxi.local",
+            "windows_vsphere_username": "root",
+            "windows_vsphere_password": "vmware-secret",
+            "windows_vsphere_datastore": "datastore1",
+            "windows_vsphere_network": "VM Network",
+            "windows_winrm_username": "Administrator",
+            "windows_winrm_password": "winrm-secret",
+            "windows_winrm_port": "5986",
+            "windows_winrm_use_https": "on",
+            "included_windows": "on",
+        },
+    )
     client.post("/save-qnap-settings", data={"return_page": "qnap", "qnap_hostname": "qnap-lab", "qnap_username": "admin", "qnap_password": "secret", "included_qnap": "on"})
 
     cfg = main.load_kit_config("Workflow-Kit")
     assert cfg["esxi"]["hostname"] == "esxi-lab"
     assert cfg["included"]["esxi"] is True
     assert cfg["windows"]["vm_name"] == "win-lab"
+    assert cfg["windows"]["vsphere_host"] == "esxi.local"
+    assert cfg["windows"]["vsphere_datastore"] == "datastore1"
+    assert cfg["windows"]["winrm_username"] == "Administrator"
+    assert cfg["windows"]["winrm_use_https"] is True
     assert cfg["qnap"]["hostname"] == "qnap-lab"
 
 
@@ -11515,7 +11537,56 @@ def test_build_default_ip_plan_uses_expected_offsets():
         "windows": "10.55.66.20",
         "qnap": "10.55.66.30",
         "iosafe": "10.55.66.31",
+        "netapp": "10.55.66.40",
     }
+
+
+def test_global_settings_renders_netapp_fields_and_execution_includes_netapp_scope(client):
+    global_settings = client.get("/global-settings")
+    assert global_settings.status_code == 200
+    assert 'name="netapp_host"' in global_settings.text
+    assert 'name="netapp_storage_protocol"' in global_settings.text
+    assert 'name="included_netapp"' in global_settings.text
+
+    execution = client.get("/execution")
+    assert execution.status_code == 200
+    assert 'value="netapp"' in execution.text
+
+
+def test_save_global_settings_persists_netapp_configuration(client):
+    cfg = main.default_config()
+    cfg["site"]["name"] = "NetApp Save Kit"
+    main.save_kit_config(cfg)
+
+    response = client.post(
+        "/save-global-settings",
+        data={
+            "return_page": "global_settings",
+            "site_name": "NetApp Save Kit",
+            "shared_subnet": "10.10.8.0/24",
+            "gateway_ip": "10.10.8.1",
+            "switch_ip": "10.10.8.2",
+            "esxi_ip": "10.10.8.10",
+            "ilo_target_ip": "10.10.8.11",
+            "windows_ip": "10.10.8.20",
+            "qnap_ip": "10.10.8.30",
+            "iosafe_ip": "10.10.8.31",
+            "netapp_ip": "10.10.8.40",
+            "netapp_host": "10.10.8.40",
+            "netapp_username": "admin",
+            "netapp_password": "secret",
+            "netapp_storage_protocol": "iscsi",
+            "included_netapp": "on",
+        },
+    )
+    assert response.status_code == 200
+
+    saved = main.load_kit_config("NetApp-Save-Kit")
+    assert saved["included"]["netapp"] is True
+    assert saved["netapp"]["host"] == "10.10.8.40"
+    assert saved["netapp"]["username"] == "admin"
+    assert saved["netapp"]["password"] == "secret"
+    assert saved["netapp"]["storage_protocol"] == "iscsi"
 
 
 def test_stage_registry_registers_and_filters_enabled_stages():
@@ -11733,6 +11804,10 @@ def test_upload_windows_image_and_plan_dry_run(client):
     cfg["site"]["name"] = "Windows Plan Kit"
     cfg["windows"]["vm_name"] = "win-plan"
     cfg["windows"]["admin_password"] = "Secret123!"
+    cfg["windows"]["vsphere_host"] = "esxi.local"
+    cfg["windows"]["vsphere_username"] = "root"
+    cfg["windows"]["vsphere_datastore"] = "datastore1"
+    cfg["windows"]["vsphere_network"] = "VM Network"
     main.save_kit_config(cfg)
     upload = client.post(
         "/upload-windows-image",
@@ -11748,3 +11823,75 @@ def test_upload_windows_image_and_plan_dry_run(client):
     install_plan = saved["windows"].get("install_plan") or {}
     assert install_plan.get("mode") == "dry_run"
     assert install_plan.get("ready") is True
+    assert install_plan.get("vsphere_host") == "esxi.local"
+    assert install_plan.get("datastore") == "datastore1"
+    assert install_plan.get("network") == "VM Network"
+
+
+def test_windows_install_plan_warns_when_vsphere_target_is_missing(client):
+    cfg = main.default_config()
+    cfg["site"]["name"] = "Windows Missing Target Kit"
+    cfg["windows"]["vm_name"] = "win-plan"
+    cfg["windows"]["admin_password"] = "Secret123!"
+    image_path = main.EXPORTS_DIR / "windows-images" / "template.ova"
+    image_path.parent.mkdir(parents=True, exist_ok=True)
+    image_path.write_bytes(b"ova-bytes")
+    cfg["windows"]["source_image_path"] = str(image_path)
+    cfg["windows"]["source_image_name"] = "template.ova"
+    cfg["windows"]["source_image_kind"] = "ova"
+    main.save_kit_config(cfg)
+
+    response = client.post("/plan-windows-install", data={"return_page": "windows"})
+    assert response.status_code == 200
+    saved = main.load_kit_config("Windows-Missing-Target-Kit")
+    install_plan = saved["windows"].get("install_plan") or {}
+    assert install_plan.get("ready") is False
+    assert "vSphere host is missing." in install_plan.get("warnings", [])
+    assert "Datastore is missing." in install_plan.get("warnings", [])
+
+
+def test_windows_probe_routes_require_saved_credentials(client):
+    cfg = main.default_config()
+    cfg["site"]["name"] = "Windows Probe Kit"
+    cfg["windows"]["vsphere_host"] = "esxi.local"
+    cfg["windows"]["vsphere_username"] = "root"
+    cfg["windows"]["winrm_username"] = "Administrator"
+    main.save_kit_config(cfg)
+
+    vsphere = client.post("/probe-windows-vsphere", data={"return_page": "windows"})
+    assert vsphere.status_code == 200
+    assert "vSphere probe failed: host, username, and password are required." in vsphere.text
+
+    winrm = client.post("/probe-windows-winrm", data={"return_page": "windows"})
+    assert winrm.status_code == 200
+    assert "WinRM probe failed: host, username, and password are required." in winrm.text
+
+
+def test_vsphere_ovf_validation_reports_missing_runtime_inputs(tmp_path):
+    missing = VsphereClient.validate_ovf_inputs(
+        {
+            "image_path": str(tmp_path / "missing.ova"),
+            "image_kind": "ova",
+            "vsphere_host": "",
+            "vsphere_username": "",
+            "datastore": "",
+            "network": "",
+        }
+    )
+    assert missing["ready"] is False
+    assert "Windows source image file is missing." in missing["warnings"]
+    assert "vSphere host is missing." in missing["warnings"]
+
+    image_path = tmp_path / "template.ovf"
+    image_path.write_text("<ovf/>", encoding="utf-8")
+    ready = VsphereClient.validate_ovf_inputs(
+        {
+            "image_path": str(image_path),
+            "image_kind": "ovf",
+            "vsphere_host": "esxi.local",
+            "vsphere_username": "root",
+            "datastore": "datastore1",
+            "network": "VM Network",
+        }
+    )
+    assert ready == {"ready": True, "warnings": []}
