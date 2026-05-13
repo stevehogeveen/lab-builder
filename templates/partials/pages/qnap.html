@@ -1,72 +1,64 @@
 <section class="panel">
     <div class="flex items-center justify-between mb-4">
         <div>
-            <h2 class="text-2xl font-bold">QNAP</h2>
+            <h2 class="text-2xl font-bold title-with-icon"><span class="page-icon icon-tone-{{ page_precheck_summary.tone if page_precheck_summary else qnap_inclusion.tone }}" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="5" y="4" width="14" height="16" rx="3"/><path d="M9 8h6"/><path d="M9 12h6"/><path d="M9 16h3"/></svg></span><span>QNAP</span></h2>
             <div class="text-sm text-slate-400">Review inherited network defaults, then save the QNAP-specific details here.</div>
         </div>
         <span class="status {{ qnap_inclusion.tone }}">{{ qnap_inclusion.label }}</span>
     </div>
 
-    <div class="grid grid-cols-1 md:grid-cols-3 gap-3 mb-4">
-        <div class="card">
-            <div class="text-xs font-bold uppercase text-slate-400 mb-1">Target</div>
-            <div class="text-lg font-semibold">{{ cfg.get('qnap', {}).get('ip', '') or cfg.get('ip_plan', {}).get('qnap', '') or 'Not set' }}</div>
-            <div class="text-sm text-slate-400 mt-1">Planned QNAP address.</div>
-        </div>
-        <div class="card">
-            <div class="text-xs font-bold uppercase text-slate-400 mb-1">Current State</div>
-            <div class="text-lg font-semibold">{{ cfg.get('qnap', {}).get('hostname', '') or 'Needs review' }}</div>
-            <div class="text-sm text-slate-400 mt-1">Local hostname and credentials live here.</div>
-        </div>
-        <div class="card">
-            <div class="text-xs font-bold uppercase text-slate-400 mb-1">Next Action</div>
-            <div class="text-lg font-semibold">Review and save</div>
-            <div class="text-sm text-slate-400 mt-1">Confirm the local QNAP credentials before the final run.</div>
-        </div>
-    </div>
+    {% set precheck_summary = page_precheck_summary %}
+    {% include "partials/components/precheck_summary.html" %}
+
+    {% set setup_strip = [
+        {"label": "Target", "value": cfg.get('qnap', {}).get('ip', '') or cfg.get('ip_plan', {}).get('qnap', '') or 'Not set', "note": "Planned QNAP address"},
+        {"label": "Hostname", "value": cfg.get('qnap', {}).get('hostname', '') or 'Needs review', "note": "Local QNAP name"},
+        {"label": "Next", "value": 'Review and save', "note": "Confirm credentials before final run"},
+    ] %}
+    {% include "partials/components/setup_strip.html" %}
 
     <div class="grid grid-cols-1 xl:grid-cols-2 gap-4">
-        <div class="card">
+        <div class="card identity-soft-card">
             <div class="text-lg font-semibold mb-3">Target and shared defaults</div>
-            <div class="space-y-3 text-sm">
-                <div class="result" style="margin-top: 0;">
-                    <div class="font-semibold">IP address</div>
+            <div class="ops-strip-grid text-sm">
+                <div class="ops-strip-card">
+                    <div class="dashboard-kicker">IP address</div>
                     <div>{{ cfg.get('qnap', {}).get('ip', '') or cfg.get('ip_plan', {}).get('qnap', '') or 'Not set' }}</div>
                     <div class="text-slate-400 mt-1">{{ 'Overridden on this page' if cfg.get('qnap', {}).get('ip') else 'Using global value' }}</div>
                 </div>
-                <div class="result" style="margin-top: 0;">
-                    <div class="font-semibold">Gateway</div>
+                <div class="ops-strip-card">
+                    <div class="dashboard-kicker">Gateway</div>
                     <div>{{ cfg.get('qnap', {}).get('gateway', '') or cfg.get('ip_plan', {}).get('gateway', '') or 'Not set' }}</div>
                     <div class="text-slate-400 mt-1">{{ 'Overridden on this page' if cfg.get('qnap', {}).get('gateway') else 'Using global value' }}</div>
                 </div>
-                <div class="result" style="margin-top: 0;">
-                    <div class="font-semibold">DNS servers</div>
-                    <div>{{ (cfg.get('qnap', {}).get('dns_servers', []) or cfg.get('shared_network', {}).get('dns_servers', []))|join(', ') or 'Not set' }}</div>
+                <div class="ops-strip-card">
+                    <div class="dashboard-kicker">DNS servers</div>
+                    <div class="truncate-wrap">{{ (cfg.get('qnap', {}).get('dns_servers', []) or cfg.get('shared_network', {}).get('dns_servers', []))|join(', ') or 'Not set' }}</div>
                     <div class="text-slate-400 mt-1">{{ 'Overridden on this page' if cfg.get('qnap', {}).get('dns_servers') else 'Using global value' }}</div>
                 </div>
             </div>
-            <div class="result mt-4">Global Settings provides the shared address plan. This page keeps the QNAP hostname, credentials, and inclusion choice.</div>
+            <div class="text-sm text-slate-400 mt-4">Global Settings provides the shared address plan. This page keeps the QNAP hostname, credentials, and inclusion choice.</div>
         </div>
 
-        <div class="card">
+        <div class="card workflow-hero-card">
             <div class="text-lg font-semibold mb-3">Local QNAP setup</div>
-            <form hx-post="/save-qnap-settings" hx-target="#main-content" hx-swap="outerHTML" class="space-y-4">
+            <form hx-post="/save-qnap-settings" hx-target="#main-content" hx-swap="outerHTML" class="space-y-4" data-action-title="Saving QNAP setup" data-action-start="Saving the QNAP host details and inclusion settings.">
                 <input type="hidden" name="return_page" value="qnap">
                 <div>
                     <label class="block text-sm font-bold text-slate-300 mb-2">Hostname</label>
-                    <input type="text" name="qnap_hostname" value="{{ cfg.get('qnap', {}).get('hostname', '') }}" class="bg-slate-800 border border-slate-600 rounded-lg p-2 w-full">
+                    <input type="text" name="qnap_hostname" value="{{ cfg.get('qnap', {}).get('hostname', '') }}" class="input">
                 </div>
                 <div>
                     <label class="block text-sm font-bold text-slate-300 mb-2">Username</label>
-                    <input type="text" name="qnap_username" value="{{ cfg.get('qnap', {}).get('username', '') }}" class="bg-slate-800 border border-slate-600 rounded-lg p-2 w-full">
+                    <input type="text" name="qnap_username" value="{{ cfg.get('qnap', {}).get('username', '') }}" class="input">
                 </div>
                 <div>
                     <label class="block text-sm font-bold text-slate-300 mb-2">Password</label>
-                    <input type="password" name="qnap_password" value="{{ cfg.get('qnap', {}).get('password', '') }}" class="bg-slate-800 border border-slate-600 rounded-lg p-2 w-full">
+                    <input type="password" name="qnap_password" value="{{ cfg.get('qnap', {}).get('password', '') }}" class="input">
                 </div>
                 <label class="check"><input type="checkbox" name="included_qnap" {% if cfg.get('included', {}).get('qnap') %}checked{% endif %}> Include QNAP in this kit</label>
                 <div class="actions">
-                    <button class="btn btn-danger" type="submit">Save QNAP setup</button>
+                    <button class="btn btn-primary action-button" type="submit">Save QNAP setup</button>
                     <a class="btn" href="/global-settings">Adjust global defaults</a>
                 </div>
             </form>
@@ -74,14 +66,14 @@
     </div>
 
     <div class="grid grid-cols-1 xl:grid-cols-2 gap-4 mt-4">
-        <div class="card">
+        <div class="card identity-soft-card">
             <div class="text-lg font-semibold mb-3">Readiness</div>
-            <div class="space-y-3 text-sm">
-                <div class="result" style="margin-top: 0;">This workspace is ready when the shared network defaults are set and the local QNAP hostname and credentials are saved here.</div>
-                <div class="result" style="margin-top: 0;">Run Center uses the saved QNAP values from this page. It does not create a different QNAP plan later.</div>
+            <div class="ops-row-list text-sm">
+                <div class="ops-row-item"><div class="ops-row-copy">This workspace is ready when the shared network defaults are set and the local QNAP hostname and credentials are saved here.</div></div>
+                <div class="ops-row-item"><div class="ops-row-copy">Run Center uses the saved QNAP values from this page. It does not create a different QNAP plan later.</div></div>
             </div>
         </div>
-        <div class="card">
+        <div class="card identity-soft-card">
             <div class="text-lg font-semibold mb-3">Reports and next step</div>
             <div class="text-sm text-slate-400 mb-3">After saving, continue in Run Center for the final review or return to Global Settings if the shared address plan changes.</div>
             <div class="actions">

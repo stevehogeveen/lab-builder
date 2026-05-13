@@ -2,8 +2,8 @@
     <section class="panel">
         <div class="flex flex-wrap items-start justify-between gap-4 mb-4">
             <div>
-                <h2 class="text-2xl font-bold">Reports & technical details</h2>
-                <div class="text-sm text-slate-400">This is the place for logs, saved files, raw output, recent history, and troubleshooting details.</div>
+                <h2 class="text-2xl font-bold title-with-icon"><span class="page-icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M7 3h7l5 5v13H7z"/><path d="M14 3v5h5"/><path d="M10 13h6"/><path d="M10 17h6"/></svg></span><span>Reports</span></h2>
+                <div class="text-sm text-slate-400">Logs, saved files, raw output, recent history, and troubleshooting details stay here.</div>
             </div>
             <div class="actions">
                 <a class="btn" href="/history">Open detailed history</a>
@@ -36,11 +36,11 @@
                 {% for item in activity_feed[:5] %}
                 <div class="card">
                     <div class="flex items-center justify-between gap-3">
-                        <div class="font-semibold">{{ item.title }}</div>
+                        <div class="font-semibold truncate-wrap" title="{{ item.title }}">{{ item.title }}</div>
                         <span class="status {{ item.tone }}">{{ item.label }}</span>
                     </div>
-                    <div class="text-sm mt-2">{{ item.summary }}</div>
-                    <div class="text-xs text-slate-400 mt-2">{{ item.time }}{% if item.target %} | {{ item.target }}{% endif %}</div>
+                    <div class="text-sm mt-2 truncate-wrap" title="{{ item.summary }}">{{ item.summary }}</div>
+                    <div class="text-xs text-slate-400 mt-2 truncate-wrap" title="{{ item.time }}{% if item.target %} | {{ item.target }}{% endif %}">{{ item.time }}{% if item.target %} | {{ item.target }}{% endif %}</div>
                 </div>
                 {% endfor %}
             </div>
@@ -91,11 +91,11 @@
                 <div class="grid grid-cols-1 xl:grid-cols-[minmax(0,1.3fr)_minmax(0,0.9fr)_auto] gap-3 items-start">
                     <div>
                         <div class="flex items-center gap-3 flex-wrap">
-                            <div class="font-semibold">{{ bundle.name }}</div>
+                            <div class="font-semibold truncate-wrap" title="{{ bundle.name }}">{{ bundle.name }}</div>
                             <span class="status {{ bundle.tone }}">{{ bundle.result }}</span>
                         </div>
-                        <div class="text-sm text-slate-400 mt-1">{{ bundle.time }}{% if bundle.target %} | {{ bundle.target }}{% endif %}</div>
-                        <div class="text-sm mt-2">{{ bundle.human_summary }}</div>
+                        <div class="text-sm text-slate-400 mt-1 truncate-wrap" title="{{ bundle.time }}{% if bundle.target %} | {{ bundle.target }}{% endif %}">{{ bundle.time }}{% if bundle.target %} | {{ bundle.target }}{% endif %}</div>
+                        <div class="text-sm mt-2 truncate-wrap" title="{{ bundle.human_summary }}">{{ bundle.human_summary }}</div>
                         {% if bundle.highlights %}
                         <div class="grid grid-cols-1 md:grid-cols-2 gap-2 mt-3 text-sm">
                             {% for item in bundle.highlights %}
@@ -105,10 +105,10 @@
                         {% endif %}
                     </div>
                     <div class="text-sm space-y-1">
-                        <div><strong>Workflow:</strong> {{ bundle.scope }}</div>
-                        <div><strong>Target:</strong> {{ bundle.target }}</div>
+                        <div class="truncate-wrap" title="{{ bundle.scope }}"><strong>Workflow:</strong> {{ bundle.scope }}</div>
+                        <div class="truncate-wrap" title="{{ bundle.target }}"><strong>Target:</strong> {{ bundle.target }}</div>
                         <div><strong>Kit:</strong> {{ current_kit }}</div>
-                        <div><strong>Full story:</strong> {{ bundle.summary }}</div>
+                        <div class="truncate-wrap" title="{{ bundle.summary }}"><strong>Full story:</strong> {{ bundle.summary }}</div>
                     </div>
                     <div class="actions justify-end">
                         {% if bundle.run_summary_path %}
@@ -136,16 +136,16 @@
                     <div class="grid grid-cols-1 xl:grid-cols-[minmax(0,1.3fr)_minmax(0,0.9fr)_auto] gap-3 items-start">
                         <div>
                             <div class="flex items-center gap-3 flex-wrap">
-                                <div class="font-semibold">{{ bundle.name }}</div>
+                                <div class="font-semibold truncate-wrap" title="{{ bundle.name }}">{{ bundle.name }}</div>
                                 <span class="status {{ bundle.tone }}">{{ bundle.result }}</span>
                             </div>
-                            <div class="text-sm text-slate-400 mt-1">{{ bundle.time }}{% if bundle.target %} | {{ bundle.target }}{% endif %}</div>
-                            <div class="text-sm mt-2">{{ bundle.human_summary }}</div>
+                            <div class="text-sm text-slate-400 mt-1 truncate-wrap" title="{{ bundle.time }}{% if bundle.target %} | {{ bundle.target }}{% endif %}">{{ bundle.time }}{% if bundle.target %} | {{ bundle.target }}{% endif %}</div>
+                            <div class="text-sm mt-2 truncate-wrap" title="{{ bundle.human_summary }}">{{ bundle.human_summary }}</div>
                         </div>
                         <div class="text-sm space-y-1">
-                            <div><strong>Workflow:</strong> {{ bundle.scope }}</div>
-                            <div><strong>Target:</strong> {{ bundle.target }}</div>
-                            <div><strong>Full story:</strong> {{ bundle.summary }}</div>
+                            <div class="truncate-wrap" title="{{ bundle.scope }}"><strong>Workflow:</strong> {{ bundle.scope }}</div>
+                            <div class="truncate-wrap" title="{{ bundle.target }}"><strong>Target:</strong> {{ bundle.target }}</div>
+                            <div class="truncate-wrap" title="{{ bundle.summary }}"><strong>Full story:</strong> {{ bundle.summary }}</div>
                         </div>
                         <div class="actions justify-end">
                             {% if bundle.run_summary_path %}
@@ -221,8 +221,8 @@
             <div class="card">
                 <div class="grid grid-cols-1 xl:grid-cols-5 gap-3 items-start">
                     <div class="xl:col-span-2">
-                        <div class="font-semibold">{{ entry.label }}</div>
-                        <div class="text-sm text-slate-400 mt-1">{{ entry.parent }}</div>
+                        <div class="font-semibold truncate-wrap" title="{{ entry.label }}">{{ entry.label }}</div>
+                        <div class="text-sm text-slate-400 mt-1 truncate-wrap" title="{{ entry.parent }}">{{ entry.parent }}</div>
                     </div>
                     <div class="text-sm">
                         <div><strong>Type:</strong> {{ entry.kind }}</div>
@@ -263,8 +263,8 @@
                 <div class="card card-compact">
                     <div class="grid grid-cols-1 xl:grid-cols-5 gap-3 items-start">
                         <div class="xl:col-span-2">
-                            <div class="font-semibold">{{ entry.label }}</div>
-                            <div class="text-sm text-slate-400 mt-1">{{ entry.parent }}</div>
+                            <div class="font-semibold truncate-wrap" title="{{ entry.label }}">{{ entry.label }}</div>
+                            <div class="text-sm text-slate-400 mt-1 truncate-wrap" title="{{ entry.parent }}">{{ entry.parent }}</div>
                         </div>
                         <div class="text-sm">
                             <div><strong>Type:</strong> {{ entry.kind }}</div>

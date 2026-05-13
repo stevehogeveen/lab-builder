@@ -1,13 +1,40 @@
 <section class="panel space-y-6">
     <div>
-        <h2 class="text-2xl font-bold">Cisco setup</h2>
-        <div class="text-sm text-slate-400">Module scaffold loaded. Cisco discover/plan/validate/apply actions are isolated in <code>app/modules/cisco/</code>.</div>
+        <h2 class="text-2xl font-bold title-with-icon"><span class="page-icon icon-tone-progress" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M5 8h14"/><path d="M5 16h14"/><path d="M7 8v8"/><path d="M17 8v8"/><path d="M3 12h4"/><path d="M17 12h4"/></svg></span><span>Cisco setup</span></h2>
+        <div class="text-sm text-slate-400">Cisco is ready as an isolated setup workspace. Live switch automation can be added here without crowding the core app.</div>
     </div>
+    {% set setup_strip = {
+        "title": "Cisco snapshot",
+        "subtitle": "This workspace is registered, isolated, and ready for the Cisco policy workflow.",
+        "items": [
+            {"label": "State", "value": "Registered", "hint": "Loaded through the module registry"},
+            {"label": "Routes", "value": "/modules/cisco", "hint": "Module entry point"},
+            {"label": "Service", "value": "app/modules/cisco/service.py", "hint": "Module-owned workflow"}
+        ]
+    } %}
+    {% include "partials/components/setup_strip.html" %}
     <div class="card card-compact">
         <div class="font-semibold mb-2">Current status</div>
-        <div class="result" style="margin-top:0;">Cisco module is registered through the module registry.</div>
-        <div class="result">Routes: <code>/modules/cisco</code></div>
-        <div class="result">Service: <code>app/modules/cisco/service.py</code> (stub methods)</div>
+        <div class="ops-row-list">
+            <div class="ops-row-item">
+                <div class="ops-row-copy">
+                    <div class="font-semibold">Module registration</div>
+                    <div class="text-sm text-slate-400">Cisco module is registered through the module registry.</div>
+                </div>
+                <div class="ops-row-meta"><span class="status ready">loaded</span></div>
+            </div>
+            <div class="ops-row-item">
+                <div class="ops-row-copy">
+                    <div class="font-semibold">Routes</div>
+                    <div class="text-sm text-slate-400"><span class="artifact-path">/modules/cisco</span></div>
+                </div>
+            </div>
+            <div class="ops-row-item">
+                <div class="ops-row-copy">
+                    <div class="font-semibold">Service file</div>
+                    <div class="text-sm text-slate-400"><span class="artifact-path">app/modules/cisco/service.py</span> owns Cisco-specific discover, plan, validate, apply, and status behavior.</div>
+                </div>
+            </div>
+        </div>
     </div>
 </section>
-

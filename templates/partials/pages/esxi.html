@@ -7,7 +7,7 @@
 }) %}
 <section class="panel space-y-6" x-data='{"tab":"basic"}'>
     <div>
-        <h2 class="text-2xl font-bold">ESXi setup</h2>
+        <h2 class="text-2xl font-bold title-with-icon"><span class="page-icon icon-tone-{{ page_precheck_summary.tone if page_precheck_summary else 'progress' }}" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="5" width="16" height="6" rx="2"/><rect x="4" y="13" width="16" height="6" rx="2"/><path d="M8 8h.01"/><path d="M8 16h.01"/><path d="M12 8h4"/><path d="M12 16h4"/></svg></span><span>ESXi setup</span></h2>
         <div class="text-sm text-slate-400">Installer version, ISO, name, and password.</div>
         <div class="actions mt-4">
             <div class="workflow-tabs">
@@ -17,9 +17,20 @@
         </div>
     </div>
 
+    {% set precheck_summary = page_precheck_summary %}
+    {% include "partials/components/precheck_summary.html" %}
+
+    {% set setup_strip = [
+        {"label": "Version", "value": 'ESXi ' ~ (esxi_page_review.version or '7'), "note": "Installer target"},
+        {"label": "Host", "value": cfg.get('esxi', {}).get('hostname', '') or 'Needs review', "note": "Saved server name"},
+        {"label": "Media", "value": 'ISO ready' if esxi_page_review.base_iso_ready else 'ISO needs attention', "note": esxi_page_review.base_iso_path or esxi_page_review.selected_base_iso_path or 'Auto-select not resolved'},
+        {"label": "Next", "value": 'Build and review installer' if esxi_page_review.base_iso_ready else 'Fix installer inputs', "note": "Run Center uses this saved profile"},
+    ] %}
+    {% include "partials/components/setup_strip.html" %}
+
     <section class="card workflow-hero-card" x-show="tab === 'basic'">
         <div class="text-lg font-semibold mb-3">Save ESXi setup</div>
-        <form hx-post="/save-esxi-settings" hx-target="#main-content" hx-swap="outerHTML" class="space-y-4">
+        <form hx-post="/save-esxi-settings" hx-target="#main-content" hx-swap="outerHTML" class="space-y-4" data-action-title="Saving ESXi setup" data-action-start="Saving the ESXi installer and post-config settings.">
             <input type="hidden" name="return_page" value="esxi">
             <div class="grid grid-cols-1 md:grid-cols-2 gap-3">
                 <div>
@@ -44,16 +55,16 @@
                     <span class="text-sm font-bold text-slate-300">Installer details</span>
                     <span class="status progress">optional</span>
                 </summary>
-                <div class="mt-3">
-                    <div class="result" style="margin-top: 0;">Version: ESXi {{ esxi_page_review.version or '7' }}</div>
-                    <div class="result" style="margin-top: .5rem;">ISO path: {{ esxi_page_review.base_iso_path or esxi_page_review.selected_base_iso_path or 'Auto-select not resolved' }}</div>
+                <div class="ops-strip-grid mt-3">
+                    <div class="ops-strip-card" style="margin-top: 0;">Version: ESXi {{ esxi_page_review.version or '7' }}</div>
+                    <div class="ops-strip-card truncate-wrap" style="margin-top: 0;" title="{{ esxi_page_review.base_iso_path or esxi_page_review.selected_base_iso_path or 'Auto-select not resolved' }}">ISO path: <span class="artifact-path">{{ esxi_page_review.base_iso_path or esxi_page_review.selected_base_iso_path or 'Auto-select not resolved' }}</span></div>
                     {% if esxi_page_review.base_iso_error %}
                     <div class="field-error mt-2">{{ esxi_page_review.base_iso_error }}</div>
                     {% endif %}
-                    <div class="result" style="margin-top: .5rem;">Kickstart target: {{ esxi_page_review.install_target.kickstart_line }}</div>
-                    <div class="result" style="margin-top: .5rem;">Preferred target: {{ esxi_page_review.install_target.preferred_target }}</div>
-                    <div class="text-xs text-slate-400 mt-2">{{ esxi_page_review.install_target.safety_note }}</div>
+                    <div class="ops-strip-card truncate-wrap" style="margin-top: 0;" title="{{ esxi_page_review.install_target.kickstart_line }}">Kickstart target: {{ esxi_page_review.install_target.kickstart_line }}</div>
+                    <div class="ops-strip-card truncate-wrap" style="margin-top: 0;" title="{{ esxi_page_review.install_target.preferred_target }}">Preferred target: {{ esxi_page_review.install_target.preferred_target }}</div>
                 </div>
+                <div class="text-xs text-slate-400 mt-2">{{ esxi_page_review.install_target.safety_note }}</div>
             </details>
             <label class="check card card-compact">
                 <input type="checkbox" name="esxi_debug_no_reboot" {% if esxi_page_review.debug_no_reboot %}checked{% endif %}>
@@ -194,7 +205,7 @@
         </form>
     </section>
 
-    <section class="card ilo-advanced-shell" x-show="tab === 'advanced'">
+    <section class="card identity-soft-card ilo-advanced-shell" x-show="tab === 'advanced'">
         <div class="flex items-center justify-between gap-3 mb-3 flex-wrap">
             <div>
                 <div class="text-lg font-semibold">Advanced ESXi installer view</div>
@@ -223,9 +234,9 @@
                 {% if area["items"] %}
                 <div class="space-y-2 text-sm">
                     {% for item in area["items"] %}
-                    <div class="result" style="margin-top: 0;">
+                    <div class="ops-strip-card" style="margin-top: 0;">
                         <div class="dashboard-kicker">{{ item.label }}</div>
-                        <div>{{ item.value }}</div>
+                        <div class="truncate-wrap" title="{{ item.value }}">{{ item.value }}</div>
                     </div>
                     {% endfor %}
                 </div>
@@ -238,9 +249,9 @@
                     </summary>
                     <div class="mt-3 space-y-2 text-sm">
                         {% for row in area.detail_rows %}
-                        <div class="result" style="margin-top: 0;">
+                        <div class="ops-strip-card" style="margin-top: 0;">
                             <div class="dashboard-kicker">{{ row.label }}</div>
-                            <div>{{ row.value }}</div>
+                            <div class="truncate-wrap" title="{{ row.value }}">{{ row.value }}</div>
                         </div>
                         {% endfor %}
                     </div>
@@ -251,19 +262,21 @@
         </div>
         {% endif %}
         {% if esxi_page_review.post_config_preview %}
-        <div class="mt-6 card card-compact">
+        <div class="mt-6 card card-compact identity-soft-card">
             <div class="font-semibold mb-2">ESXi post-install preview</div>
             {% set post = esxi_page_review.post_config_preview %}
             {% set postv = esxi_page_review.post_config_validation %}
-            <div class="result" style="margin-top:0;">Connection targets: {{ post.plan.connection_targets|join(', ') or 'None' }}</div>
-            <div class="result">Management uplinks: {{ post.plan.network_plan.preferred_mgmt_uplinks|join(', ') or 'None' }}</div>
-            <div class="result">Datastore rename: {{ post.plan.datastore_plan.rename_local_datastore_from or 'N/A' }} -> {{ post.plan.datastore_plan.rename_local_datastore_to }}</div>
-            <div class="result">LOCAL-S2 create allowed: {{ 'Yes' if post.plan.datastore_plan.create_local_s2_allowed else 'No' }}</div>
-            <div class="result">Hostname/domain: {{ post.plan.identity.hostname }} / {{ post.plan.identity.domain }}</div>
-            <div class="result">DNS: {{ post.plan.identity.dns_servers|join(', ') }}</div>
-            <div class="result">NTP target: {{ post.plan.ntp.server or 'Not set' }}</div>
-            <div class="result">SNMP target: {{ post.plan.snmp_wug.snmpv3.target or 'Not set' }}</div>
-            <div class="result">Reboot required after apply: {{ 'Yes' if post.plan.reboot.required_after_apply else 'No' }}</div>
+            <div class="ops-strip-grid">
+                <div class="ops-strip-card truncate-wrap" style="margin-top:0;" title="{{ post.plan.connection_targets|join(', ') or 'None' }}">Connection targets: {{ post.plan.connection_targets|join(', ') or 'None' }}</div>
+                <div class="ops-strip-card truncate-wrap" style="margin-top:0;" title="{{ post.plan.network_plan.preferred_mgmt_uplinks|join(', ') or 'None' }}">Management uplinks: {{ post.plan.network_plan.preferred_mgmt_uplinks|join(', ') or 'None' }}</div>
+                <div class="ops-strip-card truncate-wrap" style="margin-top:0;" title="{{ post.plan.datastore_plan.rename_local_datastore_from or 'N/A' }} -> {{ post.plan.datastore_plan.rename_local_datastore_to }}">Datastore rename: {{ post.plan.datastore_plan.rename_local_datastore_from or 'N/A' }} -> {{ post.plan.datastore_plan.rename_local_datastore_to }}</div>
+                <div class="ops-strip-card">LOCAL-S2 create allowed: {{ 'Yes' if post.plan.datastore_plan.create_local_s2_allowed else 'No' }}</div>
+                <div class="ops-strip-card truncate-wrap" title="{{ post.plan.identity.hostname }} / {{ post.plan.identity.domain }}">Hostname/domain: {{ post.plan.identity.hostname }} / {{ post.plan.identity.domain }}</div>
+                <div class="ops-strip-card truncate-wrap" title="{{ post.plan.identity.dns_servers|join(', ') }}">DNS: {{ post.plan.identity.dns_servers|join(', ') }}</div>
+                <div class="ops-strip-card truncate-wrap" title="{{ post.plan.ntp.server or 'Not set' }}">NTP target: {{ post.plan.ntp.server or 'Not set' }}</div>
+                <div class="ops-strip-card truncate-wrap" title="{{ post.plan.snmp_wug.snmpv3.target or 'Not set' }}">SNMP target: {{ post.plan.snmp_wug.snmpv3.target or 'Not set' }}</div>
+                <div class="ops-strip-card">Reboot required after apply: {{ 'Yes' if post.plan.reboot.required_after_apply else 'No' }}</div>
+            </div>
             {% if postv.errors %}
             <div class="field-error mt-3">{{ postv.errors|join(' ') }}</div>
             {% endif %}
@@ -274,7 +287,7 @@
         {% endif %}
     </section>
 
-    <details class="card">
+    <details class="card identity-soft-card">
         <summary class="summary-row">
             <span class="text-lg font-semibold">What happened last</span>
             <span class="status progress">history</span>
@@ -285,8 +298,8 @@
             <div class="flex items-start justify-between gap-3 flex-wrap">
                 <div>
                     <div class="dashboard-kicker">Last ESXi run</div>
-                    <div class="font-semibold text-lg">{{ esxi_latest_receipt.human_summary }}</div>
-                    <div class="text-sm text-slate-400 mt-1">{{ esxi_latest_receipt.time }}{% if esxi_latest_receipt.target %} | {{ esxi_latest_receipt.target }}{% endif %}</div>
+                    <div class="font-semibold text-lg truncate-wrap" title="{{ esxi_latest_receipt.human_summary }}">{{ esxi_latest_receipt.human_summary }}</div>
+                    <div class="text-sm text-slate-400 mt-1 truncate-wrap" title="{{ esxi_latest_receipt.time }}{% if esxi_latest_receipt.target %} | {{ esxi_latest_receipt.target }}{% endif %}">{{ esxi_latest_receipt.time }}{% if esxi_latest_receipt.target %} | {{ esxi_latest_receipt.target }}{% endif %}</div>
                 </div>
                 <span class="status {{ esxi_latest_receipt.tone }}">{{ esxi_latest_receipt.result }}</span>
             </div>

@@ -15,7 +15,20 @@ DEFAULT_IP_OFFSETS = {
     "windows": 20,
     "qnap": 30,
     "iosafe": 31,
-    "netapp": 40,
+    "netapp": 45,
+}
+NETAPP_MANAGEMENT_OFFSETS = {
+    "netapp_sp_a": 13,
+    "netapp_sp_b": 14,
+    "netapp_cluster_mgmt": 45,
+    "netapp_node_01_mgmt": 46,
+    "netapp_node_02_mgmt": 47,
+    "netapp_svm_mgmt": 48,
+    "cluster_mgmt_ip": 45,
+    "node_01_mgmt_ip": 46,
+    "node_02_mgmt_ip": 47,
+    "svm_mgmt_ip": 48,
+    "autosupport_mailhost": 63,
 }
 DEFAULT_KIT_NAME = "Kit-01"
 
@@ -127,7 +140,7 @@ def default_config() -> dict[str, Any]:
             "windows": "10.10.8.20",
             "qnap": "10.10.8.30",
             "iosafe": "10.10.8.31",
-            "netapp": "10.10.8.40",
+            "netapp": "10.10.8.45",
         },
         included={
             "ilo": True,
@@ -135,6 +148,7 @@ def default_config() -> dict[str, Any]:
             "windows": False,
             "qnap": False,
             "netapp": False,
+            "vmware": False,
             "iosafe": False,
             "cisco_switch": False,
             "storage": False,
@@ -176,7 +190,48 @@ def default_config() -> dict[str, Any]:
             "host": "",
             "username": "admin",
             "password": "",
-            "storage_protocol": "nfs",
+            "storage_protocol": "iscsi",
+            "cluster_name": "",
+            "svm_name": "",
+            "data_broadcast_domain": "Data",
+            "management_broadcast_domain": "Default",
+            "mtu": 9000,
+            "aggregate_node_01": "aggr_01",
+            "aggregate_node_02": "aggr_02",
+            "svm_root_aggregate": "aggr_01",
+            "preferred_data_ports": [],
+            "auto_detect_ports": True,
+            "autosupport": {
+                "enabled": True,
+                "from": "<KitId>-NetApp",
+                "to": "<KitId>Alert.Reporting",
+                "mailhost": "",
+                "transport": "smtp",
+                "support_enabled": False,
+            },
+            "management": {
+                "cluster_mgmt_ip": "",
+                "node_01_mgmt_ip": "",
+                "node_02_mgmt_ip": "",
+                "svm_mgmt_ip": "",
+            },
+            "bootstrap_complete": False,
+            "bootstrap_checks": {},
+            "iscsi": {
+                "subnet": "192.168.1.0/24",
+                "gateway": "192.168.1.1",
+                "ip_range": "192.168.1.11-192.168.1.60",
+                "portset_name": "iSCSI",
+                "igroup_name": "",
+                "lifs": [],
+                "volumes": [],
+            },
+            "nfs": {
+                "export_policy": "",
+                "allowed_subnet": "",
+                "lifs": [],
+                "volumes": [],
+            },
             "command_templates": {
                 "iscsi": "",
                 "nfs": "",
@@ -184,6 +239,31 @@ def default_config() -> dict[str, Any]:
             "desired": {},
             "discovery": {},
             "validation": {},
+        },
+        vmware={
+            "vcenter_ip": "",
+            "username": "vsphere.local\\administrator",
+            "password": "",
+            "datacenter_name": "",
+            "cluster_name": "",
+            "esxi_host_start_offset": 31,
+            "esxi_host_end_offset": 39,
+            "esxi_root_user": "root",
+            "esxi_root_password": "",
+            "vcenter_vm_name_match": "SVCNTR",
+            "ha_enabled": True,
+            "ha_isolation_response": "Shutdown",
+            "drs_enabled": False,
+            "startup_policy_enabled": True,
+            "iscsi": {
+                "rescan_hba": True,
+                "rescan_vmfs": True,
+                "multipath_policy": "RoundRobin",
+            },
+            "nfs": {
+                "datastore_name": "",
+                "nfs_version": "4.1",
+            },
         },
         iosafe={"hostname": "iosafe01", "ip": "", "username": "admin", "password": ""},
         cisco_switch={"hostname": "sw01", "ip": "", "username": "admin", "password": ""},
@@ -558,17 +638,52 @@ def normalize_ip_plan(cfg: dict[str, Any], subnet: str) -> dict[str, Any]:
 
 def calc_ip_plan(cfg: dict[str, Any]) -> dict[str, Any]:
     shared_network = cfg.get("shared_network", {})
+    netapp_cfg = cfg.get("netapp", {}) or {}
+    bootstrap_overrides = (netapp_cfg.get("bootstrap_overrides") or {}) if isinstance(netapp_cfg, dict) else {}
     subnet = shared_network.get("subnet", "10.10.8.0/24")
     details = subnet_details(subnet)
     plan = normalize_ip_plan(cfg, subnet)
+    netapp_offsets = {
+        "netapp_sp_a": int(shared_network.get("netapp_sp_a_offset", 13) or 13),
+        "netapp_sp_b": int(shared_network.get("netapp_sp_b_offset", 14) or 14),
+        "netapp_cluster_mgmt": int(shared_network.get("netapp_cluster_mgmt_offset", 45) or 45),
+        "netapp_node_01_mgmt": int(shared_network.get("netapp_node_01_mgmt_offset", 46) or 46),
+        "netapp_node_02_mgmt": int(shared_network.get("netapp_node_02_mgmt_offset", 47) or 47),
+        "netapp_svm_mgmt": int(shared_network.get("netapp_svm_mgmt_offset", 48) or 48),
+        "autosupport_mailhost": 63,
+    }
+    netapp_mgmt: dict[str, str] = {}
+    for key, offset in netapp_offsets.items():
+        candidate = str(bootstrap_overrides.get(key) or "").strip() or ip_at_offset(subnet, offset)
+        netapp_mgmt[key] = validate_ip_for_subnet(subnet, candidate, key.replace("_", " ").upper())
+    netapp_aliases = {
+        "cluster_mgmt_ip": netapp_mgmt["netapp_cluster_mgmt"],
+        "node_01_mgmt_ip": netapp_mgmt["netapp_node_01_mgmt"],
+        "node_02_mgmt_ip": netapp_mgmt["netapp_node_02_mgmt"],
+        "svm_mgmt_ip": netapp_mgmt["netapp_svm_mgmt"],
+    }
+    ip_owners: dict[str, list[str]] = {}
+    uniqueness_map = {**plan, **netapp_mgmt}
+    # `ip_plan.netapp` is the same cluster-management endpoint surfaced elsewhere as
+    # `netapp_cluster_mgmt`/`cluster_mgmt_ip`; do not treat those aliases as conflicts.
+    uniqueness_map.pop("netapp", None)
+    for key, value in uniqueness_map.items():
+        ip_owners.setdefault(value, []).append(key)
+    duplicates = {ip: labels for ip, labels in ip_owners.items() if len(labels) > 1}
+    if duplicates:
+        rendered = "; ".join(f"{ip} ({', '.join(labels)})" for ip, labels in duplicates.items())
+        raise ValueError("Each device and NetApp bootstrap IP must be unique within the kit. Duplicate: " + rendered)
     return {
         "subnet": details["subnet"],
         "netmask": details["netmask"],
         "prefixlen": details["prefixlen"],
         "first_usable": details["first_usable"],
         "last_usable": details["last_usable"],
+        "broadcast": details["broadcast_address"],
         "max_usable_offset": details["max_usable_offset"],
         **plan,
+        **netapp_mgmt,
+        **netapp_aliases,
     }
 
 
@@ -595,6 +710,28 @@ def apply_ip_plan(cfg: dict[str, Any]) -> dict[str, Any]:
     cfg["qnap"]["ip"] = plan["qnap"]
     cfg["iosafe"]["ip"] = plan["iosafe"]
     cfg["cisco_switch"]["ip"] = plan["switch"]
+    cfg.setdefault("netapp", {})
+    cfg["netapp"]["host"] = str(cfg["netapp"].get("host") or plan["cluster_mgmt_ip"]).strip()
+    cfg["netapp"].setdefault("management", {})
+    cfg["netapp"]["management"].update(
+        {
+            "cluster_mgmt_ip": plan["netapp_cluster_mgmt"],
+            "node_01_mgmt_ip": plan["netapp_node_01_mgmt"],
+            "node_02_mgmt_ip": plan["netapp_node_02_mgmt"],
+            "svm_mgmt_ip": plan["netapp_svm_mgmt"],
+        }
+    )
+    cfg["netapp"].setdefault("autosupport", {})
+    cfg["netapp"]["autosupport"]["mailhost"] = str(cfg["netapp"]["autosupport"].get("mailhost") or plan["autosupport_mailhost"]).strip()
+    cfg["netapp"].setdefault("bootstrap_checks", {})
+    cfg.setdefault("vmware", {})
+    start_offset = int(cfg["vmware"].get("esxi_host_start_offset") or 31)
+    end_offset = int(cfg["vmware"].get("esxi_host_end_offset") or 39)
+    if start_offset > end_offset:
+        start_offset, end_offset = end_offset, start_offset
+    cfg["vmware"]["discovered_host_ips"] = [ip_at_offset(plan["subnet"], offset) for offset in range(start_offset, end_offset + 1)]
+    cfg["vmware"]["datacenter_name"] = str(cfg["vmware"].get("datacenter_name") or cfg.get("site", {}).get("name") or "").strip()
+    cfg["vmware"]["cluster_name"] = str(cfg["vmware"].get("cluster_name") or f"{cfg.get('site', {}).get('name', DEFAULT_KIT_NAME)}-Cluster").strip()
     return cfg
 
 

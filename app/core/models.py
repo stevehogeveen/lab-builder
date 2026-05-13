@@ -8,6 +8,12 @@ from pydantic import BaseModel, Field, ConfigDict
 class NetworkConfigModel(BaseModel):
     subnet: str = "10.10.8.0/24"
     dns_servers: list[str] = Field(default_factory=lambda: ["", "", "", ""])
+    netapp_sp_a_offset: int = 13
+    netapp_sp_b_offset: int = 14
+    netapp_cluster_mgmt_offset: int = 45
+    netapp_node_01_mgmt_offset: int = 46
+    netapp_node_02_mgmt_offset: int = 47
+    netapp_svm_mgmt_offset: int = 48
 
 
 class IloPolicyModel(BaseModel):

@@ -481,3 +481,38 @@ Each time a new failure appears:
 3. Record fix status: `not started`, `in progress`, or `fixed`.
 4. Add exact code surface changed.
 5. If unresolved, add “next check” command/path so the next debug pass starts fast.
+
+
+## 11) Lessons From The Modular Cleanup Pass (2026-05-13)
+
+These are not single-run failures, but they are high-value lessons from the current app-wide health pass.
+
+1. Keep runtime media and generated evidence out of git:
+   - `media/` is intentionally local and currently holds large ESXi/OVA files.
+   - `artifacts/`, `config/kits/`, `.venv/`, `.pytest_cache/`, and `__pycache__/` should remain generated/runtime state.
+   - Commit source, docs, tests, examples, and scripts; do not commit operator secrets, kit configs, ISOs, OVA/OVF/VMDK files, or SQLite runtime databases.
+
+2. Direct routes and module routes should both make sense:
+   - Module routes such as `/modules/cisco` are the canonical modular-monolith entry points.
+   - If a page has app-level metadata or operator-facing navigation expectations, a direct compatibility route such as `/cisco` should not return a surprise 404.
+
+3. Pre-check data is useful only when it does not dominate the page:
+   - Keep the compact summary visible.
+   - Put detailed check rows behind a drawer/details element so dashboards do not turn into oversized blocks.
+   - Always verify responsive behavior at desktop, tablet, and phone widths after shared CSS changes.
+
+4. Browser-level sanity checks catch what tests miss:
+   - Unit tests passed while a mobile media-query ordering issue still crushed content into an unusable narrow column.
+   - Use a small Playwright render pass or manual browser pass for shared layout work.
+
+5. New stage packages should be explicit packages:
+   - Add `__init__.py` for new `app/stages/<stage>/` directories.
+   - It keeps import behavior consistent and makes future packaging/refactors safer.
+
+6. Capture setup dependencies in source:
+   - `requirements.txt` now records the app/test/runtime packages needed to recreate the local `.venv`.
+   - This avoids relying on a machine-local virtualenv as the only record of the working setup.
+
+7. Keep a one-command health check:
+   - `./scripts/health-check` records git status, workspace size, large local runtime files, Python compile, and full pytest.
+   - Run it before a big commit/push or before handing work to another session.

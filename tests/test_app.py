@@ -1091,6 +1091,16 @@ def test_save_config_persists_manual_completion_and_ilo_ips(client):
     assert cfg["ilo"]["dns_servers"][:2] == ["9.9.9.9", "8.8.4.4"]
 
 
+def test_apply_ip_plan_allows_netapp_cluster_mgmt_alias_to_match_netapp_host():
+    cfg = main.default_config()
+
+    plan = main.apply_ip_plan(cfg)["ip_plan"]
+
+    assert plan["netapp"] == "10.10.8.45"
+    assert plan["netapp_cluster_mgmt"] == "10.10.8.45"
+    assert plan["cluster_mgmt_ip"] == "10.10.8.45"
+
+
 def test_export_ilo_config_writes_dated_yaml_snapshot(client, monkeypatch):
     def fake_strftime(fmt):
         if fmt == "%Y%m%d-%H%M%S":
@@ -1290,7 +1300,87 @@ def test_save_ilo_settings_updates_only_ilo_page_fields(client):
     assert cfg["ilo"]["current_ip"] == "10.10.8.50"
     assert cfg["ilo"]["gateway"] == "10.10.8.1"
     assert cfg["ilo"]["hostname"] == "ilo-focused"
+    assert cfg["ilo"]["password"] == "secret"
     assert cfg["included"]["ilo"] is True
+
+
+def test_save_config_preserves_existing_secret_fields_when_blank(client):
+    cfg = main.default_config()
+    cfg["site"]["name"] = "Secret Preserve Kit"
+    cfg["ilo"]["password"] = "IloSecret1!"
+    cfg["esxi"]["root_password"] = "EsxiSecret1!"
+    cfg["windows"]["admin_password"] = "WindowsSecret1!"
+    cfg["qnap"]["password"] = "QnapSecret1!"
+    cfg["netapp"]["password"] = "NetAppSecret1!"
+    main.save_kit_config(cfg)
+
+    response = client.post(
+        "/save-config",
+        data={
+            "return_page": "configuration",
+            "site_name": "Secret Preserve Kit",
+            "shared_subnet": "10.10.8.0/24",
+            "gateway_ip": "10.10.8.1",
+            "switch_ip": "10.10.8.2",
+            "esxi_ip": "10.10.8.10",
+            "ilo_ip": "10.10.8.11",
+            "ilo_target_ip": "10.10.8.11",
+            "windows_ip": "10.10.8.20",
+            "qnap_ip": "10.10.8.30",
+            "iosafe_ip": "10.10.8.31",
+            "netapp_ip": "10.10.8.40",
+            "dns1": "",
+            "dns2": "",
+            "dns3": "",
+            "dns4": "",
+            "snmp_v3_username": "",
+            "snmp_v3_auth_protocol": "SHA",
+            "snmp_v3_auth_password": "",
+            "snmp_v3_priv_protocol": "AES",
+            "snmp_v3_priv_password": "",
+            "section_basics_complete": "true",
+            "section_network_complete": "true",
+            "section_included_complete": "true",
+            "section_credentials_complete": "true",
+            "ilo_current_ip": "10.10.8.11",
+            "ilo_subnet_mask": "255.255.255.0",
+            "ilo_gateway": "10.10.8.1",
+            "ilo_dns1": "",
+            "ilo_dns2": "",
+            "ilo_dns3": "",
+            "ilo_dns4": "",
+            "ilo_hostname": "ilo-secret-preserve",
+            "ilo_username": "Administrator",
+            "ilo_password": "",
+            "esxi_hostname": "esxi01",
+            "esxi_root_password": "",
+            "windows_vm_name": "win2022-01",
+            "windows_admin_password": "",
+            "qnap_hostname": "qnap01",
+            "qnap_username": "admin",
+            "qnap_password": "",
+            "iosafe_hostname": "iosafe01",
+            "iosafe_username": "admin",
+            "iosafe_password": "",
+            "cisco_switch_hostname": "sw01",
+            "cisco_switch_username": "admin",
+            "cisco_switch_password": "",
+            "netapp_host": "",
+            "netapp_username": "admin",
+            "netapp_password": "",
+            "netapp_storage_protocol": "nfs",
+            "netapp_iscsi_commands": "",
+            "netapp_nfs_commands": "",
+        },
+    )
+
+    assert response.status_code == 200
+    saved = main.load_kit_config("Secret-Preserve-Kit")
+    assert saved["ilo"]["password"] == "IloSecret1!"
+    assert saved["esxi"]["root_password"] == "EsxiSecret1!"
+    assert saved["windows"]["admin_password"] == "WindowsSecret1!"
+    assert saved["qnap"]["password"] == "QnapSecret1!"
+    assert saved["netapp"]["password"] == "NetAppSecret1!"
 
 
 def test_save_ilo_settings_persists_standard_policy_fields(client):
@@ -1434,36 +1524,39 @@ def test_save_ilo_settings_persists_additional_users(client):
     ]
 
 
-def test_discover_ilo_hosts_uses_policy_range_and_saves_results(client, monkeypatch):
+def test_esxi_validation_checks_do_not_depend_on_storage_page_state():
     cfg = main.default_config()
-    cfg["site"]["name"] = "Ilo Discover Kit"
+    cfg["included"]["storage"] = True
+    cfg["storage"]["include_in_ilo_run"] = True
+    cfg["storage"]["approval"] = {}
+    cfg["storage"]["state"] = "idle"
+    cfg["ilo"]["current_ip"] = "10.10.8.50"
+    cfg["ilo"]["host"] = "10.10.8.50"
+    cfg["esxi"]["management_ip"] = "10.10.8.10"
+    cfg["esxi"]["hostname"] = "esxi01"
+    cfg["esxi"]["root_password"] = "Secret123!"
     cfg["shared_network"]["subnet"] = "10.10.8.0/24"
-    cfg["ilo"]["policy"]["discover_start_octet"] = 21
-    cfg["ilo"]["policy"]["discover_end_octet"] = 23
-    cfg["ilo"]["current_ip"] = ""
-    cfg["ilo"]["host"] = ""
-    main.save_kit_config(cfg)
+    cfg["ip_plan"]["gateway"] = "10.10.8.1"
 
-    def fake_probe(host, port, timeout_seconds=0.75):
-        assert port == 443
-        return {
-            "host": host,
-            "port": port,
-            "reachable": host.endswith(".22"),
-            "latency_ms": 12 if host.endswith(".22") else "",
-            "error": "" if host.endswith(".22") else "timed out",
-        }
+    checks = main.build_validation_checks(cfg, "esxi")
 
-    monkeypatch.setattr(main, "probe_tcp_port", fake_probe)
+    assert all(item["label"] != "Storage readiness" for item in checks)
 
-    response = client.post("/discover-ilo-hosts", data={"return_page": "ilo"})
 
-    assert response.status_code == 200
-    saved = main.load_kit_config("Ilo-Discover-Kit")
-    discovered = saved["ilo"]["policy"]["discovered_hosts"]
-    assert [item["host"] for item in discovered] == ["10.10.8.21", "10.10.8.22", "10.10.8.23"]
-    assert saved["ilo"]["current_ip"] == "10.10.8.22"
-    assert "10.10.8.22" in response.text
+def test_page_precheck_summary_uses_state_instead_of_duplicate_target_card():
+    cfg = main.default_config()
+    cfg["ilo"]["current_ip"] = "10.10.8.50"
+    cfg["ilo"]["host"] = "10.10.8.50"
+    cfg["ilo"]["username"] = "Administrator"
+    cfg["ilo"]["password"] = "Secret123!"
+    cfg["shared_network"]["subnet"] = "10.10.8.0/24"
+    cfg["ip_plan"]["gateway"] = "10.10.8.1"
+
+    summary = main.build_page_precheck_summary("ilo", cfg, main.build_workflow_contexts(cfg, {"scope": "", "status": ""}, []))
+
+    assert summary is not None
+    assert summary["show_target"] is False
+    assert summary["summary_value_label"] == "State"
 
 
 def test_save_ilo_settings_rejects_invalid_primary_credentials(client):
@@ -3196,7 +3289,7 @@ def test_prepare_execute_shows_combined_storage_review_using_exact_approved_arti
     assert "Storage run values" in response.text
     assert "Approved plan path:" in response.text
     assert "Open summary" in response.text
-    assert "Open reports & technical details" in response.text
+    assert "Open Reports" in response.text
 
 
 def test_execution_page_warns_when_storage_is_not_approved(client):
@@ -3889,7 +3982,7 @@ def test_prepare_execute_whole_run_launches_supported_included_stages(client):
 
     assert response.status_code == 200
     assert 'name="scope" value="multi__ilo__storage__esxi"' in response.text
-    assert "Runs the included iLO, storage, and ESXi stages in order." in response.text
+    assert "Runs the included live stages in order." in response.text
     assert "ESXi installer values" in response.text
 
 
@@ -6401,8 +6494,8 @@ def test_run_ilo_real_continues_on_existing_session_when_target_ip_already_reads
     cfg["ilo"]["hostname"] = "Home-Test-01"
     cfg["shared_network"]["dns_servers"] = ["8.8.8.8", "2.2.2.2", "", ""]
     cfg["shared_snmp"]["v3_username"] = "PrivateUser"
-    cfg["shared_snmp"]["v3_auth_password"] = "P@ssw0rd"
-    cfg["shared_snmp"]["v3_priv_password"] = "P@ssw0rd"
+    cfg["shared_snmp"]["v3_auth_password"] = "SnmpAuth123!"
+    cfg["shared_snmp"]["v3_priv_password"] = "SnmpPriv123!"
 
     class FakeCarrySessionClient(RecordingGen10SmartStorageWriteClient):
         def __init__(self, cfg):
@@ -6721,8 +6814,8 @@ def test_run_ilo_real_accepts_protocol_only_final_snmp_readback(monkeypatch):
     cfg["ilo"]["hostname"] = "Home-Test-01"
     cfg["shared_network"]["dns_servers"] = ["8.8.8.8", "2.2.2.2", "", ""]
     cfg["shared_snmp"]["v3_username"] = "PrivateUser"
-    cfg["shared_snmp"]["v3_auth_password"] = "P@ssw0rd"
-    cfg["shared_snmp"]["v3_priv_password"] = "P@ssw0rd"
+    cfg["shared_snmp"]["v3_auth_password"] = "SnmpAuth123!"
+    cfg["shared_snmp"]["v3_priv_password"] = "SnmpPriv123!"
 
     class FakeProtocolOnlySnmpClient(RecordingGen10SmartStorageWriteClient):
         def __init__(self, cfg):
@@ -10667,7 +10760,7 @@ def test_dashboard_shows_recommended_next_step_and_workflow_cards(client):
     assert 'name="selected_kit"' in response.text
     assert 'name="new_kit_name"' in response.text
     assert 'type="file"' not in response.text
-    assert "Per-kit deployment dashboard for offline builds." in response.text
+    assert "Generic readiness cockpit for the active deployment workspace." in response.text
     assert "Job status" in response.text
     assert "No runs have completed for this kit yet." in response.text
     assert "Last update" not in response.text
@@ -10834,14 +10927,36 @@ def test_dashboard_uses_simplified_primary_navigation(client):
     response = client.get("/dashboard")
 
     assert response.status_code == 200
-    assert "iLO Setup" in response.text
-    assert "Storage setup" in response.text
-    assert "ESXi Setup" in response.text
-    assert "Reports & technical details" in response.text
-    assert 'href="/execution">Run Center</a>' in response.text
+    assert "Mission control" in response.text
+    assert "Shared defaults" in response.text
+    assert "Reports" in response.text
+    assert "Technical details" in response.text
+    assert 'href="/execution"' in response.text
+    assert "Run Center" in response.text
     assert ".sidebar .nav-group:last-of-type" not in response.text
     assert "Run History" not in response.text
     assert "Reset dashboard layout" not in response.text
+
+
+def test_dashboard_and_windows_page_show_precheck_summary(client):
+    cfg = main.default_config()
+    cfg["site"]["name"] = "Precheck Kit"
+    cfg["included"]["windows"] = True
+    main.save_kit_config(cfg)
+
+    dashboard = client.get("/dashboard")
+    assert dashboard.status_code == 200
+    assert "Operations summary" in dashboard.text
+    assert "Ready workflows" in dashboard.text
+    assert "Next fix" in dashboard.text
+    assert "Mission control overview" in dashboard.text
+
+    windows = client.get("/windows")
+    assert windows.status_code == 200
+    assert "Windows pre-check" in windows.text
+    assert "Checks ready" in windows.text
+    assert "Target" in windows.text
+    assert "Dry-run before execution" in windows.text
 
 
 def test_sidebar_shows_optional_setup_pages_when_included(client):
@@ -10854,10 +10969,32 @@ def test_sidebar_shows_optional_setup_pages_when_included(client):
     response = client.get("/dashboard")
 
     assert response.status_code == 200
-    assert 'href="/windows">Windows Setup</a>' in response.text
-    assert 'href="/qnap">QNAP Setup</a>' in response.text
+    assert 'href="/windows"' in response.text
+    assert 'href="/qnap"' in response.text
+    assert "Windows" in response.text
+    assert "QNAP" in response.text
     assert '.sidebar .nav-link[href="/windows"]' not in response.text
     assert '.sidebar .nav-link[href="/qnap"]' not in response.text
+
+
+def test_sidebar_groups_windows_cisco_and_netapp_under_setup(client):
+    cfg = main.default_config()
+    cfg["site"]["name"] = "Setup Group Kit"
+    cfg["included"]["windows"] = True
+    main.save_kit_config(cfg)
+
+    response = client.get("/dashboard")
+
+    assert response.status_code == 200
+    assert '<div class="nav-label">Setup</div>' in response.text
+    assert 'href="/windows"' in response.text
+    assert 'href="/modules/cisco"' in response.text
+    assert 'href="/modules/netapp"' in response.text
+    assert response.text.count('href="/modules/cisco"') == 1
+    assert response.text.count('href="/modules/netapp"') == 1
+    assert response.text.index('href="/windows"') < response.text.index('<div class="nav-label">Run</div>')
+    assert response.text.index('href="/modules/cisco"') < response.text.index('<div class="nav-label">Run</div>')
+    assert response.text.index('href="/modules/netapp"') < response.text.index('<div class="nav-label">Run</div>')
 
 
 def test_kits_route_falls_back_to_dashboard_workflow(client):
@@ -10915,7 +11052,8 @@ def test_reports_page_hides_live_jobs_and_config_capture_blocks(client):
     response = client.get("/configs")
 
     assert response.status_code == 200
-    assert "Reports & technical details" in response.text
+    assert "Reports" in response.text
+    assert "Technical details" in response.text
     assert "Live job and logs" not in response.text
     assert "Capture current iLO" not in response.text
     assert "Saved intended config" not in response.text
@@ -11537,7 +11675,7 @@ def test_build_default_ip_plan_uses_expected_offsets():
         "windows": "10.55.66.20",
         "qnap": "10.55.66.30",
         "iosafe": "10.55.66.31",
-        "netapp": "10.55.66.40",
+            "netapp": "10.55.66.45",
     }
 
 
@@ -11647,6 +11785,9 @@ def test_cisco_module_route_renders_without_breaking_legacy_routes(client):
     response = client.get("/modules/cisco")
     assert response.status_code == 200
     assert "Cisco setup" in response.text
+    legacy = client.get("/cisco")
+    assert legacy.status_code == 200
+    assert "Cisco setup" in legacy.text
     dashboard = client.get("/dashboard")
     assert dashboard.status_code == 200
 
@@ -11895,3 +12036,31 @@ def test_vsphere_ovf_validation_reports_missing_runtime_inputs(tmp_path):
         }
     )
     assert ready == {"ready": True, "warnings": []}
+
+
+def test_netapp_execution_launch_options_offer_safe_apply():
+    cfg = main.default_config()
+    cfg["included"]["netapp"] = True
+
+    launch = main.build_execution_launch_options(cfg, "netapp")
+    mode = main.execution_mode_for_scope("netapp")
+
+    assert launch["real"] is not None
+    assert launch["real"]["scope"] == "netapp"
+    assert "safe apply" in launch["real"]["label"].lower()
+    assert mode["key"] == "safe_apply"
+    assert mode["real_changes"] == "Yes"
+
+
+def test_netapp_validation_checks_require_bootstrap_complete():
+    cfg = main.default_config()
+    cfg["netapp"]["host"] = "10.10.8.45"
+    cfg["netapp"]["username"] = "admin"
+    cfg["netapp"]["password"] = "secret"
+    cfg["netapp"]["bootstrap_complete"] = False
+
+    checks = main.build_validation_checks(cfg, "netapp")
+    bootstrap_check = next(item for item in checks if item["label"] == "Bootstrap complete")
+
+    assert bootstrap_check["ok"] is False
+    assert "bootstrap" in bootstrap_check["details"].lower()

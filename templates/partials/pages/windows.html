@@ -1,149 +1,141 @@
 <section class="panel">
     <div class="flex items-center justify-between mb-4">
         <div>
-            <h2 class="text-2xl font-bold">Windows</h2>
+            <h2 class="text-2xl font-bold title-with-icon"><span class="page-icon icon-tone-{{ page_precheck_summary.tone if page_precheck_summary else windows_inclusion.tone }}" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 5.5 10.5 4v7H4z"/><path d="M12 3.8 20 2.5v8.5h-8z"/><path d="M4 12.8h6.5v7L4 18.5z"/><path d="M12 12.8h8v8.7L12 20.2z"/></svg></span><span>Windows</span></h2>
             <div class="text-sm text-slate-400">Review inherited network defaults, then save the Windows-specific details here.</div>
         </div>
         <span class="status {{ windows_inclusion.tone }}">{{ windows_inclusion.label }}</span>
     </div>
 
-    <div class="grid grid-cols-1 md:grid-cols-3 gap-3 mb-4">
-        <div class="card">
-            <div class="text-xs font-bold uppercase text-slate-400 mb-1">Target</div>
-            <div class="text-lg font-semibold">{{ cfg.get('windows', {}).get('ip_address', '') or cfg.get('ip_plan', {}).get('windows', '') or 'Not set' }}</div>
-            <div class="text-sm text-slate-400 mt-1">Planned Windows address.</div>
-        </div>
-        <div class="card">
-            <div class="text-xs font-bold uppercase text-slate-400 mb-1">Current State</div>
-            <div class="text-lg font-semibold">{{ cfg.get('windows', {}).get('vm_name', '') or 'Needs review' }}</div>
-            <div class="text-sm text-slate-400 mt-1">VM name and credentials are local to this page.</div>
-        </div>
-        <div class="card">
-            <div class="text-xs font-bold uppercase text-slate-400 mb-1">Next Action</div>
-            <div class="text-lg font-semibold">{{ 'Ready to review install plan' if (cfg.get('windows', {}).get('install_plan', {}) or {}).get('ready') else 'Upload image and plan' }}</div>
-            <div class="text-sm text-slate-400 mt-1">Upload OVA/OVF and build a dry-run install plan before real execution.</div>
-        </div>
-    </div>
+    {% set precheck_summary = page_precheck_summary %}
+    {% include "partials/components/precheck_summary.html" %}
+
+    {% set setup_strip = [
+        {"label": "Target", "value": cfg.get('windows', {}).get('ip_address', '') or cfg.get('ip_plan', {}).get('windows', '') or 'Not set', "note": "Planned Windows address"},
+        {"label": "VM", "value": cfg.get('windows', {}).get('vm_name', '') or 'Needs review', "note": "Local VM name"},
+        {"label": "Plan", "value": 'Ready to review install plan' if (cfg.get('windows', {}).get('install_plan', {}) or {}).get('ready') else 'Upload image and plan', "note": "Dry-run before execution"},
+    ] %}
+    {% include "partials/components/setup_strip.html" %}
 
     <div class="grid grid-cols-1 xl:grid-cols-2 gap-4">
-        <div class="card">
+        <div class="card identity-soft-card">
             <div class="text-lg font-semibold mb-3">Target and shared defaults</div>
-            <div class="space-y-3 text-sm">
-                <div class="result" style="margin-top: 0;">
-                    <div class="font-semibold">IP address</div>
-                    <div>{{ cfg.get('windows', {}).get('ip_address', '') or cfg.get('ip_plan', {}).get('windows', '') or 'Not set' }}</div>
+            <div class="ops-strip-grid text-sm">
+                <div class="ops-strip-card">
+                    <div class="dashboard-kicker">IP address</div>
+                    <div class="font-semibold">{{ cfg.get('windows', {}).get('ip_address', '') or cfg.get('ip_plan', {}).get('windows', '') or 'Not set' }}</div>
                     <div class="text-slate-400 mt-1">{{ 'Overridden on this page' if cfg.get('windows', {}).get('ip_address') else 'Using global value' }}</div>
                 </div>
-                <div class="result" style="margin-top: 0;">
-                    <div class="font-semibold">Gateway</div>
-                    <div>{{ cfg.get('windows', {}).get('gateway', '') or cfg.get('ip_plan', {}).get('gateway', '') or 'Not set' }}</div>
+                <div class="ops-strip-card">
+                    <div class="dashboard-kicker">Gateway</div>
+                    <div class="font-semibold">{{ cfg.get('windows', {}).get('gateway', '') or cfg.get('ip_plan', {}).get('gateway', '') or 'Not set' }}</div>
                     <div class="text-slate-400 mt-1">{{ 'Overridden on this page' if cfg.get('windows', {}).get('gateway') else 'Using global value' }}</div>
                 </div>
-                <div class="result" style="margin-top: 0;">
-                    <div class="font-semibold">DNS servers</div>
-                    <div>{{ (cfg.get('windows', {}).get('dns_servers', []) or cfg.get('shared_network', {}).get('dns_servers', []))|join(', ') or 'Not set' }}</div>
+                <div class="ops-strip-card">
+                    <div class="dashboard-kicker">DNS servers</div>
+                    <div class="font-semibold truncate-wrap">{{ (cfg.get('windows', {}).get('dns_servers', []) or cfg.get('shared_network', {}).get('dns_servers', []))|join(', ') or 'Not set' }}</div>
                     <div class="text-slate-400 mt-1">{{ 'Overridden on this page' if cfg.get('windows', {}).get('dns_servers') else 'Using global value' }}</div>
                 </div>
             </div>
-            <div class="result mt-4">Global Settings provides the shared address plan. This page keeps the Windows VM name, password, and inclusion choice.</div>
+            <div class="text-sm text-slate-400 mt-4">Global Settings provides the shared address plan. This page keeps the Windows VM name, password, and inclusion choice.</div>
         </div>
 
-        <div class="card">
+        <div class="card workflow-hero-card">
             <div class="text-lg font-semibold mb-3">Local Windows setup</div>
             <form hx-post="/save-windows-settings" hx-target="#main-content" hx-swap="outerHTML" class="space-y-4">
                 <input type="hidden" name="return_page" value="windows">
                 <div>
                     <label class="block text-sm font-bold text-slate-300 mb-2">VM name</label>
-                    <input type="text" name="windows_vm_name" value="{{ cfg.get('windows', {}).get('vm_name', '') }}" class="bg-slate-800 border border-slate-600 rounded-lg p-2 w-full">
+                    <input type="text" name="windows_vm_name" value="{{ cfg.get('windows', {}).get('vm_name', '') }}" class="input">
                 </div>
                 <div>
                     <label class="block text-sm font-bold text-slate-300 mb-2">Administrator password</label>
-                    <input type="password" name="windows_admin_password" value="{{ cfg.get('windows', {}).get('admin_password', '') }}" class="bg-slate-800 border border-slate-600 rounded-lg p-2 w-full">
+                    <input type="password" name="windows_admin_password" value="{{ cfg.get('windows', {}).get('admin_password', '') }}" class="input">
                 </div>
                 <div class="grid grid-cols-1 md:grid-cols-2 gap-3">
                     <div>
                         <label class="block text-sm font-bold text-slate-300 mb-2">vSphere / ESXi host</label>
-                        <input type="text" name="windows_vsphere_host" value="{{ cfg.get('windows', {}).get('vsphere_host', '') }}" class="bg-slate-800 border border-slate-600 rounded-lg p-2 w-full">
+                        <input type="text" name="windows_vsphere_host" value="{{ cfg.get('windows', {}).get('vsphere_host', '') }}" class="input">
                     </div>
                     <div>
                         <label class="block text-sm font-bold text-slate-300 mb-2">vSphere username</label>
-                        <input type="text" name="windows_vsphere_username" value="{{ cfg.get('windows', {}).get('vsphere_username', '') }}" class="bg-slate-800 border border-slate-600 rounded-lg p-2 w-full">
+                        <input type="text" name="windows_vsphere_username" value="{{ cfg.get('windows', {}).get('vsphere_username', '') }}" class="input">
                     </div>
                     <div>
                         <label class="block text-sm font-bold text-slate-300 mb-2">vSphere password</label>
-                        <input type="password" name="windows_vsphere_password" value="" placeholder="Leave blank to keep saved value" class="bg-slate-800 border border-slate-600 rounded-lg p-2 w-full">
+                        <input type="password" name="windows_vsphere_password" value="" placeholder="Leave blank to keep saved value" class="input">
                     </div>
                     <div>
                         <label class="block text-sm font-bold text-slate-300 mb-2">Datacenter</label>
-                        <input type="text" name="windows_vsphere_datacenter" value="{{ cfg.get('windows', {}).get('vsphere_datacenter', '') }}" class="bg-slate-800 border border-slate-600 rounded-lg p-2 w-full">
+                        <input type="text" name="windows_vsphere_datacenter" value="{{ cfg.get('windows', {}).get('vsphere_datacenter', '') }}" class="input">
                     </div>
                     <div>
                         <label class="block text-sm font-bold text-slate-300 mb-2">Datastore</label>
-                        <input type="text" name="windows_vsphere_datastore" value="{{ cfg.get('windows', {}).get('vsphere_datastore', '') }}" class="bg-slate-800 border border-slate-600 rounded-lg p-2 w-full">
+                        <input type="text" name="windows_vsphere_datastore" value="{{ cfg.get('windows', {}).get('vsphere_datastore', '') }}" class="input">
                     </div>
                     <div>
                         <label class="block text-sm font-bold text-slate-300 mb-2">VM network</label>
-                        <input type="text" name="windows_vsphere_network" value="{{ cfg.get('windows', {}).get('vsphere_network', '') }}" class="bg-slate-800 border border-slate-600 rounded-lg p-2 w-full">
+                        <input type="text" name="windows_vsphere_network" value="{{ cfg.get('windows', {}).get('vsphere_network', '') }}" class="input">
                     </div>
                     <div>
                         <label class="block text-sm font-bold text-slate-300 mb-2">VM folder</label>
-                        <input type="text" name="windows_vsphere_folder" value="{{ cfg.get('windows', {}).get('vsphere_folder', '') }}" class="bg-slate-800 border border-slate-600 rounded-lg p-2 w-full">
+                        <input type="text" name="windows_vsphere_folder" value="{{ cfg.get('windows', {}).get('vsphere_folder', '') }}" class="input">
                     </div>
                     <div>
                         <label class="block text-sm font-bold text-slate-300 mb-2">Resource pool</label>
-                        <input type="text" name="windows_vsphere_resource_pool" value="{{ cfg.get('windows', {}).get('vsphere_resource_pool', '') }}" class="bg-slate-800 border border-slate-600 rounded-lg p-2 w-full">
+                        <input type="text" name="windows_vsphere_resource_pool" value="{{ cfg.get('windows', {}).get('vsphere_resource_pool', '') }}" class="input">
                     </div>
                     <div>
                         <label class="block text-sm font-bold text-slate-300 mb-2">WinRM username</label>
-                        <input type="text" name="windows_winrm_username" value="{{ cfg.get('windows', {}).get('winrm_username', 'Administrator') }}" class="bg-slate-800 border border-slate-600 rounded-lg p-2 w-full">
+                        <input type="text" name="windows_winrm_username" value="{{ cfg.get('windows', {}).get('winrm_username', 'Administrator') }}" class="input">
                     </div>
                     <div>
                         <label class="block text-sm font-bold text-slate-300 mb-2">WinRM password</label>
-                        <input type="password" name="windows_winrm_password" value="" placeholder="Leave blank to keep saved value" class="bg-slate-800 border border-slate-600 rounded-lg p-2 w-full">
+                        <input type="password" name="windows_winrm_password" value="" placeholder="Leave blank to keep saved value" class="input">
                     </div>
                     <div>
                         <label class="block text-sm font-bold text-slate-300 mb-2">WinRM port</label>
-                        <input type="text" name="windows_winrm_port" value="{{ cfg.get('windows', {}).get('winrm_port', 5986) }}" class="bg-slate-800 border border-slate-600 rounded-lg p-2 w-full">
+                        <input type="text" name="windows_winrm_port" value="{{ cfg.get('windows', {}).get('winrm_port', 5986) }}" class="input">
                     </div>
                     <label class="check" style="align-self: end;"><input type="checkbox" name="windows_winrm_use_https" {% if cfg.get('windows', {}).get('winrm_use_https', True) %}checked{% endif %}> Use HTTPS for WinRM</label>
                 </div>
                 <label class="check"><input type="checkbox" name="included_windows" {% if cfg.get('included', {}).get('windows') %}checked{% endif %}> Include Windows in this kit</label>
                 <div class="actions">
-                    <button class="btn btn-danger" type="submit">Save Windows setup</button>
+                    <button class="btn btn-primary action-button" type="submit">Save Windows setup</button>
                     <a class="btn" href="/global-settings">Adjust global defaults</a>
                 </div>
             </form>
             <div class="actions mt-3">
-                <form hx-post="/probe-windows-vsphere" hx-target="#main-content" hx-swap="outerHTML">
+                <form hx-post="/probe-windows-vsphere" hx-target="#main-content" hx-swap="outerHTML" data-action-title="Probing vSphere" data-action-start="Checking the saved vSphere or ESXi connection details.">
                     <input type="hidden" name="return_page" value="windows">
-                    <button class="btn" type="submit">Probe vSphere</button>
+                    <button class="btn action-button" type="submit">Probe vSphere</button>
                 </form>
-                <form hx-post="/probe-windows-winrm" hx-target="#main-content" hx-swap="outerHTML">
+                <form hx-post="/probe-windows-winrm" hx-target="#main-content" hx-swap="outerHTML" data-action-title="Probing WinRM" data-action-start="Checking the saved guest WinRM endpoint and credentials.">
                     <input type="hidden" name="return_page" value="windows">
-                    <button class="btn" type="submit">Probe WinRM</button>
+                    <button class="btn action-button" type="submit">Probe WinRM</button>
                 </form>
             </div>
             <div class="grid grid-cols-1 md:grid-cols-2 gap-3 mt-3">
                 {% set vsphere_probe = cfg.get('windows', {}).get('last_vsphere_probe', {}) or {} %}
-                <div class="result" style="margin-top: 0;">
+                <div class="ops-strip-card">
                     <div class="font-semibold">Last vSphere probe</div>
-                    <div>{{ 'Connected' if vsphere_probe.get('connected') else 'Not connected yet' }}</div>
+                    <div class="truncate-wrap">{{ 'Connected' if vsphere_probe.get('connected') else 'Not connected yet' }}</div>
                     {% if vsphere_probe.get('product') %}
-                    <div class="text-slate-400 mt-1">{{ vsphere_probe.get('product') }} | API {{ vsphere_probe.get('api_version') or 'unknown' }}</div>
+                    <div class="text-slate-400 mt-1 truncate-wrap" title="{{ vsphere_probe.get('product') }} | API {{ vsphere_probe.get('api_version') or 'unknown' }}">{{ vsphere_probe.get('product') }} | API {{ vsphere_probe.get('api_version') or 'unknown' }}</div>
                     {% elif vsphere_probe.get('error') %}
-                    <div class="text-slate-400 mt-1">{{ vsphere_probe.get('error') }}</div>
+                    <div class="text-slate-400 mt-1 truncate-wrap" title="{{ vsphere_probe.get('error') }}">{{ vsphere_probe.get('error') }}</div>
                     {% else %}
                     <div class="text-slate-400 mt-1">Save vSphere target values, then probe inventory.</div>
                     {% endif %}
                 </div>
                 {% set winrm_probe = cfg.get('windows', {}).get('last_winrm_probe', {}) or {} %}
-                <div class="result" style="margin-top: 0;">
+                <div class="ops-strip-card">
                     <div class="font-semibold">Last WinRM probe</div>
-                    <div>{{ 'Connected' if winrm_probe.get('connected') else 'Not connected yet' }}</div>
+                    <div class="truncate-wrap">{{ 'Connected' if winrm_probe.get('connected') else 'Not connected yet' }}</div>
                     {% if winrm_probe.get('endpoint') %}
-                    <div class="text-slate-400 mt-1">{{ winrm_probe.get('endpoint') }} | status {{ winrm_probe.get('status_code') }}</div>
+                    <div class="text-slate-400 mt-1 truncate-wrap" title="{{ winrm_probe.get('endpoint') }} | status {{ winrm_probe.get('status_code') }}">{{ winrm_probe.get('endpoint') }} | status {{ winrm_probe.get('status_code') }}</div>
                     {% elif winrm_probe.get('error') %}
-                    <div class="text-slate-400 mt-1">{{ winrm_probe.get('error') }}</div>
+                    <div class="text-slate-400 mt-1 truncate-wrap" title="{{ winrm_probe.get('error') }}">{{ winrm_probe.get('error') }}</div>
                     {% else %}
                     <div class="text-slate-400 mt-1">After deployment, probe the guest WinRM endpoint.</div>
                     {% endif %}
@@ -151,17 +143,19 @@
             </div>
             <hr class="my-4 border-slate-700">
             <div class="text-sm font-semibold mb-2">Windows source image (OVA/OVF)</div>
-            <form hx-post="/upload-windows-image" hx-target="#main-content" hx-swap="outerHTML" enctype="multipart/form-data" class="space-y-3">
+            <form hx-post="/upload-windows-image" hx-target="#main-content" hx-swap="outerHTML" enctype="multipart/form-data" class="space-y-3" data-action-title="Uploading Windows image" data-action-start="Uploading the selected OVA or OVF file into the local artifact store.">
                 <input type="hidden" name="return_page" value="windows">
-                <input type="file" name="windows_image" accept=".ova,.ovf" class="bg-slate-800 border border-slate-600 rounded-lg p-2 w-full">
-                <button class="btn" type="submit">Upload image</button>
+                <input type="file" name="windows_image" accept=".ova,.ovf" class="input">
+                <button class="btn action-button" type="submit">Upload image</button>
             </form>
-            <div class="result mt-3">
+            <div class="ops-strip-card mt-3">
                 <div class="font-semibold">Saved image</div>
-                <div>{{ cfg.get('windows', {}).get('source_image_name', '') or 'Not uploaded' }}</div>
-                <div class="text-slate-400 mt-1">{{ cfg.get('windows', {}).get('source_image_path', '') or '' }}</div>
+                <div class="truncate-wrap" title="{{ cfg.get('windows', {}).get('source_image_name', '') or 'Not uploaded' }}">{{ cfg.get('windows', {}).get('source_image_name', '') or 'Not uploaded' }}</div>
+                {% if cfg.get('windows', {}).get('source_image_path', '') %}
+                <div class="text-slate-400 mt-1"><span class="artifact-path" title="{{ cfg.get('windows', {}).get('source_image_path', '') }}">{{ cfg.get('windows', {}).get('source_image_path', '') }}</span></div>
+                {% endif %}
             </div>
-            <form hx-post="/plan-windows-install" hx-target="#main-content" hx-swap="outerHTML" class="mt-3">
+            <form hx-post="/plan-windows-install" hx-target="#main-content" hx-swap="outerHTML" class="mt-3" data-action-title="Planning Windows install" data-action-start="Building a dry-run install plan from the saved Windows and vSphere values.">
                 <input type="hidden" name="return_page" value="windows">
                 <button class="btn btn-primary action-button" type="submit">Plan Windows install (dry-run)</button>
             </form>
@@ -169,18 +163,18 @@
     </div>
 
     <div class="grid grid-cols-1 xl:grid-cols-2 gap-4 mt-4">
-        <div class="card">
+        <div class="card identity-soft-card">
             <div class="text-lg font-semibold mb-3">Readiness</div>
-            <div class="space-y-3 text-sm">
-                <div class="result" style="margin-top: 0;">This workspace is ready when the shared network defaults are set and the Windows VM name and password are saved here.</div>
-                <div class="result" style="margin-top: 0;">Upload OVA/OVF and run the dry-run planner to confirm install inputs before execution.</div>
-                <div class="result" style="margin-top: 0;">Run Center reads the saved Windows setup from this page. It does not create a separate hidden plan later.</div>
+            <div class="ops-row-list text-sm">
+                <div class="ops-row-item"><div class="ops-row-copy">This workspace is ready when the shared network defaults are set and the Windows VM name and password are saved here.</div></div>
+                <div class="ops-row-item"><div class="ops-row-copy">Upload OVA/OVF and run the dry-run planner to confirm install inputs before execution.</div></div>
+                <div class="ops-row-item"><div class="ops-row-copy">Run Center reads the saved Windows setup from this page. It does not create a separate hidden plan later.</div></div>
             </div>
         </div>
-        <div class="card">
+        <div class="card identity-soft-card">
             <div class="text-lg font-semibold mb-3">Reports and next step</div>
             {% set install_plan = cfg.get('windows', {}).get('install_plan', {}) or {} %}
-            <div class="result mb-3" style="margin-top: 0;">
+            <div class="ops-strip-card mb-3" style="margin-top: 0;">
                 <div class="font-semibold">Install plan status</div>
                 <div>{{ 'Ready' if install_plan.get('ready') else 'Needs attention' }}</div>
                 {% if install_plan.get('warnings') %}

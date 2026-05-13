@@ -1,0 +1,27 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+cd "$(dirname "$0")/.."
+
+echo "== Lab Builder health check =="
+echo
+
+echo "-- Git status --"
+git status -sb
+echo
+
+echo "-- Workspace size --"
+du -h -d 1 . | sort -h
+echo
+
+echo "-- Large ignored/runtime files over 20 MB --"
+find . -type f -size +20M -not -path './.git/*' -not -path './.venv/*' -printf '%s %p\n' | sort -nr | head -50
+echo
+
+echo "-- Python compile --"
+.venv/bin/python -m compileall -q app tests
+echo "Python compile passed."
+echo
+
+echo "-- Tests --"
+.venv/bin/python -m pytest

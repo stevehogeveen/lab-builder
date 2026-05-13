@@ -1,8 +1,33 @@
 <section class="panel space-y-6">
     <div>
-        <h2 class="text-2xl font-bold">Run Center</h2>
+        <h2 class="text-2xl font-bold title-with-icon"><span class="page-icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14"/><path d="m13 6 6 6-6 6"/><path d="M5 6h3"/><path d="M5 18h3"/></svg></span><span>Run Center</span></h2>
         <div class="text-sm text-slate-400">Watch and run.</div>
     </div>
+
+    {% set setup_strip = {
+        "title": "Run snapshot",
+        "subtitle": "Keep the current run state, completion, and next operator action visible at the top.",
+        "items": [
+            {
+                "label": "Mode",
+                "value": job.get('execution_mode_label') or job.get('execution_mode') or 'Not running'
+            },
+            {
+                "label": "Current step",
+                "value": job.get('current_stage') or 'Nothing is running right now.'
+            },
+            {
+                "label": "Progress",
+                "value": (job.get('progress_percent', 0) | string) ~ '%',
+                "hint": (job.get('completed_steps', 0) | string) ~ ' / ' ~ (job.get('total_steps', 0) | string) ~ ' complete'
+            },
+            {
+                "label": "Next",
+                "value": execution_review.confidence.next_recommended_action if execution_review and execution_review.confidence and execution_review.confidence.next_recommended_action else live_job_story.waiting_on
+            }
+        ]
+    } %}
+    {% include "partials/components/setup_strip.html" %}
 
     <section class="card execution-live-card" id="execution-live-card" data-kit-name="{{ current_kit }}">
         <div class="flex items-center justify-between gap-3 mb-4">
@@ -11,20 +36,20 @@
             </div>
             <span class="status {{ 'progress' if job.get('status') not in ['Idle', 'Complete', 'Preview complete', 'Completed'] else 'ready' }}" id="execution-live-status">{{ job.get('status', 'Idle') }}</span>
         </div>
-        <div class="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-3 mb-4">
-            <div class="card card-compact execution-live-summary">
+        <div class="ops-strip-grid mb-4">
+            <div class="ops-strip-card execution-live-summary">
                 <div class="text-xs font-bold uppercase text-slate-400 mb-1">Mode</div>
                 <div class="text-sm font-semibold" id="execution-live-mode">{{ job.get('execution_mode_label') or job.get('execution_mode') or 'Not running' }}</div>
             </div>
-            <div class="card card-compact execution-live-summary">
+            <div class="ops-strip-card execution-live-summary">
                 <div class="text-xs font-bold uppercase text-slate-400 mb-1">Current step</div>
                 <div class="text-sm font-semibold" id="execution-live-step">{{ job.get('current_stage') or 'Nothing is running right now.' }}</div>
             </div>
-            <div class="card card-compact execution-live-summary">
+            <div class="ops-strip-card execution-live-summary">
                 <div class="text-xs font-bold uppercase text-slate-400 mb-1">Progress</div>
                 <div class="text-sm font-semibold" id="execution-live-progress">{{ job.get('progress_percent', 0) }}%</div>
             </div>
-            <div class="card card-compact execution-live-summary">
+            <div class="ops-strip-card execution-live-summary">
                 <div class="text-xs font-bold uppercase text-slate-400 mb-1">Completed</div>
                 <div class="text-sm font-semibold" id="execution-live-completed">{{ job.get('completed_steps', 0) }} / {{ job.get('total_steps', 0) }}</div>
             </div>
@@ -32,19 +57,31 @@
         <div class="progress-shell mb-4">
             <div class="progress-bar" id="execution-live-bar" style="width: {{ job.get('progress_percent', 0) }}%;"></div>
         </div>
-        <div class="execution-story-grid">
-            <div class="execution-story-card">
-                <div class="dashboard-kicker">Current focus</div>
-                <div class="font-semibold">{{ live_job_story.headline }}</div>
-                <div class="text-sm text-slate-400 mt-1">{{ live_job_story.summary }}</div>
+        <div class="ops-row-list">
+            <div class="ops-row-item">
+                <div class="ops-row-copy">
+                    <div class="dashboard-kicker">Current focus</div>
+                    <div class="font-semibold">{{ live_job_story.headline }}</div>
+                    <div class="text-sm text-slate-400 mt-1">{{ live_job_story.summary }}</div>
+                </div>
             </div>
-            <div class="execution-story-card">
-                <div class="dashboard-kicker">Last confirmed</div>
-                <div class="text-sm font-semibold">{{ live_job_story.last_confirmed }}</div>
+            <div class="ops-row-item">
+                <div class="ops-row-copy">
+                    <div class="dashboard-kicker">Last confirmed</div>
+                    <div class="text-sm font-semibold">{{ live_job_story.last_confirmed }}</div>
+                </div>
+                <div class="ops-row-meta">
+                    <span class="status ready">confirmed</span>
+                </div>
             </div>
-            <div class="execution-story-card">
-                <div class="dashboard-kicker">Still waiting on</div>
-                <div class="text-sm font-semibold">{{ live_job_story.waiting_on }}</div>
+            <div class="ops-row-item">
+                <div class="ops-row-copy">
+                    <div class="dashboard-kicker">Still waiting on</div>
+                    <div class="text-sm font-semibold">{{ live_job_story.waiting_on }}</div>
+                </div>
+                <div class="ops-row-meta">
+                    <span class="status progress">next</span>
+                </div>
             </div>
         </div>
         <div class="execution-stage-checklist-shell mt-4">
@@ -119,7 +156,7 @@
                         </summary>
                         <div class="mt-3 grid grid-cols-1 gap-2 text-sm">
                             {% for row in stage.detail_rows %}
-                            <div class="result" style="margin-top: 0;">
+                            <div class="ops-strip-card" style="margin-top: 0;">
                                 <div class="dashboard-kicker">{{ row.label }}</div>
                                 <div>{{ row.value }}</div>
                             </div>
@@ -137,12 +174,12 @@
             </div>
         </details>
         <section
-            class="card card-compact mt-4"
+            class="card card-compact identity-soft-card mt-4"
             id="execution-failure-details"
             {% if not (job.get('status') == 'Failed' and (job.get('failure_area') == 'storage' or 'storage' in (job.get('scope', '')|lower) or 'storage' in (job.get('current_stage', '')|lower))) %}style="display: none;"{% endif %}
         >
             <div class="text-sm font-bold text-slate-300 mb-2">Storage failure details</div>
-            <div class="result" style="margin-top: 0;">
+            <div class="ops-strip-card" style="margin-top: 0;">
                 <div><strong>Failure:</strong> <span id="execution-failure-reason">{{ job.get('failure_reason') or 'Storage run failed.' }}</span></div>
                 <div class="mt-2"><strong>Explanation:</strong> <span id="execution-failure-explanation">{{ job.get('failure_explanation') or 'Storage stage failed before completion.' }}</span></div>
                 <div class="mt-2"><strong>Suggested fix:</strong> <span id="execution-failure-fix">{{ job.get('failure_recommended_fix') or 'Run storage discovery again, re-approve storage, then rerun the stage.' }}</span></div>
@@ -257,30 +294,32 @@
 
         <div>
             <div class="text-sm font-bold text-slate-300 mb-2">Stages that will run</div>
-            <div class="grid grid-cols-1 md:grid-cols-2 gap-3">
+            <div class="ops-row-list">
                 {% for stage in execution_review.stages %}
-                <div class="card card-compact review-stage-card">
-                    <div class="flex items-center justify-between gap-3 mb-2">
+                <div class="ops-row-item review-stage-card">
+                    <div class="ops-row-copy">
+                        <div class="flex items-center justify-between gap-3 mb-2 flex-wrap">
                         <div class="font-semibold">{{ stage.name }}</div>
                         <span class="status {{ stage.status_tone }}">{{ stage.status_label }}</span>
-                    </div>
-                    <div class="text-sm">{{ stage.summary }}</div>
-                    {% if stage.blocked_reason and stage.status_label in ['Blocked', 'Needs review'] %}
-                    <div class="result mt-3" style="border-color: color-mix(in srgb, var(--warn) 45%, var(--border)); background: color-mix(in srgb, var(--warn) 10%, transparent);">
-                        <div><strong>Needs attention:</strong> {{ stage.blocked_reason }}</div>
-                        <div class="text-slate-400 mt-1">{{ stage.corrective_action }}</div>
-                    </div>
-                    {% endif %}
-                    {% if stage.review_href or (stage.blocked_reason and stage.fix_href) %}
-                    <div class="actions mt-3">
-                        {% if stage.review_href %}
-                        <a class="btn" href="{{ stage.review_href }}">Open setup page</a>
+                        </div>
+                        <div class="text-sm">{{ stage.summary }}</div>
+                        {% if stage.blocked_reason and stage.status_label in ['Blocked', 'Needs review'] %}
+                        <div class="result mt-3" style="border-color: color-mix(in srgb, var(--warn) 45%, var(--border)); background: color-mix(in srgb, var(--warn) 10%, transparent);">
+                            <div><strong>Needs attention:</strong> {{ stage.blocked_reason }}</div>
+                            <div class="text-slate-400 mt-1">{{ stage.corrective_action }}</div>
+                        </div>
                         {% endif %}
-                        {% if stage.blocked_reason and stage.fix_href %}
-                        <a class="btn btn-primary action-button" href="{{ stage.fix_href }}">{{ stage.fix_label }}</a>
+                        {% if stage.review_href or (stage.blocked_reason and stage.fix_href) %}
+                        <div class="actions mt-3">
+                            {% if stage.review_href %}
+                            <a class="btn" href="{{ stage.review_href }}">Open setup page</a>
+                            {% endif %}
+                            {% if stage.blocked_reason and stage.fix_href %}
+                            <a class="btn btn-primary action-button" href="{{ stage.fix_href }}">{{ stage.fix_label }}</a>
+                            {% endif %}
+                        </div>
                         {% endif %}
                     </div>
-                    {% endif %}
                 </div>
                 {% endfor %}
             </div>
@@ -320,27 +359,27 @@
             </form>
         </div>
 
-        <details class="card card-compact review-warning-card">
+        <details class="card card-compact identity-soft-card review-warning-card">
             <summary class="summary-row">
                 <span class="text-sm font-bold text-slate-300">Safety notes</span>
                 <span class="status progress">{{ execution_review.warning_points|length }}</span>
             </summary>
             <div class="space-y-2 text-sm mt-3">
                 {% for point in execution_review.warning_points %}
-                <div class="result" style="margin-top: 0; border-color: color-mix(in srgb, var(--warn) 45%, var(--border)); background: color-mix(in srgb, var(--warn) 10%, transparent);">{{ point }}</div>
+                <div class="ops-strip-card" style="margin-top: 0; border-color: color-mix(in srgb, var(--warn) 45%, var(--border)); background: color-mix(in srgb, var(--warn) 10%, transparent);">{{ point }}</div>
                 {% endfor %}
             </div>
         </details>
 
         {% if execution_review.esxi_install_review or execution_review.storage_run_review %}
-        <details class="card card-compact">
+        <details class="card card-compact identity-soft-card">
             <summary class="summary-row">
                 <span class="text-sm font-bold text-slate-300">Settings that will be used</span>
                 <span class="status progress">details</span>
             </summary>
             <div class="mt-4 space-y-4">
                 {% if execution_review.esxi_install_review %}
-                <div class="card card-compact">
+                <div class="card card-compact identity-soft-card">
                     <div class="flex items-center justify-between gap-3 mb-3">
                         <div>
                             <div class="text-sm font-bold text-slate-300">ESXi installer values</div>
@@ -348,38 +387,38 @@
                         </div>
                         <span class="status ready">saved kit values</span>
                     </div>
-                    <div class="grid grid-cols-1 md:grid-cols-2 gap-2 text-sm">
-                        <div class="result" style="margin-top: 0;">Hostname: {{ execution_review.esxi_install_review.hostname or 'Not set' }}</div>
-                        <div class="result" style="margin-top: 0;">Management IP: {{ execution_review.esxi_install_review.management_ip or 'Not set' }}</div>
-                        <div class="result" style="margin-top: 0;">Subnet mask: {{ execution_review.esxi_install_review.subnet_mask or 'Not set' }}</div>
-                        <div class="result" style="margin-top: 0;">Gateway: {{ execution_review.esxi_install_review.gateway or 'Not set' }}</div>
-                        <div class="result" style="margin-top: 0;">DNS servers: {{ ', '.join(execution_review.esxi_install_review.dns_servers) or 'Not set' }}</div>
-                        <div class="result" style="margin-top: 0;">Root password: {{ 'Saved' if execution_review.esxi_install_review.root_password_saved else 'Missing' }}</div>
-                        <div class="result" style="margin-top: 0;">VLAN ID: {{ execution_review.esxi_install_review.vlan_id or 'Not set' }}</div>
-                        <div class="result" style="margin-top: 0;">NTP server: {{ execution_review.esxi_install_review.ntp_server or 'Not set' }}</div>
-                        <div class="result" style="margin-top: 0;">Enable SSH: {{ 'Yes' if execution_review.esxi_install_review.enable_ssh else 'No' }}</div>
-                        <div class="result" style="margin-top: 0;">Disable IPv6: {{ 'Yes' if execution_review.esxi_install_review.disable_ipv6 else 'No' }}</div>
-                        <div class="result" style="margin-top: 0;">Debug no reboot: {{ 'Yes' if execution_review.esxi_install_review.debug_no_reboot else 'No' }}</div>
-                        <div class="result md:col-span-2" style="margin-top: 0;">ESXi version: {{ execution_review.esxi_install_review.version or '7' }}</div>
-                        <div class="result md:col-span-2" style="margin-top: 0;">KS.CFG install target: {{ execution_review.esxi_install_review.install_target.kickstart_line }} | {{ execution_review.esxi_install_review.install_target.preferred_target }}</div>
-                        <div class="result md:col-span-2" style="margin-top: 0;">Base ISO path: {{ execution_review.esxi_install_review.base_iso_path }}</div>
-                        <div class="result md:col-span-2" style="margin-top: 0;">Built ISO path: {{ execution_review.esxi_install_review.output_iso_path }}</div>
-                        <div class="result md:col-span-2" style="margin-top: 0;">Virtual media URL: {{ execution_review.esxi_install_review.virtual_media_url }}</div>
-                        <div class="result md:col-span-2" style="margin-top: 0;">Virtual media URL source: {{ execution_review.esxi_install_review.virtual_media_base_url_source or 'Not set' }}{% if execution_review.esxi_install_review.virtual_media_base_url_host %} | host={{ execution_review.esxi_install_review.virtual_media_base_url_host }} port={{ execution_review.esxi_install_review.virtual_media_base_url_port or 'default' }}{% endif %}</div>
+                    <div class="ops-strip-grid text-sm">
+                        <div class="ops-strip-card" style="margin-top: 0;">Hostname: {{ execution_review.esxi_install_review.hostname or 'Not set' }}</div>
+                        <div class="ops-strip-card" style="margin-top: 0;">Management IP: {{ execution_review.esxi_install_review.management_ip or 'Not set' }}</div>
+                        <div class="ops-strip-card" style="margin-top: 0;">Subnet mask: {{ execution_review.esxi_install_review.subnet_mask or 'Not set' }}</div>
+                        <div class="ops-strip-card" style="margin-top: 0;">Gateway: {{ execution_review.esxi_install_review.gateway or 'Not set' }}</div>
+                        <div class="ops-strip-card" style="margin-top: 0;">DNS servers: {{ ', '.join(execution_review.esxi_install_review.dns_servers) or 'Not set' }}</div>
+                        <div class="ops-strip-card" style="margin-top: 0;">Root password: {{ 'Saved' if execution_review.esxi_install_review.root_password_saved else 'Missing' }}</div>
+                        <div class="ops-strip-card" style="margin-top: 0;">VLAN ID: {{ execution_review.esxi_install_review.vlan_id or 'Not set' }}</div>
+                        <div class="ops-strip-card" style="margin-top: 0;">NTP server: {{ execution_review.esxi_install_review.ntp_server or 'Not set' }}</div>
+                        <div class="ops-strip-card" style="margin-top: 0;">Enable SSH: {{ 'Yes' if execution_review.esxi_install_review.enable_ssh else 'No' }}</div>
+                        <div class="ops-strip-card" style="margin-top: 0;">Disable IPv6: {{ 'Yes' if execution_review.esxi_install_review.disable_ipv6 else 'No' }}</div>
+                        <div class="ops-strip-card" style="margin-top: 0;">Debug no reboot: {{ 'Yes' if execution_review.esxi_install_review.debug_no_reboot else 'No' }}</div>
+                        <div class="ops-strip-card md:col-span-2" style="margin-top: 0;">ESXi version: {{ execution_review.esxi_install_review.version or '7' }}</div>
+                        <div class="ops-strip-card md:col-span-2" style="margin-top: 0;">KS.CFG install target: {{ execution_review.esxi_install_review.install_target.kickstart_line }} | {{ execution_review.esxi_install_review.install_target.preferred_target }}</div>
+                        <div class="ops-strip-card md:col-span-2 truncate-wrap" style="margin-top: 0;">Base ISO path: {{ execution_review.esxi_install_review.base_iso_path }}</div>
+                        <div class="ops-strip-card md:col-span-2 truncate-wrap" style="margin-top: 0;">Built ISO path: {{ execution_review.esxi_install_review.output_iso_path }}</div>
+                        <div class="ops-strip-card md:col-span-2 truncate-wrap" style="margin-top: 0;">Virtual media URL: {{ execution_review.esxi_install_review.virtual_media_url }}</div>
+                        <div class="ops-strip-card md:col-span-2 truncate-wrap" style="margin-top: 0;">Virtual media URL source: {{ execution_review.esxi_install_review.virtual_media_base_url_source or 'Not set' }}{% if execution_review.esxi_install_review.virtual_media_base_url_host %} | host={{ execution_review.esxi_install_review.virtual_media_base_url_host }} port={{ execution_review.esxi_install_review.virtual_media_base_url_port or 'default' }}{% endif %}</div>
                         {% if execution_review.esxi_install_review.runtime_status %}
-                        <div class="result md:col-span-2" style="margin-top: 0;">Current ESXi reachability: {{ execution_review.esxi_install_review.runtime_status.summary }}</div>
-                        <div class="result md:col-span-2" style="margin-top: 0;">Recommended action: {{ execution_review.esxi_install_review.runtime_status.recommended_action }}</div>
+                        <div class="ops-strip-card md:col-span-2" style="margin-top: 0;">Current ESXi reachability: {{ execution_review.esxi_install_review.runtime_status.summary }}</div>
+                        <div class="ops-strip-card md:col-span-2" style="margin-top: 0;">Recommended action: {{ execution_review.esxi_install_review.runtime_status.recommended_action }}</div>
                         {% endif %}
-                        <div class="result md:col-span-2" style="margin-top: 0;">Manual test defaults: {{ execution_review.esxi_install_review.manual_defaults_label }}</div>
+                        <div class="ops-strip-card md:col-span-2" style="margin-top: 0;">Manual test defaults: {{ execution_review.esxi_install_review.manual_defaults_label }}</div>
                         {% if execution_review.esxi_install_review.missing_fields %}
-                        <div class="result md:col-span-2" style="margin-top: 0;">Missing required values: {{ ', '.join(execution_review.esxi_install_review.missing_fields) }}</div>
+                        <div class="ops-strip-card md:col-span-2" style="margin-top: 0;">Missing required values: {{ ', '.join(execution_review.esxi_install_review.missing_fields) }}</div>
                         {% endif %}
                     </div>
                 </div>
                 {% endif %}
 
                 {% if execution_review.storage_run_review %}
-                <div class="card card-compact">
+                <div class="card card-compact identity-soft-card">
                     <div class="flex items-center justify-between gap-3 mb-3">
                         <div>
                             <div class="text-sm font-bold text-slate-300">Storage run values</div>
@@ -387,16 +426,16 @@
                         </div>
                         <span class="status ready">approved plan</span>
                     </div>
-                    <div class="grid grid-cols-1 md:grid-cols-2 gap-2 text-sm">
-                        <div class="result" style="margin-top: 0;">Apply mode: {{ execution_review.storage_run_review.apply_mode_label or 'Not set' }}</div>
-                        <div class="result" style="margin-top: 0;">Approved host: {{ execution_review.storage_run_review.approved_host or 'Not set' }}</div>
-                        <div class="result" style="margin-top: 0;">Controller: {{ execution_review.storage_run_review.controller or 'Not set' }}</div>
-                        <div class="result" style="margin-top: 0;">Restart expected: {{ 'Yes' if execution_review.storage_run_review.reboot_expected else 'No' }}</div>
-                        <div class="result" style="margin-top: 0;">OS RAID 1 bays: {{ execution_review.storage_run_review.os_bays or 'Not selected' }}</div>
-                        <div class="result" style="margin-top: 0;">Data RAID bays: {{ execution_review.storage_run_review.data_bays or 'Not selected' }}</div>
-                        <div class="result" style="margin-top: 0;">Hot spare bay: {{ execution_review.storage_run_review.spare_bay or 'Not reserved' }}</div>
-                        <div class="result md:col-span-2" style="margin-top: 0;">Approved plan path: {{ execution_review.storage_run_review.plan_path or 'Not set' }}</div>
-                        <div class="result md:col-span-2" style="margin-top: 0;">Approved discovery path: {{ execution_review.storage_run_review.discovery_raw_path or 'Not set' }}</div>
+                    <div class="ops-strip-grid text-sm">
+                        <div class="ops-strip-card" style="margin-top: 0;">Apply mode: {{ execution_review.storage_run_review.apply_mode_label or 'Not set' }}</div>
+                        <div class="ops-strip-card" style="margin-top: 0;">Approved host: {{ execution_review.storage_run_review.approved_host or 'Not set' }}</div>
+                        <div class="ops-strip-card" style="margin-top: 0;">Controller: {{ execution_review.storage_run_review.controller or 'Not set' }}</div>
+                        <div class="ops-strip-card" style="margin-top: 0;">Restart expected: {{ 'Yes' if execution_review.storage_run_review.reboot_expected else 'No' }}</div>
+                        <div class="ops-strip-card" style="margin-top: 0;">OS RAID 1 bays: {{ execution_review.storage_run_review.os_bays or 'Not selected' }}</div>
+                        <div class="ops-strip-card" style="margin-top: 0;">Data RAID bays: {{ execution_review.storage_run_review.data_bays or 'Not selected' }}</div>
+                        <div class="ops-strip-card" style="margin-top: 0;">Hot spare bay: {{ execution_review.storage_run_review.spare_bay or 'Not reserved' }}</div>
+                        <div class="ops-strip-card md:col-span-2 truncate-wrap" style="margin-top: 0;">Approved plan path: {{ execution_review.storage_run_review.plan_path or 'Not set' }}</div>
+                        <div class="ops-strip-card md:col-span-2 truncate-wrap" style="margin-top: 0;">Approved discovery path: {{ execution_review.storage_run_review.discovery_raw_path or 'Not set' }}</div>
                     </div>
                 </div>
                 {% endif %}
@@ -404,7 +443,7 @@
         </details>
         {% endif %}
 
-        <details class="card card-compact">
+        <details class="card card-compact identity-soft-card">
             <summary class="summary-row">
                 <span class="text-sm font-bold text-slate-300">Preview only</span>
                 <span class="status progress">optional</span>
@@ -428,43 +467,50 @@
             </div>
         </details>
 
-        <details class="card card-compact">
+        <details class="card card-compact identity-soft-card">
             <summary class="summary-row">
                 <span class="text-sm font-bold text-slate-300">Technical details</span>
                 <span class="status progress">details</span>
             </summary>
             <div class="mt-4 space-y-4">
-                <div class="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-3">
+                <div class="ops-row-list">
                     {% for item in execution_review.readiness_matrix %}
-                    <div class="result" style="margin-top: 0;">
-                        <div class="flex items-center justify-between gap-3">
+                    <div class="ops-row-item">
+                        <div class="ops-row-copy">
                             <div class="font-semibold">{{ item.name }}</div>
+                            <div class="text-sm mt-1">{{ item.summary }}</div>
+                            <div class="text-sm text-slate-400 mt-1">{{ item.action }}</div>
+                        </div>
+                        <div class="ops-row-meta">
                             <span class="status {{ item.tone }}">{{ item.label }}</span>
                         </div>
-                        <div class="text-sm mt-1">{{ item.summary }}</div>
-                        <div class="text-sm text-slate-400 mt-1">{{ item.action }}</div>
                     </div>
                     {% endfor %}
                 </div>
 
                 <div class="card card-compact">
                     <div class="text-sm font-bold text-slate-300 mb-3">Stage details</div>
-                    <div class="space-y-3">
+                    <div class="ops-row-list">
                         {% for stage in execution_review.stages %}
-                        <div class="result" style="margin-top: 0;">
-                            <div class="flex items-center justify-between gap-3">
-                                <div class="font-semibold">{{ stage.name }}</div>
+                        <div class="ops-row-item">
+                            <div class="ops-row-copy">
+                                <div class="flex items-center justify-between gap-3 flex-wrap">
+                                    <div class="font-semibold">{{ stage.name }}</div>
+                                    <span class="status {{ stage.status_tone }}">{{ stage.status_label }}</span>
+                                </div>
+                                {% if stage.settings %}
+                                <div class="grid grid-cols-1 md:grid-cols-2 gap-2 mt-3 text-sm">
+                                    {% for item in stage.settings %}
+                                    <div>{{ item }}</div>
+                                    {% endfor %}
+                                </div>
+                                {% else %}
+                                <div class="text-sm mt-2">{{ stage.summary }}</div>
+                                {% endif %}
+                            </div>
+                            <div class="ops-row-meta">
                                 <span class="status {{ stage.status_tone }}">{{ stage.status_label }}</span>
                             </div>
-                            {% if stage.settings %}
-                            <div class="grid grid-cols-1 md:grid-cols-2 gap-2 mt-3 text-sm">
-                                {% for item in stage.settings %}
-                                <div>{{ item }}</div>
-                                {% endfor %}
-                            </div>
-                            {% else %}
-                            <div class="text-sm mt-2">{{ stage.summary }}</div>
-                            {% endif %}
                         </div>
                         {% endfor %}
                     </div>
@@ -472,16 +518,42 @@
 
                 <div class="card card-compact">
                     <div class="text-sm font-bold text-slate-300 mb-3">Run details</div>
-                    <div class="space-y-2 text-sm">
+                    <div class="ops-row-list">
                         {% for item in execution_review.final_summary.will_run %}
-                        <div class="result" style="margin-top: 0;">Will run: {{ item }}</div>
+                        <div class="ops-row-item">
+                            <div class="ops-row-copy">
+                                <div class="font-semibold">Will run</div>
+                                <div class="text-sm text-slate-400">{{ item }}</div>
+                            </div>
+                            <div class="ops-row-meta">
+                                <span class="status ready">included</span>
+                            </div>
+                        </div>
                         {% endfor %}
                         {% for item in execution_review.final_summary.will_not_run %}
-                        <div class="result" style="margin-top: 0; border-color: color-mix(in srgb, var(--warn) 45%, var(--border)); background: color-mix(in srgb, var(--warn) 10%, transparent);">Not included: {{ item }}</div>
+                        <div class="ops-row-item" style="border-color: color-mix(in srgb, var(--warn) 45%, var(--border)); background: color-mix(in srgb, var(--warn) 10%, transparent);">
+                            <div class="ops-row-copy">
+                                <div class="font-semibold">Not included</div>
+                                <div class="text-sm text-slate-400">{{ item }}</div>
+                            </div>
+                            <div class="ops-row-meta">
+                                <span class="status pending">skipped</span>
+                            </div>
+                        </div>
                         {% endfor %}
-                        <div class="result" style="margin-top: 0;">Restart impact: {{ execution_review.final_summary.restart_impact }}</div>
+                        <div class="ops-row-item">
+                            <div class="ops-row-copy">
+                                <div class="font-semibold">Restart impact</div>
+                                <div class="text-sm text-slate-400">{{ execution_review.final_summary.restart_impact }}</div>
+                            </div>
+                        </div>
                         {% for item in execution_review.final_summary.plans_in_use %}
-                        <div class="result" style="margin-top: 0;">Using: {{ item }}</div>
+                        <div class="ops-row-item">
+                            <div class="ops-row-copy">
+                                <div class="font-semibold">Using</div>
+                                <div class="text-sm text-slate-400">{{ item }}</div>
+                            </div>
+                        </div>
                         {% endfor %}
                     </div>
                 </div>
@@ -496,7 +568,7 @@
                         <input type="hidden" name="scope" value="{{ confirm_scope }}">
                         <button class="btn" type="submit">Download summary</button>
                     </form>
-                    <a class="btn" href="/configs">Open reports & technical details</a>
+                    <a class="btn" href="/configs">Open Reports</a>
                 </div>
             </div>
         </details>

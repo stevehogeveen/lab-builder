@@ -144,6 +144,11 @@ async def save_config_handler(
 ):
     existing_cfg = runtime["load_kit_config"]()
     form = await request.form()
+
+    def preserve_existing_secret(submitted: str, existing: Any) -> str:
+        submitted_value = str(submitted or "")
+        return submitted_value if submitted_value else str(existing or "")
+
     previous_subnet = existing_cfg.get("shared_network", {}).get("subnet", "")
     previous_plan = existing_cfg.get("ip_plan", {})
     submitted_plan = {
@@ -178,17 +183,17 @@ async def save_config_handler(
         "shared_snmp": {
             "v3_username": snmp_v3_username,
             "v3_auth_protocol": snmp_v3_auth_protocol,
-            "v3_auth_password": snmp_v3_auth_password,
+            "v3_auth_password": preserve_existing_secret(snmp_v3_auth_password, (existing_cfg.get("shared_snmp") or {}).get("v3_auth_password")),
             "v3_priv_protocol": snmp_v3_priv_protocol,
-            "v3_priv_password": snmp_v3_priv_password,
+            "v3_priv_password": preserve_existing_secret(snmp_v3_priv_password, (existing_cfg.get("shared_snmp") or {}).get("v3_priv_password")),
             "read_community": str((existing_cfg.get("shared_snmp") or {}).get("read_community") or ""),
             "users": runtime["extract_snmp_users_from_form"](
                 form,
                 primary_username=snmp_v3_username,
                 primary_auth_protocol=snmp_v3_auth_protocol,
-                primary_auth_password=snmp_v3_auth_password,
+                primary_auth_password=preserve_existing_secret(snmp_v3_auth_password, (existing_cfg.get("shared_snmp") or {}).get("v3_auth_password")),
                 primary_priv_protocol=snmp_v3_priv_protocol,
-                primary_priv_password=snmp_v3_priv_password,
+                primary_priv_password=preserve_existing_secret(snmp_v3_priv_password, (existing_cfg.get("shared_snmp") or {}).get("v3_priv_password")),
             ),
         },
         "included": {
@@ -216,23 +221,23 @@ async def save_config_handler(
             "dns_servers": [ilo_dns1, ilo_dns2, ilo_dns3, ilo_dns4],
             "hostname": runtime["normalize_ilo_hostname"](ilo_hostname),
             "username": ilo_username,
-            "password": ilo_password,
+            "password": preserve_existing_secret(ilo_password, (existing_cfg.get("ilo") or {}).get("password")),
             "additional_users": runtime["extract_ilo_additional_users_from_form"](form),
             "policy": dict((existing_cfg.get("ilo") or {}).get("policy") or {}),
         },
-        "esxi": {"hostname": esxi_hostname, "root_password": esxi_root_password},
-        "windows": {"vm_name": windows_vm_name, "admin_password": windows_admin_password},
-        "qnap": {"hostname": qnap_hostname, "username": qnap_username, "password": qnap_password},
-        "iosafe": {"hostname": iosafe_hostname, "username": iosafe_username, "password": iosafe_password},
+        "esxi": {"hostname": esxi_hostname, "root_password": preserve_existing_secret(esxi_root_password, (existing_cfg.get("esxi") or {}).get("root_password"))},
+        "windows": {"vm_name": windows_vm_name, "admin_password": preserve_existing_secret(windows_admin_password, (existing_cfg.get("windows") or {}).get("admin_password"))},
+        "qnap": {"hostname": qnap_hostname, "username": qnap_username, "password": preserve_existing_secret(qnap_password, (existing_cfg.get("qnap") or {}).get("password"))},
+        "iosafe": {"hostname": iosafe_hostname, "username": iosafe_username, "password": preserve_existing_secret(iosafe_password, (existing_cfg.get("iosafe") or {}).get("password"))},
         "cisco_switch": {
             "hostname": cisco_switch_hostname,
             "username": cisco_switch_username,
-            "password": cisco_switch_password,
+            "password": preserve_existing_secret(cisco_switch_password, (existing_cfg.get("cisco_switch") or {}).get("password")),
         },
         "netapp": {
             "host": netapp_host,
             "username": netapp_username,
-            "password": netapp_password,
+            "password": preserve_existing_secret(netapp_password, (existing_cfg.get("netapp") or {}).get("password")),
             "storage_protocol": netapp_storage_protocol if netapp_storage_protocol in {"nfs", "iscsi"} else "nfs",
             "command_templates": {
                 "iscsi": netapp_iscsi_commands,
@@ -246,22 +251,6 @@ async def save_config_handler(
     ilo_input_review = runtime["build_ilo_input_review"](cfg, include_policy_validation=False)
     combined_errors = list(snmp_input_review["errors"]) + list(ilo_input_review["errors"])
     combined_notes = list(snmp_input_review["notes"]) + list(ilo_input_review["notes"])
-    if combined_errors:
-        return runtime["render_page"](
-            request,
-            cfg,
-            active_page=return_page,
-            action_feedback=runtime["build_action_feedback"](
-                "Kit needs attention",
-                "Fix the iLO or SNMP saved values before saving this page.",
-                tone="pending",
-                outcomes=[
-                    f"Kit: {cfg['site']['name']}",
-                    f"Shared subnet: {cfg['shared_network'].get('subnet', '') or 'Not set'}",
-                ],
-                details=combined_errors + combined_notes,
-            ),
-        )
     try:
         cfg = runtime["apply_ip_plan"](cfg)
         runtime["save_kit_config"](cfg)
@@ -281,13 +270,18 @@ async def save_config_handler(
             cfg,
             active_page=return_page,
             action_feedback=runtime["build_action_feedback"](
-                "Kit saved",
-                f"Saved the kit and refreshed the shared address plan for {cfg['site']['name']}.",
-                tone="ready",
+                "Kit saved with warnings" if combined_errors else "Kit saved",
+                (
+                    "Saved the kit, but some legacy iLO or SNMP values still need attention."
+                    if combined_errors
+                    else f"Saved the kit and refreshed the shared address plan for {cfg['site']['name']}."
+                ),
+                tone="pending" if combined_errors else "ready",
                 outcomes=[
                     f"Kit: {cfg['site']['name']}",
                     f"Shared subnet: {cfg['shared_network'].get('subnet', '') or 'Not set'}",
                 ],
+                details=combined_errors + combined_notes,
             ),
         )
     except Exception as e:

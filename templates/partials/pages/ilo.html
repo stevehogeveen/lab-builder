@@ -9,7 +9,7 @@
 {% set ilo_policy = cfg.get("ilo", {}).get("policy", {}) %}
 <section class="panel space-y-6" x-data='{"tab":"basic","users": {{ cfg.get("ilo", {}).get("additional_users", [])|tojson }} }'>
     <div>
-        <h2 class="text-2xl font-bold">iLO setup</h2>
+        <h2 class="text-2xl font-bold title-with-icon"><span class="page-icon icon-tone-{{ page_precheck_summary.tone if page_precheck_summary else 'progress' }}" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="5" width="16" height="12" rx="2"/><path d="M8 20h8"/><path d="M9 9h6"/><path d="M9 13h3"/></svg></span><span>iLO setup</span></h2>
         <div class="text-sm text-slate-400">Address and sign-in.</div>
         <div class="actions mt-4">
             <div class="workflow-tabs">
@@ -19,7 +19,18 @@
         </div>
     </div>
 
-    <section class="card" x-show="tab === 'basic'">
+    {% set precheck_summary = page_precheck_summary %}
+    {% include "partials/components/precheck_summary.html" %}
+
+    {% set setup_strip = [
+        {"label": "Current", "value": cfg.get('ilo', {}).get('current_ip', cfg.get('ilo', {}).get('host', '')) or 'Not set', "note": "Current iLO address"},
+        {"label": "Target", "value": cfg.get('ilo', {}).get('target_ip', cfg.get('ip_plan', {}).get('ilo', '')) or 'Not set', "note": "Final iLO address"},
+        {"label": "Hostname", "value": cfg.get('ilo', {}).get('hostname', '') or 'Needs review', "note": "Saved server name"},
+        {"label": "Next", "value": 'Read and validate iLO' if cfg.get('ilo', {}).get('current_ip', cfg.get('ilo', {}).get('host', '')) else 'Save target first', "note": "Hardware workflow entry point"},
+    ] %}
+    {% include "partials/components/setup_strip.html" %}
+
+    <section class="card workflow-hero-card" x-show="tab === 'basic'">
         <div class="text-lg font-semibold mb-3">Save iLO setup</div>
         <form hx-post="/save-ilo-settings" hx-target="#main-content" hx-swap="outerHTML" class="space-y-4" data-action-title="Saving iLO setup" data-action-start="Saving the latest iLO address and sign-in details.">
             <input type="hidden" name="return_page" value="ilo">
@@ -65,14 +76,14 @@
                 </summary>
                 <div class="mt-4 space-y-4">
                     <div class="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-4">
-                        <label class="result" style="margin-top: 0;"><input type="checkbox" name="ilo_policy_apply_standard_policy" {% if ilo_policy.get("apply_standard_policy") %}checked{% endif %}> Apply standard iLO policy</label>
-                        <label class="result" style="margin-top: 0;"><input type="checkbox" name="ilo_policy_enable_standard_accounts" {% if ilo_policy.get("enable_standard_accounts") %}checked{% endif %}> Standard local accounts</label>
-                        <label class="result" style="margin-top: 0;"><input type="checkbox" name="ilo_policy_enable_license_check" {% if ilo_policy.get("enable_license_check") %}checked{% endif %}> License check</label>
-                        <label class="result" style="margin-top: 0;"><input type="checkbox" name="ilo_policy_enable_auto_reset" {% if ilo_policy.get("enable_auto_reset") %}checked{% endif %}> Auto iLO reset</label>
-                        <label class="result" style="margin-top: 0;"><input type="checkbox" name="ilo_policy_enable_snmp_policy" {% if ilo_policy.get("enable_snmp_policy") %}checked{% endif %}> SNMP/SNMPv3 policy</label>
-                        <label class="result" style="margin-top: 0;"><input type="checkbox" name="ilo_policy_enable_alert_destinations" {% if ilo_policy.get("enable_alert_destinations") %}checked{% endif %}> SNMP alert destinations</label>
-                        <label class="result" style="margin-top: 0;"><input type="checkbox" name="ilo_policy_enable_ipv6_disable" {% if ilo_policy.get("enable_ipv6_disable") %}checked{% endif %}> Disable IPv6 policy</label>
-                        <label class="result" style="margin-top: 0;"><input type="checkbox" name="ilo_policy_enable_time_policy" {% if ilo_policy.get("enable_time_policy") %}checked{% endif %}> SNTP/time policy</label>
+                        <label class="check card card-compact"><input type="checkbox" name="ilo_policy_apply_standard_policy" {% if ilo_policy.get("apply_standard_policy") %}checked{% endif %}> Apply standard iLO policy</label>
+                        <label class="check card card-compact"><input type="checkbox" name="ilo_policy_enable_standard_accounts" {% if ilo_policy.get("enable_standard_accounts") %}checked{% endif %}> Standard local accounts</label>
+                        <label class="check card card-compact"><input type="checkbox" name="ilo_policy_enable_license_check" {% if ilo_policy.get("enable_license_check") %}checked{% endif %}> License check</label>
+                        <label class="check card card-compact"><input type="checkbox" name="ilo_policy_enable_auto_reset" {% if ilo_policy.get("enable_auto_reset") %}checked{% endif %}> Auto iLO reset</label>
+                        <label class="check card card-compact"><input type="checkbox" name="ilo_policy_enable_snmp_policy" {% if ilo_policy.get("enable_snmp_policy") %}checked{% endif %}> SNMP/SNMPv3 policy</label>
+                        <label class="check card card-compact"><input type="checkbox" name="ilo_policy_enable_alert_destinations" {% if ilo_policy.get("enable_alert_destinations") %}checked{% endif %}> SNMP alert destinations</label>
+                        <label class="check card card-compact"><input type="checkbox" name="ilo_policy_enable_ipv6_disable" {% if ilo_policy.get("enable_ipv6_disable") %}checked{% endif %}> Disable IPv6 policy</label>
+                        <label class="check card card-compact"><input type="checkbox" name="ilo_policy_enable_time_policy" {% if ilo_policy.get("enable_time_policy") %}checked{% endif %}> SNTP/time policy</label>
                     </div>
                     <div class="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-4">
                         <div>
@@ -140,9 +151,9 @@
                         <div class="font-semibold">Last discovery</div>
                         <div class="grid grid-cols-1 xl:grid-cols-2 gap-3">
                             {% for item in ilo_policy.get("discovered_hosts", []) %}
-                            <div class="result" style="margin-top: 0;">
+                            <div class="ops-strip-card" style="margin-top: 0;">
                                 <div class="dashboard-kicker">{{ item.host }}</div>
-                                <div>{% if item.reachable %}HTTPS reachable{% else %}Unreachable{% endif %}{% if item.latency_ms %} | {{ item.latency_ms }} ms{% endif %}{% if item.error %} | {{ item.error }}{% endif %}</div>
+                                <div class="truncate-wrap" title="{% if item.reachable %}HTTPS reachable{% else %}Unreachable{% endif %}{% if item.latency_ms %} | {{ item.latency_ms }} ms{% endif %}{% if item.error %} | {{ item.error }}{% endif %}">{% if item.reachable %}HTTPS reachable{% else %}Unreachable{% endif %}{% if item.latency_ms %} | {{ item.latency_ms }} ms{% endif %}{% if item.error %} | {{ item.error }}{% endif %}</div>
                             </div>
                             {% endfor %}
                         </div>
@@ -217,17 +228,13 @@
                 <a class="btn" href="/execution">Open Run Center</a>
             </div>
         </form>
-        <form hx-post="/discover-ilo-hosts" hx-target="#main-content" hx-swap="outerHTML" class="mt-4" data-action-title="Discovering iLO hosts" data-action-start="Scanning the configured kit subnet range for reachable iLO HTTPS endpoints.">
-            <input type="hidden" name="return_page" value="ilo">
-            <button class="btn action-button" type="submit">Discover iLO hosts</button>
-        </form>
         <form hx-post="/export-ilo-inventory" hx-target="#main-content" hx-swap="outerHTML" class="mt-4" data-action-title="Reading current iLO" data-action-start="Connecting to iLO and reading the current settings.">
             <input type="hidden" name="return_page" value="ilo">
             <button class="btn action-button" type="submit">Read current iLO</button>
         </form>
     </section>
 
-    <section class="card ilo-advanced-shell" x-show="tab === 'advanced'">
+    <section class="card identity-soft-card ilo-advanced-shell" x-show="tab === 'advanced'">
         <div class="flex items-center justify-between gap-3 mb-3 flex-wrap">
             <div>
                 <div class="text-lg font-semibold">Advanced iLO options</div>
@@ -256,9 +263,9 @@
                 {% if area["items"] %}
                 <div class="space-y-2 text-sm">
                     {% for item in area["items"] %}
-                    <div class="result" style="margin-top: 0;">
+                    <div class="ops-strip-card" style="margin-top: 0;">
                         <div class="dashboard-kicker">{{ item.label }}</div>
-                        <div>{{ item.value }}</div>
+                        <div class="truncate-wrap" title="{{ item.value }}">{{ item.value }}</div>
                     </div>
                     {% endfor %}
                 </div>
@@ -275,9 +282,9 @@
                     </summary>
                     <div class="mt-3 space-y-2 text-sm">
                         {% for row in area.detail_rows %}
-                        <div class="result" style="margin-top: 0;">
+                        <div class="ops-strip-card" style="margin-top: 0;">
                             <div class="dashboard-kicker">{{ row.label }}</div>
-                            <div>{{ row.value }}</div>
+                            <div class="truncate-wrap" title="{{ row.value }}">{{ row.value }}</div>
                         </div>
                         {% endfor %}
                     </div>
@@ -287,16 +294,16 @@
             {% endfor %}
         </div>
         {% if ilo_advanced.raw_key_groups %}
-        <details class="card card-compact mt-4 ilo-capability-keys">
+        <details class="card card-compact identity-soft-card mt-4 ilo-capability-keys">
             <summary class="summary-row">
                 <span class="text-sm font-bold text-slate-300">Detected Redfish capability keys</span>
                 <span class="status progress">advanced</span>
             </summary>
             <div class="mt-4 space-y-3">
                 {% for group in ilo_advanced.raw_key_groups %}
-                <div class="result" style="margin-top: 0;">
+                <div class="ops-strip-card" style="margin-top: 0;">
                     <div class="font-semibold">{{ group.label }}</div>
-                    <div class="text-sm mt-1">{{ ', '.join(group["values"]) }}</div>
+                    <div class="text-sm mt-1 truncate-wrap" title="{{ ', '.join(group['values']) }}">{{ ', '.join(group["values"]) }}</div>
                 </div>
                 {% endfor %}
             </div>
@@ -314,7 +321,7 @@
         {% endif %}
     </section>
 
-    <details class="card">
+    <details class="card identity-soft-card">
         <summary class="summary-row">
             <span class="text-lg font-semibold">What happened last</span>
             <span class="status progress">history</span>
@@ -325,8 +332,8 @@
             <div class="flex items-start justify-between gap-3 flex-wrap">
                 <div>
                     <div class="dashboard-kicker">Last iLO run</div>
-                    <div class="font-semibold text-lg">{{ ilo_latest_receipt.human_summary }}</div>
-                    <div class="text-sm text-slate-400 mt-1">{{ ilo_latest_receipt.time }}{% if ilo_latest_receipt.target %} | {{ ilo_latest_receipt.target }}{% endif %}</div>
+                    <div class="font-semibold text-lg truncate-wrap" title="{{ ilo_latest_receipt.human_summary }}">{{ ilo_latest_receipt.human_summary }}</div>
+                    <div class="text-sm text-slate-400 mt-1 truncate-wrap" title="{{ ilo_latest_receipt.time }}{% if ilo_latest_receipt.target %} | {{ ilo_latest_receipt.target }}{% endif %}">{{ ilo_latest_receipt.time }}{% if ilo_latest_receipt.target %} | {{ ilo_latest_receipt.target }}{% endif %}</div>
                 </div>
                 <span class="status {{ ilo_latest_receipt.tone }}">{{ ilo_latest_receipt.result }}</span>
             </div>

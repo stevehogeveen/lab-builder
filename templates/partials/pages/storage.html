@@ -1,21 +1,65 @@
 <section class="panel">
-    <h2 class="text-2xl font-bold mb-4">Storage setup</h2>
+    <h2 class="text-2xl font-bold title-with-icon mb-4"><span class="page-icon icon-tone-{{ page_precheck_summary.tone if page_precheck_summary else 'progress' }}" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><ellipse cx="12" cy="6" rx="7" ry="3"/><path d="M5 6v6c0 1.7 3.1 3 7 3s7-1.3 7-3V6"/><path d="M5 12v6c0 1.7 3.1 3 7 3s7-1.3 7-3v-6"/></svg></span><span>Storage setup</span></h2>
+
+    {% set storage_review = storage_review or {} %}
+    {% set storage_target = storage_target or {} %}
+    {% set storage_credentials = storage_credentials or {} %}
+    {% set storage_plan_defaults = storage_plan_defaults or storage_plan or {} %}
+
+    {% set precheck_summary = page_precheck_summary %}
+    {% include "partials/components/precheck_summary.html" %}
+
+    {% set live_controller = storage_display_controller or {} %}
+    {% set live_drives = storage_display_drives or storage_planning_drives or [] %}
+    {% set live_hpe = storage_discovery.hpe_smart_storage if storage_discovery else {} %}
+    {% set live_standard = storage_discovery.standard_redfish_storage if storage_discovery else {} %}
+    {% set live_volumes = ((live_hpe.volumes or []) if live_hpe else []) + ((live_standard.volumes or []) if live_standard else []) %}
+    {% set setup_strip = {
+        "title": "Storage snapshot",
+        "subtitle": "Confirm the target, current inventory, and next action before planning destructive changes.",
+        "items": [
+            {
+                "label": "Target",
+                "value": storage_target.resolved if storage_target and storage_target.valid else "Needs target",
+                "hint": storage_credentials.username if storage_credentials and storage_credentials.valid else "Missing saved sign-in"
+            },
+            {
+                "label": "Controller",
+                "value": live_controller.model or live_controller.name or "Waiting for live read",
+                "hint": live_controller.firmware_version or "Firmware unknown"
+            },
+            {
+                "label": "Inventory",
+                "value": ((live_volumes|length)|string) ~ " volumes / " ~ ((live_drives|length)|string) ~ " drives",
+                "hint": "Eligible: " ~ ((live_drives|selectattr('eligible')|list|length)|string) if live_drives else "Read current storage first"
+            },
+            {
+                "label": "Next",
+                "value": storage_target.error if storage_target and not storage_target.valid else (storage_credentials.error if storage_credentials and not storage_credentials.valid else ("Build or review approved plan" if storage_plan_paths else "Read current storage"))
+            }
+        ]
+    } %}
+    {% include "partials/components/setup_strip.html" %}
 
     <div class="space-y-3">
-        {% set storage_review = storage_review or {} %}
-        {% set storage_target = storage_target or {} %}
-        {% set storage_credentials = storage_credentials or {} %}
-        {% set storage_plan_defaults = storage_plan_defaults or storage_plan or {} %}
         <div class="card identity-soft-card">
-            <div class="text-lg font-semibold mb-2">Readiness at a glance</div>
-            <div class="execution-story-grid">
+            <div class="flex items-center justify-between gap-3 flex-wrap mb-3">
+                <div>
+                    <div class="text-lg font-semibold">Readiness at a glance</div>
+                    <div class="text-sm text-slate-400">Each checkpoint stays visible without blowing the page into full-height tiles.</div>
+                </div>
+                <span class="status progress">{{ storage_page_readiness|length }} checks</span>
+            </div>
+            <div class="ops-row-list">
                 {% for item in storage_page_readiness %}
-                <div class="execution-story-card">
-                    <div class="flex items-center justify-between gap-3 mb-2">
-                        <div class="dashboard-kicker">{{ item.label }}</div>
+                <div class="ops-row-item">
+                    <div class="ops-row-copy">
+                        <div class="font-semibold">{{ item.label }}</div>
+                        <div class="text-sm text-slate-400">{{ item.summary }}</div>
+                    </div>
+                    <div class="ops-row-meta">
                         <span class="status {{ item.tone }}">{{ item.status }}</span>
                     </div>
-                    <div class="text-sm font-semibold">{{ item.summary }}</div>
                 </div>
                 {% endfor %}
             </div>
@@ -53,20 +97,24 @@
         <div class="card identity-hero-card">
             <div class="text-lg font-semibold mb-2">Hardware identity</div>
             <div class="text-sm text-slate-400 mb-4">Use this to confirm the storage plan is still pointed at the right machine and controller.</div>
-            <div class="dashboard-identity-banner">
-                <div>
-                    <div class="dashboard-kicker">Active hardware</div>
-                    <div class="dashboard-identity-title">{{ hardware_identity.title }}</div>
-                    <div class="text-sm text-slate-400 mt-2">{{ hardware_identity.subtitle }}</div>
+            <div class="ops-row-list">
+                <div class="ops-row-item">
+                    <div class="ops-row-copy">
+                        <div class="dashboard-kicker">Active hardware</div>
+                        <div class="dashboard-identity-title">{{ hardware_identity.title }}</div>
+                        <div class="text-sm text-slate-400 mt-1">{{ hardware_identity.subtitle }}</div>
+                    </div>
+                    <div class="ops-row-meta">
+                        <span class="status {{ 'ready' if hardware_identity.discovered else 'pending' }}">
+                            {{ 'Captured' if hardware_identity.discovered else 'Waiting for live read' }}
+                        </span>
+                    </div>
                 </div>
-                <span class="status {{ 'ready' if hardware_identity.discovered else 'pending' }}">
-                    {{ 'Captured' if hardware_identity.discovered else 'Waiting for live read' }}
-                </span>
             </div>
-            <div class="dashboard-identity-grid">
+            <div class="ops-strip-grid mt-3">
                 {% for field in hardware_identity.fields %}
                 {% if field.label in ["Server", "Serial", "Generation", "Current iLO IP", "Final iLO IP", "Controller", "Controller firmware"] %}
-                <div class="dashboard-identity-item">
+                <div class="ops-strip-card">
                     <div class="dashboard-kicker">{{ field.label }}</div>
                     <div class="font-semibold">{{ field.value }}</div>
                 </div>
@@ -78,11 +126,12 @@
         <div class="card identity-soft-card">
             <div class="text-lg font-semibold mb-2">Before and after storage</div>
             <div class="text-sm text-slate-400 mb-4">This keeps the current server view, the planned layout, and the verification path visible before you approve anything destructive.</div>
-            <div class="grid grid-cols-1 xl:grid-cols-3 gap-3">
+            <div class="ops-row-list">
                 {% for item in storage_change_summary %}
-                <div class="card card-compact execution-change-card">
-                    <div class="font-semibold mb-3">{{ item.name }}</div>
-                    <div class="space-y-3 text-sm">
+                <div class="ops-row-item">
+                    <div class="ops-row-copy">
+                        <div class="font-semibold mb-2">{{ item.name }}</div>
+                        <div class="grid grid-cols-1 md:grid-cols-3 gap-2 text-sm">
                         <div>
                             <div class="dashboard-kicker">Now</div>
                             <div>{{ item.before }}</div>
@@ -95,6 +144,7 @@
                             <div class="dashboard-kicker">App confirms</div>
                             <div>{{ item.verify }}</div>
                         </div>
+                    </div>
                     </div>
                 </div>
                 {% endfor %}
@@ -115,9 +165,13 @@
                     <span class="status {{ storage_latest_receipt.tone }}">{{ storage_latest_receipt.result }}</span>
                 </div>
                 {% if storage_latest_receipt.highlights %}
-                <div class="dashboard-receipt-grid">
+                <div class="ops-row-list mt-3">
                     {% for item in storage_latest_receipt.highlights %}
-                    <div class="result" style="margin-top: 0;">{{ item }}</div>
+                    <div class="ops-row-item">
+                        <div class="ops-row-copy">
+                            <div class="text-sm">{{ item }}</div>
+                        </div>
+                    </div>
                     {% endfor %}
                 </div>
                 {% endif %}
@@ -321,7 +375,13 @@
 
         {% if storage_export_paths %}
         <div class="card" id="build-storage-plan">
-            <div class="text-lg font-semibold mb-3">Build storage plan</div>
+            <div class="flex items-start justify-between gap-3 flex-wrap mb-3">
+                <div>
+                    <div class="text-lg font-semibold">Build storage plan</div>
+                    <div class="text-sm text-slate-400 mt-1">Keep the selections grouped by role so you can review the array layout without one oversized form wall.</div>
+                </div>
+                <span class="status progress">planner</span>
+            </div>
             <form hx-post="/plan-raid-layout" hx-target="#main-content" hx-swap="outerHTML" data-action-title="Building storage plan" data-action-start="Reviewing the latest discovery and building a proposed layout." data-action-complete="Storage plan ready for review.">
                 <input type="hidden" name="return_page" value="storage">
                 <input type="hidden" name="discovery_raw_path" value="{{ storage_export_paths.raw }}">
@@ -365,12 +425,38 @@
                     {% set selected_data_controller_path = storage_controller_choices[0].path %}
                 {% endif %}
                 {% if planning_drives %}
+                <div class="ops-row-list mb-4">
+                    <div class="ops-row-item">
+                        <div class="ops-row-copy">
+                            <div class="font-semibold">OS mirror</div>
+                            <div class="text-sm text-slate-400">Pick the controller and member drives for the boot mirror.</div>
+                        </div>
+                        <div class="ops-row-meta">
+                            <span class="status ready">{{ selected_os_raid_level or 'RAID1' }}</span>
+                        </div>
+                    </div>
+                    <div class="ops-row-item">
+                        <div class="ops-row-copy">
+                            <div class="font-semibold">Data array</div>
+                            <div class="text-sm text-slate-400">Pick the controller, RAID level, and data-side drives.</div>
+                        </div>
+                        <div class="ops-row-meta">
+                            <span class="status progress">{{ selected_data_raid_level or 'Unused' }}</span>
+                        </div>
+                    </div>
+                    <div class="ops-row-item">
+                        <div class="ops-row-copy">
+                            <div class="font-semibold">Hot spare</div>
+                            <div class="text-sm text-slate-400">Reserve a spare only when the selected controller and inventory make sense.</div>
+                        </div>
+                    </div>
+                </div>
                 {% if storage_controller_choices and storage_controller_choices|length == 1 %}
                 <input type="hidden" name="os_controller_path" value="{{ storage_controller_choices[0].path }}">
                 <input type="hidden" name="data_controller_path" value="{{ storage_controller_choices[0].path }}">
                 {% endif %}
-                <div class="grid grid-cols-1 xl:grid-cols-3 gap-4 mb-4">
-                    <div class="card">
+                <div class="space-y-4 mb-4">
+                    <div class="card card-compact">
                         <div class="text-sm font-semibold mb-2">OS mirror drives</div>
                         {% if storage_controller_choices and storage_controller_choices|length > 1 %}
                         <label class="block mb-3">
@@ -404,7 +490,7 @@
                             {% endfor %}
                         </div>
                     </div>
-                    <div class="card">
+                    <div class="card card-compact">
                         <div class="text-sm font-semibold mb-2">Data array drives</div>
                         {% if storage_controller_choices and storage_controller_choices|length > 1 %}
                         <label class="block mb-3">
@@ -438,7 +524,7 @@
                             {% endfor %}
                         </div>
                     </div>
-                    <div class="card">
+                    <div class="card card-compact">
                         <div class="text-sm font-semibold mb-2">Hot spare</div>
                         <label>
                             <div class="text-sm text-slate-300 mb-1">Spare bay</div>
@@ -456,7 +542,6 @@
                 </div>
                 {% endif %}
                 <div class="actions">
-                    <button class="btn action-button" type="submit" formaction="/probe-storage-capabilities" formmethod="post" data-action-title="Probing storage capabilities" data-action-start="Reading controller capabilities without making changes." data-action-complete="Storage capability probe complete." {% if not storage_target.valid or not storage_credentials.valid %}disabled{% endif %}>Probe controller capabilities</button>
                     <button class="btn btn-primary action-button" type="submit" {% if not storage_target.valid %}disabled{% endif %} style="{% if storage_target.valid %}border-color: color-mix(in srgb, var(--ok) 35%, var(--border));{% else %}opacity: 0.55; cursor: not-allowed;{% endif %}">Build storage plan</button>
                 </div>
                 {% if not storage_target.valid %}
@@ -655,73 +740,73 @@
                 </summary>
                 <div class="mt-4">
                     {% if storage_plan_paths %}
-                    <div class="result mb-4">Plan artifact: {{ storage_plan_paths.plan }}</div>
+                    <div class="result mb-4 truncate-wrap" title="{{ storage_plan_paths.plan }}">Plan artifact: <span class="artifact-path">{{ storage_plan_paths.plan }}</span></div>
                     {% endif %}
                     <div class="text-sm font-bold text-slate-300 mb-2">OS section: {{ storage_plan.os_raid1.label or storage_plan.planned_layout.os_raid1.raid or 'RAID 1' }}</div>
                     <div class="muted mb-2">{{ storage_plan.os_raid1.explanation }}</div>
                     <div class="mb-2"><strong>Target size:</strong> about {{ storage_plan.os_raid1.target_size_gib }} GiB</div>
                     {% if storage_plan.os_raid1.drives %}
-                    <table class="mb-4">
+                    <div class="table-shell mb-4"><table>
                         <thead><tr><th>Bay</th><th>Size GiB</th><th>Model</th><th>Serial</th><th>Status</th><th>Controller</th></tr></thead>
                         <tbody>
                         {% for drive in storage_plan.os_raid1.drives %}
                             <tr><td>{{ drive.bay }}</td><td>{{ drive.size_gib }}</td><td>{{ drive.model or drive.name }}</td><td>{{ drive.serial_number or "no serial" }}</td><td>{{ drive.status }}</td><td>{{ drive.controller_name or drive.controller_path }}</td></tr>
                         {% endfor %}
                         </tbody>
-                    </table>
+                    </table></div>
                     {% endif %}
 
                     <div class="text-sm font-bold text-slate-300 mb-2">Data section: {{ storage_plan.data_raid6.label or storage_plan.planned_layout.data_raid6.raid or 'RAID 6' }}</div>
                     <div class="muted mb-2">{{ storage_plan.data_raid6.explanation }}</div>
                     <div class="mb-2"><strong>Feasible:</strong> {{ "Yes" if storage_plan.data_raid6.feasible else "No" }}</div>
                     {% if storage_plan.data_raid6.drives %}
-                    <table class="mb-4">
+                    <div class="table-shell mb-4"><table>
                         <thead><tr><th>Bay</th><th>Size GiB</th><th>Model</th><th>Serial</th><th>Status</th><th>Controller</th></tr></thead>
                         <tbody>
                         {% for drive in storage_plan.data_raid6.drives %}
                             <tr><td>{{ drive.bay }}</td><td>{{ drive.size_gib }}</td><td>{{ drive.model or drive.name }}</td><td>{{ drive.serial_number or "no serial" }}</td><td>{{ drive.status }}</td><td>{{ drive.controller_name or drive.controller_path }}</td></tr>
                         {% endfor %}
                         </tbody>
-                    </table>
+                    </table></div>
                     {% endif %}
 
                     <div class="text-sm font-bold text-slate-300 mb-2">Hot spare</div>
                     {% if storage_plan.hot_spare.drive %}
                     <div class="muted mb-2">One compatible data-side spare is reserved for the future applied layout.</div>
-                    <table class="mb-4">
+                    <div class="table-shell mb-4"><table>
                         <thead><tr><th>Bay</th><th>Size GiB</th><th>Model</th><th>Serial</th><th>Status</th><th>Controller</th></tr></thead>
                         <tbody>
                             <tr><td>{{ storage_plan.hot_spare.drive.bay }}</td><td>{{ storage_plan.hot_spare.drive.size_gib }}</td><td>{{ storage_plan.hot_spare.drive.model or storage_plan.hot_spare.drive.name }}</td><td>{{ storage_plan.hot_spare.drive.serial_number or "no serial" }}</td><td>{{ storage_plan.hot_spare.drive.status }}</td><td>{{ storage_plan.hot_spare.drive.controller_name or storage_plan.hot_spare.drive.controller_path }}</td></tr>
                         </tbody>
-                    </table>
+                    </table></div>
                     {% else %}
                     <div class="muted mb-4">No dedicated hot spare is selected for this plan.</div>
                     {% endif %}
 
                     <div class="text-sm font-bold text-slate-300 mb-2">Existing logical volumes</div>
                     {% if storage_plan.existing_logical_volumes %}
-                    <table class="mb-4">
+                    <div class="table-shell mb-4"><table>
                         <thead><tr><th>Name</th><th>RAID</th><th>Size GiB</th><th>Source</th></tr></thead>
                         <tbody>
                         {% for volume in storage_plan.existing_logical_volumes %}
                             <tr><td>{{ volume.name or volume.id }}</td><td>{{ volume.raid_type }}</td><td>{{ volume.capacity_gib or "" }}</td><td>{{ volume.source }}</td></tr>
                         {% endfor %}
                         </tbody>
-                    </table>
+                    </table></div>
                     {% else %}
                     <div class="muted mb-4">No existing logical volumes were detected.</div>
                     {% endif %}
 
                     <div class="text-sm font-bold text-slate-300 mb-2">Drives intentionally excluded</div>
                     {% if storage_plan.excluded_drives %}
-                    <table>
+                    <div class="table-shell"><table>
                         <thead><tr><th>Bay</th><th>Model</th><th>Size GiB</th><th>Reason</th></tr></thead>
                         <tbody>
                         {% for drive in storage_plan.excluded_drives %}
                             <tr><td>{{ drive.bay }}</td><td>{{ drive.model or drive.name }}</td><td>{{ drive.size_gib }}</td><td>{{ drive.exclude_reason }}</td></tr>
                         {% endfor %}
                         </tbody>
-                    </table>
+                    </table></div>
                     {% else %}
                     <div class="muted">No eligible drives were excluded.</div>
                     {% endif %}
@@ -919,11 +1004,11 @@
                 <span class="status progress">files</span>
             </summary>
             <div class="mt-4">
-                <div class="result mb-4">
-                    Export folder: {{ storage_export_paths.directory }}<br>
-                    Summary file: {{ storage_export_paths.summary }}<br>
-                    Raw file: {{ storage_export_paths.raw }}
-                    {% if storage_plan_paths %}<br>Plan file: {{ storage_plan_paths.plan }}{% endif %}
+                <div class="result mb-4 truncate-wrap">
+                    Export folder: <span class="artifact-path" title="{{ storage_export_paths.directory }}">{{ storage_export_paths.directory }}</span><br>
+                    Summary file: <span class="artifact-path" title="{{ storage_export_paths.summary }}">{{ storage_export_paths.summary }}</span><br>
+                    Raw file: <span class="artifact-path" title="{{ storage_export_paths.raw }}">{{ storage_export_paths.raw }}</span>
+                    {% if storage_plan_paths %}<br>Plan file: <span class="artifact-path" title="{{ storage_plan_paths.plan }}">{{ storage_plan_paths.plan }}</span>{% endif %}
                 </div>
                 <div class="actions">
                     {% if storage_plan_paths %}

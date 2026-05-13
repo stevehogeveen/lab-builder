@@ -2,24 +2,24 @@
     <section class="panel">
         <div class="flex flex-wrap items-start justify-between gap-4 mb-4">
             <div>
-                <h2 class="text-2xl font-bold">Run History</h2>
+                <h2 class="text-2xl font-bold title-with-icon"><span class="page-icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 8v5l3 2"/><circle cx="12" cy="12" r="8"/><path d="M12 4v2"/><path d="M12 18v2"/></svg></span><span>Run History</span></h2>
                 <div class="text-sm text-slate-400">A friendlier activity feed first, with deeper execution detail still available when you need it.</div>
             </div>
             <a class="btn btn-primary" href="/configs">Open Reports</a>
         </div>
 
         <div class="grid grid-cols-1 md:grid-cols-3 gap-3">
-            <div class="card">
+            <div class="card identity-soft-card">
                 <div class="text-xs font-bold uppercase text-slate-400 mb-1">Recent entries</div>
                 <div class="text-lg font-semibold">{{ history|length }}</div>
                 <div class="text-sm text-slate-400 mt-1">Latest 25 items for this kit.</div>
             </div>
-            <div class="card">
+            <div class="card identity-soft-card">
                 <div class="text-xs font-bold uppercase text-slate-400 mb-1">Latest event</div>
                 <div class="text-lg font-semibold">{{ activity_feed[0].title if activity_feed else 'Nothing yet' }}</div>
                 <div class="text-sm text-slate-400 mt-1">{{ activity_feed[0].summary if activity_feed else 'Run something to start building history.' }}</div>
             </div>
-            <div class="card">
+            <div class="card identity-soft-card">
                 <div class="text-xs font-bold uppercase text-slate-400 mb-1">Next action</div>
                 <div class="text-lg font-semibold">Review, reopen, or export</div>
                 <div class="text-sm text-slate-400 mt-1">Use the cards below for a quick summary, then expand only when you need the full detail.</div>
@@ -32,13 +32,13 @@
         {% if activity_feed %}
         <div class="space-y-3">
             {% for item in activity_feed %}
-            <div class="card">
+            <div class="card identity-soft-card">
                 <div class="flex items-center justify-between gap-3">
-                    <div class="font-semibold">{{ item.title }}</div>
+                    <div class="font-semibold truncate-wrap" title="{{ item.title }}">{{ item.title }}</div>
                     <span class="status {{ item.tone }}">{{ item.label }}</span>
                 </div>
-                <div class="text-sm mt-2">{{ item.summary }}</div>
-                <div class="text-xs text-slate-400 mt-2">{{ item.time }}{% if item.target %} | {{ item.target }}{% endif %}</div>
+                <div class="text-sm mt-2 truncate-wrap" title="{{ item.summary }}">{{ item.summary }}</div>
+                <div class="text-xs text-slate-400 mt-2 truncate-wrap" title="{{ item.time }}{% if item.target %} | {{ item.target }}{% endif %}">{{ item.time }}{% if item.target %} | {{ item.target }}{% endif %}</div>
                 {% if item.details %}
                 <details class="mt-3">
                     <summary class="summary-row">
@@ -47,7 +47,7 @@
                     </summary>
                     <div class="mt-3 space-y-2 text-sm">
                         {% for detail in item.details %}
-                        <div class="result" style="margin-top: 0;">{{ detail }}</div>
+                        <div class="ops-strip-card" style="margin-top: 0;">{{ detail }}</div>
                         {% endfor %}
                     </div>
                 </details>
@@ -65,19 +65,19 @@
         {% if report_center.bundles %}
         <div class="space-y-3">
             {% for bundle in report_center.bundles %}
-            <div class="card">
+            <div class="card identity-soft-card">
                 <div class="grid grid-cols-1 xl:grid-cols-[minmax(0,1.3fr)_minmax(0,0.9fr)_auto] gap-3 items-start">
                     <div>
                         <div class="flex items-center gap-3 flex-wrap">
-                            <div class="font-semibold">{{ bundle.name }}</div>
+                            <div class="font-semibold truncate-wrap" title="{{ bundle.name }}">{{ bundle.name }}</div>
                             <span class="status {{ bundle.tone }}">{{ bundle.result }}</span>
                         </div>
-                        <div class="text-sm text-slate-400 mt-1">{{ bundle.time }}{% if bundle.target %} | {{ bundle.target }}{% endif %}</div>
-                        <div class="text-sm mt-2">{{ bundle.summary }}</div>
+                        <div class="text-sm text-slate-400 mt-1 truncate-wrap" title="{{ bundle.time }}{% if bundle.target %} | {{ bundle.target }}{% endif %}">{{ bundle.time }}{% if bundle.target %} | {{ bundle.target }}{% endif %}</div>
+                        <div class="text-sm mt-2 truncate-wrap" title="{{ bundle.summary }}">{{ bundle.summary }}</div>
                     </div>
                     <div class="text-sm space-y-1">
-                        <div><strong>Workflow:</strong> {{ bundle.scope }}</div>
-                        <div><strong>Target:</strong> {{ bundle.target }}</div>
+                        <div class="truncate-wrap" title="{{ bundle.scope }}"><strong>Workflow:</strong> {{ bundle.scope }}</div>
+                        <div class="truncate-wrap" title="{{ bundle.target }}"><strong>Target:</strong> {{ bundle.target }}</div>
                         <div><strong>Kit:</strong> {{ current_kit }}</div>
                     </div>
                     <div class="actions justify-end">
@@ -104,13 +104,13 @@
         {% if history_display %}
         <div class="space-y-3">
             {% for item in history_display %}
-            <details class="card">
+            <details class="card identity-soft-card">
                 <summary class="summary-row">
-                    <span class="font-semibold">{{ item.get('display_title', item.get('scope', 'Run')) }}</span>
+                    <span class="font-semibold truncate-single" title="{{ item.get('display_title', item.get('scope', 'Run')) }}">{{ item.get('display_title', item.get('scope', 'Run')) }}</span>
                     <span class="status {{ item.get('display_tone', 'progress') }}">{{ item.get('display_status', item.get('status', 'Recorded')) }}</span>
                 </summary>
                 <div class="mt-4 text-sm text-slate-300 space-y-3">
-                    <div class="result" style="margin-top: 0;">{{ item.get('display_summary') or item.get('summary') or 'Run recorded.' }}</div>
+                    <div class="ops-strip-card truncate-wrap" style="margin-top: 0;" title="{{ item.get('display_summary') or item.get('summary') or 'Run recorded.' }}">{{ item.get('display_summary') or item.get('summary') or 'Run recorded.' }}</div>
                     <div class="grid grid-cols-1 md:grid-cols-3 gap-3 text-sm">
                         <div><span class="text-slate-400">When:</span> {{ item.get('time', '') or 'Not recorded' }}</div>
                         <div><span class="text-slate-400">Target:</span> {{ item.get('display_target', '') or 'Not set' }}</div>
@@ -119,7 +119,7 @@
                     {% if item.get('display_highlights') %}
                     <div class="grid grid-cols-1 md:grid-cols-2 gap-2 text-sm">
                         {% for detail in item.get('display_highlights', []) %}
-                        <div class="result" style="margin-top: 0;">{{ detail }}</div>
+                        <div class="ops-strip-card" style="margin-top: 0;">{{ detail }}</div>
                         {% endfor %}
                     </div>
                     {% endif %}
@@ -140,7 +140,7 @@
                         </form>
                         {% endif %}
                     </div>
-                    <div><span class="text-slate-400">Full story:</span> {{ item.get('current_stage', '') or item.get('event', '') or 'Not recorded' }}</div>
+                    <div class="truncate-wrap" title="{{ item.get('current_stage', '') or item.get('event', '') or 'Not recorded' }}"><span class="text-slate-400">Full story:</span> {{ item.get('current_stage', '') or item.get('event', '') or 'Not recorded' }}</div>
                     <div><span class="text-slate-400">Completed:</span> {{ item.get('completed_steps', 0) }} / {{ item.get('total_steps', 0) }}</div>
                     {% if item.get('config_summary') %}
                     <details>
@@ -148,7 +148,7 @@
                             <span class="text-sm font-bold text-slate-300">Config used</span>
                             <span class="status progress">details</span>
                         </summary>
-                        <div class="card mt-3">
+                        <div class="card card-compact identity-soft-card mt-3">
                             <div class="space-y-1">
                                 {% for key, value in item.get('config_summary', {}).items() %}
                                 {% if value is sameas false or value %}
@@ -179,7 +179,7 @@
                             <span class="text-sm font-bold text-slate-300">Applied results</span>
                             <span class="status progress">details</span>
                         </summary>
-                        <div class="card mt-3">
+                        <div class="card card-compact identity-soft-card mt-3">
                             <div class="space-y-1">
                                 {% if cfgsum.get('dns_apply_status') %}
                                 <div><span class="text-slate-400">DNS:</span> {{ cfgsum.get('dns_apply_status') }}{% if cfgsum.get('dns_applied_values') %} | {{ cfgsum.get('dns_applied_values')|join(', ') }}{% endif %}</div>

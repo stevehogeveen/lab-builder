@@ -71,7 +71,6 @@ from app.core.registry import load_modules
 from app.core.stage_registry import StageRegistry
 from app.stages.ilo.adapter import HpeIloRedfishAdapter
 from app.modules.ilo.routes import (
-    discover_ilo_hosts_handler,
     ilo_page_handler,
     save_ilo_settings_handler,
 )
@@ -159,6 +158,7 @@ from app.stages.esxi.runtime import (
 )
 from app.stages.ilo.plugin import create_ilo_stage
 from app.stages.esxi.plugin import create_esxi_stage
+from app.stages.netapp.plugin import create_netapp_stage
 from app.stages.storage.plugin import create_storage_stage
 from app.stages.windows.plugin import create_windows_stage
 from app.stages.storage.runtime import (
@@ -477,12 +477,12 @@ DEFAULT_IP_OFFSETS = {
     "windows": 20,
     "qnap": 30,
     "iosafe": 31,
-    "netapp": 40,
+    "netapp": 45,
 }
 PAGE_META = {
     "dashboard": {
         "title": "Lab Builder Dashboard",
-        "subtitle": "Per-kit deployment dashboard for offline builds.",
+        "subtitle": "Generic readiness cockpit for the active deployment workspace.",
     },
     "global_settings": {
         "title": "Global Settings",
@@ -510,19 +510,19 @@ PAGE_META = {
     },
     "netapp": {
         "title": "NetApp",
-        "subtitle": "NetApp module scaffold and policy workflow.",
+        "subtitle": "Bootstrap, discover, validate, plan, and safely apply ONTAP setup.",
     },
     "cisco": {
         "title": "Cisco",
-        "subtitle": "Cisco module scaffold and policy workflow.",
+        "subtitle": "Cisco switch setup workspace.",
     },
     "configuration": {
         "title": "Global Settings",
         "subtitle": "Shared defaults for network, inclusion, and kit-wide behavior.",
     },
     "configs": {
-        "title": "Reports & Technical Details",
-        "subtitle": "Open logs, reports, raw output, and saved technical details in one place.",
+        "title": "Reports",
+        "subtitle": "Open logs, reports, raw output, and saved troubleshooting details in one place.",
     },
     "storage": {
         "title": "Storage setup",
@@ -545,6 +545,7 @@ def build_stage_registry(cfg: dict[str, Any] | None = None) -> StageRegistry:
         create_ilo_stage(),
         create_storage_stage(),
         create_esxi_stage(),
+        create_netapp_stage(),
         create_windows_stage(),
     ])
     # Touch the plugins through their enabled hooks so tests can validate registry wiring
@@ -2925,18 +2926,6 @@ def build_validation_checks(cfg: dict[str, Any], workflow: str) -> list[dict[str
                     href="/ilo",
                 )
             )
-        if workflow == "esxi" and cfg.get("included", {}).get("storage"):
-            storage_review = build_storage_review_context(cfg)
-            checks.append(
-                validation_check(
-                    "Storage readiness",
-                    storage_review.get("approved") and not storage_review.get("stale"),
-                    "Ready" if storage_review.get("approved") and not storage_review.get("stale") else "Review storage first if ESXi depends on the approved storage layout.",
-                    why="If ESXi depends on storage, the approved storage plan must still be current.",
-                    fix="Open Storage / RAID and approve the latest storage plan.",
-                    href="/storage#storage-review-start",
-                )
-            )
         if workflow == "esxi":
             esxi_cfg = cfg.get("esxi", {}) or {}
             checks.append(
@@ -3003,6 +2992,26 @@ def build_validation_checks(cfg: dict[str, Any], workflow: str) -> list[dict[str
             protocol = str(netapp_cfg.get("storage_protocol") or "nfs").strip().lower()
             checks.append(
                 validation_check(
+                    "Bootstrap complete",
+                    bool(netapp_cfg.get("bootstrap_complete")),
+                    "Ready" if netapp_cfg.get("bootstrap_complete") else "Complete the NetApp bootstrap checklist first.",
+                    why="The safe-apply path assumes the cluster management endpoint is already online.",
+                    fix="Open the NetApp page, finish bootstrap, and mark it complete.",
+                    href="/modules/netapp",
+                )
+            )
+            checks.append(
+                validation_check(
+                    "ONTAP API target",
+                    bool(str(netapp_cfg.get("host") or cfg.get("ip_plan", {}).get("netapp") or "").strip()),
+                    "Ready" if str(netapp_cfg.get("host") or cfg.get("ip_plan", {}).get("netapp") or "").strip() else "NetApp target host is missing.",
+                    why="The NetApp workflow needs the cluster management API endpoint before it can connect.",
+                    fix="Open the NetApp page and save the ONTAP API / Cluster Management IP.",
+                    href="/modules/netapp",
+                )
+            )
+            checks.append(
+                validation_check(
                     "Saved credentials",
                     bool(str(netapp_cfg.get("username") or "").strip() and str(netapp_cfg.get("password") or "")),
                     "Ready" if (str(netapp_cfg.get("username") or "").strip() and str(netapp_cfg.get("password") or "")) else "NetApp username or password is missing.",
@@ -3030,6 +3039,209 @@ def checks_status(checks: list[dict[str, Any]]) -> tuple[str, str, str]:
     if checks:
         return "complete", "Ready", "ready"
     return "not_started", "Not started", "pending"
+
+
+def summarize_validation_checks(checks: list[dict[str, Any]]) -> dict[str, Any]:
+    total = len(checks)
+    ready = sum(1 for item in checks if item.get("ok"))
+    blockers = sum(1 for item in checks if not item.get("ok"))
+    next_blocker = next((item for item in checks if not item.get("ok")), None)
+    tone = "pending" if blockers else ("ready" if total else "progress")
+    label = "Needs attention" if blockers else ("Ready" if total else "Not started")
+    return {
+        "total": total,
+        "ready": ready,
+        "blockers": blockers,
+        "next_blocker": next_blocker,
+        "tone": tone,
+        "label": label,
+    }
+
+
+def build_workflow_precheck_card(
+    workflow_key: str,
+    cfg: dict[str, Any],
+    workflow_contexts: dict[str, dict[str, Any]],
+) -> dict[str, Any]:
+    context = workflow_contexts.get(workflow_key, {}) or {}
+    checks = list(context.get("checks") or build_validation_checks(cfg, workflow_key))
+    summary = summarize_validation_checks(checks)
+    target = str(context.get("target") or "Not set")
+    review_href = str(context.get("review_href") or f"/{workflow_key}")
+    return {
+        "key": workflow_key,
+        "name": str(context.get("name") or workflow_key.replace("_", " ").title()),
+        "label": summary["label"],
+        "tone": summary["tone"],
+        "target": target,
+        "href": review_href,
+        "checks_ready": summary["ready"],
+        "total_checks": summary["total"],
+        "blockers": summary["blockers"],
+        "state_label": str(context.get("state_label") or summary["label"]),
+        "next_blocker": summary["next_blocker"],
+        "items": [
+            {
+                "label": str(item.get("label") or ""),
+                "status": "Ready" if item.get("ok") else "Blocked",
+                "tone": "ready" if item.get("ok") else "pending",
+                "details": str(item.get("details") or ""),
+                "fix": str(item.get("fix") or ""),
+                "href": str(item.get("href") or review_href),
+            }
+            for item in checks
+        ],
+    }
+
+
+def build_setup_precheck_summary(
+    cfg: dict[str, Any],
+    workflow_contexts: dict[str, dict[str, Any]],
+    recommended_next_step: dict[str, str],
+) -> dict[str, Any]:
+    included = cfg.get("included", {}) or {}
+    workflow_keys = ["ilo"]
+    if included.get("storage"):
+        workflow_keys.append("storage")
+    for key in ["esxi", "windows", "qnap", "netapp"]:
+        if included.get(key):
+            workflow_keys.append(key)
+    cards = [build_workflow_precheck_card(key, cfg, workflow_contexts) for key in workflow_keys]
+    total_workflows = len(cards)
+    ready_workflows = sum(1 for item in cards if item.get("blockers") == 0 and item.get("total_checks"))
+    total_blockers = sum(int(item.get("blockers") or 0) for item in cards)
+    next_blocker = next((item.get("next_blocker") for item in cards if item.get("next_blocker")), None)
+    tone = "pending" if total_blockers else "ready"
+    label = "Needs attention" if total_blockers else "Ready"
+    return {
+        "title": "Operations summary",
+        "subtitle": "The same pre-check state should stay visible while you move through setup, preview, and final run review.",
+        "tone": tone,
+        "label": label,
+        "ready_workflows": ready_workflows,
+        "total_workflows": total_workflows,
+        "total_blockers": total_blockers,
+        "next_step": recommended_next_step,
+        "next_blocker": next_blocker,
+        "items": cards,
+    }
+
+
+def build_dashboard_overview(
+    cfg: dict[str, Any],
+    setup_precheck_summary: dict[str, Any],
+    workflow_contexts: dict[str, dict[str, Any]],
+    dashboard_job_status: dict[str, Any],
+    job: dict[str, Any],
+) -> dict[str, Any]:
+    cards = list(setup_precheck_summary.get("items") or [])
+    total_checks = sum(int(item.get("total_checks") or 0) for item in cards)
+    ready_checks = sum(int(item.get("checks_ready") or 0) for item in cards)
+    total_blockers = int(setup_precheck_summary.get("total_blockers") or 0)
+    readiness_percent = int(round((ready_checks / total_checks) * 100)) if total_checks else 0
+    ready_workflows = int(setup_precheck_summary.get("ready_workflows") or 0)
+    total_workflows = int(setup_precheck_summary.get("total_workflows") or len(cards))
+    running = str(job.get("status") or "").lower() not in {"", "idle", "complete", "completed", "preview complete"}
+    failed_runs = list(dashboard_job_status.get("failed") or [])
+    passed_runs = list(dashboard_job_status.get("passed") or [])
+
+    if running:
+        headline = "Run in progress"
+        summary = str(job.get("current_stage") or "A run is active. Watch Run Center for live status.")
+        tone = "progress"
+    elif total_blockers:
+        headline = "Needs attention"
+        summary = f"{total_blockers} blocker{'s' if total_blockers != 1 else ''} need review before this kit is ready."
+        tone = "pending"
+    elif total_workflows:
+        headline = "Ready for review"
+        summary = "Included setup modules are ready for Run Center review."
+        tone = "ready"
+    else:
+        headline = "No included setup modules"
+        summary = "Choose the modules for this kit in Global Settings."
+        tone = "muted"
+
+    if failed_runs:
+        latest_result = {
+            "label": f"{failed_runs[0].get('name', 'Stage')} failed",
+            "summary": failed_runs[0].get("time") or "Review the latest failed run.",
+            "tone": "pending",
+        }
+    elif passed_runs:
+        latest_result = {
+            "label": f"{passed_runs[0].get('name', 'Stage')} passed",
+            "summary": passed_runs[0].get("time") or "Latest run completed.",
+            "tone": "ready",
+        }
+    else:
+        latest_result = {
+            "label": "No completed runs yet",
+            "summary": "Run results will appear here after preview or execution.",
+            "tone": "progress",
+        }
+
+    module_rows = []
+    for item in cards:
+        blockers = int(item.get("blockers") or 0)
+        module_rows.append(
+            {
+                "name": item.get("name") or "Module",
+                "label": item.get("state_label") or item.get("label") or "Review",
+                "tone": item.get("tone") or "progress",
+                "href": item.get("href") or "/dashboard",
+                "checks_ready": int(item.get("checks_ready") or 0),
+                "total_checks": int(item.get("total_checks") or 0),
+                "blockers": blockers,
+                "summary": (
+                    item.get("next_blocker", {}).get("label")
+                    if blockers and isinstance(item.get("next_blocker"), dict)
+                    else workflow_contexts.get(str(item.get("key") or ""), {}).get("planned_summary", "Review saved setup.")
+                ),
+            }
+        )
+
+    return {
+        "headline": headline,
+        "summary": summary,
+        "tone": tone,
+        "readiness_percent": readiness_percent,
+        "ready_checks": ready_checks,
+        "total_checks": total_checks,
+        "ready_workflows": ready_workflows,
+        "total_workflows": total_workflows,
+        "total_blockers": total_blockers,
+        "next_step": setup_precheck_summary.get("next_step") or {},
+        "next_blocker": setup_precheck_summary.get("next_blocker"),
+        "latest_result": latest_result,
+        "module_rows": module_rows,
+        "workspace_label": cfg.get("site", {}).get("name", "") or "Current kit",
+    }
+
+
+def build_page_precheck_summary(
+    active_page: str,
+    cfg: dict[str, Any],
+    workflow_contexts: dict[str, dict[str, Any]],
+) -> dict[str, Any] | None:
+    workflow_map = {
+        "ilo": "ilo",
+        "storage": "storage",
+        "esxi": "esxi",
+        "windows": "windows",
+        "qnap": "qnap",
+        "netapp": "netapp",
+    }
+    workflow_key = workflow_map.get(active_page)
+    if not workflow_key:
+        return None
+    card = build_workflow_precheck_card(workflow_key, cfg, workflow_contexts)
+    card["title"] = f"{card['name']} pre-check"
+    card["subtitle"] = "Keep the target, blockers, and next fix visible while you work on this setup page."
+    card["summary_value_label"] = "State"
+    card["summary_value"] = card.get("state_label") or card.get("label") or "Review"
+    card["show_target"] = False
+    return card
 
 
 def build_workflow_contexts(cfg: dict[str, Any], job: dict[str, Any], history: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
@@ -3081,10 +3293,6 @@ def build_workflow_contexts(cfg: dict[str, Any], job: dict[str, Any], history: l
         if str(job.get("scope") or "") == key and str(job.get("status") or "") == "Running":
             state, label, tone = "running", workflow_state_ui("running")["label"], workflow_state_ui("running")["tone"]
         latest = latest_history_entry_for_scope(history, [key])
-        if latest and "Fail" in str(latest.get("status", "")):
-            state, label, tone = "failed", workflow_state_ui("failed")["label"], workflow_state_ui("failed")["tone"]
-        elif latest and "Complete" in str(latest.get("status", "")) and state not in {"failed", "running"}:
-            state, label, tone = "complete", workflow_state_ui("complete")["label"], workflow_state_ui("complete")["tone"]
         contexts[key] = {
             "key": key,
             "name": name,
@@ -3111,7 +3319,7 @@ def build_recommended_next_step(cfg: dict[str, Any], workflow_contexts: dict[str
         return {"title": "Finish storage review", "summary": "Go to Storage / RAID, confirm the current server, and approve the exact storage plan before the final run.", "href": "/storage"}
     for key in ["esxi", "windows", "qnap", "netapp"]:
         if cfg.get("included", {}).get(key) and workflow_contexts[key]["state"] in {"not_started", "failed"}:
-            return {"title": f"Review {workflow_contexts[key]['name']} setup", "summary": f"Open the {workflow_contexts[key]['name']} page and finish the saved setup values.", "href": workflow_contexts[key]["review_href"]}
+            return {"title": f"Open {workflow_contexts[key]['name']} page", "summary": f"Open the {workflow_contexts[key]['name']} page and finish the saved setup values.", "href": workflow_contexts[key]["review_href"]}
     return {"title": "Review the run", "summary": "Open Run Center to review the included stages, checks, and warnings before starting.", "href": "/execution"}
 
 
@@ -3365,7 +3573,7 @@ def build_execution_validation_overview(cfg: dict[str, Any], scope: str, stages:
         key = stage.get("key", "")
         if key == "storage":
             checks.extend(build_validation_checks(cfg, "storage"))
-        elif key in {"ilo", "esxi", "windows", "qnap"}:
+        elif key in {"ilo", "esxi", "windows", "qnap", "netapp"}:
             checks.extend(build_validation_checks(cfg, key))
     deduped: list[dict[str, Any]] = []
     seen = set()
@@ -3443,6 +3651,19 @@ def execution_mode_for_scope(scope: str) -> dict[str, str]:
             "run_note": "This stage currently performs validation only and does not deploy a VM.",
             "live_intro": "Live progress below is tracking a safe Windows stage execution.",
         }
+    if scope == "netapp":
+        return {
+            "key": "safe_apply",
+            "label": "Safe execution",
+            "badge": "Safe apply",
+            "summary": "This path runs the currently supported NetApp API create/update actions and blocks the rest.",
+            "what_this_does": "Applies supported NetApp actions such as SVM, LIF, subnet, and protocol service setup.",
+            "real_changes": "Yes",
+            "next_step": "Use this after discovery and review confirm the current NetApp state.",
+            "run_button": "Start NetApp safe apply",
+            "run_note": "This is a live NetApp path for supported actions only. Manual and blocked steps are logged but not executed.",
+            "live_intro": "Live progress below is tracking a NetApp safe-apply run.",
+        }
     return {
         "key": "preview",
         "label": "Preview / safety mode",
@@ -3476,13 +3697,13 @@ def build_execution_launch_options(cfg: dict[str, Any], scope: str) -> dict[str,
         }
     if scope == "included":
         selected = run_center_scope_keys(scope, cfg)
-        supported_real = [item for item in selected if item in {"ilo", "storage", "esxi"}]
-        unsupported_real = [item for item in selected if item not in {"ilo", "storage", "esxi"}]
+        supported_real = [item for item in selected if item in {"ilo", "storage", "esxi", "netapp"}]
+        unsupported_real = [item for item in selected if item not in {"ilo", "storage", "esxi", "netapp"}]
         if unsupported_real:
             return {"preview": preview_option, "real": None}
         if len(supported_real) > 1:
             real_scope = "multi__" + "__".join(supported_real)
-            multi_stage_summary = "Runs the included iLO, storage, and ESXi stages in order."
+            multi_stage_summary = "Runs the included live stages in order."
             if "storage" in supported_real:
                 multi_stage_summary += " The approved storage plan will also be applied."
             multi_stage_summary += " Later stages use the final iLO IP after the iLO stage finishes."
@@ -3521,6 +3742,15 @@ def build_execution_launch_options(cfg: dict[str, Any], scope: str) -> dict[str,
                     "summary": "Builds the custom ESXi installer ISO, mounts it through virtual media, sets one-time boot, and starts the real ESXi boot sequence.",
                 },
             }
+        if supported_real == ["netapp"]:
+            return {
+                "preview": preview_option,
+                "real": {
+                    "scope": "netapp",
+                    "label": "Run safe apply",
+                    "summary": "Runs the supported NetApp API actions and logs blocked/manual steps for anything not yet automated.",
+                },
+            }
     if scope == "esxi":
         return {
             "preview": preview_option,
@@ -3539,6 +3769,15 @@ def build_execution_launch_options(cfg: dict[str, Any], scope: str) -> dict[str,
                 "summary": "Validates uploaded OVA/OVF source and saved install plan, then records the stage run without deploying a VM.",
             },
         }
+    if scope == "netapp":
+        return {
+            "preview": preview_option,
+            "real": {
+                "scope": "netapp",
+                "label": "Run safe apply",
+                "summary": "Runs the supported NetApp API actions and logs blocked/manual steps for anything not yet automated.",
+            },
+        }
     if scope == "storage":
         return {
             "preview": preview_option,
@@ -3550,13 +3789,13 @@ def build_execution_launch_options(cfg: dict[str, Any], scope: str) -> dict[str,
         }
     if scope.startswith("multi__"):
         selected = run_center_scope_keys(scope, cfg)
-        if selected and all(item in {"ilo", "storage", "esxi"} for item in selected):
+        if selected and all(item in {"ilo", "storage", "esxi", "netapp"} for item in selected):
             return {
                 "preview": preview_option,
                 "real": {
                     "scope": scope,
                     "label": "Run selected for real",
-                    "summary": "Runs the selected iLO, storage, and ESXi stages in order. Later stages use the final iLO IP after the iLO stage finishes.",
+                    "summary": "Runs the selected live stages in order. Later stages use the final iLO IP after the iLO stage finishes.",
                 },
             }
     return {"preview": preview_option, "real": None}
@@ -8718,7 +8957,7 @@ def build_execution_review(cfg: dict, scope: str):
         "netapp": {
             "name": "NetApp",
             "target": cfg["netapp"].get("host", "") or cfg.get("ip_plan", {}).get("netapp", "") or "Not set",
-            "summary": "Run read-only ONTAP discovery and dry-run validation warnings against desired protocol settings.",
+            "summary": "Run supported NetApp safe-apply actions and log anything still blocked or manual.",
             "review_href": "/modules/netapp",
         },
         "storage": {
@@ -8977,7 +9216,7 @@ def build_execution_review(cfg: dict, scope: str):
         if key == "qnap":
             return ["Global Settings", "Saved QNAP host details"]
         if key == "netapp":
-            return ["Global Settings", "Saved NetApp host and credentials", "Read-only ONTAP discovery"]
+            return ["NetApp bootstrap complete", "Saved NetApp host and credentials", "Current ONTAP discovery"]
         return ["Saved workspace settings"]
 
     def stage_restart_expected(key: str) -> bool:
@@ -9053,8 +9292,8 @@ def build_execution_review(cfg: dict, scope: str):
             return {
                 "name": "NetApp",
                 "before": f"Current target {cfg['netapp'].get('host') or cfg.get('ip_plan', {}).get('netapp') or 'Not set'}",
-                "after": f"Run read-only discovery and dry-run validation for protocol {protocol}",
-                "verify": "Review discovery warnings and suggestions before enabling any write phase.",
+                "after": f"Run supported NetApp safe-apply actions for protocol {protocol}",
+                "verify": "Review execution logs for blocked/manual actions and verify ONTAP state after the run.",
             }
         return {
             "name": components[key]["name"],
@@ -9556,7 +9795,7 @@ def get_steps_for_scope(cfg: dict, scope: str):
         if included.get("cisco_switch"):
             steps.append("Preview Cisco switch actions")
         if included.get("netapp"):
-            steps.append("Preview NetApp discovery and validation actions")
+            steps.append("Run NetApp safe-apply actions")
         steps.append("Preview complete - ready for real included-kit execution")
         return steps
     if scope.startswith("multi__"):
@@ -9570,7 +9809,7 @@ def get_steps_for_scope(cfg: dict, scope: str):
                     "qnap": "Preview QNAP actions",
                     "iosafe": "Preview ioSafe actions",
                     "cisco_switch": "Preview Cisco switch actions",
-                    "netapp": "Preview NetApp discovery and validation actions",
+                    "netapp": "Run NetApp safe-apply actions",
                 }.get(key, f"Preview {key} actions")
             )
             steps.append(label)
@@ -9801,8 +10040,8 @@ def execute_real_job_in_background(cfg: dict, scope: str):
             selected = selected_tokens
             if not selected:
                 raise RuntimeError("No stages were selected for the real run.")
-            if not all(item in {"ilo", "storage", "esxi"} for item in selected):
-                raise RuntimeError("Real selected-stage execution currently supports iLO, storage, and ESXi only.")
+            if not all(item in {"ilo", "storage", "esxi", "netapp"} for item in selected):
+                raise RuntimeError("Real selected-stage execution currently supports iLO, storage, ESXi, and NetApp only.")
             storage_was_handled_by_ilo = False
             if "ilo" in selected:
                 mark_stage("ilo", "running")
@@ -9863,8 +10102,17 @@ def execute_real_job_in_background(cfg: dict, scope: str):
                     mark_stage("esxi", "failed")
                     return
                 mark_stage("esxi", "completed")
+            if "netapp" in selected:
+                mark_stage("netapp", "running")
+                cfg = load_kit_config(kit_name)
+                _execute_netapp_stage(cfg, kit_name)
+                finished_job = load_job(kit_name)
+                if finished_job.get("status") == "Failed":
+                    mark_stage("netapp", "failed")
+                    return
+                mark_stage("netapp", "completed")
             return
-        if scope in {"ilo", "storage", "esxi", "windows"}:
+        if scope in {"ilo", "storage", "esxi", "windows", "netapp"}:
             stage = registry.get(scope)
             if stage is None:
                 raise RuntimeError(f"Stage registry entry is missing for scope: {scope}")
@@ -9875,6 +10123,7 @@ def execute_real_job_in_background(cfg: dict, scope: str):
                     "ilo": lambda _job: run_ilo_real(cfg),
                     "storage": lambda _job: _execute_storage_stage(cfg, kit_name, mark_stage),
                     "esxi": lambda _job: _execute_esxi_stage(cfg, kit_name),
+                    "netapp": lambda _job: _execute_netapp_stage(cfg, kit_name),
                     "windows": lambda _job: _execute_windows_stage(cfg, kit_name),
                 },
             }
@@ -9893,6 +10142,8 @@ def execute_real_job_in_background(cfg: dict, scope: str):
             stage_to_fail = "storage"
         elif "windows" in current_stage:
             stage_to_fail = "windows"
+        elif "netapp" in current_stage or "ontap" in current_stage:
+            stage_to_fail = "netapp"
         elif "ilo" in current_stage:
             stage_to_fail = "ilo"
         if stage_to_fail:
@@ -9977,6 +10228,70 @@ def _execute_windows_stage(cfg: dict[str, Any], kit_name: str) -> None:
     update_job(kit_name, job, "Running", "Simulate deployment", 4, total, "[INFO] Safe mode: no VM deployment actions are executed in this stage yet.")
     job = load_job(kit_name)
     update_job(kit_name, job, "Complete", "Windows safe stage complete", 5, total, "[OK] Windows safe execution completed. No VM changes were made.")
+
+
+def _execute_netapp_stage(cfg: dict[str, Any], kit_name: str) -> None:
+    from app.modules.netapp.service import NetAppModuleService
+
+    cfg = apply_ip_plan(cfg)
+    service = NetAppModuleService()
+    total = 5
+    job = load_job(kit_name)
+    update_job(kit_name, job, "Running", "Validate NetApp bootstrap", 1, total, "[RUNNING] Checking NetApp bootstrap and saved ONTAP API target.")
+
+    netapp_cfg = cfg.get("netapp", {}) or {}
+    if not bool(netapp_cfg.get("bootstrap_complete")):
+        raise RuntimeError("NetApp safe execution blocked: mark NetApp bootstrap complete first.")
+    host = str(netapp_cfg.get("host") or cfg.get("ip_plan", {}).get("netapp") or "").strip()
+    username = str(netapp_cfg.get("username") or "").strip()
+    password = str(netapp_cfg.get("password") or "")
+    if not host or not username or not password:
+        raise RuntimeError("NetApp safe execution blocked: save the ONTAP API host, username, and password first.")
+
+    job = load_job(kit_name)
+    update_job(kit_name, job, "Running", "Build NetApp plan", 2, total, "[RUNNING] Building the NetApp discovery, validation, and safe-apply plan.")
+    payload = service.apply({"cfg": cfg}, {"job_id": f"{kit_name}-netapp-safe-apply", "scope": "netapp", "confirm": True})
+    apply_stage = dict(payload.get("apply") or {})
+    execution = dict(apply_stage.get("execution") or apply_stage)
+    result = str(payload.get("result") or execution.get("result") or "failed").strip().lower()
+    logs = list(execution.get("logs") or [])
+
+    job = load_job(kit_name)
+    update_job(kit_name, job, "Running", "Apply NetApp safe actions", 3, total, "[RUNNING] Executing supported NetApp API actions.")
+    for line in logs:
+        job = load_job(kit_name)
+        update_job(kit_name, job, "Running", "Apply NetApp safe actions", 3, total, str(line))
+
+    blocked_actions = list(execution.get("blocked_actions") or [])
+    if blocked_actions:
+        job = load_job(kit_name)
+        update_job(
+            kit_name,
+            job,
+            "Running",
+            "Review blocked NetApp actions",
+            4,
+            total,
+            "[WARN] Some NetApp actions still require manual review or a future automation handler.",
+        )
+
+    if result == "failed":
+        reason = str(payload.get("error") or execution.get("reason") or "NetApp safe apply failed.").strip()
+        job = load_job(kit_name)
+        update_job(kit_name, job, "Failed", "NetApp safe apply failed", total, total, f"[FAILED] {reason}")
+        return
+
+    final_message = "[OK] NetApp safe apply completed."
+    if result == "no_changes":
+        final_message = "[OK] NetApp safe apply did not execute any supported changes."
+    if blocked_actions:
+        suffix = f" {len(blocked_actions)} action(s) were left blocked/manual."
+        if result == "no_changes":
+            final_message += suffix
+        else:
+            final_message += suffix
+    job = load_job(kit_name)
+    update_job(kit_name, job, "Completed", "NetApp safe apply complete", total, total, final_message)
 
 
 def resolve_esxi_base_iso_path(cfg: dict) -> Path:
@@ -13352,9 +13667,12 @@ def render_page(
         workflow_contexts["storage"]["tone"] = storage_ui["tone"]
         workflow_contexts["storage"]["result_summary"] = storage_workflow_state.get("workflow_summary") or workflow_contexts["storage"]["result_summary"]
     recommended_next_step = build_recommended_next_step(cfg, workflow_contexts)
+    setup_precheck_summary = build_setup_precheck_summary(cfg, workflow_contexts, recommended_next_step)
+    page_precheck_summary = build_page_precheck_summary(active_page, cfg, workflow_contexts)
     activity_feed = build_activity_feed(history)
     history_display = build_history_display_entries(history)
     dashboard_job_status = build_dashboard_job_status(history)
+    dashboard_overview = build_dashboard_overview(cfg, setup_precheck_summary, workflow_contexts, dashboard_job_status, job)
     hardware_identity = build_hardware_identity(cfg)
     ilo_input_review = build_ilo_input_review(cfg, include_policy_validation=active_page == "ilo")
     snmp_input_review = build_snmp_input_review(cfg)
@@ -13435,6 +13753,9 @@ def render_page(
         "storage_plan_defaults": storage_plan_defaults,
         "workflow_contexts": workflow_contexts,
         "recommended_next_step": recommended_next_step,
+        "setup_precheck_summary": setup_precheck_summary,
+        "page_precheck_summary": page_precheck_summary,
+        "dashboard_overview": dashboard_overview,
         "activity_feed": activity_feed,
         "history_display": history_display,
         "dashboard_job_status": dashboard_job_status,
@@ -14014,26 +14335,6 @@ async def save_ilo_settings_route(
         ilo_policy_snmpv3_priv_protocol=ilo_policy_snmpv3_priv_protocol,
         ilo_policy_snmpv3_priv_password=ilo_policy_snmpv3_priv_password,
         ilo_policy_alert_destinations=ilo_policy_alert_destinations,
-    )
-
-
-@app.post("/discover-ilo-hosts", response_class=HTMLResponse)
-async def discover_ilo_hosts_route(request: Request, return_page: str = Form("ilo")):
-    return await discover_ilo_hosts_handler(
-        request,
-        runtime={
-            "load_kit_config": load_kit_config,
-            "render_page": render_page,
-            "normalize_ilo_hostname": normalize_ilo_hostname,
-            "extract_ilo_additional_users_from_form": extract_ilo_additional_users_from_form,
-            "normalize_ilo_policy": normalize_ilo_policy,
-            "build_ilo_discovery_targets": build_ilo_discovery_targets,
-            "probe_tcp_port": probe_tcp_port,
-            "save_kit_config": save_kit_config,
-            "append_activity_event": append_activity_event,
-            "build_action_feedback": build_action_feedback,
-        },
-        return_page=return_page,
     )
 
 

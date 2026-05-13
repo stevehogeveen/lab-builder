@@ -58,26 +58,5 @@ class IloModuleService:
         cfg["included"]["ilo"] = True
         return {"cfg": cfg, "normalized_hostname": normalized_hostname}
 
-    def discover_ilo_hosts(self, cfg: dict[str, Any]) -> dict[str, Any]:
-        normalize_ilo_policy = self.deps["normalize_ilo_policy"]
-        build_ilo_discovery_targets = self.deps["build_ilo_discovery_targets"]
-        probe_tcp_port = self.deps["probe_tcp_port"]
-        policy = normalize_ilo_policy((cfg.get("ilo") or {}).get("policy"))
-        targets = build_ilo_discovery_targets(cfg)
-        results = [probe_tcp_port(target, 443, timeout_seconds=0.75) for target in targets]
-        policy["discovered_hosts"] = results
-        cfg["ilo"]["policy"] = normalize_ilo_policy(policy)
-        reachable = [item for item in results if item.get("reachable")]
-        current_ip = str((cfg.get("ilo") or {}).get("current_ip") or "").strip()
-        if len(reachable) == 1 and (
-            not current_ip
-            or current_ip == str((cfg.get("ip_plan") or {}).get("ilo") or "").strip()
-            or current_ip not in {item.get("host") for item in reachable}
-        ):
-            cfg["ilo"]["current_ip"] = str(reachable[0].get("host") or "")
-            cfg["ilo"]["host"] = cfg["ilo"]["current_ip"]
-        return {"cfg": cfg, "policy": policy, "results": results, "reachable": reachable}
-
-
 def default_ilo_module_service(deps: dict[str, Any]) -> IloModuleService:
     return IloModuleService(deps)

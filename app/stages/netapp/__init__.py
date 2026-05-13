@@ -1,0 +1,1 @@
+"""NetApp execution stage package."""

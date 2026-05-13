@@ -1,0 +1,121 @@
+{% set precheck = precheck_summary or {} %}
+{% if precheck %}
+<section class="card identity-soft-card ops-summary-shell">
+    <div class="flex flex-col gap-4 xl:flex-row xl:items-start xl:justify-between">
+        <div>
+            <div class="text-lg font-semibold">{{ precheck.title or 'Pre-check summary' }}</div>
+            <div class="text-sm text-slate-400 mt-1">{{ precheck.subtitle or 'Keep readiness visible before execution.' }}</div>
+        </div>
+        <span class="status {{ precheck.tone or 'progress' }}">{{ precheck.label or 'Review' }}</span>
+    </div>
+
+    <div class="ops-strip-grid mt-4">
+        {% if precheck.ready_workflows is defined %}
+        <div class="ops-strip-card">
+            <div class="dashboard-kicker">Ready workflows</div>
+            <div class="font-semibold">{{ precheck.ready_workflows }}/{{ precheck.total_workflows }}</div>
+        </div>
+        {% else %}
+        <div class="ops-strip-card">
+            <div class="dashboard-kicker">Checks ready</div>
+            <div class="font-semibold">{{ precheck.checks_ready }}/{{ precheck.total_checks }}</div>
+        </div>
+        {% endif %}
+        <div class="ops-strip-card">
+            <div class="dashboard-kicker">Blockers</div>
+            <div class="font-semibold">{{ precheck.total_blockers if precheck.total_blockers is defined else precheck.blockers }}</div>
+        </div>
+        <div class="ops-strip-card">
+            <div class="dashboard-kicker">
+                {% if precheck.summary_value is defined %}
+                {{ precheck.summary_value_label or 'State' }}
+                {% elif precheck.target is defined and (precheck.show_target is not defined or precheck.show_target) %}
+                Target
+                {% else %}
+                Next step
+                {% endif %}
+            </div>
+            <div class="font-semibold">
+                {% if precheck.summary_value is defined %}
+                {{ precheck.summary_value }}
+                {% elif precheck.target is defined and (precheck.show_target is not defined or precheck.show_target) %}
+                {{ precheck.target or 'Not set' }}
+                {% else %}
+                {{ precheck.next_step.title if precheck.next_step else 'Review setup' }}
+                {% endif %}
+            </div>
+        </div>
+        <div class="ops-strip-card">
+            <div class="dashboard-kicker">Next fix</div>
+            <div class="font-semibold">
+                {% if precheck.next_blocker %}
+                {{ precheck.next_blocker.label }}
+                {% else %}
+                No blockers
+                {% endif %}
+            </div>
+            <div class="text-slate-400 mt-1">
+                {% if precheck.next_blocker %}
+                {{ precheck.next_blocker.details }}
+                {% elif precheck.next_step %}
+                {{ precheck.next_step.summary }}
+                {% else %}
+                This stage is ready for the next review.
+                {% endif %}
+            </div>
+        </div>
+    </div>
+
+    {% set precheck_items = precheck['items'] if 'items' in precheck else [] %}
+    {% if precheck_items %}
+    <details class="precheck-detail-drawer mt-4">
+        <summary class="summary-row">
+            <span class="text-sm font-bold text-slate-300">Detailed checks</span>
+            <span class="status progress">{{ precheck_items|length }} shown</span>
+        </summary>
+        <div class="ops-row-list mt-3">
+        {% for item in precheck_items %}
+        <a class="ops-row-item block" href="{{ item.href or '#' }}">
+            <div class="ops-row-copy">
+                {% if item.total_checks is defined %}
+                <div class="dashboard-kicker mb-1">{{ item.name or item.label }}</div>
+                <div class="font-semibold">{{ item.summary or item.details or item.state_label or item.status or item.label }}</div>
+                <div class="text-sm text-slate-400">
+                    {% if item.target is defined %}
+                    Target: {{ item.target or 'Not set' }}
+                    {% else %}
+                    {{ item.details if item.details and item.details != (item.summary or '') else '' }}
+                    {% endif %}
+                </div>
+                {% else %}
+                <div class="font-semibold">{{ item.label }}</div>
+                {% if item.details and item.details not in ['Ready', item.label] %}
+                <div class="text-sm text-slate-400 mt-1">{{ item.details }}</div>
+                {% endif %}
+                {% endif %}
+                <div class="text-sm mt-2">
+                    {% if item.next_blocker %}
+                    <span class="font-semibold">Next fix:</span> {{ item.next_blocker.fix or item.next_blocker.details }}
+                    {% elif item.fix %}
+                    <span class="font-semibold">Fix:</span> {{ item.fix }}
+                    {% else %}
+                    <span class="font-semibold">Status:</span> Ready for the next step.
+                    {% endif %}
+                </div>
+            </div>
+            <div class="ops-row-meta">
+                <span class="status {{ item.tone or 'progress' }}">
+                    {% if item.total_checks is defined %}
+                    {{ item.checks_ready }}/{{ item.total_checks }}
+                    {% else %}
+                    {{ item.state_label or item.status or 'Review' }}
+                    {% endif %}
+                </span>
+            </div>
+        </a>
+        {% endfor %}
+        </div>
+    </details>
+    {% endif %}
+</section>
+{% endif %}

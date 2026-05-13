@@ -21,8 +21,6 @@ def _ilo_service(runtime: IloRuntime):
             "normalize_ilo_hostname": runtime["normalize_ilo_hostname"],
             "extract_ilo_additional_users_from_form": runtime["extract_ilo_additional_users_from_form"],
             "normalize_ilo_policy": runtime["normalize_ilo_policy"],
-            "build_ilo_discovery_targets": runtime["build_ilo_discovery_targets"],
-            "probe_tcp_port": runtime["probe_tcp_port"],
         }
     )
 
@@ -110,8 +108,8 @@ async def save_ilo_settings_handler(
     )
     cfg = updated["cfg"]
     normalized_hostname = str(updated["normalized_hostname"] or "")
-    ilo_input_review = runtime["build_ilo_input_review"](cfg, include_policy_validation=True)
-    if ilo_input_review["errors"]:
+    core_ilo_input_review = runtime["build_ilo_input_review"](cfg, include_policy_validation=False)
+    if core_ilo_input_review["errors"]:
         return runtime["render_page"](
             request,
             cfg,
@@ -130,9 +128,13 @@ async def save_ilo_settings_handler(
                     f"Planned final IP: {cfg['ilo'].get('target_ip') or 'Unchanged'}",
                     f"Hostname: {normalized_hostname or 'Not set'}",
                 ],
-                details=list(ilo_input_review["errors"]) + list(ilo_input_review["notes"]),
+                details=list(core_ilo_input_review["errors"]) + list(core_ilo_input_review["notes"]),
             ),
         )
+    ilo_input_review = runtime["build_ilo_input_review"](cfg, include_policy_validation=True)
+    policy_details = list(ilo_input_review["errors"]) + list(ilo_input_review["notes"])
+    core_details = set(list(core_ilo_input_review["errors"]) + list(core_ilo_input_review["notes"]))
+    policy_warnings = [detail for detail in policy_details if detail not in core_details]
     try:
         cfg = runtime["apply_ip_plan"](cfg)
     except Exception as e:
@@ -160,53 +162,20 @@ async def save_ilo_settings_handler(
             else None
         ),
         action_feedback=runtime["build_action_feedback"](
-            "iLO setup saved",
-            "Updated the saved iLO target and local sign-in settings for this kit.",
-            tone="ready",
+            "iLO setup saved with warnings" if policy_warnings else "iLO setup saved",
+            (
+                "Updated the saved iLO target and local sign-in settings, but some optional standard-policy secrets still need attention."
+                if policy_warnings
+                else "Updated the saved iLO target and local sign-in settings for this kit."
+            ),
+            tone="pending" if policy_warnings else "ready",
             outcomes=[
                 f"Target: {cfg['ilo'].get('current_ip') or cfg['ilo'].get('host', '') or 'Not set'}",
                 f"Planned final IP: {cfg['ilo'].get('target_ip') or 'Unchanged'}",
                 f"Gateway: {cfg['ilo'].get('gateway') or 'Not set'}",
             ],
+            details=policy_warnings,
             links=[{"label": "Open Storage setup", "href": "/storage"}, {"label": "Review run prep", "href": "/execution"}],
-        ),
-    )
-
-
-async def discover_ilo_hosts_handler(request: Request, runtime: IloRuntime, return_page: str = Form("ilo")):
-    cfg = runtime["load_kit_config"]()
-    service = _ilo_service(runtime)
-    discovered = service.discover_ilo_hosts(cfg)
-    cfg = discovered["cfg"]
-    policy = discovered["policy"]
-    results = discovered["results"]
-    reachable = discovered["reachable"]
-    runtime["save_kit_config"](cfg)
-    runtime["append_activity_event"](
-        cfg["site"]["name"],
-        "ilo_hosts_discovered",
-        workflow="ilo",
-        summary="Scanned the kit subnet for reachable iLO HTTPS endpoints.",
-        target=str((reachable[0] if reachable else {}).get("host") or ""),
-        details=[
-            f"Subnet: {cfg.get('shared_network', {}).get('subnet') or 'Not set'}",
-            f"Octet range: {policy.get('discover_start_octet')}..{policy.get('discover_end_octet')}",
-            f"Reachable hosts: {', '.join(item.get('host', '') for item in reachable) or 'None'}",
-        ],
-    )
-    return runtime["render_page"](
-        request,
-        cfg,
-        active_page=return_page,
-        action_feedback=runtime["build_action_feedback"](
-            "iLO discovery complete",
-            "Scanned the configured subnet range for reachable iLO HTTPS endpoints.",
-            tone="ready" if reachable else "pending",
-            outcomes=[
-                f"Scanned hosts: {len(results)}",
-                f"Reachable: {', '.join(item.get('host', '') for item in reachable) or 'None'}",
-                f"Range: {policy.get('discover_start_octet')}..{policy.get('discover_end_octet')}",
-            ],
         ),
     )
 
