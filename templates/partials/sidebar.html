@@ -72,7 +72,6 @@
                 </span>
             </span>
         </a>
-        {% if cfg.get('included', {}).get('windows') %}
         <a class="nav-link{% if active_page == 'windows' %} nav-link-active{% endif %}" href="/windows">
             <span class="nav-link-shell">
                 <span class="nav-dot nav-dot-{{ windows_tone }}"></span>
@@ -82,7 +81,6 @@
                 </span>
             </span>
         </a>
-        {% endif %}
         {% for item in module_navigation or [] %}
         {% if item.active_page in ['cisco', 'netapp'] %}
         <a class="nav-link{% if active_page == item.active_page %} nav-link-active{% endif %}" href="{{ item.href }}">

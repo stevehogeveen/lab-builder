@@ -10977,6 +10977,20 @@ def test_sidebar_shows_optional_setup_pages_when_included(client):
     assert '.sidebar .nav-link[href="/qnap"]' not in response.text
 
 
+def test_sidebar_keeps_windows_setup_link_when_not_included(client):
+    cfg = main.default_config()
+    cfg["site"]["name"] = "Windows Nav Kit"
+    cfg["included"]["windows"] = False
+    main.save_kit_config(cfg)
+
+    response = client.get("/dashboard")
+
+    assert response.status_code == 200
+    assert 'href="/windows"' in response.text
+    assert "Windows" in response.text
+    assert 'nav-dot nav-dot-muted' in response.text
+
+
 def test_sidebar_groups_windows_cisco_and_netapp_under_setup(client):
     cfg = main.default_config()
     cfg["site"]["name"] = "Setup Group Kit"
