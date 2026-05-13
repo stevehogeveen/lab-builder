@@ -1,6 +1,42 @@
 # HOWTO: Use Lab Builder End To End
 
-## 1) Start The App
+## 1) Install Dependencies
+
+Lab Builder has three dependency layers:
+
+1. OS tools used by automation workflows.
+2. Python packages listed in `requirements.txt`.
+3. Local runtime media and generated artifacts that stay out of git.
+
+On Ubuntu/Debian-style hosts:
+
+```bash
+sudo apt update
+sudo apt install -y python3 python3-venv xorriso sshpass
+```
+
+Python environment:
+
+```bash
+python3 -m venv .venv
+.venv/bin/pip install -r requirements.txt
+```
+
+Optional but recommended for browser/UI sanity checks:
+
+```bash
+.venv/bin/playwright install chromium
+```
+
+Dependency notes:
+
+- `xorriso` is required by ESXi ISO customization.
+- `sshpass` is used by the ESXi live SSH transport when password-based root login is configured.
+- Python packages such as FastAPI, Requests, Paramiko, pyVmomi, pywinrm, pytest, and Playwright are pinned in `requirements.txt`.
+- Local ESXi ISOs, OVA/OVF files, and VMDK files belong under `media/`; that directory is intentionally ignored by git.
+- Runtime outputs under `artifacts/` and kit configs under `config/kits/` are intentionally ignored because they are operator/local state.
+
+## 2) Start The App
 
 ```bash
 ./scripts/start-app-dev
@@ -10,7 +46,7 @@ Open `http://localhost:8000`.
 
 Use `./scripts/start-app` for non-reload mode.
 
-## 2) Create Or Load A Kit
+## 3) Create Or Load A Kit
 
 1. Go to Global/Configuration.
 2. Create a new kit or load an existing one.
@@ -18,7 +54,7 @@ Use `./scripts/start-app` for non-reload mode.
 
 Kit files are stored in `config/kits/`.
 
-## 3) Complete Setup Sections
+## 4) Complete Setup Sections
 
 Work through enabled setup pages in order:
 
@@ -30,7 +66,7 @@ Work through enabled setup pages in order:
 
 For each section: save settings, run preview/check actions, resolve validation warnings.
 
-## 4) Run From Run Center
+## 5) Run From Run Center
 
 1. Open Run Center (`/execution`).
 2. Select a scope (single stage or included multi-stage path).
@@ -38,7 +74,7 @@ For each section: save settings, run preview/check actions, resolve validation w
 4. For real execution: check confirmation checkbox and type `EXECUTE`.
 5. Start execution and monitor live job logs/status.
 
-## 5) Review Outputs And Reports
+## 6) Review Outputs And Reports
 
 - Use Reports page for config snapshots, run summaries, and exports.
 - Key artifact areas:
@@ -47,7 +83,7 @@ For each section: save settings, run preview/check actions, resolve validation w
   - `artifacts/exports/`
   - `artifacts/generated/`
 
-## 6) Troubleshoot Failures
+## 7) Troubleshoot Failures
 
 1. Check Run Center job logs and latest report output.
 2. Open debug bundle:
@@ -57,7 +93,7 @@ For each section: save settings, run preview/check actions, resolve validation w
    - `docs/automation-principles.md`
    - `docs/debugging.md`
 
-## 7) How To Update The App Safely
+## 8) How To Update The App Safely
 
 ### Add/Update A Module
 
@@ -73,7 +109,7 @@ For each section: save settings, run preview/check actions, resolve validation w
 2. Update route handler context in module routes or `app/main.py` helper wiring.
 3. Verify sidebar/nav state remains accurate.
 
-## 8) Validation Checklist After Changes
+## 9) Validation Checklist After Changes
 
 1. Start app and load a test kit.
 2. Confirm modified section renders and saves correctly.
@@ -83,4 +119,10 @@ For each section: save settings, run preview/check actions, resolve validation w
 
 ```bash
 pytest -q
+```
+
+For a broader local sanity pass:
+
+```bash
+./scripts/health-check
 ```

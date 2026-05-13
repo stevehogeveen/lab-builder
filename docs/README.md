@@ -4,6 +4,8 @@
 
 - App overview: [../README.md](/home/administrator/lab-builder/README.md)
 - Full usage guide: [HOWTO.md](/home/administrator/lab-builder/docs/HOWTO.md)
+- Dependency setup is documented in [HOWTO.md](/home/administrator/lab-builder/docs/HOWTO.md#1-install-dependencies).
+- Python packages are pinned in [../requirements.txt](/home/administrator/lab-builder/requirements.txt).
 
 ## UI Sections
 

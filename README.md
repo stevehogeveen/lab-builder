@@ -11,11 +11,19 @@ Lab Builder is a FastAPI application for offline/controlled lab provisioning wor
 
 ## Quick Start
 
+Install system prerequisites first:
+
+```bash
+sudo apt update
+sudo apt install -y python3 python3-venv xorriso sshpass
+```
+
 Create or refresh the local environment:
 
 ```bash
 python3 -m venv .venv
 .venv/bin/pip install -r requirements.txt
+.venv/bin/playwright install chromium
 ```
 
 ```bash
@@ -29,6 +37,14 @@ or:
 ```
 
 Default URL: `http://localhost:8000`
+
+## Dependency Notes
+
+- Python packages are pinned in `requirements.txt`.
+- ESXi ISO customization uses `xorriso`.
+- ESXi live SSH post-config uses `sshpass` when password-based root login is used.
+- Browser-based UI sanity checks use Playwright Chromium; install it with `.venv/bin/playwright install chromium`.
+- Local media under `media/` is intentionally not tracked by git. Put ESXi ISOs, OVA/OVF, and VMDK files there on each machine that needs them.
 
 ## High-Level Architecture
 
