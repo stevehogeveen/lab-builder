@@ -488,6 +488,10 @@ PAGE_META = {
         "title": "Global Settings",
         "subtitle": "Shared defaults for network, inclusion, and kit-wide behavior.",
     },
+    "ovf_templates": {
+        "title": "OVF Templates",
+        "subtitle": "Register full local OVF/OVA template directories for VM workflows.",
+    },
     "ilo": {
         "title": "iLO",
         "subtitle": "Target the controller, review readiness, and run the iLO workflow.",

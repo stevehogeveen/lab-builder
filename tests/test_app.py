@@ -11000,15 +11000,28 @@ def test_sidebar_groups_windows_cisco_and_netapp_under_setup(client):
     response = client.get("/dashboard")
 
     assert response.status_code == 200
-    assert '<div class="nav-label">Setup</div>' in response.text
+    assert '<div class="nav-label">Setup Modules</div>' in response.text
     assert 'href="/windows"' in response.text
     assert 'href="/modules/cisco"' in response.text
     assert 'href="/modules/netapp"' in response.text
+    assert 'href="/modules/ovf-templates"' in response.text
     assert response.text.count('href="/modules/cisco"') == 1
     assert response.text.count('href="/modules/netapp"') == 1
+    assert response.text.count('href="/modules/ovf-templates"') == 1
     assert response.text.index('href="/windows"') < response.text.index('<div class="nav-label">Run</div>')
     assert response.text.index('href="/modules/cisco"') < response.text.index('<div class="nav-label">Run</div>')
     assert response.text.index('href="/modules/netapp"') < response.text.index('<div class="nav-label">Run</div>')
+    assert response.text.index('href="/modules/ovf-templates"') < response.text.index('<div class="nav-label">Run</div>')
+    assert response.text.count('<div class="nav-label">Setup Modules</div>') == 1
+
+
+def test_ovf_templates_page_renders_from_sidebar_route(client):
+    response = client.get("/modules/ovf-templates")
+
+    assert response.status_code == 200
+    assert "OVF Templates" in response.text
+    assert "Register local template directory" in response.text
+    assert "Dashboard mission control" not in response.text
 
 
 def test_kits_route_falls_back_to_dashboard_workflow(client):
