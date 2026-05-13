@@ -1,0 +1,67 @@
+<section class="panel">
+    <div class="flex items-center justify-between mb-4">
+        <div>
+            <h2 class="text-2xl font-bold title-with-icon"><span class="page-icon icon-tone-progress" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 5h16v14H4z"/><path d="M8 9h8"/><path d="M8 13h5"/><path d="M15 17h1"/></svg></span><span>OVF Templates</span></h2>
+            <div class="text-sm text-slate-400">Register reusable VM template folders for Windows, Ubuntu, and future VM workflows.</div>
+        </div>
+        <span class="status progress">Directory based</span>
+    </div>
+
+    {% set templates = (ovf_template_payload or {}).get('templates', []) %}
+    <div class="grid grid-cols-1 xl:grid-cols-2 gap-4">
+        <div class="card workflow-hero-card">
+            <div class="text-lg font-semibold mb-3">Register local template directory</div>
+            <div class="text-sm text-slate-400 mb-4">Point at the folder that contains the `.ovf` descriptor and its referenced files. ESXi/VMware needs the whole directory, not just one picked file.</div>
+            <form hx-post="/modules/ovf-templates/register-directory" hx-target="#main-content" hx-swap="outerHTML" class="space-y-3" data-action-title="Registering OVF directory" data-action-start="Scanning the directory, descriptor, VMDK, NVRAM, and other referenced files.">
+                <input type="hidden" name="return_page" value="ovf_templates">
+                <div>
+                    <label class="block text-sm font-bold text-slate-300 mb-2">Template directory</label>
+                    <input type="text" name="ovf_template_directory" value="/home/administrator/lab-builder/media/OVF_Templates/DepOps_W2K22_Template_VMware7.0_Feb2025-1.0" class="input">
+                </div>
+                <div class="grid grid-cols-1 md:grid-cols-2 gap-3">
+                    <div>
+                        <label class="block text-sm font-bold text-slate-300 mb-2">Display name</label>
+                        <input type="text" name="ovf_template_name" placeholder="Windows Server 2022 Template" class="input">
+                    </div>
+                    <div>
+                        <label class="block text-sm font-bold text-slate-300 mb-2">OS family</label>
+                        <select name="ovf_template_os_family" class="input">
+                            <option value="">Generic</option>
+                            <option value="windows">Windows</option>
+                            <option value="ubuntu">Ubuntu</option>
+                            <option value="linux">Linux</option>
+                            <option value="appliance">Appliance</option>
+                        </select>
+                    </div>
+                </div>
+                <div>
+                    <label class="block text-sm font-bold text-slate-300 mb-2">OVF descriptor name, only needed if the folder has more than one</label>
+                    <input type="text" name="ovf_descriptor_name" placeholder="template.ovf" class="input">
+                </div>
+                <button class="btn btn-primary action-button" type="submit">Register directory</button>
+            </form>
+        </div>
+
+        <div class="card identity-soft-card">
+            <div class="text-lg font-semibold mb-3">Registered templates</div>
+            {% if templates %}
+            <div class="ops-row-list text-sm">
+                {% for item in templates %}
+                <div class="ops-row-item">
+                    <div class="ops-row-copy">
+                        <div class="font-semibold">{{ item.get('name') or item.get('id') }}</div>
+                        <div class="text-slate-400 truncate-wrap" title="{{ item.get('directory', '') }}">{{ item.get('descriptor_name') or 'No descriptor' }} | {{ item.get('file_count', 0) }} files | {{ item.get('total_size_display', '0 B') }}</div>
+                    </div>
+                    <div class="ops-row-meta">{{ item.get('os_family') or 'generic' }}</div>
+                </div>
+                {% endfor %}
+            </div>
+            {% else %}
+            <div class="ops-strip-card">
+                <div class="font-semibold">No templates registered yet</div>
+                <div class="text-slate-400 mt-1">Register the full OVF folder first, then Windows or future Linux setup pages can select it.</div>
+            </div>
+            {% endif %}
+        </div>
+    </div>
+</section>

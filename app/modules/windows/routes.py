@@ -6,11 +6,35 @@ from typing import Any, Callable
 from fastapi import APIRouter, FastAPI, Form, Request, UploadFile
 from fastapi.responses import HTMLResponse
 
+from app.modules.ovf_templates.service import OvfTemplateService
 from app.windows import inspect_ovf_source
 
 
 WindowsRuntime = dict[str, Callable[..., Any]]
 router = APIRouter()
+ovf_service = OvfTemplateService()
+
+
+def _apply_ovf_template_to_windows_cfg(windows_cfg: dict[str, Any], template: dict[str, Any]) -> None:
+    windows_cfg["ovf_template_id"] = str(template.get("id") or "")
+    windows_cfg["source_image_path"] = str(template.get("descriptor_path") or "")
+    windows_cfg["source_image_name"] = str(template.get("descriptor_name") or template.get("name") or "")
+    windows_cfg["source_image_kind"] = str(template.get("kind") or "ovf")
+    windows_cfg["source_image_origin"] = "ovf_template"
+    windows_cfg["source_image_folder"] = str(template.get("directory") or "")
+    windows_cfg["source_image_files"] = list(template.get("files") or [])
+    windows_cfg["source_image_total_size_bytes"] = int(template.get("total_size_bytes") or 0)
+    windows_cfg["source_image_total_size_display"] = str(template.get("total_size_display") or "0 B")
+    windows_cfg["source_image_summary"] = {
+        "vm_name": template.get("vm_name", ""),
+        "network_names": template.get("network_names", []),
+        "os_description": template.get("os_description", ""),
+        "hardware_version": template.get("hardware_version", ""),
+        "cpu_count": template.get("cpu_count", ""),
+        "memory_mb": template.get("memory_mb", ""),
+        "disk_capacity": template.get("disk_capacity", ""),
+    }
+    windows_cfg["install_plan"] = {}
 
 
 async def save_windows_settings_handler(
@@ -214,6 +238,43 @@ async def register_windows_ovf_path_handler(
     )
 
 
+async def select_windows_ovf_template_handler(
+    request: Request,
+    runtime: WindowsRuntime,
+    return_page: str = Form("windows"),
+    windows_ovf_template_id: str = Form(""),
+):
+    cfg = runtime["load_kit_config"]()
+    template = ovf_service.get_template(cfg, windows_ovf_template_id)
+    if not template:
+        return runtime["render_page"](request, cfg, active_page=return_page, error_message="Select a registered OVF template first.")
+    windows_cfg = cfg.setdefault("windows", {})
+    _apply_ovf_template_to_windows_cfg(windows_cfg, template)
+    runtime["save_kit_config"](cfg)
+    runtime["append_activity_event"](
+        cfg["site"]["name"],
+        "windows_ovf_template_selected",
+        workflow="windows",
+        summary="Selected a registered OVF template for Windows install planning.",
+        target=str(template.get("descriptor_path") or ""),
+    )
+    return runtime["render_page"](
+        request,
+        cfg,
+        active_page=return_page,
+        action_feedback=runtime["build_action_feedback"](
+            "Windows OVF template selected",
+            "Windows will use the registered OVF template directory for dry-run planning.",
+            tone="ready",
+            outcomes=[
+                f"Template: {template.get('name') or template.get('id')}",
+                f"Descriptor: {template.get('descriptor_name') or 'Not set'}",
+                f"Files: {template.get('file_count', 0)}",
+            ],
+        ),
+    )
+
+
 async def plan_windows_install_handler(
     request: Request,
     runtime: WindowsRuntime,
@@ -386,6 +447,28 @@ async def register_windows_ovf_path_route(
         },
         return_page=return_page,
         windows_ovf_path=windows_ovf_path,
+    )
+
+
+@router.post("/select-windows-ovf-template", response_class=HTMLResponse)
+async def select_windows_ovf_template_route(
+    request: Request,
+    return_page: str = Form("windows"),
+    windows_ovf_template_id: str = Form(""),
+):
+    from app import main
+
+    return await select_windows_ovf_template_handler(
+        request,
+        runtime={
+            "load_kit_config": main.load_kit_config,
+            "save_kit_config": main.save_kit_config,
+            "append_activity_event": main.append_activity_event,
+            "render_page": main.render_page,
+            "build_action_feedback": main.build_action_feedback,
+        },
+        return_page=return_page,
+        windows_ovf_template_id=windows_ovf_template_id,
     )
 
 

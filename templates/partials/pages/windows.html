@@ -142,29 +142,32 @@
                 </div>
             </div>
             <hr class="my-4 border-slate-700">
-            <div class="text-sm font-semibold mb-2">Windows source image (OVA/OVF)</div>
+            <div class="text-sm font-semibold mb-2">Windows source template</div>
+            {% set registered_ovf_templates = ((cfg.get('ovf_templates', {}) or {}).get('templates', {}) or {}) %}
             <div class="ops-strip-card mb-3">
-                <div class="font-semibold">Use local OVF/OVA source</div>
-                <div class="text-slate-400 mt-1">Best for folder-based OVF templates because the app validates sidecar files such as VMDK and NVRAM without copying multi-GB media.</div>
-                <form hx-post="/register-windows-ovf-path" hx-target="#main-content" hx-swap="outerHTML" class="space-y-3 mt-3" data-action-title="Registering Windows OVF" data-action-start="Validating the local OVA/OVF path and referenced sidecar files.">
+                <div class="font-semibold">Select registered OVF template</div>
+                <div class="text-slate-400 mt-1">OVF registration is shared now. Register the full directory once, then select it here for this Windows VM.</div>
+                <form hx-post="/select-windows-ovf-template" hx-target="#main-content" hx-swap="outerHTML" class="space-y-3 mt-3" data-action-title="Selecting Windows OVF template" data-action-start="Linking the registered OVF directory to the Windows install plan.">
                     <input type="hidden" name="return_page" value="windows">
-                    <input type="text" name="windows_ovf_path" value="{{ cfg.get('windows', {}).get('source_image_path', '') if cfg.get('windows', {}).get('source_image_origin') == 'local_path' else '' }}" placeholder="/home/administrator/lab-builder/media/OVF_Templates/template/template.ovf" class="input">
-                    <button class="btn btn-primary action-button" type="submit">Use local OVF/OVA path</button>
+                    <select name="windows_ovf_template_id" class="input">
+                        <option value="">Choose a registered OVF template</option>
+                        {% for template_id, template in registered_ovf_templates.items() %}
+                        <option value="{{ template_id }}" {% if cfg.get('windows', {}).get('ovf_template_id') == template_id %}selected{% endif %}>{{ template.get('name') or template_id }}{% if template.get('os_family') %} ({{ template.get('os_family') }}){% endif %}</option>
+                        {% endfor %}
+                    </select>
+                    <div class="actions">
+                        <button class="btn btn-primary action-button" type="submit">Use selected template</button>
+                        <a class="btn" href="/modules/ovf-templates">Open OVF Templates</a>
+                    </div>
                 </form>
             </div>
-            <div class="text-xs uppercase tracking-[0.24em] text-slate-500 mb-2">Small single-file upload</div>
-            <form hx-post="/upload-windows-image" hx-target="#main-content" hx-swap="outerHTML" enctype="multipart/form-data" class="space-y-3" data-action-title="Uploading Windows image" data-action-start="Uploading the selected OVA or OVF file into the local artifact store.">
-                <input type="hidden" name="return_page" value="windows">
-                <input type="file" name="windows_image" accept=".ova,.ovf" class="input">
-                <button class="btn action-button" type="submit">Upload image</button>
-            </form>
             {% set source_files = cfg.get('windows', {}).get('source_image_files', []) or [] %}
             <div class="ops-strip-card mt-3">
-                <div class="font-semibold">Saved image</div>
+                <div class="font-semibold">Selected template</div>
                 <div class="truncate-wrap" title="{{ cfg.get('windows', {}).get('source_image_name', '') or 'Not uploaded' }}">{{ cfg.get('windows', {}).get('source_image_name', '') or 'Not uploaded' }}</div>
                 {% if cfg.get('windows', {}).get('source_image_path', '') %}
                 <div class="text-slate-400 mt-1"><span class="artifact-path" title="{{ cfg.get('windows', {}).get('source_image_path', '') }}">{{ cfg.get('windows', {}).get('source_image_path', '') }}</span></div>
-                <div class="text-slate-400 mt-1">Origin: {{ 'Local path' if cfg.get('windows', {}).get('source_image_origin') == 'local_path' else 'Uploaded artifact' }}{% if cfg.get('windows', {}).get('source_image_total_size_display') %} | Total: {{ cfg.get('windows', {}).get('source_image_total_size_display') }}{% endif %}</div>
+                <div class="text-slate-400 mt-1">Origin: {{ 'Registered OVF template' if cfg.get('windows', {}).get('source_image_origin') == 'ovf_template' else 'Legacy source' }}{% if cfg.get('windows', {}).get('source_image_total_size_display') %} | Total: {{ cfg.get('windows', {}).get('source_image_total_size_display') }}{% endif %}</div>
                 {% if source_files %}
                 <details class="mt-2">
                     <summary class="text-slate-300 cursor-pointer">Source file inventory ({{ source_files|length }})</summary>

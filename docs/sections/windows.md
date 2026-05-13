@@ -6,10 +6,7 @@ Stages Windows post-install/vSphere-related settings and validation steps.
 ## How It Works
 Windows routes gather settings, perform probes, and feed execution review for Windows scope.
 
-Windows source media supports two safe paths:
-
-- Register a local `.ovf` or `.ova` path for large templates already on disk. This is the preferred flow for folder-based OVF exports because the app validates referenced sidecar files such as `.vmdk` and `.nvram` without copying multi-GB media into artifacts.
-- Upload a small single-file `.ova` or `.ovf` through the browser when appropriate.
+Windows source media now comes from the shared OVF Templates module. Register the full local OVF directory there first, then select the registered template on the Windows page.
 
 Current execution remains a dry-run/safe path. The Windows stage records and validates install inputs but does not deploy or modify a VM yet.
 

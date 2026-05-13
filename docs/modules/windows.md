@@ -3,7 +3,7 @@
 ## Purpose
 Supports Windows-related setup, validation probes, and staged execution planning.
 
-The module can register local OVA/OVF sources for install planning. Folder-based OVF templates should be registered by path so the descriptor, VMDK, NVRAM, and other referenced files stay in place and are validated before a dry-run plan is built. The dry-run plan includes a deployment preview with source metadata, target placement, network mapping, and future import steps.
+The module selects a registered OVF template for install planning. Folder-based OVF templates are owned by the OVF Templates module so the descriptor, VMDK, NVRAM, and other referenced files are validated as one reusable directory. The Windows dry-run plan includes a deployment preview with source metadata, target placement, network mapping, and future import steps.
 
 ## Key Files
 - `app/modules/windows/manifest.yml`

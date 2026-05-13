@@ -94,6 +94,8 @@
         {% include "partials/pages/dashboard.html" %}
     {% elif active_page in ["global_settings", "configuration"] %}
         {% include "partials/pages/configuration.html" %}
+    {% elif active_page == "ovf_templates" %}
+        {% include "partials/pages/ovf_templates.html" %}
     {% elif active_page == "ilo" %}
         {% include "partials/pages/ilo.html" %}
     {% elif active_page == "execution" %}

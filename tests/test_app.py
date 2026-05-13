@@ -12051,6 +12051,87 @@ def test_register_windows_local_ovf_path_validates_sidecars_and_plans(client, tm
     assert deployment_preview.get("target", {}).get("vm_name") == "win-local-ovf"
 
 
+def test_ovf_templates_register_directory_and_windows_selects_template(client, tmp_path):
+    cfg = main.default_config()
+    cfg["site"]["name"] = "OVF Template Kit"
+    cfg["windows"]["vm_name"] = "win-from-template"
+    cfg["windows"]["admin_password"] = "Secret123!"
+    cfg["windows"]["vsphere_host"] = "esxi.local"
+    cfg["windows"]["vsphere_username"] = "root"
+    cfg["windows"]["vsphere_datastore"] = "datastore1"
+    cfg["windows"]["vsphere_network"] = "VM Network"
+    main.save_kit_config(cfg)
+    ovf_path = tmp_path / "template.ovf"
+    disk_path = tmp_path / "template-disk.vmdk"
+    nvram_path = tmp_path / "template.nvram"
+    disk_path.write_bytes(b"disk")
+    nvram_path.write_bytes(b"nvram")
+    ovf_path.write_text(
+        """
+        <Envelope xmlns:ovf="http://schemas.dmtf.org/ovf/envelope/1">
+          <References>
+            <File ovf:id="file1" ovf:href="template-disk.vmdk"/>
+            <File ovf:id="file2" ovf:href="template.nvram"/>
+          </References>
+          <NetworkSection><Network ovf:name="VM Network"/></NetworkSection>
+          <VirtualSystem ovf:id="Reusable-Template"/>
+        </Envelope>
+        """,
+        encoding="utf-8",
+    )
+
+    registered = client.post(
+        "/modules/ovf-templates/register-directory",
+        data={
+            "return_page": "ovf_templates",
+            "ovf_template_directory": str(tmp_path),
+            "ovf_template_name": "Reusable Windows Template",
+            "ovf_template_os_family": "windows",
+        },
+    )
+    assert registered.status_code == 200
+    assert "OVF template registered" in registered.text
+    saved = main.load_kit_config("OVF-Template-Kit")
+    templates = (saved.get("ovf_templates") or {}).get("templates") or {}
+    template_id = next(iter(templates))
+    assert templates[template_id]["file_count"] == 3
+    assert templates[template_id]["directory"] == str(tmp_path)
+
+    selected = client.post(
+        "/select-windows-ovf-template",
+        data={"return_page": "windows", "windows_ovf_template_id": template_id},
+    )
+    assert selected.status_code == 200
+    assert "Windows OVF template selected" in selected.text
+    saved = main.load_kit_config("OVF-Template-Kit")
+    assert saved["windows"]["source_image_origin"] == "ovf_template"
+    assert saved["windows"]["source_image_folder"] == str(tmp_path)
+
+    plan = client.post("/plan-windows-install", data={"return_page": "windows"})
+    assert plan.status_code == 200
+    saved = main.load_kit_config("OVF-Template-Kit")
+    assert saved["windows"]["install_plan"]["ready"] is True
+    assert saved["windows"]["install_plan"]["deployment_preview"]["source"]["file_count"] == 3
+
+
+def test_ovf_template_directory_requires_descriptor_choice_when_multiple_ovfs(client, tmp_path):
+    cfg = main.default_config()
+    cfg["site"]["name"] = "OVF Multi Kit"
+    main.save_kit_config(cfg)
+    (tmp_path / "one.ovf").write_text("<Envelope/>", encoding="utf-8")
+    (tmp_path / "two.ovf").write_text("<Envelope/>", encoding="utf-8")
+
+    response = client.post(
+        "/modules/ovf-templates/register-directory",
+        data={"return_page": "ovf_templates", "ovf_template_directory": str(tmp_path)},
+    )
+
+    assert response.status_code == 200
+    assert "Multiple .ovf descriptors were found." in response.text
+    assert "one.ovf" in response.text
+    assert "two.ovf" in response.text
+
+
 def test_windows_install_plan_warns_on_ovf_network_mismatch(client, tmp_path):
     cfg = main.default_config()
     cfg["site"]["name"] = "Windows Network Mismatch Kit"

@@ -1,0 +1,17 @@
+name: ovf_templates
+title: OVF Templates
+description: Register local OVF/OVA template directories for Windows, Ubuntu, and other VM deployments.
+enabled: true
+routes:
+  prefix: /modules/ovf-templates
+navigation:
+  section: Setup Modules
+  label: OVF Templates
+  href: /modules/ovf-templates
+  active_page: ovf_templates
+capabilities:
+  - discover
+  - plan
+  - validate
+  - preview
+  - status
