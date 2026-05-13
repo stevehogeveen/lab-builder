@@ -3,10 +3,14 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any, Callable
 
-from fastapi import FastAPI, Form, Request, UploadFile
+from fastapi import APIRouter, FastAPI, Form, Request, UploadFile
+from fastapi.responses import HTMLResponse
+
+from app.windows import inspect_ovf_source
 
 
 WindowsRuntime = dict[str, Callable[..., Any]]
+router = APIRouter()
 
 
 async def save_windows_settings_handler(
@@ -109,6 +113,13 @@ async def upload_windows_image_handler(
     cfg["windows"]["source_image_path"] = str(target)
     cfg["windows"]["source_image_name"] = filename
     cfg["windows"]["source_image_kind"] = suffix.lstrip(".")
+    cfg["windows"]["source_image_origin"] = "uploaded_artifact"
+    cfg["windows"]["source_image_total_size_bytes"] = len(data)
+    cfg["windows"].pop("source_image_folder", None)
+    cfg["windows"].pop("source_image_files", None)
+    cfg["windows"].pop("source_image_total_size_display", None)
+    cfg["windows"].pop("source_image_summary", None)
+    cfg["windows"]["install_plan"] = {}
     runtime["save_kit_config"](cfg)
     runtime["append_activity_event"](
         cfg["site"]["name"],
@@ -128,6 +139,73 @@ async def upload_windows_image_handler(
             outcomes=[
                 f"File: {filename}",
                 f"Stored at: {target}",
+            ],
+        ),
+    )
+
+
+async def register_windows_ovf_path_handler(
+    request: Request,
+    runtime: WindowsRuntime,
+    return_page: str = Form("windows"),
+    windows_ovf_path: str = Form(""),
+):
+    cfg = runtime["load_kit_config"]()
+    windows_cfg = cfg.setdefault("windows", {})
+    source_text = str(windows_ovf_path or "").strip()
+    if not source_text:
+        return runtime["render_page"](request, cfg, active_page=return_page, error_message="Enter a local OVA or OVF path.")
+    source = Path(source_text).expanduser()
+    if source.suffix.lower() not in {".ova", ".ovf"}:
+        return runtime["render_page"](request, cfg, active_page=return_page, error_message="Local Windows source must be an .ova or .ovf file.")
+    summary = runtime["inspect_ovf_source"](source)
+    if summary.get("warnings"):
+        return runtime["render_page"](
+            request,
+            cfg,
+            active_page=return_page,
+            error_message=" ".join(str(item) for item in summary.get("warnings", [])),
+        )
+
+    windows_cfg["source_image_path"] = str(source)
+    windows_cfg["source_image_name"] = source.name
+    windows_cfg["source_image_kind"] = source.suffix.lower().lstrip(".")
+    windows_cfg["source_image_origin"] = "local_path"
+    windows_cfg["source_image_folder"] = str(source.parent)
+    windows_cfg["source_image_files"] = summary.get("files", [])
+    windows_cfg["source_image_total_size_bytes"] = summary.get("total_size_bytes", 0)
+    windows_cfg["source_image_total_size_display"] = summary.get("total_size_display", "0 B")
+    windows_cfg["source_image_summary"] = {
+        "vm_name": summary.get("vm_name", ""),
+        "network_names": summary.get("network_names", []),
+        "os_description": summary.get("os_description", ""),
+        "hardware_version": summary.get("hardware_version", ""),
+    }
+    windows_cfg["install_plan"] = {}
+    runtime["save_kit_config"](cfg)
+    runtime["append_activity_event"](
+        cfg["site"]["name"],
+        "windows_local_ovf_registered",
+        workflow="windows",
+        summary="Registered a local Windows OVA/OVF source for install planning.",
+        target=str(source),
+        details=[
+            f"Files: {len(summary.get('files') or [])}",
+            f"Size: {summary.get('total_size_display') or '0 B'}",
+        ],
+    )
+    return runtime["render_page"](
+        request,
+        cfg,
+        active_page=return_page,
+        action_feedback=runtime["build_action_feedback"](
+            "Windows OVF source registered",
+            "Validated the local source and sidecar files without copying them into artifacts.",
+            tone="ready",
+            outcomes=[
+                f"Source: {source.name}",
+                f"Files: {len(summary.get('files') or [])}",
+                f"Total size: {summary.get('total_size_display') or '0 B'}",
             ],
         ),
     )
@@ -176,6 +254,8 @@ async def plan_windows_install_handler(
     }
     interface_check = runtime["validate_ovf_inputs"](plan)
     warnings.extend([item for item in interface_check.get("warnings", []) if item not in warnings])
+    if interface_check.get("source_summary"):
+        plan["source_summary"] = interface_check.get("source_summary")
     plan["warnings"] = warnings
     plan["ready"] = not warnings
     cfg["windows"]["install_plan"] = plan
@@ -280,6 +360,29 @@ async def probe_windows_winrm_handler(
         return runtime["render_page"](request, cfg, active_page=return_page, error_message=f"WinRM probe failed: {str(e).splitlines()[0]}")
 
 
+@router.post("/register-windows-ovf-path", response_class=HTMLResponse)
+async def register_windows_ovf_path_route(
+    request: Request,
+    return_page: str = Form("windows"),
+    windows_ovf_path: str = Form(""),
+):
+    from app import main
+
+    return await register_windows_ovf_path_handler(
+        request,
+        runtime={
+            "load_kit_config": main.load_kit_config,
+            "save_kit_config": main.save_kit_config,
+            "append_activity_event": main.append_activity_event,
+            "render_page": main.render_page,
+            "build_action_feedback": main.build_action_feedback,
+            "inspect_ovf_source": inspect_ovf_source,
+        },
+        return_page=return_page,
+        windows_ovf_path=windows_ovf_path,
+    )
+
+
 def register_module_routes(app: FastAPI) -> None:
-    # Windows routes are still served by legacy app/main.py endpoints during migration.
-    _ = app
+    # Most Windows routes are still served by legacy app/main.py endpoints during migration.
+    app.include_router(router)

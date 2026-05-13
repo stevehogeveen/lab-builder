@@ -11969,6 +11969,83 @@ def test_upload_windows_image_and_plan_dry_run(client):
     assert install_plan.get("network") == "VM Network"
 
 
+def test_register_windows_local_ovf_path_validates_sidecars_and_plans(client, tmp_path):
+    cfg = main.default_config()
+    cfg["site"]["name"] = "Windows Local OVF Kit"
+    cfg["windows"]["vm_name"] = "win-local-ovf"
+    cfg["windows"]["admin_password"] = "Secret123!"
+    cfg["windows"]["vsphere_host"] = "esxi.local"
+    cfg["windows"]["vsphere_username"] = "root"
+    cfg["windows"]["vsphere_datastore"] = "datastore1"
+    cfg["windows"]["vsphere_network"] = "VM Network"
+    main.save_kit_config(cfg)
+    ovf_path = tmp_path / "template.ovf"
+    disk_path = tmp_path / "template-disk.vmdk"
+    nvram_path = tmp_path / "template.nvram"
+    disk_path.write_bytes(b"disk")
+    nvram_path.write_bytes(b"nvram")
+    ovf_path.write_text(
+        """
+        <Envelope xmlns:ovf="http://schemas.dmtf.org/ovf/envelope/1">
+          <References>
+            <File ovf:id="file1" ovf:href="template-disk.vmdk"/>
+            <File ovf:id="file2" ovf:href="template.nvram"/>
+          </References>
+          <NetworkSection><Network ovf:name="VM Network"/></NetworkSection>
+          <VirtualSystem ovf:id="Windows-Template">
+            <OperatingSystemSection><Description>Windows Server 2022</Description></OperatingSystemSection>
+            <VirtualHardwareSection><System><VirtualSystemType>vmx-19</VirtualSystemType></System></VirtualHardwareSection>
+          </VirtualSystem>
+        </Envelope>
+        """,
+        encoding="utf-8",
+    )
+
+    response = client.post(
+        "/register-windows-ovf-path",
+        data={"return_page": "windows", "windows_ovf_path": str(ovf_path)},
+    )
+    assert response.status_code == 200
+    assert "Windows OVF source registered" in response.text
+    saved = main.load_kit_config("Windows-Local-OVF-Kit")
+    assert saved["windows"]["source_image_origin"] == "local_path"
+    assert saved["windows"]["source_image_kind"] == "ovf"
+    assert len(saved["windows"]["source_image_files"]) == 3
+
+    plan = client.post("/plan-windows-install", data={"return_page": "windows"})
+    assert plan.status_code == 200
+    saved = main.load_kit_config("Windows-Local-OVF-Kit")
+    install_plan = saved["windows"].get("install_plan") or {}
+    assert install_plan.get("ready") is True
+    source_summary = install_plan.get("source_summary") or {}
+    assert source_summary.get("vm_name") == "Windows-Template"
+    assert source_summary.get("network_names") == ["VM Network"]
+
+
+def test_register_windows_local_ovf_path_rejects_missing_sidecar(client, tmp_path):
+    cfg = main.default_config()
+    cfg["site"]["name"] = "Windows Broken OVF Kit"
+    main.save_kit_config(cfg)
+    ovf_path = tmp_path / "broken.ovf"
+    ovf_path.write_text(
+        """
+        <Envelope xmlns:ovf="http://schemas.dmtf.org/ovf/envelope/1">
+          <References><File ovf:id="file1" ovf:href="missing.vmdk"/></References>
+        </Envelope>
+        """,
+        encoding="utf-8",
+    )
+
+    response = client.post(
+        "/register-windows-ovf-path",
+        data={"return_page": "windows", "windows_ovf_path": str(ovf_path)},
+    )
+    assert response.status_code == 200
+    assert "OVF referenced file is missing: missing.vmdk" in response.text
+    saved = main.load_kit_config("Windows-Broken-OVF-Kit")
+    assert not saved["windows"].get("source_image_path")
+
+
 def test_windows_install_plan_warns_when_vsphere_target_is_missing(client):
     cfg = main.default_config()
     cfg["site"]["name"] = "Windows Missing Target Kit"
@@ -12035,7 +12112,8 @@ def test_vsphere_ovf_validation_reports_missing_runtime_inputs(tmp_path):
             "network": "VM Network",
         }
     )
-    assert ready == {"ready": True, "warnings": []}
+    assert ready["ready"] is True
+    assert ready["warnings"] == []
 
 
 def test_netapp_execution_launch_options_offer_safe_apply():
