@@ -1,0 +1,227 @@
+# Session Coordination
+
+Purpose: keep parallel Codex sessions from colliding in the same workspace.
+
+Update this file before large edits and after finishing a meaningful slice.
+
+## Rules
+
+1. Claim write scope before editing shared files.
+2. Keep ownership narrow: list exact files or directories.
+3. Add a short "working on" note while active.
+4. Append a "changed" note when you finish a slice.
+5. If two sessions need the same file, stop and re-assign explicitly here first.
+
+## Session Template
+
+Copy this block and update it in place.
+
+```md
+### Session: <name>
+- Status: active | paused | done
+- Branch: <branch-name>
+- Scope owner: <what this session owns>
+- Working on: <current task>
+- Blocked by: <session/file/dependency or none>
+- Ready to hand off: <next clean handoff point or none>
+- Files claimed:
+  - path/a
+  - path/b
+- Shared files touched with caution:
+  - path/c
+- Last changed:
+  - YYYY-MM-DD HH:MM TZ - <short note>
+- Next intended change:
+  - <short note>
+```
+
+## Active Sessions
+
+### Session: netapp
+- Status: active
+- Branch: unknown
+- Scope owner: NetApp workflow, NetApp module UI, NetApp planning/validation
+- Working on: Final NetApp page completion, protocol-object editing, and richer dry-run review
+- Blocked by: none
+- Ready to hand off: Page-complete NetApp review slice can hand off after template and route parsing updates are recorded here
+- Files claimed:
+  - app/modules/netapp/**
+  - app/netapp.py
+  - tests/test_netapp_module.py
+  - templates/partials/pages/netapp.html
+- Shared files touched with caution:
+  - app/main.py
+  - app/core/config.py
+  - app/modules/configs/routes.py
+  - templates/partials/pages/configuration.html
+  - templates/partials/pages/execution.html
+  - templates/partials/pages/dashboard.html
+  - static/js/live-job.js
+  - tests/test_app.py
+  - tests/test_netapp_module.py
+- Last changed:
+  - 2026-05-12 America/Toronto - Session declared from coordination template.
+  - 2026-05-12 America/Toronto - Claimed ONTAP adapter and NetApp tests for fallback-read and capability cleanup.
+  - 2026-05-12 America/Toronto - Added adaptive REST field fallback in app/netapp.py and made NetApp validation capability-aware for unverifiable NTP/users/autosupport/subnet checks.
+  - 2026-05-12 America/Toronto - Added read-only export-policy, igroup, portset, LUN, and LUN-map discovery so older ONTAP can still describe current NFS/iSCSI posture when service endpoints are sparse.
+  - 2026-05-12 America/Toronto - Added protocol-specific validation for NFS export policy/volume and iSCSI igroup/portset/LUN mappings, and tied plan action statuses to those checks.
+  - 2026-05-12 America/Toronto - Added protocol LIF name/IP/node/port comparison against discovered interfaces and tied NFS/iSCSI LIF plan actions to that validation.
+  - 2026-05-12 America/Toronto - Completed the NetApp page review surface with capability status, validation findings, protocol object inventory, and editable iSCSI or NFS LIF or volume form fields.
+  - 2026-05-12 America/Toronto - Reworked NetApp into a bootstrap-first compact page with generated manual checklist, derived SP/node/cluster IPs, connectivity tests, and a reduced post-bootstrap snapshot focused on controllers, disks, and current port IPs.
+  - 2026-05-13 America/Toronto - Shifted NetApp defaults to the real .45/.46/.47/.48 management convention, added legacy .40/.41/.42/.43 warning plus one-click update, and relabeled the bootstrap plan with controller and port names.
+  - 2026-05-13 America/Toronto - Enabled the first NetApp safe-apply slice for create-only API actions (subnets, SVM, LIFs, services, export policy, igroup, portset, NFS volume) with in-page execution logs and manual blocks for the remaining actions.
+- Next intended change:
+  - Use operator feedback from the next manual test pass to tighten layout, wording, and any remaining protocol-detail validations.
+
+### Session: rest-of-app
+- Status: active
+- Branch: cleanup/project-structure
+- Scope owner: non-NetApp app work
+- Working on: App-wide wording/layout cleanup pass, with narrow NetApp preview wording touch
+- Blocked by: none
+- Ready to hand off: NetApp snapshot slice can hand off after page and discovery updates are recorded here
+- Files claimed:
+  - SESSION_COORDINATION.md
+  - app/netapp.py
+  - app/main.py
+  - templates/index.html
+  - templates/partials/pages/configuration.html
+  - templates/partials/pages/netapp.html
+  - templates/partials/pages/dashboard.html
+  - templates/partials/pages/ilo.html
+  - templates/partials/pages/storage.html
+  - templates/partials/pages/execution.html
+  - templates/partials/pages/esxi.html
+  - templates/partials/pages/windows.html
+  - templates/partials/pages/qnap.html
+  - templates/partials/components/setup_strip.html
+  - templates/partials/components/precheck_summary.html
+  - templates/partials/sidebar.html
+  - tests/test_app.py
+  - tests/test_netapp_module.py
+- Shared files touched with caution:
+  - app/main.py
+  - app/core/config.py
+  - app/modules/configs/routes.py
+  - templates/partials/pages/configuration.html
+  - templates/partials/pages/execution.html
+  - templates/partials/pages/dashboard.html
+  - static/js/live-job.js
+  - tests/test_app.py
+- Last changed:
+  - 2026-05-12 America/Toronto - Added blocked-by and ready-to-hand-off fields and confirmed shared-caution rules.
+  - 2026-05-12 America/Toronto - Claimed sidebar template for setup-group navigation cleanup.
+  - 2026-05-12 America/Toronto - Claimed app-wide sidebar test for navigation regrouping coverage.
+  - 2026-05-12 America/Toronto - Claimed NetApp snapshot UI and discovery detail slice in this session.
+  - 2026-05-12 America/Toronto - Moved Windows, Cisco, and NetApp links into the main Setup group and verified sidebar coverage.
+  - 2026-05-12 America/Toronto - Renamed the remaining sidebar Modules section to Setup Modules.
+  - 2026-05-12 America/Toronto - Claimed shared pre-check summary slice for dashboard and setup pages, excluding the active NetApp page file.
+  - 2026-05-12 America/Toronto - Added reusable operations-style pre-check summaries to dashboard plus iLO, Storage, ESXi, Windows, and QNAP pages.
+  - 2026-05-12 America/Toronto - Claimed shared layout CSS to reduce oversized cards and finish the NetApp page in the denser UI style.
+  - 2026-05-12 America/Toronto - Tightened shared card spacing, removed forced full-height cards, and rebuilt the NetApp page into a denser operations-style layout.
+  - 2026-05-12 America/Toronto - Replaced remaining large pre-check and setup tiles with denser PRTG-style strips and status rows.
+  - 2026-05-12 America/Toronto - Widened the setup rail, added command-bar hero metadata, and regrouped Global Settings with advanced templates collapsed.
+  - 2026-05-12 America/Toronto - Claimed compact setup-strip component and mission-control/dashboard tightening slice for iLO, ESXi, Windows, QNAP, and NetApp inventory views.
+  - 2026-05-12 America/Toronto - Replaced remaining setup mini-dashboards with compact strips, tightened the dashboard mission-control block, and converted NetApp inventory areas to denser operator rows.
+  - 2026-05-12 America/Toronto - Claimed Storage and Run Center templates for the next compact-layout pass.
+  - 2026-05-12 America/Toronto - Fixed the shared setup-strip component, removed stray bottom-of-page CSS output, and compacted Storage planner plus Run Center technical-detail layouts.
+  - 2026-05-12 America/Toronto - Added shared truncation/table-fit helpers and applied them to reports, history, and storage artifact/detail surfaces.
+  - 2026-05-12 America/Toronto - Finished the remaining page-fit pass for ESXi, iLO, Windows, QNAP, and Cisco, including legacy input styling cleanup and long-value truncation.
+- Next intended change:
+  - Finish app-wide wording/layout cleanup pass and rerun regression tests.
+
+## Shared File Ledger
+
+Use this section only for files that more than one session may need.
+
+```md
+- path/to/file
+  - Current owner: <session-name>
+  - Reason: <why this file is shared>
+  - Safe touch window: <optional note>
+```
+
+Current entries:
+
+- app/main.py
+  - Current owner: unassigned/shared-caution
+  - Reason: cross-cutting routing and page context
+  - Safe touch window: coordinate here before edits
+
+- app/core/config.py
+  - Current owner: unassigned/shared-caution
+  - Reason: shared config defaults and shape
+  - Safe touch window: coordinate here before edits
+
+- app/modules/configs/routes.py
+  - Current owner: unassigned/shared-caution
+  - Reason: shared settings persistence
+  - Safe touch window: coordinate here before edits
+
+- templates/partials/pages/configuration.html
+  - Current owner: unassigned/shared-caution
+  - Reason: shared settings UI
+  - Safe touch window: coordinate here before edits
+
+- templates/partials/pages/execution.html
+  - Current owner: unassigned/shared-caution
+  - Reason: shared run-center UI
+  - Safe touch window: coordinate here before edits
+
+- templates/partials/pages/dashboard.html
+  - Current owner: unassigned/shared-caution
+  - Reason: shared dashboard UI
+  - Safe touch window: coordinate here before edits
+
+- static/js/live-job.js
+  - Current owner: unassigned/shared-caution
+  - Reason: shared live run-center behavior
+  - Safe touch window: coordinate here before edits
+
+- tests/test_app.py
+  - Current owner: unassigned/shared-caution
+  - Reason: shared app-wide regression coverage
+  - Safe touch window: coordinate here before edits
+- 2026-05-12 America/Toronto - Fixed iLO save persistence by allowing base iLO credentials to save even when optional policy secrets are incomplete, preserving blank-posted secrets in legacy save-config, and correcting NetApp IP alias handling in calc_ip_plan().
+- 2026-05-12 America/Toronto - Decoupled setup-page/sidebar readiness from stale run history, removed the storage probe action, and reduced duplicate page-level target summary cards.
+- 2026-05-12 America/Toronto - Flattened page-level pre-check rows to remove duplicate left-side title/detail rendering in setup pre-check sections.
+- 2026-05-12 America/Toronto - Removed the unused iLO discovery action/route/test and added a shared HTMX request overlay with busy-button state so actions visibly show in-progress work.
+- 2026-05-12 America/Toronto - Brought the remaining older setup/history/run-center templates onto the newer soft-card and strip layout patterns across Global, iLO, ESXi, Windows, QNAP, History, and Execution.
+- 2026-05-13 America/Toronto - Rebuilt the Dashboard into a generic deployment cockpit with readiness score, blocker signals, module readiness map, compact kit management, and generic dashboard header stats.
+- 2026-05-13 America/Toronto - Wired NetApp into the shared Run Center real-execution path with a stage plugin, safe-apply launch option, NetApp prechecks, and background runner support in app/main.py.
+- 2026-05-13 America/Toronto - Made NetApp safe apply capability-aware for missing ONTAP API surfaces so unsupported writes (first hit: /api/network/ip/subnets on 9.9.1P2) are blocked/manual instead of failing the whole run.
+- 2026-05-13 America/Toronto - Fixed NetApp runner log plumbing and reran the live NetApp stage through main.py; the stage now completes cleanly and records blocked/manual ONTAP actions instead of failing hard on older API surfaces.
+  - 2026-05-13 America/Toronto - Cleaned stale operator-facing scaffold/placeholder wording, aligned duplicate NetApp .45 default, made NetApp discovered management IPs persist through reload, and tightened NetApp profile defaults to the configured subnet/netmask.
+- 2026-05-13 America/Toronto - Cleaned another app-wide polish slice: shortened Reports wording, collapsed detailed pre-check rows, widened setup page content, fixed mobile sidebar/content crushing, fixed tablet table overflow, removed generated __pycache__ folders, and verified with browser render checks.
+- 2026-05-13 America/Toronto - Added broadcast-domain adoption from discovered protocol LIF placement; Lab-Uplands-G10 now resolves NFS_BD instead of flagging a fake missing Data domain, and safe apply skips that step cleanly.
+- 2026-05-13 America/Toronto - Added concrete VMware NFS datastore planning from discovered NetApp state (SVM, NFS LIF IPs, export path, datastore name, per-ESXi mount plan) and passed it through the NetApp planner for UI consumption.
+- 2026-05-13 America/Toronto - Refined VMware NFS datastore planning to assign a preferred server per ESXi host, alternate path, validate mount inputs, and emit candidate PowerCLI New-Datastore commands from discovered NetApp state.
+- 2026-05-13 America/Toronto - Switched VMware NFS planning to standalone ESXi mode when no vCenter is configured; Lab-Uplands-G10 now validates against ESXi 10.10.8.111 with saved root credentials and emits a single direct datastore mount command.
+
+- 2026-05-13 America/Toronto - Added a standalone ESXi/NFS probe action to the NetApp page that tests ESXi management reachability and TCP/2049 on discovered NFS LIFs, persisting the latest probe result for operator review.
+
+- 2026-05-13 America/Toronto - Added standalone ESXi NFS datastore automation work: discovered NetApp export-policy mismatch, now creates export rules/volume binding and is being tuned to fall back from NFS 4.1 to NFS v3 when the ESXi host cannot bring up the 4.1 mount.
+- 2026-05-13 America/Toronto - Ran overall health/sanity pass: added requirements.txt, added scripts/health-check, fixed Cisco direct route compatibility, added stage package markers, documented cleanup lessons, removed regenerated caches, and replaced real-looking test password literals with dummy test values.
+
+- 2026-05-13 America/Toronto - Added a shared Upgrade Helper inventory path: scans /media, normalizes current vs available versions for iLO/ONTAP/Cisco, and surfaces per-device upgrade posture in Global Settings and setup prechecks.
+
+2026-05-13 America/Toronto - Wired Cisco version discovery into Upgrade Helper: SSH show version parsing, cached upgrade inventory, Global Settings Cisco access, and direct read-version actions.
+
+2026-05-13 America/Toronto - Upgrade Helper now resolves repo-local media at /home/administrator/lab-builder/media, recognizes real ONTAP q_image and compact iLO firmware filenames, and exposes an Upgrade planner drill-down in Global Settings.
+
+2026-05-13 America/Toronto - Added dedicated /upgrade-helper page, promoted upgrade gates into recommended-next-step routing, and made Global Settings + Upgrade Helper render the same planner state from repo-local media.
+
+2026-05-13 America/Toronto - Added Windows local OVA/OVF path registration with sidecar validation, compact source inventory UI, dry-run plan source summaries, and Windows OVF tests/docs.
+
+2026-05-13 America/Toronto - Extended Windows dry-run planning with OVF hardware metadata parsing, deployment preview UI, target placement summary, and OVF network mismatch warnings.
+
+2026-05-13 America/Toronto - Split OVF handling into a reusable OVF Templates module: register full local template directories, validate sidecars, and let Windows select a registered template for planning.
+
+2026-05-13 America/Toronto - Added upgrade gate policies (block/warn/ignore), enforced them in validate_execution_scope and Run Center readiness, isolated app tests from live media by default, and added dedicated /upgrade-helper policy save flow.
+
+2026-05-13 America/Toronto - Surfaced upgrade policy state earlier: dashboard and setup prechecks now use policy-aware blocker text from Upgrade Helper, and per-device upgrade detail cards now show raw version/source, policy, and matched media path.
+
+2026-05-13 America/Toronto - Added device-specific compatibility notes for Upgrade Helper: ONTAP baseline/media details, Cisco model/platform/media hints, and concise policy-aware blocker text propagated to dashboard and Run Center.
+2026-05-13 America/Toronto - Added first iLO firmware-upgrade workflow: family-safe media matching between ilo5/ilo6 `.fwpkg` files, iLO upgrade planning/execution routes, Redfish HttpPush upload support in `app/ilo.py`, and operator actions on Upgrade Helper + iLO pages with targeted upgrade tests.
+2026-05-13 America/Toronto - Ran the first live iLO firmware upgrade on Lab-Uplands-G10: detected iLO 5 v3.03 on 10.10.8.110, matched `media/ilo5_319.fwpkg`, observed UpdateService `Updating -> Complete -> Idle`, and verified final live firmware `iLO 5 v3.19`.
+2026-05-13 America/Toronto - Added matching planner/executor scaffolding for ONTAP and Cisco upgrades: ONTAP image upload/validate/start/poll helpers plus NetApp UI/routes, and Cisco SSH/SCP planner/executor plus UI/routes. Tested planners/UI with focused pytest; live ONTAP/Cisco execution still unproven.

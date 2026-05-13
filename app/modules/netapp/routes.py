@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+from datetime import datetime, timezone
 from pathlib import Path
+import threading
 from typing import Any
 
 from fastapi import APIRouter, FastAPI, Form, Request
@@ -9,8 +11,11 @@ from jinja2 import Environment, FileSystemLoader, select_autoescape
 
 from app.modules.netapp.schemas import NetAppModuleContext
 from app.modules.netapp.service import NetAppModuleService
+from app.netapp import NetAppClient, NetAppConfig
+from app.netapp_upgrade import build_netapp_upgrade_plan, execute_netapp_upgrade
 from app.plan_renderer import build_token_map, render_command_preview, write_plan_artifacts
 from app.storage_profiles import build_protocol_profile
+from app.upgrade_helper import record_upgrade_inventory
 from app.vmware import build_vmware_plan
 
 router = APIRouter()
@@ -62,7 +67,14 @@ def _parse_iscsi_volumes(value: str) -> list[dict[str, str]]:
     return volumes
 
 
-def _render_netapp_page(request: Request, context: dict[str, Any], payload: dict[str, Any], *, saved: bool = False):
+def _render_netapp_page(
+    request: Request,
+    context: dict[str, Any],
+    payload: dict[str, Any],
+    *,
+    saved: bool = False,
+    action_feedback: dict[str, Any] | None = None,
+):
     from app import main
 
     plan = payload.get("plan") or {}
@@ -72,7 +84,8 @@ def _render_netapp_page(request: Request, context: dict[str, Any], payload: dict
         request,
         context["cfg"],
         active_page="netapp",
-        action_feedback=main.build_action_feedback(
+        action_feedback=action_feedback
+        or main.build_action_feedback(
             "NetApp settings saved" if saved else "NetApp dry-run review",
             "Saved NetApp desired settings and rebuilt the dry-run plan." if saved else "Read-only discovery and validation are loaded for NetApp base workflow and selected storage profile.",
             tone="ready" if payload.get("ok") or saved else "pending",
@@ -97,6 +110,15 @@ def _set_vmware_check(cfg: dict[str, Any], key: str, result: dict[str, Any]) -> 
     cfg.setdefault("netapp", {})
     cfg["netapp"].setdefault("vmware_checks", {})
     cfg["netapp"]["vmware_checks"][key] = result
+
+
+def _cache_discovery_summary(cfg: dict[str, Any], discovery: dict[str, Any]) -> None:
+    cfg.setdefault("netapp", {})
+    version = str(discovery.get("ontap_version") or "").strip()
+    cfg["netapp"]["last_discovered_ontap_version"] = version
+    cfg["netapp"]["last_discovered_cluster_name"] = str(discovery.get("cluster_name") or "").strip()
+    if version:
+        record_upgrade_inventory(cfg, "netapp", current_version=version, source="Last NetApp discovery", raw_version=version)
 
 
 def _sync_discovered_values(cfg: dict[str, Any], discovery: dict[str, Any]) -> list[str]:
@@ -147,23 +169,157 @@ def _sync_discovered_values(cfg: dict[str, Any], discovery: dict[str, Any]) -> l
     return notes
 
 
+def _store_netapp_upgrade_plan(cfg: dict[str, Any], plan: dict) -> None:
+    cfg.setdefault("netapp", {})
+    cfg["netapp"].setdefault("upgrade", {})
+    cfg["netapp"]["upgrade"]["last_plan"] = plan
+
+
+def _compact_error(exc: Exception) -> str:
+    return " ".join(str(exc).split())
+
+
+def _record_netapp_upgrade_activity(cfg: dict[str, Any], event: dict[str, Any], *, status: str | None = None) -> dict[str, Any]:
+    from app import main
+
+    progress_by_phase = {
+        "queued": 5,
+        "precheck": 10,
+        "connect": 20,
+        "upload": 35,
+        "validate": 55,
+        "start": 70,
+        "upgrade": 85,
+        "blocked": 100,
+        "failed": 100,
+        "complete": 100,
+    }
+    cfg.setdefault("netapp", {}).setdefault("upgrade", {})
+    activity = cfg["netapp"]["upgrade"].setdefault("activity", {})
+    events = list(activity.get("events") or [])
+    events.append(event)
+    phase = str(event.get("phase") or activity.get("phase") or "")
+    event_progress = event.get("progress_percent")
+    try:
+        progress_percent = int(event_progress) if event_progress is not None else progress_by_phase.get(phase, int(activity.get("progress_percent") or 0))
+    except (TypeError, ValueError):
+        progress_percent = progress_by_phase.get(phase, int(activity.get("progress_percent") or 0))
+    activity.update(
+        {
+            "status": status or activity.get("status") or "running",
+            "phase": phase,
+            "message": event.get("message") or activity.get("message") or "",
+            "updated_at": event.get("timestamp") or activity.get("updated_at") or "",
+            "events": events[-80:],
+            "progress_percent": max(0, min(100, progress_percent)),
+        }
+    )
+    if event.get("job_uuid"):
+        activity["job_uuid"] = event.get("job_uuid")
+    if not activity.get("started_at"):
+        activity["started_at"] = event.get("timestamp") or ""
+    main.save_kit_config(cfg)
+    return activity
+
+
+def _start_netapp_upgrade_worker(cfg: dict[str, Any]) -> None:
+    from app import main
+
+    def progress(event: dict[str, Any]) -> None:
+        _record_netapp_upgrade_activity(cfg, event, status="running")
+
+    def worker() -> None:
+        try:
+            result = execute_netapp_upgrade(
+                cfg,
+                main.scan_upgrade_media(),
+                build_client=lambda *, host, username, password: NetAppClient(
+                    NetAppConfig(host=host, username=username, password=password, verify_tls=False, timeout=30)
+                ),
+                progress=progress,
+                skip_warnings=True,
+            )
+            cfg.setdefault("netapp", {}).setdefault("upgrade", {})["last_result"] = result
+            _record_netapp_upgrade_activity(
+                cfg,
+                {"phase": "complete", "message": "ONTAP upgrade completed.", "timestamp": result.get("completed_at") or ""},
+                status="completed",
+            )
+            main.save_kit_config(cfg)
+        except Exception as exc:
+            error = _compact_error(exc)
+            cfg.setdefault("netapp", {}).setdefault("upgrade", {})["last_result"] = {"status": "failed", "error": error}
+            _record_netapp_upgrade_activity(
+                cfg,
+                {"phase": "failed", "message": error, "timestamp": datetime.now(timezone.utc).isoformat()},
+                status="failed",
+            )
+            main.save_kit_config(cfg)
+
+    thread = threading.Thread(target=worker, name="netapp-upgrade-worker", daemon=True)
+    thread.start()
+
+
+def _read_current_ontap_version_for_upgrade(cfg: dict[str, Any]) -> tuple[str, list[str]]:
+    notes: list[str] = []
+    netapp_cfg = cfg.setdefault("netapp", {})
+    host = str(netapp_cfg.get("host") or "").strip()
+    username = str(netapp_cfg.get("username") or "admin").strip()
+    password = str(netapp_cfg.get("password") or "")
+    if not host:
+        return "", ["ONTAP API target is not set."]
+    if not username or not password:
+        return "", ["Saved ONTAP credentials are incomplete."]
+    try:
+        client = NetAppClient(NetAppConfig(host=host, username=username, password=password, verify_tls=False, timeout=20))
+        cluster = client.get_cluster()
+    except Exception as exc:
+        return "", [f"Could not read ONTAP version from {host}: {str(exc).splitlines()[0]}"]
+
+    version_payload = cluster.get("version") if isinstance(cluster, dict) else {}
+    version = ""
+    if isinstance(version_payload, dict):
+        version = str(version_payload.get("full") or version_payload.get("generation") or "").strip()
+    cluster_name = str(cluster.get("name") or "").strip() if isinstance(cluster, dict) else ""
+    if version:
+        netapp_cfg["last_discovered_ontap_version"] = version
+        record_upgrade_inventory(cfg, "netapp", current_version=version, source="Live ONTAP upgrade readiness check", raw_version=version)
+        notes.append(f"Current ONTAP version read from {host}: {version}")
+    else:
+        notes.append(f"Connected to {host}, but /api/cluster did not return an ONTAP version.")
+    if cluster_name:
+        netapp_cfg["last_discovered_cluster_name"] = cluster_name
+        notes.append(f"Cluster: {cluster_name}")
+    return version, notes
+
+
 def _apply_current_netapp_convention(cfg: dict[str, Any]) -> list[str]:
     from app.core.config import ip_at_offset
 
     shared = cfg.setdefault("shared_network", {})
     subnet = str(shared.get("subnet") or "10.10.8.0/24").strip()
+    shared.update(
+        {
+            "netapp_sp_a_offset": 13,
+            "netapp_sp_b_offset": 14,
+            "netapp_cluster_mgmt_offset": 45,
+            "netapp_node_01_mgmt_offset": 46,
+            "netapp_node_02_mgmt_offset": 47,
+            "netapp_svm_mgmt_offset": 48,
+        }
+    )
     netapp_cfg = cfg.setdefault("netapp", {})
     management = netapp_cfg.setdefault("management", {})
     desired = netapp_cfg.setdefault("desired", {})
     overrides = dict(netapp_cfg.get("bootstrap_overrides") or {})
 
     current_values = {
-        "netapp_sp_a": ip_at_offset(subnet, int(shared.get("netapp_sp_a_offset", 13) or 13)),
-        "netapp_sp_b": ip_at_offset(subnet, int(shared.get("netapp_sp_b_offset", 14) or 14)),
-        "netapp_cluster_mgmt": ip_at_offset(subnet, int(shared.get("netapp_cluster_mgmt_offset", 45) or 45)),
-        "netapp_node_01_mgmt": ip_at_offset(subnet, int(shared.get("netapp_node_01_mgmt_offset", 46) or 46)),
-        "netapp_node_02_mgmt": ip_at_offset(subnet, int(shared.get("netapp_node_02_mgmt_offset", 47) or 47)),
-        "netapp_svm_mgmt": ip_at_offset(subnet, int(shared.get("netapp_svm_mgmt_offset", 48) or 48)),
+        "netapp_sp_a": ip_at_offset(subnet, 13),
+        "netapp_sp_b": ip_at_offset(subnet, 14),
+        "netapp_cluster_mgmt": ip_at_offset(subnet, 45),
+        "netapp_node_01_mgmt": ip_at_offset(subnet, 46),
+        "netapp_node_02_mgmt": ip_at_offset(subnet, 47),
+        "netapp_svm_mgmt": ip_at_offset(subnet, 48),
     }
     for key, value in current_values.items():
         overrides[key] = value
@@ -674,7 +830,12 @@ async def netapp_discover_page(
     )
     main.save_kit_config(cfg)
     context = _module_context(request)
-    return _render_netapp_page(request, context, service.discover(context))
+    payload = service.discover(context)
+    if payload.get("ok") and payload.get("discovery"):
+        _cache_discovery_summary(cfg, payload["discovery"])
+        main.save_kit_config(cfg)
+        context = _module_context(request)
+    return _render_netapp_page(request, context, payload)
 
 
 @router.post("/modules/netapp/bootstrap-complete", response_class=HTMLResponse)
@@ -718,18 +879,36 @@ async def netapp_use_discovered_values(request: Request):
     from app import main
 
     context = _module_context(request)
+    cfg = context["cfg"]
+    form = {key: value for key, value in dict(await request.form()).items()}
+    _apply_live_netapp_form_state(cfg, form)
+    main.save_kit_config(cfg)
+    context = _module_context(request)
     discover_payload = service.discover(context)
     if not discover_payload.get("ok") or not discover_payload.get("discovery"):
-        return _render_netapp_page(request, context, discover_payload)
+        feedback = main.build_action_feedback(
+            "No discovered NetApp values were applied",
+            "The app tried to read ONTAP first, but discovery did not return usable values to copy into the kit settings.",
+            tone="danger",
+            outcomes=[f"Target: {str((cfg.get('netapp') or {}).get('host') or 'Not set')}"],
+            details=([str(discover_payload.get("error"))] if discover_payload.get("error") else []) + list(discover_payload.get("warnings") or []),
+        )
+        return _render_netapp_page(request, context, discover_payload, action_feedback=feedback)
 
-    cfg = context["cfg"]
+    _cache_discovery_summary(cfg, discover_payload["discovery"])
     sync_notes = _sync_discovered_values(cfg, discover_payload["discovery"])
     main.save_kit_config(cfg)
     context = _module_context(request)
     payload = service.plan(context)
     payload.setdefault("suggestions", [])
     payload["suggestions"] = list(sync_notes) + list(payload.get("suggestions") or [])
-    return _render_netapp_page(request, context, payload, saved=True)
+    feedback = main.build_action_feedback(
+        "Discovered NetApp values applied" if sync_notes else "Discovery succeeded, no settings changed",
+        "Copied the discovered cluster management, node management, cluster name, and NFS LIF values that ONTAP returned.",
+        tone="ready" if sync_notes else "pending",
+        outcomes=sync_notes or ["Discovered values already match the saved kit settings."],
+    )
+    return _render_netapp_page(request, context, payload, saved=True, action_feedback=feedback)
 
 
 @router.post("/modules/netapp/probe-vmware-nfs", response_class=HTMLResponse)
@@ -758,13 +937,21 @@ async def netapp_update_convention(request: Request):
 
     context = _module_context(request)
     cfg = context["cfg"]
+    form = {key: value for key, value in dict(await request.form()).items()}
+    _apply_live_netapp_form_state(cfg, form)
     update_notes = _apply_current_netapp_convention(cfg)
     main.save_kit_config(cfg)
     context = _module_context(request)
     payload = service.plan(context)
     payload.setdefault("suggestions", [])
     payload["suggestions"] = list(update_notes) + list(payload.get("suggestions") or [])
-    return _render_netapp_page(request, context, payload, saved=True)
+    feedback = main.build_action_feedback(
+        "NetApp IP convention updated",
+        "Updated the planned bootstrap values and ONTAP API target to the current NetApp build convention.",
+        tone="ready",
+        outcomes=update_notes,
+    )
+    return _render_netapp_page(request, context, payload, saved=True, action_feedback=feedback)
 
 
 @router.post("/modules/netapp/api-readiness", response_class=HTMLResponse)
@@ -824,6 +1011,128 @@ async def netapp_apply_page(request: Request):
     context = _module_context(request)
     payload = service.apply(context, {"job_id": "job-netapp-safe-apply-001", "scope": "netapp.apply", "confirm": True})
     return _render_netapp_page(request, context, payload, saved=True)
+
+
+@router.post("/modules/netapp/plan-upgrade", response_class=HTMLResponse)
+async def netapp_plan_upgrade(request: Request, return_page: str = Form("netapp")):
+    from app import main
+
+    context = _module_context(request)
+    cfg = context["cfg"]
+    form = {key: value for key, value in dict(await request.form()).items()}
+    _apply_live_netapp_form_state(cfg, form)
+    live_version_notes: list[str] = []
+    current_inventory = (((cfg.get("upgrade_inventory") or {}).get("netapp")) or {})
+    if not str(current_inventory.get("current_version") or "").strip():
+        _, live_version_notes = _read_current_ontap_version_for_upgrade(cfg)
+    plan = build_netapp_upgrade_plan(cfg, main.scan_upgrade_media())
+    _store_netapp_upgrade_plan(cfg, plan)
+    main.save_kit_config(cfg)
+    details = list(live_version_notes) + list(plan.get("blockers") or []) + list(plan.get("warnings") or []) + list(plan.get("notes") or [])
+    feedback = main.build_action_feedback(
+        "ONTAP upgrade readiness checked" if plan.get("ready") else "ONTAP upgrade is not ready yet",
+        "This reviews the ONTAP upgrade path only. It does not upload an image or start an upgrade.",
+        tone="ready" if plan.get("ready") else "pending",
+        outcomes=[
+            "Action: readiness review only",
+            f"Target: {plan.get('host') or 'Not set'}",
+            f"Current version: {plan.get('current_version') or 'Unknown'}",
+            f"Matched image: {plan.get('media_version') or 'Not found'}",
+            f"Ready to run: {'yes' if plan.get('ready') else 'no'}",
+        ],
+        details=details,
+    )
+    page = str(return_page or "").strip().lower()
+    if page in {"upgrade_helper", "global_settings"}:
+        return main.render_page(request, cfg, active_page=page, action_feedback=feedback)
+    context = _module_context(request)
+    payload = service.plan(context)
+    return _render_netapp_page(request, context, payload | {"upgrade_plan": plan}, saved=True, action_feedback=feedback)
+
+
+@router.post("/modules/netapp/run-upgrade", response_class=HTMLResponse)
+async def netapp_run_upgrade(request: Request, return_page: str = Form("netapp")):
+    from app import main
+
+    context = _module_context(request)
+    cfg = context["cfg"]
+    form = {key: value for key, value in dict(await request.form()).items()}
+    _apply_live_netapp_form_state(cfg, form)
+    if not str((((cfg.get("upgrade_inventory") or {}).get("netapp") or {}).get("current_version")) or "").strip():
+        _read_current_ontap_version_for_upgrade(cfg)
+    plan = build_netapp_upgrade_plan(cfg, main.scan_upgrade_media())
+    _store_netapp_upgrade_plan(cfg, plan)
+    activity = (((cfg.get("netapp") or {}).get("upgrade") or {}).get("activity") or {})
+    if str(activity.get("status") or "").lower() == "running":
+        feedback = main.build_action_feedback(
+            "ONTAP upgrade already running",
+            "The existing ONTAP upgrade activity is still active. Watch the activity panel for the latest job state.",
+            tone="pending",
+            outcomes=[f"Phase: {activity.get('phase') or 'unknown'}", f"Last message: {activity.get('message') or 'waiting'}"],
+        )
+    elif not plan.get("ready"):
+        cfg.setdefault("netapp", {}).setdefault("upgrade", {})["last_result"] = {"status": "blocked", "error": "; ".join(plan.get("blockers") or [])}
+        _record_netapp_upgrade_activity(
+            cfg,
+            {"phase": "blocked", "message": "; ".join(plan.get("blockers") or ["ONTAP upgrade prechecks are not satisfied."]), "timestamp": datetime.now(timezone.utc).isoformat()},
+            status="blocked",
+        )
+        feedback = main.build_action_feedback(
+            "ONTAP upgrade blocked",
+            "The app did not start the upgrade because readiness checks did not pass.",
+            tone="danger",
+            outcomes=[
+                f"Target: {plan.get('host') or 'Not set'}",
+                f"Current version: {plan.get('current_version') or 'Unknown'}",
+                f"Matched image: {plan.get('media_version') or 'Not found'}",
+            ],
+            details=list(plan.get("blockers") or []) + list(plan.get("warnings") or []),
+        )
+    else:
+        cfg.setdefault("netapp", {}).setdefault("upgrade", {})["activity"] = {
+            "status": "running",
+            "phase": "queued",
+            "message": "ONTAP upgrade worker queued.",
+            "started_at": datetime.now(timezone.utc).isoformat(),
+            "updated_at": datetime.now(timezone.utc).isoformat(),
+            "events": [
+                {
+                    "phase": "queued",
+                    "message": "ONTAP upgrade worker queued.",
+                    "timestamp": datetime.now(timezone.utc).isoformat(),
+                }
+            ],
+        }
+        main.save_kit_config(cfg)
+        _start_netapp_upgrade_worker(cfg)
+        feedback = main.build_action_feedback(
+            "ONTAP upgrade started",
+            "The upgrade is running in the background. The activity panel will show upload, validation, job IDs, and errors.",
+            tone="pending",
+            outcomes=[
+                f"Target: {plan.get('host') or 'Not set'}",
+                f"Current version: {plan.get('current_version') or 'Unknown'}",
+                f"Target version: {plan.get('media_version') or 'Unknown'}",
+            ],
+        )
+    page = str(return_page or "").strip().lower()
+    if page in {"upgrade_helper", "global_settings"}:
+        return main.render_page(request, cfg, active_page=page, action_feedback=feedback)
+    context = _module_context(request)
+    payload = service.plan(context)
+    return _render_netapp_page(request, context, payload, saved=True, action_feedback=feedback)
+
+
+@router.get("/modules/netapp/upgrade-activity", response_class=HTMLResponse)
+async def netapp_upgrade_activity(request: Request):
+    from app import main
+
+    cfg = main.load_kit_config()
+    return main.templates.TemplateResponse(
+        request,
+        "partials/components/netapp_upgrade_activity.html",
+        {"cfg": cfg},
+    )
 
 
 @router.get("/modules/netapp/preview", response_class=HTMLResponse)

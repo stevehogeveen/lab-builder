@@ -59,6 +59,7 @@ class IloConfigModel(BaseModel):
     password: str = ""
     additional_users: list[dict[str, str]] = Field(default_factory=list)
     policy: IloPolicyModel = Field(default_factory=IloPolicyModel)
+    upgrade: dict[str, Any] = Field(default_factory=dict)
 
 
 class EsxiConfigModel(BaseModel):
@@ -117,6 +118,7 @@ class KitConfigModel(BaseModel):
     cisco_switch: dict[str, Any] = Field(default_factory=dict)
     storage: StoragePlanModel = Field(default_factory=StoragePlanModel)
     netapp: dict[str, Any] = Field(default_factory=dict)
+    upgrade_inventory: dict[str, Any] = Field(default_factory=dict)
 
 
 class JobStatusModel(BaseModel):

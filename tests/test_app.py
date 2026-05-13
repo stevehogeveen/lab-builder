@@ -33,6 +33,107 @@ def fake_esxi_base_iso(tmp_path: Path) -> Path:
     return path
 
 
+def test_validate_execution_scope_blocks_on_upgrade_gate(monkeypatch):
+    cfg = main.default_config()
+    cfg["upgrade_inventory"] = {
+        "netapp": {"current_version": "9.9.1P2", "source": "Last NetApp discovery", "last_checked_at": "2026-05-13T00:00:00+00:00"},
+    }
+    cfg["upgrade_helper"] = {"policies": {"netapp": "block"}}
+    cfg["included"]["netapp"] = True
+    monkeypatch.setattr(main, "scan_upgrade_media", lambda: {
+        "root": "/repo/media",
+        "latest": {"netapp": {"version": "9.17.1", "filename": "9171_q_image.tgz", "path": "/repo/media/9171_q_image.tgz"}},
+        "counts": {"netapp": 1},
+        "candidates": [],
+    })
+
+    with pytest.raises(ValueError, match="Upgrade ONTAP"):
+        main.validate_execution_scope(cfg, "netapp")
+
+
+def test_validate_execution_scope_allows_warn_only_upgrade_gap(monkeypatch):
+    cfg = main.default_config()
+    cfg["upgrade_inventory"] = {
+        "netapp": {"current_version": "9.9.1P2", "source": "Last NetApp discovery", "last_checked_at": "2026-05-13T00:00:00+00:00"},
+    }
+    cfg["upgrade_helper"] = {"policies": {"netapp": "warn"}}
+    monkeypatch.setattr(main, "scan_upgrade_media", lambda: {
+        "root": "/repo/media",
+        "latest": {"netapp": {"version": "9.17.1", "filename": "9171_q_image.tgz", "path": "/repo/media/9171_q_image.tgz"}},
+        "counts": {"netapp": 1},
+        "candidates": [],
+    })
+
+    main.validate_execution_scope(cfg, "netapp")
+
+
+def test_upgrade_helper_and_ilo_page_show_ilo_upgrade_actions(client):
+    cfg = main.default_config()
+    cfg["upgrade_inventory"] = {
+        "ilo": {"current_version": "1.50", "source": "Latest live iLO inventory", "manager_model": "iLO 6"},
+    }
+    main.save_kit_config(cfg)
+
+    response = client.get("/upgrade-helper")
+    assert response.status_code == 200
+    assert "Plan iLO upgrade" in response.text
+    assert "Run iLO upgrade" in response.text
+
+    response = client.get("/ilo")
+    assert response.status_code == 200
+    assert "iLO firmware upgrade" in response.text
+    assert "Run iLO upgrade" in response.text
+
+
+def test_upgrade_helper_shows_netapp_and_cisco_upgrade_actions(client):
+    cfg = main.default_config()
+    cfg["upgrade_inventory"] = {
+        "netapp": {"current_version": "9.9.1P2", "source": "Last NetApp discovery"},
+        "cisco_switch": {"current_version": "17.03.01", "source": "Last Cisco discovery"},
+    }
+    main.save_kit_config(cfg)
+
+    response = client.get("/upgrade-helper")
+    assert response.status_code == 200
+    assert "Review ONTAP upgrade plan" in response.text
+    assert "Run ONTAP upgrade" in response.text
+    assert "Review Cisco upgrade plan" in response.text
+    assert "Run Cisco upgrade" in response.text
+    assert "Upgrade Helper" in response.text
+
+
+def test_upgrade_helper_preserves_post_upgrade_ilo_version_over_stale_live_snapshot(monkeypatch):
+    cfg = main.default_config()
+    cfg["upgrade_inventory"] = {
+        "ilo": {
+            "current_version": "3.19",
+            "source": "Post-upgrade iLO verification",
+            "last_checked_at": "2026-05-13T17:09:38+00:00",
+            "manager_model": "iLO 5",
+        }
+    }
+    monkeypatch.setattr(
+        main,
+        "load_latest_live_inventory_snapshot_for_cfg",
+        lambda _cfg: {
+            "summary": {"ilo_firmware_version": "iLO 5 v3.03"},
+            "raw": {"inventory": {"summary": {"manager": {"model": "iLO 5"}}}},
+        },
+    )
+    monkeypatch.setattr(main, "scan_upgrade_media", lambda: {
+        "root": "/repo/media",
+        "latest": {"ilo": {"version": "3.19", "filename": "ilo5_319.fwpkg", "path": "/repo/media/ilo5_319.fwpkg"}},
+        "counts": {"ilo": 1},
+        "candidates": [{"device": "ilo", "version": "3.19", "filename": "ilo5_319.fwpkg", "path": "/repo/media/ilo5_319.fwpkg"}],
+    })
+
+    card = main.build_upgrade_helper_card(cfg)
+    entry = next(item for item in card["planner"]["entries"] if item["key"] == "ilo")
+
+    assert entry["current_version"] == "3.19"
+    assert entry["comparison"] == "current_enough"
+
+
 @pytest.fixture(autouse=True)
 def isolate_runtime_paths(tmp_path, monkeypatch):
     config_dir = tmp_path / "config"
@@ -64,6 +165,7 @@ def isolate_runtime_paths(tmp_path, monkeypatch):
         monkeypatch.setattr(main, name, value)
     monkeypatch.setenv("LAB_BUILDER_VALIDATE_ESXI_MEDIA_URL", "0")
     monkeypatch.setenv("LAB_BUILDER_LIVE_RUN_CENTER_CHECKS", "0")
+    monkeypatch.setattr(main, "scan_upgrade_media", lambda: {"root": str(tmp_path / "media"), "latest": {}, "counts": {}, "candidates": []})
     main.set_current_kit_name("Kit-01")
 
 

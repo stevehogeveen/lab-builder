@@ -4,6 +4,40 @@
         <div class="text-sm text-slate-400">Watch and run.</div>
     </div>
 
+    {% set upgrade = upgrade_helper_summary or {} %}
+    {% if upgrade %}
+    <section class="card identity-soft-card">
+        <div class="flex items-start justify-between gap-4">
+            <div>
+                <div class="text-lg font-semibold">Upgrade gates</div>
+                <div class="text-sm text-slate-400 mt-1">Run Center uses the same device upgrade policy decisions as the prebuild pages.</div>
+            </div>
+            <span class="status {{ upgrade.tone or 'progress' }}">{{ upgrade.summary_value or upgrade.label or 'Review' }}</span>
+        </div>
+        <div class="grid grid-cols-1 md:grid-cols-4 gap-4 mt-4">
+            <div class="ops-strip-card" style="margin-top: 0;">
+                <div class="dashboard-kicker">Decision</div>
+                <div class="font-semibold">{{ upgrade.summary_value or 'Review' }}</div>
+            </div>
+            <div class="ops-strip-card" style="margin-top: 0;">
+                <div class="dashboard-kicker">Blockers</div>
+                <div class="font-semibold">{{ upgrade.get('planner', {}).get('blockers', 0) }}</div>
+            </div>
+            <div class="ops-strip-card" style="margin-top: 0;">
+                <div class="dashboard-kicker">Warnings</div>
+                <div class="font-semibold">{{ upgrade.get('planner', {}).get('warnings', 0) }}</div>
+            </div>
+            <div class="ops-strip-card" style="margin-top: 0;">
+                <div class="dashboard-kicker">Next step</div>
+                <div class="font-semibold">{{ upgrade.get('next_blocker', {}).get('label', 'Open Upgrade Helper') if upgrade.get('next_blocker') else 'Open Upgrade Helper' }}</div>
+            </div>
+        </div>
+        <div class="actions mt-4">
+            <a class="btn" href="/upgrade-helper">Open Upgrade Helper</a>
+        </div>
+    </section>
+    {% endif %}
+
     {% set setup_strip = {
         "title": "Run snapshot",
         "subtitle": "Keep the current run state, completion, and next operator action visible at the top.",

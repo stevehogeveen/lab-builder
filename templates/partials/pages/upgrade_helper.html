@@ -1,0 +1,200 @@
+{% set upgrade = upgrade_helper_summary or {} %}
+<section class="panel space-y-6">
+    <div>
+        <h2 class="text-2xl font-bold title-with-icon"><span class="page-icon icon-tone-{{ page_precheck_summary.tone if page_precheck_summary else 'progress' }}" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v4"/><path d="M12 17v4"/><path d="M3 12h4"/><path d="M17 12h4"/><circle cx="12" cy="12" r="3.5"/><path d="m5.6 5.6 2.8 2.8"/><path d="m15.6 15.6 2.8 2.8"/><path d="m18.4 5.6-2.8 2.8"/><path d="m8.4 15.6-2.8 2.8"/></svg></span><span>Upgrade Helper</span></h2>
+        <div class="text-sm text-slate-400 mt-1">Use this page to decide whether iLO, ONTAP, or Cisco should be upgraded before the rest of the build continues.</div>
+    </div>
+
+    {% set precheck_summary = page_precheck_summary %}
+    {% include "partials/components/precheck_summary.html" %}
+
+    <section class="card identity-soft-card">
+        <div class="flex items-start justify-between gap-4 mb-3">
+            <div>
+                <div class="text-lg font-semibold">Upgrade inventory</div>
+                <div class="text-sm text-slate-400 mt-1">Scans approved files under <span class="artifact-path">{{ upgrade.target or '/home/administrator/lab-builder/media' }}</span> and compares them to the latest discovered device versions.</div>
+            </div>
+            <span class="status {{ upgrade.tone or 'progress' }}">{{ upgrade.label or 'Review' }}</span>
+        </div>
+        <div class="grid grid-cols-1 md:grid-cols-4 gap-4">
+            <div class="ops-strip-card" style="margin-top: 0;">
+                <div class="dashboard-kicker">Decision</div>
+                <div class="font-semibold">{{ upgrade.summary_value or 'Review' }}</div>
+            </div>
+            <div class="ops-strip-card" style="margin-top: 0;">
+                <div class="dashboard-kicker">Ready</div>
+                <div class="font-semibold">{{ upgrade.get('planner', {}).get('ready', 0) }}/{{ upgrade.get('planner', {}).get('total', 0) }}</div>
+            </div>
+            <div class="ops-strip-card" style="margin-top: 0;">
+                <div class="dashboard-kicker">Blockers</div>
+                <div class="font-semibold">{{ upgrade.get('planner', {}).get('blockers', upgrade.blockers or 0) }}</div>
+            </div>
+            <div class="ops-strip-card" style="margin-top: 0;">
+                <div class="dashboard-kicker">Media root</div>
+                <div class="font-semibold">{{ upgrade.target or '/home/administrator/lab-builder/media' }}</div>
+            </div>
+        </div>
+    </section>
+
+    {% if cfg.get('included', {}).get('netapp') %}
+    {% include "partials/components/netapp_upgrade_activity.html" %}
+    {% endif %}
+
+    <form hx-post="/save-upgrade-policies" hx-target="#main-content" hx-swap="outerHTML" class="card identity-soft-card">
+        <input type="hidden" name="return_page" value="upgrade_helper">
+        <div class="flex items-start justify-between gap-4 mb-3">
+            <div>
+                <div class="text-lg font-semibold">Gate policies</div>
+                <div class="text-sm text-slate-400 mt-1">Choose whether each device should block the build, warn only, or be ignored when the current version is unknown or older than the matched media.</div>
+            </div>
+            <button class="btn btn-primary" type="submit">Save policies</button>
+        </div>
+        <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
+            <div>
+                <label class="block text-sm font-bold text-slate-300 mb-2">iLO</label>
+                <select name="policy_ilo" class="input">
+                    {% set p = upgrade.get('policies', {}).get('ilo', 'block') %}
+                    <option value="block" {% if p == 'block' %}selected{% endif %}>Block build</option>
+                    <option value="warn" {% if p == 'warn' %}selected{% endif %}>Warn only</option>
+                    <option value="ignore" {% if p == 'ignore' %}selected{% endif %}>Ignore</option>
+                </select>
+            </div>
+            <div>
+                <label class="block text-sm font-bold text-slate-300 mb-2">ONTAP</label>
+                <select name="policy_netapp" class="input">
+                    {% set p = upgrade.get('policies', {}).get('netapp', 'block') %}
+                    <option value="block" {% if p == 'block' %}selected{% endif %}>Block build</option>
+                    <option value="warn" {% if p == 'warn' %}selected{% endif %}>Warn only</option>
+                    <option value="ignore" {% if p == 'ignore' %}selected{% endif %}>Ignore</option>
+                </select>
+            </div>
+            <div>
+                <label class="block text-sm font-bold text-slate-300 mb-2">Cisco</label>
+                <select name="policy_cisco_switch" class="input">
+                    {% set p = upgrade.get('policies', {}).get('cisco_switch', 'block') %}
+                    <option value="block" {% if p == 'block' %}selected{% endif %}>Block build</option>
+                    <option value="warn" {% if p == 'warn' %}selected{% endif %}>Warn only</option>
+                    <option value="ignore" {% if p == 'ignore' %}selected{% endif %}>Ignore</option>
+                </select>
+            </div>
+        </div>
+    </form>
+
+    {% if upgrade.get('devices') %}
+    <section class="ops-detail-grid">
+        {% for device in upgrade.get('devices', []) %}
+        {% set planner_entry = (upgrade.get('planner', {}).get('entries', []) | selectattr('key', 'equalto', device.key) | list | first) %}
+        <div class="card card-compact">
+            <div class="flex items-start justify-between gap-3">
+                <div class="font-semibold">{{ device.label }}</div>
+                <span class="status {{ device.tone }}">{{ device.status | replace('_', ' ') | title }}</span>
+            </div>
+            <div class="text-sm text-slate-300 mt-3">Current {{ device.current_version or 'unknown' }}</div>
+            <div class="text-xs text-slate-500 mt-1">{{ device.current_source or 'No current source yet' }}</div>
+            {% if planner_entry and planner_entry.current_raw and planner_entry.current_raw != device.current_version %}
+            <div class="text-xs text-slate-500 mt-1">Raw value: {{ planner_entry.current_raw }}</div>
+            {% endif %}
+            <div class="text-sm text-slate-300 mt-3">Media {{ device.media_version or 'not found' }}</div>
+            <div class="text-xs text-slate-500 mt-1">{{ device.media_filename or 'No file matched under media' }}</div>
+            {% if planner_entry %}
+            <div class="text-xs text-slate-500 mt-1">Policy: {{ planner_entry.policy | title }}{% if planner_entry.blocks_run %} | Blocks run{% elif planner_entry.warn_only %} | Warn only{% endif %}</div>
+            {% if planner_entry.media_path %}
+            <div class="text-xs text-slate-500 mt-1 truncate-wrap">File: {{ planner_entry.media_path }}</div>
+            {% endif %}
+            {% if planner_entry.compatibility_summary %}
+            <div class="text-sm mt-3">{{ planner_entry.compatibility_summary }}</div>
+            {% endif %}
+            {% if planner_entry.detail_lines %}
+            <div class="text-xs text-slate-500 mt-2 space-y-1">
+                {% for line in planner_entry.detail_lines %}
+                <div>{{ line }}</div>
+                {% endfor %}
+            </div>
+            {% endif %}
+            <div class="text-sm text-slate-300 mt-3">{{ planner_entry.recommended_action }}</div>
+            {% endif %}
+            <div class="actions mt-4">
+                {% if device.key == 'cisco_switch' %}
+                <div class="text-xs text-slate-500 mb-2">Review prechecks, matched image, and readiness before starting the upgrade.</div>
+                <button class="btn" type="button" hx-post="/modules/cisco/plan-upgrade" hx-vals='{"return_page":"upgrade_helper"}' hx-target="#main-content" hx-swap="outerHTML">Review Cisco upgrade plan</button>
+                <button class="btn btn-primary" type="button" hx-post="/modules/cisco/run-upgrade" hx-vals='{"return_page":"upgrade_helper"}' hx-target="#main-content" hx-swap="outerHTML">Run Cisco upgrade</button>
+                <button class="btn" type="button" hx-post="/modules/cisco/discover-version" hx-include="[name='cisco_switch_hostname'],[name='cisco_switch_username'],[name='cisco_switch_password']" hx-vals='{"return_page":"upgrade_helper"}' hx-target="#main-content" hx-swap="outerHTML">Read Cisco version</button>
+                {% elif device.key == 'netapp' %}
+                <div class="text-xs text-slate-500 mb-2">Review prechecks, matched image, and readiness before starting the cluster upgrade.</div>
+                <button class="btn" type="button" hx-post="/modules/netapp/plan-upgrade" hx-vals='{"return_page":"upgrade_helper"}' hx-target="#main-content" hx-swap="outerHTML">Review ONTAP upgrade plan</button>
+                <button class="btn btn-primary" type="button" hx-post="/modules/netapp/run-upgrade" hx-vals='{"return_page":"upgrade_helper"}' hx-target="#main-content" hx-swap="outerHTML">Run ONTAP upgrade</button>
+                <a class="btn" href="/modules/netapp">Open NetApp</a>
+                {% elif device.key == 'ilo' %}
+                <div class="text-xs text-slate-500 mb-2">Review prechecks, matched package, and readiness before flashing firmware.</div>
+                <button class="btn" type="button" hx-post="/plan-ilo-upgrade" hx-vals='{"return_page":"upgrade_helper"}' hx-target="#main-content" hx-swap="outerHTML">Review iLO upgrade plan</button>
+                <button class="btn btn-primary" type="button" hx-post="/run-ilo-upgrade" hx-vals='{"return_page":"upgrade_helper"}' hx-target="#main-content" hx-swap="outerHTML">Run iLO upgrade</button>
+                <a class="btn" href="/ilo">Open iLO</a>
+                {% endif %}
+            </div>
+        </div>
+        {% endfor %}
+    </section>
+    {% endif %}
+
+    {% set planner = upgrade.get('planner', {}) %}
+    {% if planner.get('entries') %}
+    <section class="card identity-soft-card">
+        <div class="text-lg font-semibold mb-3">Upgrade planner</div>
+        <div class="ops-row-list">
+            {% for entry in planner.get('entries', []) %}
+            <div class="ops-row-item">
+                <div class="ops-row-copy">
+                    <div class="font-semibold">{{ entry.label }}</div>
+                    <div class="text-sm text-slate-400 mt-1">
+                        Current {{ entry.current_version or 'unknown' }}
+                        {% if entry.current_source %}<span class="text-slate-500">({{ entry.current_source }})</span>{% endif %}
+                        |
+                        Media {{ entry.media_version or 'not found' }}
+                        {% if entry.media_filename %}<span class="text-slate-500">({{ entry.media_filename }})</span>{% endif %}
+                    </div>
+                    {% if entry.media_path %}
+                    <div class="text-xs text-slate-500 mt-1 truncate-wrap">{{ entry.media_path }}</div>
+                    {% endif %}
+                    <div class="text-xs text-slate-500 mt-2">Policy: {{ entry.policy | title }}{% if entry.warn_only %} | Warning only{% elif entry.blocks_run %} | Blocks run{% endif %}</div>
+                    {% if entry.compatibility_summary %}
+                    <div class="text-sm mt-2">{{ entry.compatibility_summary }}</div>
+                    {% endif %}
+                    {% if entry.detail_lines %}
+                    <div class="text-xs text-slate-500 mt-2 space-y-1">
+                        {% for line in entry.detail_lines %}
+                        <div>{{ line }}</div>
+                        {% endfor %}
+                    </div>
+                    {% endif %}
+                    <div class="text-sm mt-2">{{ entry.recommended_action }}</div>
+                </div>
+                <div class="ops-row-meta">
+                    <span class="status {{ entry.severity }}">{{ entry.comparison | replace('_', ' ') | title }}</span>
+                    {% if entry.prebuild_gate %}
+                    <div class="text-xs text-amber-300 mt-2">Prebuild gate</div>
+                    {% endif %}
+                </div>
+            </div>
+            {% endfor %}
+        </div>
+    </section>
+    {% endif %}
+
+    <section class="card identity-soft-card">
+        <div class="text-lg font-semibold mb-3">Cisco access</div>
+        <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
+            <div>
+                <label class="block text-sm font-bold text-slate-300 mb-2">Hostname</label>
+                <input type="text" name="cisco_switch_hostname" value="{{ cfg.get('cisco_switch', {}).get('hostname', 'sw01') }}" class="input">
+            </div>
+            <div>
+                <label class="block text-sm font-bold text-slate-300 mb-2">Username</label>
+                <input type="text" name="cisco_switch_username" value="{{ cfg.get('cisco_switch', {}).get('username', 'admin') }}" class="input">
+            </div>
+            <div>
+                <label class="block text-sm font-bold text-slate-300 mb-2">Password</label>
+                <input type="password" name="cisco_switch_password" value="{{ cfg.get('cisco_switch', {}).get('password', '') }}" class="input">
+            </div>
+        </div>
+    </section>
+</section>

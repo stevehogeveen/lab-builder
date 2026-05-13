@@ -7,6 +7,111 @@
     {% set precheck_summary = setup_precheck_summary %}
     {% include "partials/components/precheck_summary.html" %}
 
+    {% set upgrade = upgrade_helper_summary or {} %}
+    {% if upgrade %}
+    <section class="card identity-soft-card">
+        <div class="flex items-start justify-between gap-4 mb-3">
+            <div>
+                <div class="text-lg font-semibold">Upgrade Helper</div>
+                <div class="text-sm text-slate-400 mt-1">Checks `/media` for approved upgrade files and compares them to the latest known device versions before build execution.</div>
+            </div>
+            <span class="status {{ upgrade.tone or 'progress' }}">{{ upgrade.label or 'Review' }}</span>
+        </div>
+        <div class="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-4">
+            <div class="ops-strip-card" style="margin-top: 0;">
+                <div class="dashboard-kicker">Media root</div>
+                <div class="font-semibold">{{ upgrade.target or '/media' }}</div>
+            </div>
+            <div class="ops-strip-card" style="margin-top: 0;">
+                <div class="dashboard-kicker">Checks ready</div>
+                <div class="font-semibold">{{ upgrade.checks_ready or 0 }}/{{ upgrade.total_checks or 0 }}</div>
+            </div>
+            <div class="ops-strip-card" style="margin-top: 0;">
+                <div class="dashboard-kicker">Blockers</div>
+                <div class="font-semibold">{{ upgrade.blockers or 0 }}</div>
+            </div>
+            <div class="ops-strip-card" style="margin-top: 0;">
+                <div class="dashboard-kicker">Next issue</div>
+                <div class="font-semibold">{{ upgrade.get('next_blocker', {}).get('label', 'None') if upgrade.get('next_blocker') else 'None' }}</div>
+            </div>
+        </div>
+        {% if upgrade.get('items') %}
+        <div class="ops-list mt-4">
+            {% for item in upgrade.get('items', []) %}
+            <div class="result" style="margin-top: 0;">
+                <div class="font-semibold">{{ item.label }}</div>
+                <div class="text-sm text-slate-400 mt-1">{{ item.details }}</div>
+                {% if item.fix %}
+                <div class="text-xs text-slate-500 mt-1">{{ item.fix }}</div>
+                {% endif %}
+            </div>
+            {% endfor %}
+        </div>
+        {% endif %}
+        {% if upgrade.get('devices') %}
+        <div class="ops-detail-grid mt-4">
+            {% for device in upgrade.get('devices', []) %}
+            <div class="card card-compact">
+                <div class="flex items-start justify-between gap-3">
+                    <div class="font-semibold">{{ device.label }}</div>
+                    <span class="status {{ device.tone }}">{{ device.status | replace('_', ' ') | title }}</span>
+                </div>
+                <div class="text-sm text-slate-300 mt-3">Current {{ device.current_version or 'unknown' }}</div>
+                <div class="text-xs text-slate-500 mt-1">{{ device.current_source or 'No current source yet' }}</div>
+                <div class="text-sm text-slate-300 mt-3">Media {{ device.media_version or 'not found' }}</div>
+                <div class="text-xs text-slate-500 mt-1">{{ device.media_filename or 'No file matched under /media' }}</div>
+                {% if device.key == 'cisco_switch' %}
+                <div class="mt-4">
+                    <button
+                        class="btn"
+                        type="button"
+                        hx-post="/modules/cisco/discover-version"
+                        hx-include="closest form"
+                        hx-vals='{"return_page":"global_settings"}'
+                        hx-target="#main-content"
+                        hx-swap="outerHTML"
+                    >Read Cisco version</button>
+                </div>
+                {% endif %}
+            </div>
+            {% endfor %}
+        </div>
+        {% endif %}
+        {% set planner = upgrade.get('planner', {}) %}
+        {% if planner.get('entries') %}
+        <details class="card card-compact mt-4" open>
+            <summary class="summary-row">
+                <span class="font-semibold">Upgrade planner</span>
+                <span class="text-xs text-slate-500">{{ planner.get('ready', 0) }}/{{ planner.get('total', 0) }} ready</span>
+            </summary>
+            <div class="ops-row-list mt-3">
+                {% for entry in planner.get('entries', []) %}
+                <div class="ops-row-item">
+                    <div class="ops-row-copy">
+                        <div class="font-semibold">{{ entry.label }}</div>
+                        <div class="text-sm text-slate-400 mt-1">
+                            Current {{ entry.current_version or 'unknown' }}
+                            {% if entry.current_source %}<span class="text-slate-500">({{ entry.current_source }})</span>{% endif %}
+                            |
+                            Media {{ entry.media_version or 'not found' }}
+                            {% if entry.media_filename %}<span class="text-slate-500">({{ entry.media_filename }})</span>{% endif %}
+                        </div>
+                        <div class="text-xs text-slate-500 mt-2">{{ entry.recommended_action }}</div>
+                    </div>
+                    <div class="ops-row-meta">
+                        <span class="status {{ entry.severity }}">{{ entry.comparison | replace('_', ' ') | title }}</span>
+                        {% if entry.prebuild_gate %}
+                        <div class="text-xs text-amber-300 mt-2">Prebuild gate</div>
+                        {% endif %}
+                    </div>
+                </div>
+                {% endfor %}
+            </div>
+        </details>
+        {% endif %}
+    </section>
+    {% endif %}
+
     <form hx-post="/save-global-settings" hx-target="#main-content" hx-swap="outerHTML" class="space-y-4" x-data='{"snmpUsers": {{ cfg.get("shared_snmp", {}).get("users", [])[1:]|tojson }} }'>
         <input type="hidden" name="return_page" value="global_settings">
 
@@ -103,6 +208,56 @@
                         <option value="nfs" {% if protocol == 'nfs' %}selected{% endif %}>NFS</option>
                         <option value="iscsi" {% if protocol == 'iscsi' %}selected{% endif %}>iSCSI</option>
                     </select>
+                </div>
+            </div>
+        </section>
+
+        <section class="card identity-soft-card">
+            <div class="flex items-start justify-between gap-4 mb-3">
+                <div>
+                    <div class="text-lg font-semibold">Cisco access</div>
+                    <div class="text-sm text-slate-400 mt-1">These values are used for read-only switch version discovery and future prebuild checks.</div>
+                </div>
+                <button
+                    class="btn"
+                    type="button"
+                    hx-post="/modules/cisco/discover-version"
+                    hx-include="closest form"
+                    hx-vals='{"return_page":"global_settings"}'
+                    hx-target="#main-content"
+                    hx-swap="outerHTML"
+                >Read Cisco version</button>
+            </div>
+            <div class="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-4">
+                <div>
+                    <label class="block text-sm font-bold text-slate-300 mb-2">Hostname</label>
+                    <input type="text" name="cisco_switch_hostname" value="{{ cfg.get('cisco_switch', {}).get('hostname', 'sw01') }}" class="input">
+                </div>
+                <div>
+                    <label class="block text-sm font-bold text-slate-300 mb-2">Target IP</label>
+                    <input type="text" value="{{ cfg.get('cisco_switch', {}).get('ip', '') or cfg.get('ip_plan', {}).get('switch', '') }}" class="input" disabled>
+                </div>
+                <div>
+                    <label class="block text-sm font-bold text-slate-300 mb-2">Username</label>
+                    <input type="text" name="cisco_switch_username" value="{{ cfg.get('cisco_switch', {}).get('username', 'admin') }}" class="input">
+                </div>
+                <div>
+                    <label class="block text-sm font-bold text-slate-300 mb-2">Password</label>
+                    <input type="password" name="cisco_switch_password" value="{{ cfg.get('cisco_switch', {}).get('password', '') }}" class="input">
+                </div>
+            </div>
+            <div class="grid grid-cols-1 md:grid-cols-3 gap-4 mt-4">
+                <div class="ops-strip-card" style="margin-top: 0;">
+                    <div class="dashboard-kicker">Current version</div>
+                    <div class="font-semibold">{{ cfg.get('cisco_switch', {}).get('last_discovered_version', '') or 'Unknown' }}</div>
+                </div>
+                <div class="ops-strip-card" style="margin-top: 0;">
+                    <div class="dashboard-kicker">Last read</div>
+                    <div class="font-semibold">{{ cfg.get('cisco_switch', {}).get('last_discovered_at', '') or 'Not run yet' }}</div>
+                </div>
+                <div class="ops-strip-card" style="margin-top: 0;">
+                    <div class="dashboard-kicker">Last error</div>
+                    <div class="font-semibold">{{ cfg.get('cisco_switch', {}).get('last_discovery_error', '') or 'None' }}</div>
                 </div>
             </div>
         </section>

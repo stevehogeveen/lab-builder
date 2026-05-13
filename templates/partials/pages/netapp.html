@@ -51,6 +51,7 @@
     {% set node_mgmt_mismatch = (planned_node_01_mgmt_ip and discovered_node_mgmt_map and discovered_node_mgmt_ips and planned_node_01_mgmt_ip not in discovered_node_mgmt_ips) or (planned_node_02_mgmt_ip and discovered_node_mgmt_map and discovered_node_mgmt_ips and planned_node_02_mgmt_ip not in discovered_node_mgmt_ips) %}
     {% set active_protocols = discovery.get('enabled_protocols', []) %}
     {% set legacy_warning_ns = namespace(value='') %}
+    {% set shared_upgrade_entry = (upgrade_helper_summary.get('planner', {}).get('entries', []) | selectattr('key', 'equalto', 'netapp') | list | first) if upgrade_helper_summary else {} %}
     {% for warning in bootstrap_warnings %}
         {% if '.40/.41/.42/.43' in warning %}
             {% set legacy_warning_ns.value = warning %}
@@ -108,6 +109,55 @@
             <div class="font-semibold">{{ (warnings|length) if has_snapshot else (bootstrap_warnings|length) }}</div>
         </div>
     </div>
+
+    {% set netapp_upgrade = cfg.get('netapp', {}).get('upgrade', {}) %}
+    {% set netapp_upgrade_plan = netapp_upgrade.get('last_plan', {}) or shared_upgrade_entry or {} %}
+    {% set netapp_upgrade_path = netapp_upgrade_plan.get('upgrade_path', {}) %}
+    {% set netapp_upgrade_result = netapp_upgrade.get('last_result', {}) %}
+    <section class="card identity-soft-card">
+        <div class="flex items-start justify-between gap-4">
+            <div>
+                <div class="text-lg font-semibold">ONTAP upgrade</div>
+                <div class="text-sm text-slate-400 mt-1">Separate from storage configuration. The planner matches the current cluster version to the best image in <span class="artifact-path">/home/administrator/lab-builder/media</span>, then the executor can upload, validate, and start the cluster software workflow.</div>
+            </div>
+            <span class="status {{ 'ready' if netapp_upgrade_plan.get('ready') else 'progress' }}">{{ 'Ready' if netapp_upgrade_plan.get('ready') else 'Review' }}</span>
+        </div>
+        <div class="grid grid-cols-1 md:grid-cols-4 gap-4 mt-4">
+            <div class="ops-strip-card" style="margin-top: 0;">
+                <div class="dashboard-kicker">Current</div>
+                <div class="font-semibold">{{ netapp_upgrade_plan.get('current_version') or discovery.get('ontap_version') or 'Unknown' }}</div>
+            </div>
+            <div class="ops-strip-card" style="margin-top: 0;">
+                <div class="dashboard-kicker">Matched image</div>
+                <div class="font-semibold">{{ netapp_upgrade_plan.get('media_version') or 'Not found' }}</div>
+            </div>
+            <div class="ops-strip-card" style="margin-top: 0;">
+                <div class="dashboard-kicker">Target</div>
+                <div class="font-semibold">{{ cfg.get('netapp', {}).get('host', '') or 'Not set' }}</div>
+            </div>
+            <div class="ops-strip-card" style="margin-top: 0;">
+                <div class="dashboard-kicker">Last result</div>
+                <div class="font-semibold">{{ netapp_upgrade_result.get('status', 'Not run') | replace('_', ' ') | title }}</div>
+            </div>
+        </div>
+        {% if netapp_upgrade_path.get('path') %}
+        <div class="result mt-4">
+            <div class="font-semibold">Stored ONTAP upgrade path</div>
+            <div class="text-sm text-slate-300 mt-1">{{ netapp_upgrade_path.get('path') | join(' -> ') }}</div>
+            <div class="text-xs text-slate-500 mt-1">Next hop: {{ netapp_upgrade_path.get('next_hop') or 'none' }}{% if netapp_upgrade_path.get('missing_media') %} | Missing media: {{ netapp_upgrade_path.get('missing_media') | join(', ') }}{% endif %}</div>
+        </div>
+        {% endif %}
+        {% if netapp_upgrade_result.get('error') %}
+        <div class="result mt-4">{{ netapp_upgrade_result.get('error') }}</div>
+        {% endif %}
+        <div class="actions mt-4">
+            <button class="btn" type="button" hx-post="/modules/netapp/plan-upgrade" hx-include="[name='netapp_host'],[name='netapp_username'],[name='netapp_password'],[name='netapp_storage_protocol']" hx-vals='{"return_page":"netapp"}' hx-target="#main-content" hx-swap="outerHTML">Check ONTAP upgrade readiness</button>
+            <button class="btn btn-primary" type="button" hx-post="/modules/netapp/run-upgrade" hx-include="[name='netapp_host'],[name='netapp_username'],[name='netapp_password'],[name='netapp_storage_protocol']" hx-vals='{"return_page":"netapp"}' hx-target="#main-content" hx-swap="outerHTML">Run ONTAP upgrade</button>
+            <a class="btn" href="/upgrade-helper">Open Upgrade Helper</a>
+        </div>
+    </section>
+
+    {% include "partials/components/netapp_upgrade_activity.html" %}
 
     <form hx-post="/modules/netapp/save-settings" hx-target="#main-content" hx-swap="outerHTML" class="space-y-4">
         <input type="hidden" name="bootstrap_complete" value="{{ 'true' if bootstrap_complete else 'false' }}">

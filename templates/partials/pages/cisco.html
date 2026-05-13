@@ -1,40 +1,87 @@
+{% set cisco = (cisco_payload or {}).get('status', {}) %}
 <section class="panel space-y-6">
     <div>
         <h2 class="text-2xl font-bold title-with-icon"><span class="page-icon icon-tone-progress" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M5 8h14"/><path d="M5 16h14"/><path d="M7 8v8"/><path d="M17 8v8"/><path d="M3 12h4"/><path d="M17 12h4"/></svg></span><span>Cisco setup</span></h2>
-        <div class="text-sm text-slate-400">Cisco is ready as an isolated setup workspace. Live switch automation can be added here without crowding the core app.</div>
+        <div class="text-sm text-slate-400">Read the current switch version here, then let Upgrade Helper compare it against the best matching file under <span class="artifact-path">/media</span>.</div>
     </div>
-    {% set setup_strip = {
-        "title": "Cisco snapshot",
-        "subtitle": "This workspace is registered, isolated, and ready for the Cisco policy workflow.",
-        "items": [
-            {"label": "State", "value": "Registered", "hint": "Loaded through the module registry"},
-            {"label": "Routes", "value": "/modules/cisco", "hint": "Module entry point"},
-            {"label": "Service", "value": "app/modules/cisco/service.py", "hint": "Module-owned workflow"}
-        ]
-    } %}
-    {% include "partials/components/setup_strip.html" %}
-    <div class="card card-compact">
-        <div class="font-semibold mb-2">Current status</div>
-        <div class="ops-row-list">
-            <div class="ops-row-item">
-                <div class="ops-row-copy">
-                    <div class="font-semibold">Module registration</div>
-                    <div class="text-sm text-slate-400">Cisco module is registered through the module registry.</div>
-                </div>
-                <div class="ops-row-meta"><span class="status ready">loaded</span></div>
+
+    <section class="card identity-soft-card">
+        <div class="flex items-start justify-between gap-4">
+            <div>
+                <div class="text-lg font-semibold">Cisco version inventory</div>
+                <div class="text-sm text-slate-400 mt-1">This is read-only. It only captures the current software version and keeps the result for prebuild checks.</div>
             </div>
-            <div class="ops-row-item">
-                <div class="ops-row-copy">
-                    <div class="font-semibold">Routes</div>
-                    <div class="text-sm text-slate-400"><span class="artifact-path">/modules/cisco</span></div>
-                </div>
+            <form hx-post="/modules/cisco/discover-version" hx-target="#main-content" hx-swap="outerHTML">
+                <button class="btn btn-primary" type="submit">Read Cisco version</button>
+            </form>
+        </div>
+        <div class="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-4 mt-4">
+            <div class="ops-strip-card" style="margin-top: 0;">
+                <div class="dashboard-kicker">Target</div>
+                <div class="font-semibold">{{ cisco.target or cfg.get('ip_plan', {}).get('switch', '') or 'Not set' }}</div>
             </div>
-            <div class="ops-row-item">
-                <div class="ops-row-copy">
-                    <div class="font-semibold">Service file</div>
-                    <div class="text-sm text-slate-400"><span class="artifact-path">app/modules/cisco/service.py</span> owns Cisco-specific discover, plan, validate, apply, and status behavior.</div>
-                </div>
+            <div class="ops-strip-card" style="margin-top: 0;">
+                <div class="dashboard-kicker">Username</div>
+                <div class="font-semibold">{{ cisco.username or cfg.get('cisco_switch', {}).get('username', '') or 'Not set' }}</div>
+            </div>
+            <div class="ops-strip-card" style="margin-top: 0;">
+                <div class="dashboard-kicker">Current version</div>
+                <div class="font-semibold">{{ cisco.last_discovered_version or 'Unknown' }}</div>
+            </div>
+            <div class="ops-strip-card" style="margin-top: 0;">
+                <div class="dashboard-kicker">Last read</div>
+                <div class="font-semibold">{{ cisco.last_discovered_at or 'Not run yet' }}</div>
             </div>
         </div>
-    </div>
+        {% if cisco.last_discovery_error %}
+        <div class="result mt-4">{{ cisco.last_discovery_error }}</div>
+        {% endif %}
+        {% if cisco.last_show_version %}
+        <details class="card card-compact mt-4">
+            <summary class="summary-row">
+                <span class="font-semibold">Last show version excerpt</span>
+            </summary>
+            <pre class="mt-3 whitespace-pre-wrap text-sm text-slate-300">{{ cisco.last_show_version }}</pre>
+        </details>
+        {% endif %}
+    </section>
+
+    {% set cisco_upgrade = cfg.get('cisco_switch', {}).get('upgrade', {}) %}
+    {% set cisco_upgrade_plan = cisco_upgrade.get('last_plan', {}) %}
+    {% set cisco_upgrade_result = cisco_upgrade.get('last_result', {}) %}
+    <section class="card identity-soft-card">
+        <div class="flex items-start justify-between gap-4">
+            <div>
+                <div class="text-lg font-semibold">Cisco software upgrade</div>
+                <div class="text-sm text-slate-400 mt-1">Planner and executor for the matched Cisco image under <span class="artifact-path">/home/administrator/lab-builder/media</span>. This path is implemented but still unproven on live hardware in this workspace.</div>
+            </div>
+            <span class="status {{ 'ready' if cisco_upgrade_plan.get('ready') else 'progress' }}">{{ 'Ready' if cisco_upgrade_plan.get('ready') else 'Review' }}</span>
+        </div>
+        <div class="grid grid-cols-1 md:grid-cols-4 gap-4 mt-4">
+            <div class="ops-strip-card" style="margin-top: 0;">
+                <div class="dashboard-kicker">Current</div>
+                <div class="font-semibold">{{ cisco_upgrade_plan.get('current_version') or cisco.last_discovered_version or 'Unknown' }}</div>
+            </div>
+            <div class="ops-strip-card" style="margin-top: 0;">
+                <div class="dashboard-kicker">Matched media</div>
+                <div class="font-semibold">{{ cisco_upgrade_plan.get('media_version') or 'Not found' }}</div>
+            </div>
+            <div class="ops-strip-card" style="margin-top: 0;">
+                <div class="dashboard-kicker">Model</div>
+                <div class="font-semibold">{{ cfg.get('upgrade_inventory', {}).get('cisco_switch', {}).get('model') or 'Unknown' }}</div>
+            </div>
+            <div class="ops-strip-card" style="margin-top: 0;">
+                <div class="dashboard-kicker">Last result</div>
+                <div class="font-semibold">{{ cisco_upgrade_result.get('status', 'Not run') | replace('_', ' ') | title }}</div>
+            </div>
+        </div>
+        {% if cisco_upgrade_result.get('error') %}
+        <div class="result mt-4">{{ cisco_upgrade_result.get('error') }}</div>
+        {% endif %}
+        <div class="actions mt-4">
+            <button class="btn" type="button" hx-post="/modules/cisco/plan-upgrade" hx-vals='{"return_page":"cisco"}' hx-target="#main-content" hx-swap="outerHTML">Review Cisco upgrade plan</button>
+            <button class="btn btn-primary" type="button" hx-post="/modules/cisco/run-upgrade" hx-vals='{"return_page":"cisco"}' hx-target="#main-content" hx-swap="outerHTML">Run Cisco upgrade</button>
+            <a class="btn" href="/upgrade-helper">Open Upgrade Helper</a>
+        </div>
+    </section>
 </section>

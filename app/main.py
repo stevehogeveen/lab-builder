@@ -21,6 +21,8 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
 from app.ilo import ILOClient, ILOConfig, ILOError
+from app.ilo_upgrade import build_ilo_upgrade_plan, execute_ilo_upgrade
+from app.upgrade_helper import build_upgrade_helper_context, build_upgrade_inventory, build_upgrade_planner_with_policies, normalize_upgrade_policies, record_upgrade_inventory, scan_upgrade_media
 from app.windows import VsphereClient, VsphereConfig, WinRMClient, WinRMConfig
 from app.esxi.builder import build_custom_iso
 from app.esxi.models import EsxiBuildSpec
@@ -487,6 +489,10 @@ PAGE_META = {
     "global_settings": {
         "title": "Global Settings",
         "subtitle": "Shared defaults for network, inclusion, and kit-wide behavior.",
+    },
+    "upgrade_helper": {
+        "title": "Upgrade Helper",
+        "subtitle": "Compare discovered device versions against approved media before prebuild execution.",
     },
     "ovf_templates": {
         "title": "OVF Templates",
@@ -3111,6 +3117,7 @@ def build_setup_precheck_summary(
         if included.get(key):
             workflow_keys.append(key)
     cards = [build_workflow_precheck_card(key, cfg, workflow_contexts) for key in workflow_keys]
+    cards.append(build_upgrade_helper_card(cfg))
     total_workflows = len(cards)
     ready_workflows = sum(1 for item in cards if item.get("blockers") == 0 and item.get("total_checks"))
     total_blockers = sum(int(item.get("blockers") or 0) for item in cards)
@@ -3228,6 +3235,11 @@ def build_page_precheck_summary(
     cfg: dict[str, Any],
     workflow_contexts: dict[str, dict[str, Any]],
 ) -> dict[str, Any] | None:
+    if active_page == "upgrade_helper":
+        card = build_upgrade_helper_card(cfg)
+        card["title"] = "Upgrade pre-check"
+        card["subtitle"] = "Keep upgrade readiness visible before you proceed with the rest of the build."
+        return card
     workflow_map = {
         "ilo": "ilo",
         "storage": "storage",
@@ -3246,6 +3258,105 @@ def build_page_precheck_summary(
     card["summary_value"] = card.get("state_label") or card.get("label") or "Review"
     card["show_target"] = False
     return card
+
+
+def build_upgrade_helper_card(cfg: dict[str, Any]) -> dict[str, Any]:
+    live_snapshot = load_latest_live_inventory_snapshot_for_cfg(cfg)
+    live_summary = dict(live_snapshot.get("summary") or {})
+    live_raw_summary = (((live_snapshot.get("raw") or {}).get("inventory") or {}).get("summary") or {})
+    ilo_version = str(live_summary.get("ilo_firmware_version") or "").strip()
+    manager_model = str(((live_raw_summary.get("manager") or {}).get("model")) or "").strip()
+    existing_ilo_inventory = dict((build_upgrade_inventory(cfg).get("ilo") or {}))
+    existing_ilo_source = str(existing_ilo_inventory.get("source") or "").strip().lower()
+    preserve_verified_ilo = existing_ilo_source == "post-upgrade ilo verification" and str(existing_ilo_inventory.get("current_version") or "").strip()
+    if ilo_version and not preserve_verified_ilo:
+        record_upgrade_inventory(
+            cfg,
+            "ilo",
+            current_version=ilo_version,
+            source="Latest live iLO inventory",
+            raw_version=ilo_version,
+            manager_model=manager_model,
+        )
+    inventory = build_upgrade_inventory(cfg)
+    current_versions = {key: str((inventory.get(key) or {}).get("current_version") or "").strip() for key in ("ilo", "netapp", "cisco_switch")}
+    current_sources = {key: str((inventory.get(key) or {}).get("source") or "").strip() for key in ("ilo", "netapp", "cisco_switch")}
+    policies = normalize_upgrade_policies(cfg)
+    device_details = {
+        "ilo": {
+            "manager_model": str((inventory.get("ilo") or {}).get("manager_model") or manager_model).strip(),
+        },
+        "netapp": {
+            "baseline_target": str(((((cfg.get("netapp") or {}).get("desired") or {}).get("baseline") or {}).get("target_ontap_version") or "9.12.1")).strip(),
+            "minimum_version": str(((((cfg.get("netapp") or {}).get("desired") or {}).get("baseline") or {}).get("minimum_ontap_version") or "")).strip(),
+        },
+        "cisco_switch": {
+            "model": str((inventory.get("cisco_switch") or {}).get("model") or "").strip(),
+            "platform": str((inventory.get("cisco_switch") or {}).get("platform") or "").strip(),
+            "hostname": str((inventory.get("cisco_switch") or {}).get("hostname") or "").strip(),
+        },
+    }
+    card = build_upgrade_helper_context(
+        scan_upgrade_media(),
+        current_versions,
+        current_sources,
+        device_details=device_details,
+    )
+    planner = build_upgrade_planner_with_policies(
+        scan_upgrade_media(),
+        current_versions,
+        current_sources=current_sources,
+        policies=policies,
+        device_details=device_details,
+    )
+    card["planner"] = planner
+    card["policies"] = policies
+    blocker_count = int(planner.get("blockers") or card.get("blockers") or 0)
+    warning_count = int(planner.get("warnings") or 0)
+    unknown_count = sum(1 for item in list(planner.get("entries") or []) if str(item.get("comparison") or "") == "current_unknown" and str(item.get("policy") or "") == "block")
+    next_blocker = next((dict(item) for item in list(planner.get("entries") or []) if item.get("blocks_run")), None)
+    next_warning = next((dict(item) for item in list(planner.get("entries") or []) if item.get("warn_only")), None)
+    if blocker_count:
+        state = "Upgrade first" if blocker_count > unknown_count else "Read versions"
+    elif warning_count:
+        state = "Warnings only"
+    else:
+        state = "Ready"
+    card["blockers"] = blocker_count
+    card["tone"] = "pending" if blocker_count else ("progress" if warning_count else "ready")
+    card["label"] = "Needs attention" if blocker_count else ("Review warnings" if warning_count else "Ready")
+    if next_blocker:
+        blocker_details = ". ".join(
+            [part for part in [str(next_blocker.get("compatibility_summary") or "").strip(), str(next_blocker.get("recommended_action") or "").strip()] if part]
+        ).strip()
+        card["next_blocker"] = {
+            "label": f"{next_blocker.get('label', 'Device')} policy blocks the build",
+            "details": blocker_details or "Open Upgrade Helper to review this device.",
+            "fix": blocker_details or "Open Upgrade Helper to review this device.",
+            "href": "/upgrade-helper",
+        }
+    elif next_warning:
+        warning_details = ". ".join(
+            [part for part in [str(next_warning.get("compatibility_summary") or "").strip(), str(next_warning.get("recommended_action") or "").strip()] if part]
+        ).strip()
+        card["next_blocker"] = {
+            "label": f"{next_warning.get('label', 'Device')} has upgrade warnings",
+            "details": warning_details or "Open Upgrade Helper to review the warning policy.",
+            "fix": warning_details or "Open Upgrade Helper to review the warning policy.",
+            "href": "/upgrade-helper",
+        }
+    else:
+        card["next_blocker"] = None
+    card["href"] = "/upgrade-helper"
+    card["summary_value_label"] = "Decision"
+    card["summary_value"] = state
+    card["show_target"] = False
+    return card
+
+
+def upgrade_gate_blockers(cfg: dict[str, Any]) -> list[dict[str, Any]]:
+    planner = dict((build_upgrade_helper_card(cfg).get("planner") or {}))
+    return [dict(item) for item in list(planner.get("entries") or []) if item.get("blocks_run")]
 
 
 def build_workflow_contexts(cfg: dict[str, Any], job: dict[str, Any], history: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
@@ -3316,6 +3427,13 @@ def build_workflow_contexts(cfg: dict[str, Any], job: dict[str, Any], history: l
 
 
 def build_recommended_next_step(cfg: dict[str, Any], workflow_contexts: dict[str, dict[str, Any]]) -> dict[str, str]:
+    upgrade_helper = build_upgrade_helper_card(cfg)
+    if int(upgrade_helper.get("blockers") or 0) > 0:
+        return {
+            "title": "Review upgrade gates",
+            "summary": "One or more devices need version review or upgrade before you continue the prebuild sequence.",
+            "href": "/upgrade-helper",
+        }
     ilo_host = (cfg.get("ilo", {}).get("current_ip") or cfg.get("ilo", {}).get("host") or "").strip()
     if not ilo_host:
         return {"title": "Set the iLO target", "summary": "Start on the iLO page and save the current iLO address and credentials first.", "href": "/ilo"}
@@ -3809,6 +3927,10 @@ def build_run_center_readiness_matrix(cfg: dict[str, Any], scope: str) -> list[d
     included_cfg = cfg.get("included", {}) or {}
     storage_review = build_storage_review_context(cfg)
     selected_keys = run_center_scope_keys(scope, cfg)
+    upgrade_card = build_upgrade_helper_card(cfg)
+    upgrade_planner = dict(upgrade_card.get("planner") or {})
+    upgrade_blockers = [dict(item) for item in list(upgrade_planner.get("entries") or []) if item.get("blocks_run")]
+    upgrade_warns = [dict(item) for item in list(upgrade_planner.get("entries") or []) if item.get("warn_only")]
 
     def stage_in_scope(key: str) -> bool:
         if scope == "included":
@@ -3833,6 +3955,41 @@ def build_run_center_readiness_matrix(cfg: dict[str, Any], scope: str) -> list[d
             "href": "/global-settings",
         }
     ]
+    if upgrade_blockers:
+        primary = upgrade_blockers[0]
+        matrix.append(
+            {
+                "name": "Upgrade gates",
+                "label": "Blocked",
+                "tone": "pending",
+                "summary": primary.get("recommended_action") or "A device version gate is blocking this run.",
+                "action": "Open Upgrade Helper and either upgrade the device or lower the policy intentionally.",
+                "href": "/upgrade-helper",
+            }
+        )
+    elif upgrade_warns:
+        primary = upgrade_warns[0]
+        matrix.append(
+            {
+                "name": "Upgrade gates",
+                "label": "Needs review",
+                "tone": "progress",
+                "summary": primary.get("recommended_action") or "Upgrade review warnings are present.",
+                "action": "Open Upgrade Helper and confirm the warning policies are intentional.",
+                "href": "/upgrade-helper",
+            }
+        )
+    else:
+        matrix.append(
+            {
+                "name": "Upgrade gates",
+                "label": "Ready",
+                "tone": "ready",
+                "summary": "No enforced upgrade blockers are active for this kit.",
+                "action": "Open Upgrade Helper if you want to review media and device versions again.",
+                "href": "/upgrade-helper",
+            }
+        )
 
     for key, name in [("ilo", "iLO"), ("storage", "Storage"), ("esxi", "ESXi"), ("windows", "Windows"), ("qnap", "QNAP"), ("netapp", "NetApp")]:
         included = stage_in_scope(key)
@@ -9823,6 +9980,10 @@ def get_steps_for_scope(cfg: dict, scope: str):
 
 
 def validate_execution_scope(cfg: dict, scope: str) -> None:
+    upgrade_blockers = upgrade_gate_blockers(cfg)
+    if upgrade_blockers:
+        primary = upgrade_blockers[0]
+        raise ValueError(primary.get("recommended_action") or f"{primary.get('label', 'Upgrade gate')} is blocking this run. Review Upgrade Helper first.")
     if scope == "esxi":
         esxi_values = get_esxi_effective_values(cfg)
         if esxi_values["missing_fields"]:
@@ -13678,6 +13839,7 @@ def render_page(
     dashboard_job_status = build_dashboard_job_status(history)
     dashboard_overview = build_dashboard_overview(cfg, setup_precheck_summary, workflow_contexts, dashboard_job_status, job)
     hardware_identity = build_hardware_identity(cfg)
+    upgrade_helper_summary = build_upgrade_helper_card(cfg)
     ilo_input_review = build_ilo_input_review(cfg, include_policy_validation=active_page == "ilo")
     snmp_input_review = build_snmp_input_review(cfg)
     ilo_field_errors = build_ilo_field_errors(cfg)
@@ -13760,6 +13922,7 @@ def render_page(
         "setup_precheck_summary": setup_precheck_summary,
         "page_precheck_summary": page_precheck_summary,
         "dashboard_overview": dashboard_overview,
+        "upgrade_helper_summary": upgrade_helper_summary,
         "activity_feed": activity_feed,
         "history_display": history_display,
         "dashboard_job_status": dashboard_job_status,
@@ -13899,6 +14062,163 @@ async def execution_page(request: Request):
 async def global_settings_page(request: Request):
     cfg = load_kit_config()
     return render_page(request, cfg, active_page="global_settings")
+
+
+@app.get("/upgrade-helper", response_class=HTMLResponse)
+async def upgrade_helper_page(request: Request):
+    cfg = load_kit_config()
+    return render_page(request, cfg, active_page="upgrade_helper")
+
+
+@app.post("/save-upgrade-policies", response_class=HTMLResponse)
+async def save_upgrade_policies_route(
+    request: Request,
+    return_page: str = Form("upgrade_helper"),
+    policy_ilo: str = Form("block"),
+    policy_netapp: str = Form("block"),
+    policy_cisco_switch: str = Form("block"),
+):
+    cfg = load_kit_config()
+    cfg.setdefault("upgrade_helper", {})
+    cfg["upgrade_helper"]["policies"] = normalize_upgrade_policies(
+        policies={
+            "ilo": policy_ilo,
+            "netapp": policy_netapp,
+            "cisco_switch": policy_cisco_switch,
+        }
+    )
+    save_kit_config(cfg)
+    page = str(return_page or "upgrade_helper").strip().lower()
+    if page not in {"upgrade_helper", "global_settings"}:
+        page = "upgrade_helper"
+    return render_page(
+        request,
+        cfg,
+        active_page=page,
+        action_feedback=build_action_feedback(
+            "Upgrade policies saved",
+            "Updated how Upgrade Helper treats iLO, ONTAP, and Cisco version gaps before prebuild execution.",
+            tone="ready",
+            outcomes=[
+                f"iLO policy: {cfg['upgrade_helper']['policies'].get('ilo', 'block')}",
+                f"ONTAP policy: {cfg['upgrade_helper']['policies'].get('netapp', 'block')}",
+                f"Cisco policy: {cfg['upgrade_helper']['policies'].get('cisco_switch', 'block')}",
+            ],
+        ),
+    )
+
+
+@app.post("/plan-ilo-upgrade", response_class=HTMLResponse)
+async def plan_ilo_upgrade_route(request: Request, return_page: str = Form("upgrade_helper")):
+    cfg = load_kit_config()
+    media_scan = scan_upgrade_media()
+    plan = build_ilo_upgrade_plan(cfg, media_scan)
+    cfg.setdefault("ilo", {})
+    cfg["ilo"].setdefault("upgrade", {})
+    cfg["ilo"]["upgrade"]["last_plan"] = plan
+    save_kit_config(cfg)
+    details = list(plan.get("blockers") or []) + list(plan.get("warnings") or []) + list(plan.get("notes") or [])
+    return render_page(
+        request,
+        cfg,
+        active_page=return_page if return_page in {"upgrade_helper", "ilo"} else "upgrade_helper",
+        action_feedback=build_action_feedback(
+            "iLO upgrade plan ready" if plan.get("ready") else "iLO upgrade plan needs attention",
+            (
+                f"Matched {plan.get('media_filename') or 'no media file'} for {plan.get('manager_model') or 'unknown iLO family'}."
+                if plan.get("ready")
+                else "Review the matched media, current version, and saved iLO identity before attempting the upgrade."
+            ),
+            tone="ready" if plan.get("ready") else "pending",
+            outcomes=[
+                f"Target: {plan.get('host') or 'Not set'}",
+                f"Current version: {plan.get('current_version') or 'Unknown'}",
+                f"Matched media: {plan.get('media_version') or 'Not found'}",
+            ],
+            details=details,
+            links=[{"label": "Open Upgrade Helper", "href": "/upgrade-helper"}, {"label": "Open iLO", "href": "/ilo"}],
+        ),
+    )
+
+
+@app.post("/run-ilo-upgrade", response_class=HTMLResponse)
+async def run_ilo_upgrade_route(request: Request, return_page: str = Form("upgrade_helper")):
+    cfg = load_kit_config()
+    media_scan = scan_upgrade_media()
+    plan = build_ilo_upgrade_plan(cfg, media_scan)
+    cfg.setdefault("ilo", {})
+    cfg["ilo"].setdefault("upgrade", {})
+    cfg["ilo"]["upgrade"]["last_plan"] = plan
+    if not plan.get("ready"):
+        save_kit_config(cfg)
+        return render_page(
+            request,
+            cfg,
+            active_page=return_page if return_page in {"upgrade_helper", "ilo"} else "upgrade_helper",
+            action_feedback=build_action_feedback(
+                "iLO upgrade blocked",
+                "The upgrade prechecks did not pass. Review the blockers before trying to flash firmware.",
+                tone="pending",
+                outcomes=[
+                    f"Target: {plan.get('host') or 'Not set'}",
+                    f"Current version: {plan.get('current_version') or 'Unknown'}",
+                    f"Matched media: {plan.get('media_version') or 'Not found'}",
+                ],
+                details=list(plan.get("blockers") or []) + list(plan.get("warnings") or []) + list(plan.get("notes") or []),
+            ),
+        )
+    try:
+        result = execute_ilo_upgrade(
+            cfg,
+            media_scan,
+            build_client=lambda *, host, username, password: ILOClient(
+                ILOConfig(host=host, username=username, password=password, verify_tls=False, timeout=30)
+            ),
+        )
+        save_kit_config(cfg)
+        return render_page(
+            request,
+            cfg,
+            active_page=return_page if return_page in {"upgrade_helper", "ilo"} else "upgrade_helper",
+            action_feedback=build_action_feedback(
+                "iLO upgrade completed",
+                "Uploaded the matched firmware package through the iLO Redfish update service and verified the post-upgrade firmware version.",
+                tone="ready",
+                outcomes=[
+                    f"Target: {result.get('host') or 'Not set'}",
+                    f"Previous version: {result.get('previous_version') or 'Unknown'}",
+                    f"Current version: {((result.get('verification') or {}).get('current_version') or result.get('target_version') or 'Unknown')}",
+                ],
+                details=[
+                    f"Media: {result.get('media_path') or 'Unknown'}",
+                    f"Detected manager: {result.get('manager_model') or 'Unknown'}",
+                    f"Reconnect observed: {'yes' if ((result.get('verification') or {}).get('saw_disconnect')) else 'no'}",
+                ],
+            ),
+        )
+    except Exception as exc:
+        cfg["ilo"]["upgrade"]["last_result"] = {
+            "status": "failed",
+            "failed_at": datetime.now().isoformat(),
+            "error": str(exc).splitlines()[0],
+        }
+        save_kit_config(cfg)
+        return render_page(
+            request,
+            cfg,
+            active_page=return_page if return_page in {"upgrade_helper", "ilo"} else "upgrade_helper",
+            action_feedback=build_action_feedback(
+                "iLO upgrade failed",
+                "The firmware upload or post-upgrade verification did not complete cleanly.",
+                tone="danger",
+                outcomes=[
+                    f"Target: {plan.get('host') or 'Not set'}",
+                    f"Current version: {plan.get('current_version') or 'Unknown'}",
+                    f"Matched media: {plan.get('media_version') or 'Not found'}",
+                ],
+                details=[str(exc).splitlines()[0]] + list(plan.get("notes") or []),
+            ),
+        )
 
 
 @app.get("/ilo", response_class=HTMLResponse)
@@ -14213,6 +14533,9 @@ async def save_global_settings_route(
     netapp_storage_protocol: str = Form("nfs"),
     netapp_iscsi_commands: str = Form(""),
     netapp_nfs_commands: str = Form(""),
+    cisco_switch_hostname: str = Form(""),
+    cisco_switch_username: str = Form("admin"),
+    cisco_switch_password: str = Form(""),
 ):
     return await save_global_settings_handler(
         request,
@@ -14260,6 +14583,9 @@ async def save_global_settings_route(
         netapp_storage_protocol=netapp_storage_protocol,
         netapp_iscsi_commands=netapp_iscsi_commands,
         netapp_nfs_commands=netapp_nfs_commands,
+        cisco_switch_hostname=cisco_switch_hostname,
+        cisco_switch_username=cisco_switch_username,
+        cisco_switch_password=cisco_switch_password,
     )
 
 

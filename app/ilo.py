@@ -3,6 +3,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 import ipaddress
+import json
+from pathlib import Path
 import re
 import time
 import requests
@@ -1256,13 +1258,29 @@ class ILOClient:
     def _create_redfish_session(self) -> None:
         self._clear_redfish_session()
         url = f"{self.base}{self._session_service_path()}"
-        response = self.http.post(
-            url,
-            json={"UserName": self.cfg.username, "Password": self.cfg.password},
-            verify=self.cfg.verify_tls,
-            timeout=self.cfg.timeout,
-            headers={"Accept": "application/json"},
-        )
+        headers = {
+            "Accept": "application/json",
+            "Content-Type": "application/json",
+            "OData-Version": "4.0",
+        }
+        try:
+            response = self.http.post(
+                url,
+                json={"UserName": self.cfg.username, "Password": self.cfg.password},
+                verify=self.cfg.verify_tls,
+                timeout=self.cfg.timeout,
+                headers=headers,
+            )
+        except requests.RequestException:
+            self._reset_transport()
+            time.sleep(0.2)
+            response = self.http.post(
+                url,
+                json={"UserName": self.cfg.username, "Password": self.cfg.password},
+                verify=self.cfg.verify_tls,
+                timeout=self.cfg.timeout,
+                headers=headers,
+            )
         if response.status_code >= 400:
             raise ILOError(f"POST {url} failed with HTTP {response.status_code}: {response.text[:300]}")
         token = str(response.headers.get("X-Auth-Token") or "").strip()
@@ -1990,6 +2008,98 @@ class ILOClient:
 
     def get_service_root(self) -> dict[str, Any]:
         return self._get("/redfish/v1/")
+
+    def get_update_service_path(self) -> str:
+        root = self.get_service_root()
+        path = str(((root.get("UpdateService") or {}).get("@odata.id")) or "").strip()
+        return path or "/redfish/v1/UpdateService"
+
+    def get_update_service(self) -> dict[str, Any]:
+        return self._get(self.get_update_service_path())
+
+    def upload_firmware_component(
+        self,
+        file_path: str | Path,
+        *,
+        update_repository: bool = True,
+        update_target: bool = True,
+        section: int = 0,
+    ) -> dict[str, Any]:
+        component = Path(file_path)
+        if not component.is_file():
+            raise ILOError(f"Firmware component was not found: {component}")
+
+        update_service_path = self.get_update_service_path()
+        update_service = self._get(update_service_path)
+        upload_uri = str(update_service.get("HttpPushUri") or "").strip()
+        if not upload_uri:
+            raise ILOError(f"{update_service_path} does not expose HttpPushUri.")
+
+        oem_hpe = ((update_service.get("Oem") or {}).get("Hpe") or {})
+        if oem_hpe.get("Accept3rdPartyFirmware") is False:
+            try:
+                self._patch(update_service_path, {"Oem": {"Hpe": {"Accept3rdPartyFirmware": True}}})
+            except Exception:
+                pass
+
+        if not self._redfish_session_token:
+            self._create_redfish_session()
+
+        url = upload_uri if upload_uri.startswith("http") else f"{self.base}{upload_uri}"
+        parameters = {
+            "UpdateRepository": bool(update_repository),
+            "UpdateTarget": bool(update_target),
+            "Section": int(section),
+            "UploadCurrentEtag": "lab-builder",
+        }
+        headers = {
+            "Accept": "application/json",
+            "Expect": "",
+            "OData-Version": "4.0",
+            "X-Auth-Token": self._redfish_session_token,
+            "Cookie": f"sessionKey={self._redfish_session_token}",
+        }
+        data = {
+            "sessionKey": self._redfish_session_token,
+            "parameters": json.dumps(parameters),
+        }
+        with component.open("rb") as handle:
+            response = self.http.post(
+                url,
+                verify=self.cfg.verify_tls,
+                timeout=max(self.cfg.timeout, 900),
+                headers=headers,
+                data=data,
+                files={"file": (component.name, handle, "application/octet-stream")},
+            )
+        if self._looks_like_invalid_session(response.status_code, response.text):
+            self._create_redfish_session()
+            headers["X-Auth-Token"] = self._redfish_session_token
+            headers["Cookie"] = f"sessionKey={self._redfish_session_token}"
+            data["sessionKey"] = self._redfish_session_token
+            with component.open("rb") as handle:
+                response = self.http.post(
+                    url,
+                    verify=self.cfg.verify_tls,
+                    timeout=max(self.cfg.timeout, 900),
+                    headers=headers,
+                    data=data,
+                    files={"file": (component.name, handle, "application/octet-stream")},
+                )
+        if response.status_code >= 400:
+            raise ILOError(f"POST {url} failed with HTTP {response.status_code}: {response.text[:500]}")
+        try:
+            body = response.json() if response.text.strip() else {}
+        except Exception:
+            body = {"raw_text": response.text[:500]}
+        return {
+            "status_code": response.status_code,
+            "upload_url": url,
+            "update_service_path": update_service_path,
+            "location": str(response.headers.get("Location") or "").strip(),
+            "body": body,
+            "parameters": parameters,
+        }
 
     def get_managers(self) -> list[str]:
         data = self._get("/redfish/v1/Managers")

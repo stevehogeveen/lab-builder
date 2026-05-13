@@ -710,6 +710,60 @@ def test_use_discovered_values_updates_connection_and_management_fields(client, 
     assert cfg["netapp"]["nfs"]["lifs"][0]["address"] == "10.10.8.51"
 
 
+def test_netapp_upgrade_plan_reads_live_version_from_current_page_fields(client, monkeypatch):
+    import app.modules.netapp.routes as netapp_routes
+
+    cfg = main.default_config()
+    cfg["included"]["netapp"] = True
+    cfg["netapp"]["host"] = "10.10.8.40"
+    cfg["netapp"]["username"] = "admin"
+    cfg["netapp"]["password"] = ""
+    cfg["upgrade_inventory"] = {"netapp": {"current_version": "", "source": ""}}
+    main.save_kit_config(cfg)
+
+    class FakeNetAppClient:
+        def __init__(self, config):
+            assert config.host == "10.10.8.45"
+            assert config.password == "secret"
+
+        def get_cluster(self):
+            return {"name": "X20", "version": {"full": "NetApp Release 9.9.1P2"}}
+
+    monkeypatch.setattr(netapp_routes, "NetAppClient", FakeNetAppClient)
+    monkeypatch.setattr(
+        main,
+        "scan_upgrade_media",
+        lambda: {
+            "root": "/repo/media",
+            "latest": {"netapp": {"version": "9.17.1", "filename": "9171_q_image.tgz", "path": "/repo/media/9171_q_image.tgz"}},
+            "counts": {"netapp": 2},
+            "candidates": [
+                {"device": "netapp", "version": "9.13.1", "filename": "9131_q_image.tgz", "path": "/repo/media/9131_q_image.tgz"},
+                {"device": "netapp", "version": "9.17.1", "filename": "9171_q_image.tgz", "path": "/repo/media/9171_q_image.tgz"},
+            ],
+        },
+    )
+
+    response = client.post(
+        "/modules/netapp/plan-upgrade",
+        data={
+            "return_page": "netapp",
+            "netapp_host": "10.10.8.45",
+            "netapp_username": "admin",
+            "netapp_password": "secret",
+            "netapp_storage_protocol": "nfs",
+        },
+    )
+
+    assert response.status_code == 200
+    assert "ONTAP upgrade readiness checked" in response.text
+    assert "NetApp Release 9.9.1P2" in response.text
+    cfg = main.load_kit_config()
+    assert cfg["netapp"]["host"] == "10.10.8.45"
+    assert cfg["netapp"]["last_discovered_ontap_version"] == "NetApp Release 9.9.1P2"
+    assert cfg["upgrade_inventory"]["netapp"]["source"] == "Live ONTAP upgrade readiness check"
+
+
 def test_validate_stage_checks_nfs_export_policy_and_volume():
     from app.modules.netapp.service import NetAppModuleService
 

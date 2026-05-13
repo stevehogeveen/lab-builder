@@ -266,7 +266,31 @@ def default_config() -> dict[str, Any]:
             },
         },
         iosafe={"hostname": "iosafe01", "ip": "", "username": "admin", "password": ""},
-        cisco_switch={"hostname": "sw01", "ip": "", "username": "admin", "password": ""},
+        cisco_switch={
+            "hostname": "sw01",
+            "ip": "",
+            "username": "admin",
+            "password": "",
+            "last_discovered_version": "",
+            "last_discovered_at": "",
+            "last_show_version": "",
+            "last_discovery_error": "",
+            "last_discovered_model": "",
+            "last_discovered_platform": "",
+            "last_discovered_hostname": "",
+        },
+        upgrade_inventory={
+            "ilo": {"current_version": "", "source": "", "last_checked_at": ""},
+            "netapp": {"current_version": "", "source": "", "last_checked_at": ""},
+            "cisco_switch": {"current_version": "", "source": "", "last_checked_at": ""},
+        },
+        upgrade_helper={
+            "policies": {
+                "ilo": "block",
+                "netapp": "block",
+                "cisco_switch": "block",
+            }
+        },
     ).model_dump()
 
 

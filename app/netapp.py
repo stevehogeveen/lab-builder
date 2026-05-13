@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import ipaddress
+from pathlib import Path
 import re
 from typing import Any
 
@@ -80,6 +81,115 @@ class NetAppClient:
 
     def patch(self, path: str, body: dict[str, Any], *, ok_statuses: tuple[int, ...] = (200, 202)) -> dict[str, Any]:
         return self._request("PATCH", path, json_body=body, ok_statuses=ok_statuses)
+
+    def get_job(self, uuid: str) -> dict[str, Any]:
+        return self._get(f"/api/cluster/jobs/{uuid}")
+
+    def get_cluster_software(self) -> dict[str, Any]:
+        return self._get("/api/cluster/software")
+
+    def validate_cluster_software(self, version: str) -> dict[str, Any]:
+        return self._request(
+            "PATCH",
+            "/api/cluster/software",
+            params={"validate_only": "true"},
+            json_body={"version": version},
+            ok_statuses=(200, 202),
+        )
+
+    def start_cluster_software_update(
+        self,
+        version: str,
+        *,
+        skip_warnings: bool = False,
+        stabilize_minutes: int = 8,
+    ) -> dict[str, Any]:
+        params: dict[str, Any] = {"stabilize_minutes": int(stabilize_minutes)}
+        if skip_warnings:
+            params["skip_warnings"] = "true"
+        return self._request(
+            "PATCH",
+            "/api/cluster/software",
+            params=params,
+            json_body={"version": version},
+            ok_statuses=(200, 202),
+        )
+
+    def private_cli_cluster_image_update(
+        self,
+        version: str,
+        *,
+        ignore_validation_warning: bool = True,
+        skip_confirmation: bool = True,
+        stabilize_minutes: int = 8,
+    ) -> dict[str, Any]:
+        body = {
+            "version": version,
+            "ignore-validation-warning": "true" if ignore_validation_warning else "false",
+            "skip-confirmation": "true" if skip_confirmation else "false",
+            "stabilize-minutes": str(int(stabilize_minutes)),
+        }
+        try:
+            response = self.session.post(
+                self._url("/api/private/cli/cluster/image/update"),
+                params={"return_timeout": "0"},
+                json=body,
+                timeout=self.config.timeout,
+            )
+        except requests.ReadTimeout:
+            return {
+                "status": "accepted_timeout",
+                "message": "ONTAP held the private CLI update request open past the HTTP timeout; polling cluster software state.",
+                "request": body,
+            }
+        except requests.RequestException as exc:
+            raise NetAppError(f"Connection failed: {exc}") from exc
+        if response.status_code >= 400:
+            raise NetAppError(
+                f"POST /api/private/cli/cluster/image/update failed ({response.status_code}): {response.text[:300]}"
+            )
+        try:
+            payload = response.json() if response.text else {}
+        except ValueError:
+            payload = {}
+        payload.setdefault("status", "submitted")
+        return payload
+
+    def control_cluster_software_update(self, action: str, version: str) -> dict[str, Any]:
+        normalized = str(action or "").strip().lower()
+        if normalized not in {"pause", "resume", "cancel"}:
+            raise NetAppError(f"Unsupported ONTAP upgrade action: {action}")
+        return self._request(
+            "PATCH",
+            "/api/cluster/software",
+            params={"action": normalized},
+            json_body={"version": version},
+            ok_statuses=(200, 202),
+        )
+
+    def upload_cluster_software(self, file_path: str | Path) -> dict[str, Any]:
+        image = Path(file_path)
+        if not image.is_file():
+            raise NetAppError(f"ONTAP image not found: {image}")
+        url = self._url("/api/cluster/software/upload")
+        with image.open("rb") as handle:
+            try:
+                response = self.session.post(
+                    url,
+                    files={"file": (image.name, handle, "application/octet-stream")},
+                    timeout=max(self.config.timeout, 900),
+                )
+            except requests.RequestException as exc:
+                raise NetAppError(f"Connection failed: {exc}") from exc
+        if response.status_code >= 400:
+            raise NetAppError(f"POST /api/cluster/software/upload failed ({response.status_code}): {response.text[:300]}")
+        try:
+            return response.json() if response.text else {}
+        except ValueError:
+            return {}
+
+    def get_cluster_software_package(self, version: str) -> dict[str, Any]:
+        return self._get(f"/api/cluster/software/packages/{version}")
 
     def _records(self, path: str, params: dict[str, Any] | None = None) -> list[dict[str, Any]]:
         payload = self._get(path, params=params)

@@ -296,6 +296,8 @@ class NetAppModuleService:
             if not value:
                 continue
             conflicts = [name for name in device_keys if str(plan.get(name) or "").strip() == value]
+            if key == "netapp_cluster_mgmt":
+                conflicts = [name for name in conflicts if name != "netapp"]
             if conflicts:
                 warnings.append(f"{labels[key]} IP {value} conflicts with {', '.join(conflicts)}.")
         legacy_warning = self._legacy_convention_warning(context)

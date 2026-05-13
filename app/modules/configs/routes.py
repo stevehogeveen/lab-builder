@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import copy
 from typing import Any, Callable
 
 from fastapi import Form, Request, UploadFile
@@ -224,6 +225,7 @@ async def save_config_handler(
             "password": preserve_existing_secret(ilo_password, (existing_cfg.get("ilo") or {}).get("password")),
             "additional_users": runtime["extract_ilo_additional_users_from_form"](form),
             "policy": dict((existing_cfg.get("ilo") or {}).get("policy") or {}),
+            "upgrade": copy.deepcopy((existing_cfg.get("ilo") or {}).get("upgrade") or {}),
         },
         "esxi": {"hostname": esxi_hostname, "root_password": preserve_existing_secret(esxi_root_password, (existing_cfg.get("esxi") or {}).get("root_password"))},
         "windows": {"vm_name": windows_vm_name, "admin_password": preserve_existing_secret(windows_admin_password, (existing_cfg.get("windows") or {}).get("admin_password"))},
@@ -233,17 +235,30 @@ async def save_config_handler(
             "hostname": cisco_switch_hostname,
             "username": cisco_switch_username,
             "password": preserve_existing_secret(cisco_switch_password, (existing_cfg.get("cisco_switch") or {}).get("password")),
+            "last_discovered_version": str(((existing_cfg.get("cisco_switch") or {}).get("last_discovered_version")) or ""),
+            "last_discovered_at": str(((existing_cfg.get("cisco_switch") or {}).get("last_discovered_at")) or ""),
+            "last_show_version": str(((existing_cfg.get("cisco_switch") or {}).get("last_show_version")) or ""),
+            "last_discovery_error": str(((existing_cfg.get("cisco_switch") or {}).get("last_discovery_error")) or ""),
+            "last_discovered_model": str(((existing_cfg.get("cisco_switch") or {}).get("last_discovered_model")) or ""),
+            "last_discovered_platform": str(((existing_cfg.get("cisco_switch") or {}).get("last_discovered_platform")) or ""),
+            "last_discovered_hostname": str(((existing_cfg.get("cisco_switch") or {}).get("last_discovered_hostname")) or ""),
+            "upgrade": copy.deepcopy((existing_cfg.get("cisco_switch") or {}).get("upgrade") or {}),
         },
         "netapp": {
             "host": netapp_host,
             "username": netapp_username,
             "password": preserve_existing_secret(netapp_password, (existing_cfg.get("netapp") or {}).get("password")),
             "storage_protocol": netapp_storage_protocol if netapp_storage_protocol in {"nfs", "iscsi"} else "nfs",
+            "last_discovered_ontap_version": str(((existing_cfg.get("netapp") or {}).get("last_discovered_ontap_version")) or ""),
+            "last_discovered_cluster_name": str(((existing_cfg.get("netapp") or {}).get("last_discovered_cluster_name")) or ""),
             "command_templates": {
                 "iscsi": netapp_iscsi_commands,
                 "nfs": netapp_nfs_commands,
             },
+            "upgrade": copy.deepcopy((existing_cfg.get("netapp") or {}).get("upgrade") or {}),
         },
+        "upgrade_inventory": copy.deepcopy(existing_cfg.get("upgrade_inventory") or {}),
+        "upgrade_helper": copy.deepcopy(existing_cfg.get("upgrade_helper") or {}),
     }
     cfg = runtime["merge_defaults"](cfg)
     cfg["storage"]["include_in_ilo_run"] = cfg.get("included", {}).get("storage", False)
@@ -325,9 +340,16 @@ async def save_global_settings_handler(
     netapp_storage_protocol: str = Form("nfs"),
     netapp_iscsi_commands: str = Form(""),
     netapp_nfs_commands: str = Form(""),
+    cisco_switch_hostname: str = Form(""),
+    cisco_switch_username: str = Form("admin"),
+    cisco_switch_password: str = Form(""),
 ):
     cfg = runtime["load_kit_config"]()
     form = await request.form()
+
+    def preserve_existing_secret(submitted: str, existing: Any) -> str:
+        submitted_value = str(submitted or "")
+        return submitted_value if submitted_value else str(existing or "")
     cfg["site"]["name"] = runtime["sanitize_kit_name"](site_name)
     cfg["shared_network"]["subnet"] = shared_subnet
     cfg["shared_network"]["dns_servers"] = [dns1, dns2, dns3, dns4]
@@ -392,12 +414,19 @@ async def save_global_settings_handler(
         {
             "host": netapp_host,
             "username": netapp_username,
-            "password": netapp_password,
+            "password": preserve_existing_secret(netapp_password, (cfg.get("netapp") or {}).get("password")),
             "storage_protocol": netapp_storage_protocol if netapp_storage_protocol in {"nfs", "iscsi"} else "nfs",
             "command_templates": {
                 "iscsi": netapp_iscsi_commands,
                 "nfs": netapp_nfs_commands,
             },
+        }
+    )
+    cfg["cisco_switch"].update(
+        {
+            "hostname": cisco_switch_hostname,
+            "username": cisco_switch_username,
+            "password": preserve_existing_secret(cisco_switch_password, (cfg.get("cisco_switch") or {}).get("password")),
         }
     )
     cfg["ilo"]["target_ip"] = ilo_target_ip

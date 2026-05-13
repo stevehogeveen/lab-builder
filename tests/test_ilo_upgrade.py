@@ -1,0 +1,101 @@
+from app.ilo import ILOError
+from app.ilo_upgrade import build_ilo_upgrade_plan, execute_ilo_upgrade
+
+
+def test_build_ilo_upgrade_plan_requires_live_identity_and_matching_media():
+    cfg = {
+        "ilo": {
+            "current_ip": "10.10.8.50",
+            "host": "10.10.8.50",
+            "username": "Administrator",
+            "password": "secret",
+        },
+        "upgrade_inventory": {
+            "ilo": {
+                "current_version": "1.50",
+                "source": "Latest live iLO inventory",
+                "manager_model": "iLO 6",
+            }
+        },
+    }
+    media_scan = {
+        "root": "/repo/media",
+        "latest": {"ilo": {"version": "3.19", "filename": "ilo5_319.fwpkg", "path": "/repo/media/ilo5_319.fwpkg"}},
+        "counts": {"ilo": 2},
+        "candidates": [
+            {"device": "ilo", "version": "3.19", "filename": "ilo5_319.fwpkg", "path": "/repo/media/ilo5_319.fwpkg"},
+            {"device": "ilo", "version": "1.76", "filename": "ilo6_176.fwpkg", "path": "/repo/media/ilo6_176.fwpkg"},
+        ],
+    }
+
+    plan = build_ilo_upgrade_plan(cfg, media_scan)
+
+    assert plan["ready"] is True
+    assert plan["media_filename"] == "ilo6_176.fwpkg"
+    assert plan["media_version"] == "1.76"
+
+
+def test_execute_ilo_upgrade_updates_cached_inventory():
+    cfg = {
+        "ilo": {
+            "current_ip": "10.10.8.50",
+            "host": "10.10.8.50",
+            "username": "Administrator",
+            "password": "secret",
+        },
+        "upgrade_inventory": {
+            "ilo": {
+                "current_version": "1.50",
+                "source": "Latest live iLO inventory",
+                "manager_model": "iLO 6",
+            }
+        },
+    }
+    media_scan = {
+        "root": "/repo/media",
+        "latest": {"ilo": {"version": "1.76", "filename": "ilo6_176.fwpkg", "path": "/repo/media/ilo6_176.fwpkg"}},
+        "counts": {"ilo": 1},
+        "candidates": [
+            {"device": "ilo", "version": "1.76", "filename": "ilo6_176.fwpkg", "path": "/repo/media/ilo6_176.fwpkg"},
+        ],
+    }
+
+    class FakeClient:
+        def __init__(self):
+            self.version = "1.50"
+            self.uploads = []
+
+        def upload_firmware_component(self, file_path, **kwargs):
+            self.uploads.append((str(file_path), dict(kwargs)))
+            self.version = "1.76"
+            return {"status_code": 200}
+
+        def get_summary(self):
+            return {"manager_firmware": self.version}
+
+    fake = FakeClient()
+    result = execute_ilo_upgrade(
+        cfg,
+        media_scan,
+        build_client=lambda **_: fake,
+        wait_timeout=2,
+        poll_interval=0.01,
+    )
+
+    assert result["target_version"] == "1.76"
+    assert cfg["upgrade_inventory"]["ilo"]["current_version"] == "1.76"
+    assert cfg["ilo"]["upgrade"]["last_result"]["status"] == "completed"
+
+
+def test_execute_ilo_upgrade_blocks_when_prechecks_fail():
+    cfg = {
+        "ilo": {"current_ip": "", "host": "", "username": "", "password": ""},
+        "upgrade_inventory": {"ilo": {"current_version": "", "source": "", "manager_model": ""}},
+    }
+    media_scan = {"root": "/repo/media", "latest": {}, "counts": {}, "candidates": []}
+
+    try:
+        execute_ilo_upgrade(cfg, media_scan, build_client=lambda **_: object())
+        assert False, "expected ILOError"
+    except ILOError as exc:
+        assert "prechecks" in str(exc).lower() or "current ilo address" in str(exc).lower()
