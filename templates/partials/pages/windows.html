@@ -184,6 +184,49 @@
                 <input type="hidden" name="return_page" value="windows">
                 <button class="btn btn-primary action-button" type="submit">Plan Windows install (dry-run)</button>
             </form>
+            {% set install_plan = cfg.get('windows', {}).get('install_plan', {}) or {} %}
+            {% set deployment_preview = install_plan.get('deployment_preview', {}) or {} %}
+            {% if deployment_preview %}
+            {% set preview_source = deployment_preview.get('source', {}) or {} %}
+            {% set preview_template = deployment_preview.get('template', {}) or {} %}
+            {% set preview_target = deployment_preview.get('target', {}) or {} %}
+            <div class="ops-strip-card mt-3">
+                <div class="flex items-center justify-between gap-3">
+                    <div class="font-semibold">Deployment preview</div>
+                    <span class="status {{ 'ready' if install_plan.get('ready') else 'pending' }}">{{ 'Ready' if install_plan.get('ready') else 'Needs attention' }}</span>
+                </div>
+                <div class="ops-strip-grid text-sm mt-3">
+                    <div>
+                        <div class="dashboard-kicker">Source</div>
+                        <div class="truncate-wrap" title="{{ preview_source.get('path', '') }}">{{ preview_source.get('name', '') or 'Not set' }}</div>
+                        <div class="text-slate-400 mt-1">{{ preview_source.get('file_count', 0) }} files | {{ preview_source.get('total_size_display', '0 B') }}</div>
+                    </div>
+                    <div>
+                        <div class="dashboard-kicker">Template</div>
+                        <div class="truncate-wrap">{{ preview_template.get('vm_name', '') or cfg.get('windows', {}).get('vm_name', '') or 'Not set' }}</div>
+                        <div class="text-slate-400 mt-1">{{ preview_template.get('hardware_version', '') or 'Unknown hardware' }}{% if preview_template.get('cpu_count') or preview_template.get('memory_mb') %} | {{ preview_template.get('cpu_count', '?') }} CPU / {{ preview_template.get('memory_mb', '?') }}{% endif %}</div>
+                    </div>
+                    <div>
+                        <div class="dashboard-kicker">Target</div>
+                        <div class="truncate-wrap">{{ preview_target.get('vsphere_host', '') or 'Not set' }}</div>
+                        <div class="text-slate-400 mt-1">{{ preview_target.get('datastore', '') or 'No datastore' }} | {{ preview_target.get('network', '') or 'No network' }}</div>
+                    </div>
+                </div>
+                {% if preview_target.get('guest_ip') %}
+                <div class="text-slate-400 text-sm mt-3">Guest network: {{ preview_target.get('guest_ip') }} via {{ preview_target.get('gateway') or 'no gateway' }}{% if preview_target.get('dns_servers') %} | DNS {{ preview_target.get('dns_servers')|join(', ') }}{% endif %}</div>
+                {% endif %}
+                {% if deployment_preview.get('steps') %}
+                <details class="mt-3">
+                    <summary class="text-slate-300 cursor-pointer">Dry-run execution outline</summary>
+                    <div class="ops-row-list text-sm mt-2">
+                        {% for step in deployment_preview.get('steps', []) %}
+                        <div class="ops-row-item"><div class="ops-row-copy">{{ step }}</div></div>
+                        {% endfor %}
+                    </div>
+                </details>
+                {% endif %}
+            </div>
+            {% endif %}
         </div>
     </div>
 

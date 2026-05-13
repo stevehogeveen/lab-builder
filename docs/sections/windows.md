@@ -13,6 +13,8 @@ Windows source media supports two safe paths:
 
 Current execution remains a dry-run/safe path. The Windows stage records and validates install inputs but does not deploy or modify a VM yet.
 
+The install planner stores a deployment preview that summarizes the source template, detected hardware metadata, sidecar count, target vSphere/ESXi endpoint, datastore, VM network, guest address, and the future import steps. Network mismatches between the OVF descriptor and saved VM network are warnings, not live changes.
+
 ## How To Update
 - UI: `templates/partials/pages/windows.html`
 - Route handlers: `app/modules/windows/routes.py`

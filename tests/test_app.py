@@ -11967,6 +11967,9 @@ def test_upload_windows_image_and_plan_dry_run(client):
     assert install_plan.get("vsphere_host") == "esxi.local"
     assert install_plan.get("datastore") == "datastore1"
     assert install_plan.get("network") == "VM Network"
+    deployment_preview = install_plan.get("deployment_preview") or {}
+    assert deployment_preview.get("mode") == "dry_run"
+    assert deployment_preview.get("target", {}).get("datastore") == "datastore1"
 
 
 def test_register_windows_local_ovf_path_validates_sidecars_and_plans(client, tmp_path):
@@ -11991,10 +11994,15 @@ def test_register_windows_local_ovf_path_validates_sidecars_and_plans(client, tm
             <File ovf:id="file1" ovf:href="template-disk.vmdk"/>
             <File ovf:id="file2" ovf:href="template.nvram"/>
           </References>
-          <NetworkSection><Network ovf:name="VM Network"/></NetworkSection>
+            <NetworkSection><Network ovf:name="VM Network"/></NetworkSection>
+          <DiskSection><Disk ovf:capacity="100" ovf:capacityAllocationUnits="byte * 2^30"/></DiskSection>
           <VirtualSystem ovf:id="Windows-Template">
             <OperatingSystemSection><Description>Windows Server 2022</Description></OperatingSystemSection>
-            <VirtualHardwareSection><System><VirtualSystemType>vmx-19</VirtualSystemType></System></VirtualHardwareSection>
+            <VirtualHardwareSection>
+              <System><VirtualSystemType>vmx-19</VirtualSystemType></System>
+              <Item><ResourceType>3</ResourceType><VirtualQuantity>2</VirtualQuantity></Item>
+              <Item><ResourceType>4</ResourceType><VirtualQuantity>4096</VirtualQuantity><AllocationUnits>MegaBytes</AllocationUnits></Item>
+            </VirtualHardwareSection>
           </VirtualSystem>
         </Envelope>
         """,
@@ -12020,6 +12028,49 @@ def test_register_windows_local_ovf_path_validates_sidecars_and_plans(client, tm
     source_summary = install_plan.get("source_summary") or {}
     assert source_summary.get("vm_name") == "Windows-Template"
     assert source_summary.get("network_names") == ["VM Network"]
+    assert source_summary.get("cpu_count") == "2"
+    assert source_summary.get("memory_mb") == "4096 MegaBytes"
+    assert source_summary.get("disk_capacity") == "100 byte * 2^30"
+    deployment_preview = install_plan.get("deployment_preview") or {}
+    assert deployment_preview.get("source", {}).get("file_count") == 3
+    assert deployment_preview.get("template", {}).get("hardware_version") == "vmx-19"
+    assert deployment_preview.get("target", {}).get("vm_name") == "win-local-ovf"
+
+
+def test_windows_install_plan_warns_on_ovf_network_mismatch(client, tmp_path):
+    cfg = main.default_config()
+    cfg["site"]["name"] = "Windows Network Mismatch Kit"
+    cfg["windows"]["vm_name"] = "win-network"
+    cfg["windows"]["admin_password"] = "Secret123!"
+    cfg["windows"]["vsphere_host"] = "esxi.local"
+    cfg["windows"]["vsphere_username"] = "root"
+    cfg["windows"]["vsphere_datastore"] = "datastore1"
+    cfg["windows"]["vsphere_network"] = "Prod Network"
+    ovf_path = tmp_path / "template.ovf"
+    disk_path = tmp_path / "disk.vmdk"
+    disk_path.write_bytes(b"disk")
+    ovf_path.write_text(
+        """
+        <Envelope xmlns:ovf="http://schemas.dmtf.org/ovf/envelope/1">
+          <References><File ovf:id="file1" ovf:href="disk.vmdk"/></References>
+          <NetworkSection><Network ovf:name="VM Network"/></NetworkSection>
+          <VirtualSystem ovf:id="Windows-Template"/>
+        </Envelope>
+        """,
+        encoding="utf-8",
+    )
+    cfg["windows"]["source_image_path"] = str(ovf_path)
+    cfg["windows"]["source_image_name"] = "template.ovf"
+    cfg["windows"]["source_image_kind"] = "ovf"
+    main.save_kit_config(cfg)
+
+    response = client.post("/plan-windows-install", data={"return_page": "windows"})
+    assert response.status_code == 200
+    saved = main.load_kit_config("Windows-Network-Mismatch-Kit")
+    install_plan = saved["windows"].get("install_plan") or {}
+    assert install_plan.get("ready") is False
+    assert "Saved VM network 'Prod Network' does not match OVF network(s): VM Network." in install_plan.get("warnings", [])
+    assert install_plan.get("deployment_preview", {}).get("warnings")
 
 
 def test_register_windows_local_ovf_path_rejects_missing_sidecar(client, tmp_path):

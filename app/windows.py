@@ -22,6 +22,13 @@ def _attr_by_local_name(element: ET.Element, name: str) -> str:
     return ""
 
 
+def _child_text_by_local_name(element: ET.Element, name: str) -> str:
+    for child in list(element):
+        if _local_name(child.tag) == name:
+            return str(child.text or "").strip()
+    return ""
+
+
 def _display_size(size_bytes: int) -> str:
     if size_bytes >= 1024**3:
         return f"{size_bytes / 1024**3:.1f} GB"
@@ -48,6 +55,9 @@ def inspect_ovf_source(image_path: str | Path) -> dict[str, Any]:
         "network_names": [],
         "os_description": "",
         "hardware_version": "",
+        "cpu_count": "",
+        "memory_mb": "",
+        "disk_capacity": "",
     }
     if suffix not in {"ova", "ovf"}:
         summary["warnings"].append("Windows source image must be OVA or OVF.")
@@ -113,10 +123,77 @@ def inspect_ovf_source(image_path: str | Path) -> dict[str, Any]:
                 summary["os_description"] = text
         elif name == "VirtualSystemType" and not summary["hardware_version"]:
             summary["hardware_version"] = str(element.text or "").strip()
+        elif name == "Disk" and not summary["disk_capacity"]:
+            capacity = _attr_by_local_name(element, "capacity").strip()
+            allocation_units = _attr_by_local_name(element, "capacityAllocationUnits").strip()
+            if capacity:
+                summary["disk_capacity"] = f"{capacity} {allocation_units}".strip()
+        elif name == "Item":
+            resource_type = _child_text_by_local_name(element, "ResourceType")
+            quantity = _child_text_by_local_name(element, "VirtualQuantity")
+            allocation_units = _child_text_by_local_name(element, "AllocationUnits")
+            if resource_type == "3" and quantity and not summary["cpu_count"]:
+                summary["cpu_count"] = quantity
+            elif resource_type == "4" and quantity and not summary["memory_mb"]:
+                summary["memory_mb"] = f"{quantity} {allocation_units}".strip()
 
     summary["ok"] = not summary["warnings"]
     summary["total_size_display"] = _display_size(int(summary["total_size_bytes"]))
     return summary
+
+
+def build_deployment_preview(plan: dict[str, Any], source_summary: dict[str, Any]) -> dict[str, Any]:
+    source_files = list(source_summary.get("files") or [])
+    sidecar_files = [item for item in source_files if item.get("role") == "referenced"]
+    vm_name = str(plan.get("vm_name") or source_summary.get("vm_name") or "").strip()
+    target_network = str(plan.get("network") or "").strip()
+    ovf_networks = [str(item) for item in source_summary.get("network_names") or [] if str(item).strip()]
+    warnings: list[str] = []
+    if target_network and ovf_networks and target_network not in ovf_networks:
+        warnings.append(f"Saved VM network '{target_network}' does not match OVF network(s): {', '.join(ovf_networks)}.")
+    preview = {
+        "action": "Deploy OVF/OVA template",
+        "mode": "dry_run",
+        "creates_vm": False,
+        "source": {
+            "name": source_summary.get("name") or Path(str(plan.get("image_path") or "")).name,
+            "path": source_summary.get("path") or plan.get("image_path") or "",
+            "kind": source_summary.get("kind") or plan.get("image_kind") or "",
+            "total_size_display": source_summary.get("total_size_display") or "",
+            "file_count": len(source_files),
+            "sidecar_count": len(sidecar_files),
+        },
+        "template": {
+            "vm_name": source_summary.get("vm_name") or "",
+            "os_description": source_summary.get("os_description") or "",
+            "hardware_version": source_summary.get("hardware_version") or "",
+            "cpu_count": source_summary.get("cpu_count") or "",
+            "memory_mb": source_summary.get("memory_mb") or "",
+            "disk_capacity": source_summary.get("disk_capacity") or "",
+            "network_names": ovf_networks,
+        },
+        "target": {
+            "vm_name": vm_name,
+            "vsphere_host": str(plan.get("vsphere_host") or ""),
+            "datacenter": str(plan.get("datacenter") or ""),
+            "datastore": str(plan.get("datastore") or ""),
+            "network": target_network,
+            "folder": str(plan.get("folder") or ""),
+            "resource_pool": str(plan.get("resource_pool") or ""),
+            "guest_ip": str(plan.get("target_ip") or ""),
+            "gateway": str(plan.get("gateway") or ""),
+            "dns_servers": list(plan.get("dns_servers") or []),
+        },
+        "steps": [
+            "Validate OVA/OVF source and sidecar files.",
+            "Connect to the saved vSphere or standalone ESXi endpoint.",
+            "Map the OVF network to the saved VM network.",
+            "Import the VM to the selected datastore and inventory location.",
+            "Leave the VM powered off until an explicit apply flow is added.",
+        ],
+        "warnings": warnings,
+    }
+    return preview
 
 
 @dataclass
@@ -211,7 +288,14 @@ class VsphereClient:
         for field, label in labels.items():
             if not str(plan.get(field) or "").strip():
                 warnings.append(f"{label} is missing.")
-        return {"ready": not warnings, "warnings": warnings, "source_summary": source_summary}
+        deployment_preview = build_deployment_preview(plan, source_summary) if source_summary else {}
+        warnings.extend([item for item in deployment_preview.get("warnings", []) if item not in warnings])
+        return {
+            "ready": not warnings,
+            "warnings": warnings,
+            "source_summary": source_summary,
+            "deployment_preview": deployment_preview,
+        }
 
 
 class WinRMClient:

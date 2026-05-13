@@ -180,6 +180,9 @@ async def register_windows_ovf_path_handler(
         "network_names": summary.get("network_names", []),
         "os_description": summary.get("os_description", ""),
         "hardware_version": summary.get("hardware_version", ""),
+        "cpu_count": summary.get("cpu_count", ""),
+        "memory_mb": summary.get("memory_mb", ""),
+        "disk_capacity": summary.get("disk_capacity", ""),
     }
     windows_cfg["install_plan"] = {}
     runtime["save_kit_config"](cfg)
@@ -256,6 +259,8 @@ async def plan_windows_install_handler(
     warnings.extend([item for item in interface_check.get("warnings", []) if item not in warnings])
     if interface_check.get("source_summary"):
         plan["source_summary"] = interface_check.get("source_summary")
+    if interface_check.get("deployment_preview"):
+        plan["deployment_preview"] = interface_check.get("deployment_preview")
     plan["warnings"] = warnings
     plan["ready"] = not warnings
     cfg["windows"]["install_plan"] = plan
@@ -280,6 +285,7 @@ async def plan_windows_install_handler(
             outcomes=[
                 f"VM: {plan.get('vm_name') or 'Not set'}",
                 f"Image: {windows_cfg.get('source_image_name') or 'Not uploaded'}",
+                f"Target: {plan.get('vsphere_host') or 'Not set'} / {plan.get('datastore') or 'No datastore'}",
                 f"Readiness: {'Ready' if plan.get('ready') else 'Needs attention'}",
             ],
             details=warnings if warnings else ["Dry-run plan looks complete."],
