@@ -37,6 +37,7 @@ async def register_ovf_template_directory(
     ovf_template_directory: str = Form(""),
     ovf_template_name: str = Form(""),
     ovf_template_os_family: str = Form(""),
+    ovf_source_location_type: str = Form("local"),
     ovf_descriptor_name: str = Form(""),
 ):
     from app import main
@@ -48,6 +49,7 @@ async def register_ovf_template_directory(
         template_name=ovf_template_name,
         os_family=ovf_template_os_family,
         ovf_name=ovf_descriptor_name,
+        source_location_type=ovf_source_location_type,
     )
     if not result.get("ok"):
         candidates = list((result.get("summary") or {}).get("candidates") or [])
@@ -67,7 +69,9 @@ async def register_ovf_template_directory(
             f"Descriptor: {template.get('descriptor_name') or 'Not set'}",
             f"Files: {template.get('file_count', 0)}",
             f"Size: {template.get('total_size_display') or '0 B'}",
+            f"Source: {str(template.get('source_location_type') or 'local').replace('_', ' ').title()}",
         ],
+        details=list(((template.get("readiness") or {}).get("blockers") or [])),
     )
     page = str(return_page or "ovf_templates").strip().lower()
     if page == "windows":
@@ -77,4 +81,3 @@ async def register_ovf_template_directory(
 
 def register_module_routes(app: FastAPI) -> None:
     app.include_router(router)
-

@@ -248,6 +248,13 @@ async def select_windows_ovf_template_handler(
     template = ovf_service.get_template(cfg, windows_ovf_template_id)
     if not template:
         return runtime["render_page"](request, cfg, active_page=return_page, error_message="Select a registered OVF template first.")
+    readiness = dict(template.get("readiness") or {})
+    if not readiness.get("ready"):
+        blockers = list(readiness.get("blockers") or [])
+        message = readiness.get("summary") or "Selected OVF template source is not ready."
+        if blockers:
+            message = f"{message} {' '.join(str(item) for item in blockers)}"
+        return runtime["render_page"](request, cfg, active_page=return_page, error_message=message)
     windows_cfg = cfg.setdefault("windows", {})
     _apply_ovf_template_to_windows_cfg(windows_cfg, template)
     runtime["save_kit_config"](cfg)
@@ -285,6 +292,14 @@ async def plan_windows_install_handler(
     warnings: list[str] = []
     image_path = str(windows_cfg.get("source_image_path") or "").strip()
     image_kind = str(windows_cfg.get("source_image_kind") or "").strip().lower()
+    template_id = str(windows_cfg.get("ovf_template_id") or "").strip()
+    if template_id:
+        template = ovf_service.get_template(cfg, template_id)
+        if template:
+            readiness = dict(template.get("readiness") or {})
+            if not readiness.get("ready"):
+                warnings.append(str(readiness.get("summary") or "Selected OVF template source is not ready."))
+                warnings.extend([str(item) for item in list(readiness.get("blockers") or [])])
     if not image_path:
         warnings.append("No OVA/OVF image is uploaded yet.")
     elif not Path(image_path).exists():

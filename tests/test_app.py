@@ -12100,6 +12100,7 @@ def test_ovf_templates_register_directory_and_windows_selects_template(client, t
             "ovf_template_directory": str(tmp_path),
             "ovf_template_name": "Reusable Windows Template",
             "ovf_template_os_family": "windows",
+            "ovf_source_location_type": "local",
         },
     )
     assert registered.status_code == 200
@@ -12109,6 +12110,8 @@ def test_ovf_templates_register_directory_and_windows_selects_template(client, t
     template_id = next(iter(templates))
     assert templates[template_id]["file_count"] == 3
     assert templates[template_id]["directory"] == str(tmp_path)
+    assert templates[template_id]["source_location_type"] == "local"
+    assert templates[template_id]["readiness"]["ready"] is True
 
     selected = client.post(
         "/select-windows-ovf-template",
@@ -12143,6 +12146,104 @@ def test_ovf_template_directory_requires_descriptor_choice_when_multiple_ovfs(cl
     assert "Multiple .ovf descriptors were found." in response.text
     assert "one.ovf" in response.text
     assert "two.ovf" in response.text
+
+
+def test_netapp_backed_ovf_template_blocks_windows_until_storage_ready(client, tmp_path):
+    cfg = main.default_config()
+    cfg["site"]["name"] = "OVF NetApp Blocked Kit"
+    cfg["windows"]["vm_name"] = "win-netapp"
+    cfg["windows"]["admin_password"] = "Secret123!"
+    cfg["windows"]["vsphere_host"] = "esxi.local"
+    cfg["windows"]["vsphere_username"] = "root"
+    cfg["windows"]["vsphere_datastore"] = "netapp_nfs"
+    cfg["windows"]["vsphere_network"] = "VM Network"
+    main.save_kit_config(cfg)
+    ovf_path = tmp_path / "template.ovf"
+    disk_path = tmp_path / "template-disk.vmdk"
+    disk_path.write_bytes(b"disk")
+    ovf_path.write_text(
+        """
+        <Envelope xmlns:ovf="http://schemas.dmtf.org/ovf/envelope/1">
+          <References><File ovf:id="file1" ovf:href="template-disk.vmdk"/></References>
+          <NetworkSection><Network ovf:name="VM Network"/></NetworkSection>
+          <VirtualSystem ovf:id="NetApp-Template"/>
+        </Envelope>
+        """,
+        encoding="utf-8",
+    )
+
+    response = client.post(
+        "/modules/ovf-templates/register-directory",
+        data={
+            "return_page": "ovf_templates",
+            "ovf_template_directory": str(tmp_path),
+            "ovf_template_name": "NetApp Template",
+            "ovf_source_location_type": "netapp",
+        },
+    )
+    assert response.status_code == 200
+    saved = main.load_kit_config("OVF-NetApp-Blocked-Kit")
+    template_id = next(iter((saved.get("ovf_templates") or {}).get("templates") or {}))
+    template = saved["ovf_templates"]["templates"][template_id]
+    assert template["source_location_type"] == "netapp"
+    assert template["readiness"]["ready"] is False
+
+    selected = client.post(
+        "/select-windows-ovf-template",
+        data={"return_page": "windows", "windows_ovf_template_id": template_id},
+    )
+    assert selected.status_code == 200
+    assert "NetApp-backed OVF source needs a ready NetApp VMware/NFS datastore probe first." in selected.text
+
+
+def test_netapp_backed_ovf_template_allows_windows_when_probe_ready(client, tmp_path):
+    cfg = main.default_config()
+    cfg["site"]["name"] = "OVF NetApp Ready Kit"
+    cfg["windows"]["vm_name"] = "win-netapp"
+    cfg["windows"]["admin_password"] = "Secret123!"
+    cfg["windows"]["vsphere_host"] = "esxi.local"
+    cfg["windows"]["vsphere_username"] = "root"
+    cfg["windows"]["vsphere_datastore"] = "netapp_nfs"
+    cfg["windows"]["vsphere_network"] = "VM Network"
+    cfg["netapp"]["vmware_checks"] = {"nfs_mount": {"ready": True, "datastore_name": "netapp_nfs"}}
+    main.save_kit_config(cfg)
+    ovf_path = tmp_path / "template.ovf"
+    disk_path = tmp_path / "template-disk.vmdk"
+    disk_path.write_bytes(b"disk")
+    ovf_path.write_text(
+        """
+        <Envelope xmlns:ovf="http://schemas.dmtf.org/ovf/envelope/1">
+          <References><File ovf:id="file1" ovf:href="template-disk.vmdk"/></References>
+          <NetworkSection><Network ovf:name="VM Network"/></NetworkSection>
+          <VirtualSystem ovf:id="NetApp-Template"/>
+        </Envelope>
+        """,
+        encoding="utf-8",
+    )
+
+    response = client.post(
+        "/modules/ovf-templates/register-directory",
+        data={
+            "return_page": "ovf_templates",
+            "ovf_template_directory": str(tmp_path),
+            "ovf_template_name": "NetApp Template",
+            "ovf_source_location_type": "netapp",
+        },
+    )
+    assert response.status_code == 200
+    saved = main.load_kit_config("OVF-NetApp-Ready-Kit")
+    template_id = next(iter((saved.get("ovf_templates") or {}).get("templates") or {}))
+
+    selected = client.post(
+        "/select-windows-ovf-template",
+        data={"return_page": "windows", "windows_ovf_template_id": template_id},
+    )
+    assert selected.status_code == 200
+    assert "Windows OVF template selected" in selected.text
+    plan = client.post("/plan-windows-install", data={"return_page": "windows"})
+    assert plan.status_code == 200
+    saved = main.load_kit_config("OVF-NetApp-Ready-Kit")
+    assert saved["windows"]["install_plan"]["ready"] is True
 
 
 def test_windows_install_plan_warns_on_ovf_network_mismatch(client, tmp_path):

@@ -15,6 +15,14 @@
             <form hx-post="/modules/ovf-templates/register-directory" hx-target="#main-content" hx-swap="outerHTML" class="space-y-3" data-action-title="Registering OVF directory" data-action-start="Scanning the directory, descriptor, VMDK, NVRAM, and other referenced files.">
                 <input type="hidden" name="return_page" value="ovf_templates">
                 <div>
+                    <label class="block text-sm font-bold text-slate-300 mb-2">Source location</label>
+                    <select name="ovf_source_location_type" class="input">
+                        <option value="local">Local Lab Builder server</option>
+                        <option value="netapp">NetApp-backed storage</option>
+                    </select>
+                    <div class="text-slate-400 text-sm mt-1">Local sources work without NetApp. NetApp-backed sources are blocked until the NetApp VMware/NFS datastore probe is ready.</div>
+                </div>
+                <div>
                     <label class="block text-sm font-bold text-slate-300 mb-2">Template directory</label>
                     <input type="text" name="ovf_template_directory" value="/home/administrator/lab-builder/media/OVF_Templates/DepOps_W2K22_Template_VMware7.0_Feb2025-1.0" class="input">
                 </div>
@@ -48,11 +56,13 @@
             <div class="ops-row-list text-sm">
                 {% for item in templates %}
                 <div class="ops-row-item">
+                    {% set readiness = item.get('readiness', {}) or {} %}
                     <div class="ops-row-copy">
                         <div class="font-semibold">{{ item.get('name') or item.get('id') }}</div>
                         <div class="text-slate-400 truncate-wrap" title="{{ item.get('directory', '') }}">{{ item.get('descriptor_name') or 'No descriptor' }} | {{ item.get('file_count', 0) }} files | {{ item.get('total_size_display', '0 B') }}</div>
+                        <div class="text-slate-400 mt-1">{{ (item.get('source_location_type') or 'local')|replace('_', ' ')|title }} | {{ readiness.get('summary') or 'Readiness not checked' }}</div>
                     </div>
-                    <div class="ops-row-meta">{{ item.get('os_family') or 'generic' }}</div>
+                    <div class="ops-row-meta"><span class="status {{ readiness.get('tone', 'progress') }}">{{ readiness.get('label', 'Review') }}</span></div>
                 </div>
                 {% endfor %}
             </div>
