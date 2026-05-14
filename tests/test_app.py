@@ -137,12 +137,15 @@ def test_upgrade_helper_preserves_post_upgrade_ilo_version_over_stale_live_snaps
 @pytest.fixture(autouse=True)
 def isolate_runtime_paths(tmp_path, monkeypatch):
     config_dir = tmp_path / "config"
+    media_dir = tmp_path / "media"
     artifacts_dir = tmp_path / "artifacts"
     exports_dir = artifacts_dir / "exports"
     paths = {
         "CONFIG_DIR": config_dir,
         "KITS_DIR": config_dir / "kits",
         "CURRENT_KIT_FILE": config_dir / "current_kit.txt",
+        "MEDIA_DIR": media_dir,
+        "FIRMWARE_UPLOAD_DIR": media_dir / "firmware",
         "ARTIFACTS_DIR": artifacts_dir,
         "GENERATED_DIR": artifacts_dir / "generated",
         "JOBS_DIR": artifacts_dir / "jobs",
@@ -1065,6 +1068,8 @@ class FakeGen10StorageApplyClient:
 def client(tmp_path, monkeypatch):
     config_dir = tmp_path / "config"
     kits_dir = config_dir / "kits"
+    media_dir = tmp_path / "media"
+    firmware_upload_dir = media_dir / "firmware"
     artifacts_dir = tmp_path / "artifacts"
     generated_dir = artifacts_dir / "generated"
     jobs_dir = artifacts_dir / "jobs"
@@ -1081,6 +1086,8 @@ def client(tmp_path, monkeypatch):
     for path in (
         config_dir,
         kits_dir,
+        media_dir,
+        firmware_upload_dir,
         generated_dir,
         jobs_dir,
         history_dir,
@@ -1097,6 +1104,8 @@ def client(tmp_path, monkeypatch):
     monkeypatch.setattr(main, "CONFIG_DIR", config_dir)
     monkeypatch.setattr(main, "KITS_DIR", kits_dir)
     monkeypatch.setattr(main, "CURRENT_KIT_FILE", config_dir / "current_kit.txt")
+    monkeypatch.setattr(main, "MEDIA_DIR", media_dir)
+    monkeypatch.setattr(main, "FIRMWARE_UPLOAD_DIR", firmware_upload_dir)
     monkeypatch.setattr(main, "ARTIFACTS_DIR", artifacts_dir)
     monkeypatch.setattr(main, "GENERATED_DIR", generated_dir)
     monkeypatch.setattr(main, "JOBS_DIR", jobs_dir)
@@ -1113,6 +1122,28 @@ def client(tmp_path, monkeypatch):
 
     with TestClient(main.app) as test_client:
         yield test_client
+
+
+def test_health_reports_app_name_version_and_status(client):
+    response = client.get("/health")
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "app_name": "Lab Builder",
+        "version": main.app_version(),
+        "status": "ok",
+    }
+
+
+def test_upgrade_media_upload_writes_to_persistent_media_folder(client):
+    response = client.post(
+        "/upload-upgrade-media",
+        files={"media_file": ("ilo6_319.fwpkg", b"firmware-bytes", "application/octet-stream")},
+    )
+
+    assert response.status_code == 200
+    assert "Firmware media uploaded" in response.text
+    assert (main.FIRMWARE_UPLOAD_DIR / "ilo6_319.fwpkg").read_bytes() == b"firmware-bytes"
 
 
 def test_navigation_pages_render(client):

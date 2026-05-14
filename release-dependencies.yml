@@ -1,0 +1,23 @@
+name: lab-builder
+version: "0.1.0"
+
+python:
+  runtime_requirements: requirements-runtime.txt
+  development_requirements: requirements.txt
+  runtime_notes:
+    - Runtime image intentionally excludes pytest and Playwright.
+    - Browser test tooling belongs in developer environments, not release runtime images.
+
+container_os_packages:
+  base_image: python:3.12-slim
+  apt:
+    - ca-certificates
+    - openssh-client
+    - sshpass
+    - xorriso
+
+docker_image:
+  repository: lab-builder
+  tag: "0.1.0"
+  archive: dist/lab-builder-0.1.0-image.tar.gz
+  digest: generated during release build

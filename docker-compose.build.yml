@@ -1,0 +1,5 @@
+services:
+  lab-builder:
+    build:
+      context: .
+      dockerfile: Dockerfile

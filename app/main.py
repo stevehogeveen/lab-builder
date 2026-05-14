@@ -185,12 +185,15 @@ from app.stages.storage.runtime import (
 ILO_CLIENT_BASE = ILOClient
 
 BASE_DIR = Path(__file__).resolve().parent.parent
+VERSION_FILE = BASE_DIR / "VERSION"
 TEMPLATES_DIR = BASE_DIR / "templates"
 STATIC_DIR = BASE_DIR / "static"
 CONFIG_DIR = BASE_DIR / "config"
 KITS_DIR = CONFIG_DIR / "kits"
 CURRENT_KIT_FILE = CONFIG_DIR / "current_kit.txt"
 ARTIFACTS_DIR = BASE_DIR / "artifacts"
+MEDIA_DIR = BASE_DIR / "media"
+FIRMWARE_UPLOAD_DIR = MEDIA_DIR / "firmware"
 GENERATED_DIR = ARTIFACTS_DIR / "generated"
 JOBS_DIR = ARTIFACTS_DIR / "jobs"
 HISTORY_DIR = ARTIFACTS_DIR / "history"
@@ -208,12 +211,25 @@ MODULES_DIR = BASE_DIR / "app" / "modules"
 STORAGE_APPLY_CONFIRM_CREATE = "CREATE STORAGE"
 STORAGE_APPLY_CONFIRM_WIPE = "WIPE STORAGE"
 KNOWN_ISSUE_STORAGE_DRIVE_CONTROLLER_MISMATCH = "storage_drive_controller_mismatch"
+APP_NAME = "Lab Builder"
+ALLOWED_MEDIA_UPLOAD_SUFFIXES = {
+    ".bin",
+    ".fw",
+    ".fwpkg",
+    ".gz",
+    ".img",
+    ".iso",
+    ".tar",
+    ".tgz",
+    ".zip",
+}
 
-app = FastAPI(title="Lab Builder")
+app = FastAPI(title=APP_NAME)
 
 STATIC_DIR.mkdir(parents=True, exist_ok=True)
 CONFIG_DIR.mkdir(parents=True, exist_ok=True)
 KITS_DIR.mkdir(parents=True, exist_ok=True)
+FIRMWARE_UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
 GENERATED_DIR.mkdir(parents=True, exist_ok=True)
 JOBS_DIR.mkdir(parents=True, exist_ok=True)
 HISTORY_DIR.mkdir(parents=True, exist_ok=True)
@@ -463,6 +479,20 @@ def db_persist_storage_inventory(cfg: dict[str, Any], discovery: dict[str, Any],
         inventory_kind="storage_inventory",
         raw_summary=summary,
     )
+
+
+def app_version() -> str:
+    try:
+        version = VERSION_FILE.read_text(encoding="utf-8").strip()
+    except OSError:
+        return "unknown"
+    return version or "unknown"
+
+
+@app.get("/health")
+def health() -> dict[str, str]:
+    return {"app_name": APP_NAME, "version": app_version(), "status": "ok"}
+
 
 app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
 templates = Jinja2Templates(directory=str(TEMPLATES_DIR))
@@ -14103,6 +14133,67 @@ async def save_upgrade_policies_route(
                 f"iLO policy: {cfg['upgrade_helper']['policies'].get('ilo', 'block')}",
                 f"ONTAP policy: {cfg['upgrade_helper']['policies'].get('netapp', 'block')}",
                 f"Cisco policy: {cfg['upgrade_helper']['policies'].get('cisco_switch', 'block')}",
+            ],
+        ),
+    )
+
+
+def safe_upload_filename(filename: str) -> str:
+    name = Path(str(filename or "")).name.strip()
+    name = re.sub(r"[^A-Za-z0-9._-]+", "-", name)
+    name = name.strip(".-")
+    return name[:180]
+
+
+@app.post("/upload-upgrade-media", response_class=HTMLResponse)
+async def upload_upgrade_media_route(
+    request: Request,
+    return_page: str = Form("upgrade_helper"),
+    media_file: UploadFile = File(...),
+):
+    cfg = load_kit_config()
+    filename = safe_upload_filename(media_file.filename or "")
+    if not filename:
+        return render_page(
+            request,
+            cfg,
+            active_page="upgrade_helper",
+            error_message="No firmware or media file was selected.",
+        )
+    suffixes = [suffix.lower() for suffix in Path(filename).suffixes]
+    if not suffixes or not any(suffix in ALLOWED_MEDIA_UPLOAD_SUFFIXES for suffix in suffixes):
+        return render_page(
+            request,
+            cfg,
+            active_page="upgrade_helper",
+            error_message="Unsupported media file type. Upload firmware, ISO, ONTAP, or switch image files only.",
+        )
+
+    FIRMWARE_UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
+    target = FIRMWARE_UPLOAD_DIR / filename
+    if target.exists():
+        stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+        target = FIRMWARE_UPLOAD_DIR / f"{target.stem}-{stamp}{target.suffix}"
+
+    with target.open("wb") as handle:
+        while chunk := await media_file.read(1024 * 1024):
+            handle.write(chunk)
+    await media_file.close()
+
+    page = str(return_page or "upgrade_helper").strip().lower()
+    if page not in {"upgrade_helper", "global_settings"}:
+        page = "upgrade_helper"
+    return render_page(
+        request,
+        cfg,
+        active_page=page,
+        action_feedback=build_action_feedback(
+            "Firmware media uploaded",
+            "The file was saved under media/firmware. Media folders are mounted runtime data and are never included in release packages or Docker images.",
+            tone="ready",
+            outcomes=[
+                f"File: {target.name}",
+                "Location: media/firmware",
             ],
         ),
     )

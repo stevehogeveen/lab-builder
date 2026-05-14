@@ -44,7 +44,7 @@ Default URL: `http://localhost:8000`
 - ESXi ISO customization uses `xorriso`.
 - ESXi live SSH post-config uses `sshpass` when password-based root login is used.
 - Browser-based UI sanity checks use Playwright Chromium; install it with `.venv/bin/playwright install chromium`.
-- Local media under `media/` is intentionally not tracked by git. Put ESXi ISOs, OVA/OVF, and VMDK files there on each machine that needs them.
+- Local media under `media/` is intentionally not tracked by git. Put ESXi ISOs, firmware, OVA/OVF, and VMDK files there on each machine that needs them, or upload firmware and upgrade media from Upgrade Helper.
 
 ## High-Level Architecture
 
@@ -56,10 +56,10 @@ Default URL: `http://localhost:8000`
 
 ## Documentation Map
 
-- Main docs index: [docs/README.md](/home/administrator/lab-builder/docs/README.md)
-- Full operator + maintainer guide: [docs/HOWTO.md](/home/administrator/lab-builder/docs/HOWTO.md)
+- Main docs index: [docs/README.md](docs/README.md)
+- Full operator + maintainer guide: [docs/HOWTO.md](docs/HOWTO.md)
 - Health check: `./scripts/health-check`
 - Existing operations references:
-  - [docs/automation-principles.md](/home/administrator/lab-builder/docs/automation-principles.md)
-  - [docs/esxi-operations.md](/home/administrator/lab-builder/docs/esxi-operations.md)
-  - [docs/debugging.md](/home/administrator/lab-builder/docs/debugging.md)
+  - [docs/automation-principles.md](docs/automation-principles.md)
+  - [docs/esxi-operations.md](docs/esxi-operations.md)
+  - [docs/debugging.md](docs/debugging.md)

@@ -1,0 +1,58 @@
+name: lab-builder
+version: "0.1.0"
+release_date: "YYYY-MM-DD"
+
+package:
+  type: source-archive-with-optional-docker-image
+  archive_name: lab-builder-${version}.tar.gz
+  docker_image_archive: lab-builder-${version}-image.tar.gz
+  checksums: SHA256SUMS
+  entrypoint: scripts/run_lab_builder.sh
+  runtime_requirements: requirements-runtime.txt
+  dependency_manifest: release-dependencies.yml
+
+persistent_mounts:
+  - path: config/
+    purpose: Kit configuration and operator settings.
+    include_in_image: false
+    include_in_release_package: false
+  - path: artifacts/
+    purpose: Generated outputs, job state, run history, debug bundles, and local SQLite data.
+    include_in_image: false
+    include_in_release_package: false
+  - path: media/
+    purpose: Local ISO, firmware, OVF/OVA, VMDK, and other customer-provided media.
+    include_in_image: false
+    include_in_release_package: false
+
+excluded_from_release:
+  - real kit files
+  - customer names, site names, hostnames, and operator-specific paths
+  - passwords and credentials
+  - generated artifacts
+  - ISO, firmware, OVF/OVA, VMDK, and other customer media files
+  - customer data
+  - local virtual environments and caches
+  - mounted runtime folders: config/, artifacts/, media/, backups/
+
+verification:
+  - python -m compileall -q app
+  - scripts/audit_release.sh dist/lab-builder-${version}.tar.gz
+  - scripts/check_docker.sh
+  - docker compose -f docker-compose.yml -f docker-compose.build.yml build
+  - scripts/export_docker_image.sh
+  - scripts/load_docker_image.sh dist/lab-builder-${version}-image.tar.gz
+  - curl http://localhost:8000/health
+
+host_setup:
+  ubuntu_docker_install: scripts/install_docker_ubuntu.sh
+
+release_modes:
+  connected:
+    description: Build the Docker image from source on a host with internet access.
+    command: docker compose -f docker-compose.yml -f docker-compose.build.yml up --build
+  self_contained:
+    description: Load the prebuilt Docker image archive, then run without dependency downloads.
+    commands:
+      - scripts/load_docker_image.sh dist/lab-builder-${version}-image.tar.gz
+      - scripts/run_lab_builder.sh

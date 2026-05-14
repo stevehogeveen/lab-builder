@@ -11,6 +11,9 @@ artifacts/runs/
 artifacts/debug-bundles/
 artifacts/lab-builder.sqlite3
 artifacts/*.log
+dist/
+backups/
+release/
 config/current_kit.txt
 config/kits/*.yml
 offline-wheels/
