@@ -1,0 +1,187 @@
+application: lab-builder
+product: ontap
+owner: lab-builder
+required_versions:
+  - 9.14.1
+  - 9.15.1
+  - 9.16.1
+  - 9.17.1
+  - 9.18.1
+
+capabilities:
+  upgrade_orchestration:
+    operations:
+      - method: GET
+        path: /api/cluster/jobs/{uuid}
+      - method: GET
+        path: /api/cluster/software
+      - method: PATCH
+        path: /api/cluster/software
+      - method: POST
+        path: /api/private/cli/cluster/image/update
+        required: false
+        notes: Optional fallback for validation-warning acknowledgement; private CLI endpoints are not published in the public Swagger reference.
+      - method: POST
+        path: /api/cluster/software/upload
+      - method: GET
+        path: /api/cluster/software/packages/{version}
+
+  cluster_inventory:
+    operations:
+      - method: GET
+        path: /api/cluster
+      - method: GET
+        path: /api/cluster/nodes
+        field_sets:
+          - [name, model, serial_number, state, version, ha, uuid]
+          - [name, model, state, version, uuid]
+      - method: GET
+        path: /api/network/ethernet/ports
+        field_sets:
+          - [name, node, broadcast_domain, broadcast_domain.ipspace.name, mtu, state, speed, type, enabled, mac_address]
+          - [name, node, broadcast_domain, mtu, state, speed, type, enabled, mac_address]
+          - [name, node, broadcast_domain, mtu, state, speed, type]
+      - method: GET
+        path: /api/storage/aggregates
+        field_sets:
+          - [name, node, space, state, uuid]
+      - method: GET
+        path: /api/storage/disks
+        field_sets:
+          - [name, node, owner, vendor, model, class, type, state, firmware_revision, usable_size, physical_size, container_type, container_name, self_encrypting]
+          - [name, node, owner, vendor, model, type, state, firmware_revision, usable_size, physical_size]
+          - [name, node, type, state, vendor, model]
+      - method: GET
+        path: /api/svm/svms
+        field_sets:
+          - [name, uuid, state, subtype, allowed_protocols]
+          - [name, uuid, state, subtype]
+          - [name, state, subtype]
+          - [name, state]
+
+  storage_inventory:
+    operations:
+      - method: GET
+        path: /api/storage/volumes
+        field_sets:
+          - [name, svm, aggregates, size, state, type, nas.path, nas.export_policy]
+          - [name, svm, aggregate, size, state, type, nas.path, nas.export_policy]
+          - [name, svm, size, state, type, nas.path, nas.export_policy]
+          - [name, size, state, type, nas.path]
+      - method: GET
+        path: /api/storage/luns
+        field_sets:
+          - [name, os_type, location, space, comment, svm, status.state, serial_number]
+          - [name, os_type, location, svm, status.state, comment]
+          - [name, os_type, svm, status.state]
+      - method: GET
+        path: /api/protocols/san/lun-maps
+        field_sets:
+          - [lun, igroup, logical_unit_number, svm]
+          - [lun, igroup, logical_unit_number]
+
+  network_inventory:
+    operations:
+      - method: GET
+        path: /api/network/ip/interfaces
+        field_sets:
+          - [name, svm, ip, location, service_policy, enabled]
+          - [name, svm, ip, location, enabled]
+          - [name, svm, ip, location]
+      - method: GET
+        path: /api/network/ethernet/broadcast-domains
+        field_sets:
+          - [name, ipspace, mtu, ports]
+          - [name, mtu, ports]
+          - [name, mtu]
+      - method: GET
+        path: /api/network/ip/subnets
+        field_sets:
+          - [name, ipspace, subnet, broadcast_domain, ranges, gateway]
+          - [name, subnet, broadcast_domain, gateway]
+          - [name, subnet, gateway]
+          - [name, subnet]
+
+  protocol_inventory:
+    operations:
+      - method: GET
+        path: /api/protocols/nfs/services
+        field_sets:
+          - [svm, enabled, v3, v4_1, v4_2]
+          - [svm, enabled, v3, v4_1]
+          - [svm, enabled]
+      - method: GET
+        path: /api/protocols/san/iscsi/services
+        field_sets:
+          - [svm, enabled, target]
+          - [svm, enabled]
+          - [enabled]
+      - method: GET
+        path: /api/protocols/nfs/export-policies
+        field_sets:
+          - [name, svm, rules]
+          - [name, svm]
+          - [name]
+      - method: GET
+        path: /api/protocols/san/igroups
+        field_sets:
+          - [name, svm, os_type, protocol, initiators]
+          - [name, svm, os_type, protocol]
+          - [name, protocol]
+      - method: GET
+        path: /api/protocols/san/portsets
+        field_sets:
+          - [name, svm, protocol, interfaces, igroups]
+          - [name, svm, protocol, interfaces]
+          - [name, protocol]
+
+  platform_settings:
+    operations:
+      - method: GET
+        path: /api/cluster/licensing/licenses
+        field_sets:
+          - [name, state, scope]
+          - [name, state]
+          - [name]
+      - method: GET
+        path: /api/cluster/ntp/servers
+        field_sets:
+          - [server, is_preferred, version]
+          - [server, is_preferred]
+          - [server]
+      - method: GET
+        path: /api/support/autosupport
+      - method: GET
+        path: /api/security/accounts
+        field_sets:
+          - [name, applications, authentication_methods, owner, role, locked]
+          - [name, owner, role, locked]
+          - [name, role, locked]
+          - [name, role]
+
+  safe_apply:
+    operations:
+      - method: POST
+        path: /api/svm/svms
+      - method: PATCH
+        path: /api/svm/svms/{uuid}
+      - method: POST
+        path: /api/network/ip/interfaces
+      - method: POST
+        path: /api/network/ip/subnets
+      - method: POST
+        path: /api/protocols/nfs/services
+      - method: POST
+        path: /api/protocols/san/iscsi/services
+      - method: POST
+        path: /api/protocols/nfs/export-policies
+      - method: POST
+        path: /api/protocols/nfs/export-policies/{policy.id}/rules
+      - method: POST
+        path: /api/protocols/san/igroups
+      - method: POST
+        path: /api/protocols/san/portsets
+      - method: POST
+        path: /api/storage/volumes
+      - method: PATCH
+        path: /api/storage/volumes/{uuid}

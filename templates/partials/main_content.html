@@ -18,7 +18,7 @@
         </div>
     </section>
     {% endif %}
-    {% if action_feedback %}
+    {% if action_feedback and not suppress_action_feedback_banner %}
     <section class="card receipt-banner">
         <div class="flex items-center justify-between gap-3 mb-3">
             <div class="text-lg font-semibold">{{ action_feedback.title }}</div>

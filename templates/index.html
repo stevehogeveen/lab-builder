@@ -2310,16 +2310,24 @@
     {% include "partials/sidebar.html" %}
 
     <main class="main">
+        {% set hero_summary = page_precheck_summary if active_page != 'dashboard' and page_precheck_summary else setup_precheck_summary %}
+        {% set hero_ready = hero_summary.get('checks_ready', hero_summary.get('ready_workflows', 0)) if hero_summary else 0 %}
+        {% set hero_total = hero_summary.get('total_checks', hero_summary.get('total_workflows', 0)) if hero_summary else 0 %}
+        {% set hero_blockers = hero_summary.get('blockers', hero_summary.get('total_blockers', 0)) if hero_summary else 0 %}
+        {% set hero_next_blocker = hero_summary.get('next_blocker') if hero_summary else none %}
         <section class="hero">
             <div>
                 <div class="command-kicker">{{ current_kit }}</div>
                 <h1 class="command-title font-bold">{{ title }}</h1>
                 <div class="muted mt-1">{{ page_subtitle }}</div>
                 <div class="hero-status-shell">
-                    <span class="status {{ setup_precheck_summary.tone if setup_precheck_summary else 'progress' }}">{{ setup_precheck_summary.label if setup_precheck_summary else 'Review' }}</span>
-                    {% if setup_precheck_summary %}
-                    <span class="text-sm text-slate-400">{{ setup_precheck_summary.ready_workflows }}/{{ setup_precheck_summary.total_workflows }} ready</span>
-                    <span class="text-sm text-slate-400">{{ setup_precheck_summary.total_blockers }} blockers</span>
+                    <span class="status {{ hero_summary.get('tone', 'progress') if hero_summary else 'progress' }}">{{ hero_summary.get('label', 'Review') if hero_summary else 'Review' }}</span>
+                    {% if hero_summary %}
+                    <span class="text-sm text-slate-400">{{ hero_ready }}/{{ hero_total }} ready</span>
+                    <span class="text-sm text-slate-400">{{ hero_blockers }} blockers</span>
+                    {% if hero_next_blocker %}
+                    <span class="text-sm text-slate-400">Next: {{ hero_next_blocker.label }}</span>
+                    {% endif %}
                     {% endif %}
                 </div>
             </div>
@@ -2349,9 +2357,34 @@
                     <div class="hero-stat-label">Latest</div>
                     <div class="hero-stat-value">{{ dashboard_overview.latest_result.label }}</div>
                 </div>
+                {% elif page_precheck_summary %}
+                <div class="hero-stat">
+                    <div class="hero-stat-label">Workspace</div>
+                    <div class="hero-stat-value">{{ current_kit }}</div>
+                </div>
+                <div class="hero-stat">
+                    <div class="hero-stat-label">Module</div>
+                    <div class="hero-stat-value">{{ page_precheck_summary.get('name', title) }}</div>
+                </div>
+                <div class="hero-stat">
+                    <div class="hero-stat-label">State</div>
+                    <div class="hero-stat-value">{{ page_precheck_summary.get('state_label') or page_precheck_summary.get('label', 'Review') }}</div>
+                </div>
+                <div class="hero-stat">
+                    <div class="hero-stat-label">Checks</div>
+                    <div class="hero-stat-value">{{ page_precheck_summary.get('checks_ready', 0) }}/{{ page_precheck_summary.get('total_checks', 0) }} ready</div>
+                </div>
+                <div class="hero-stat">
+                    <div class="hero-stat-label">Blockers</div>
+                    <div class="hero-stat-value">{{ page_precheck_summary.get('blockers', 0) }}</div>
+                </div>
+                <div class="hero-stat">
+                    <div class="hero-stat-label">Next Fix</div>
+                    <div class="hero-stat-value">{{ page_precheck_summary.next_blocker.label if page_precheck_summary.next_blocker else 'No blockers' }}</div>
+                </div>
                 {% else %}
                 <div class="hero-stat">
-                    <div class="hero-stat-label">Active Kit</div>
+                    <div class="hero-stat-label">Workspace</div>
                     <div class="hero-stat-value">{{ current_kit }}</div>
                 </div>
                 <div class="hero-stat">
@@ -2361,10 +2394,6 @@
                 <div class="hero-stat">
                     <div class="hero-stat-label">Gateway</div>
                     <div class="hero-stat-value">{{ cfg.get('ip_plan', {}).get('gateway', '') or 'Not set' }}</div>
-                </div>
-                <div class="hero-stat">
-                    <div class="hero-stat-label">Protocol</div>
-                    <div class="hero-stat-value">{{ (cfg.get('netapp', {}).get('storage_protocol', 'nfs') or 'nfs') | upper }}</div>
                 </div>
                 <div class="hero-stat">
                     <div class="hero-stat-label">Next Step</div>
@@ -2430,17 +2459,64 @@
         }
     }
 
+    function escapeHtml(value) {
+        return String(value == null ? "" : value)
+            .replaceAll("&", "&amp;")
+            .replaceAll("<", "&lt;")
+            .replaceAll(">", "&gt;")
+            .replaceAll('"', "&quot;")
+            .replaceAll("'", "&#039;");
+    }
+
+    function actionPayloadFromElement(elt) {
+        const actionRoot = elt && elt.closest ? (elt.closest("[data-action-title]") || elt.closest("form") || elt) : elt;
+        const buttonLabel = elt && elt.textContent ? elt.textContent.trim() : "";
+        const title = actionRoot && actionRoot.getAttribute ? actionRoot.getAttribute("data-action-title") : "";
+        const start = actionRoot && actionRoot.getAttribute ? actionRoot.getAttribute("data-action-start") : "";
+        const complete = actionRoot && actionRoot.getAttribute ? actionRoot.getAttribute("data-action-complete") : "";
+        return {
+            title: title || buttonLabel || "Working",
+            start: start || `${buttonLabel || "The action"} is running.`,
+            complete: complete || `${buttonLabel || "The action"} finished.`,
+        };
+    }
+
+    function updateLocalActionPanel(elt, payload) {
+        if (!elt || typeof elt.closest !== "function") return;
+        const panel = elt.closest("[data-action-panel]") || elt.closest(".card") || elt.closest("section");
+        if (!panel) return;
+        let card = panel.querySelector(":scope > .local-action-status");
+        if (!card) {
+            card = document.createElement("div");
+            card.className = "result local-action-status";
+            card.style.marginBottom = "1rem";
+            panel.insertBefore(card, panel.firstElementChild || null);
+        }
+        card.innerHTML = [
+            '<div class="flex items-center justify-between gap-3">',
+            `<div class="font-semibold">${escapeHtml(payload.title || "Working")}</div>`,
+            `<span class="status ${escapeHtml(payload.tone || "progress")}">${escapeHtml(payload.label || "Working")}</span>`,
+            "</div>",
+            `<div class="text-sm text-slate-300 mt-2">${escapeHtml(payload.summary || "The app is working on your request.")}</div>`,
+            '<div class="progress-shell mt-3">',
+            `<div class="progress-bar" style="width:${escapeHtml(String(payload.progress == null ? 35 : payload.progress))}%;"></div>`,
+            "</div>",
+        ].join("");
+    }
+
     document.body.addEventListener("htmx:beforeRequest", function (event) {
         const detail = event.detail || {};
         const elt = detail.elt || null;
         const actionRoot = elt && elt.closest ? (elt.closest("[data-action-title]") || elt.closest("form") || elt) : elt;
         const title = actionRoot && actionRoot.getAttribute ? actionRoot.getAttribute("data-action-title") : "";
         const text = actionRoot && actionRoot.getAttribute ? actionRoot.getAttribute("data-action-start") : "";
+        const payload = actionPayloadFromElement(elt);
         activeRequestCount += 1;
         if (busyButton && busyButton !== elt) markBusyButton(busyButton, false);
         busyButton = elt && elt.matches && elt.matches("button, .btn, input[type='submit']") ? elt : (actionRoot && actionRoot.querySelector ? actionRoot.querySelector("button[type='submit'], .btn, input[type='submit']") : null);
         markBusyButton(busyButton, true);
         setOverlayVisible(true, title || "Please wait", text || "The app is working on your request.");
+        updateLocalActionPanel(elt, { title: payload.title, summary: payload.start, label: "Working", tone: "progress", progress: 35 });
     });
 
     function clearBusyState() {
@@ -2453,6 +2529,20 @@
     }
 
     document.body.addEventListener("htmx:afterRequest", clearBusyState);
+    document.body.addEventListener("htmx:afterRequest", function (event) {
+        const detail = event.detail || {};
+        const elt = detail.elt || null;
+        const payload = actionPayloadFromElement(elt);
+        const xhr = detail.xhr;
+        const successful = xhr && xhr.status >= 200 && xhr.status < 400;
+        updateLocalActionPanel(elt, {
+            title: payload.title,
+            summary: successful ? payload.complete : "The action needs attention. Review the message in this section for details.",
+            label: successful ? "Done" : "Warning",
+            tone: successful ? "ready" : "pending",
+            progress: 100,
+        });
+    });
     document.body.addEventListener("htmx:responseError", clearBusyState);
     document.body.addEventListener("htmx:sendError", clearBusyState);
 

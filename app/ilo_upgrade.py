@@ -139,13 +139,33 @@ def execute_ilo_upgrade(
             }
         )
     upload = client.upload_firmware_component(media_path, update_repository=True, update_target=True)
+    update_status = wait_for_ilo_update_service(
+        client,
+        expected_version=expected_version,
+        media_filename=str(plan.get("media_filename") or media_path.name),
+        timeout=wait_timeout,
+        poll_interval=poll_interval,
+        progress=progress,
+    )
+    reset_result: dict[str, Any] = {}
+    if update_status.get("activation") == "AfterDeviceReset":
+        if progress:
+            progress(
+                {
+                    "phase": "reset",
+                    "message": "Firmware flash completed. Resetting iLO so the new firmware can activate.",
+                    "timestamp": datetime.now(timezone.utc).isoformat(),
+                    "progress_percent": 70,
+                }
+            )
+        reset_result = request_ilo_activation_reset(client)
     if progress:
         progress(
             {
                 "phase": "verify",
-                "message": "Firmware upload completed. Waiting for iLO to report the target version.",
+                "message": "Firmware flash completed. Waiting for iLO to report the target version.",
                 "timestamp": datetime.now(timezone.utc).isoformat(),
-                "progress_percent": 55,
+                "progress_percent": 75,
             }
         )
     final = wait_for_ilo_firmware_version(
@@ -164,6 +184,8 @@ def execute_ilo_upgrade(
         "media_path": str(media_path),
         "media_filename": str(plan.get("media_filename") or ""),
         "upload": upload,
+        "update_service": update_status,
+        "reset": reset_result,
         "verification": final,
         "completed_at": datetime.now(timezone.utc).isoformat(),
     }
@@ -189,6 +211,138 @@ def execute_ilo_upgrade(
             }
         )
     return result
+
+
+def wait_for_ilo_update_service(
+    client: Any,
+    *,
+    expected_version: str,
+    media_filename: str = "",
+    timeout: int = 1800,
+    poll_interval: float = 15.0,
+    progress: Callable[[dict[str, Any]], None] | None = None,
+) -> dict[str, Any]:
+    if not hasattr(client, "get_update_service"):
+        return {"status": "not_available", "activation": ""}
+
+    deadline = time.time() + max(timeout, 60)
+    last_state = ""
+    last_progress: int | None = None
+    last_error = ""
+    activation = ""
+    component = ""
+
+    while time.time() < deadline:
+        try:
+            service = client.get_update_service()
+            hpe = ((service.get("Oem") or {}).get("Hpe") or {})
+            last_state = str(hpe.get("State") or "").strip()
+            try:
+                last_progress = int(hpe.get("FlashProgressPercent")) if hpe.get("FlashProgressPercent") is not None else last_progress
+            except (TypeError, ValueError):
+                pass
+            component_info = find_ilo_repository_component(client, expected_version=expected_version, media_filename=media_filename)
+            activation = str(component_info.get("activation") or activation or "").strip()
+            component = str(component_info.get("filename") or component or "").strip()
+            if progress:
+                detail = f"iLO update service state {last_state or 'unknown'}"
+                if last_progress is not None:
+                    detail += f", flash {last_progress}%"
+                if activation:
+                    detail += f", activates {activation}"
+                progress(
+                    {
+                        "phase": "flash",
+                        "message": detail + ".",
+                        "timestamp": datetime.now(timezone.utc).isoformat(),
+                        "progress_percent": max(35, min(65, int(last_progress or 0) if last_progress is not None else 55)),
+                        "update_state": last_state,
+                        "flash_progress_percent": last_progress,
+                        "activation": activation,
+                    }
+                )
+            if last_state.lower() in {"complete", "completed", "idle"} or (last_progress is not None and last_progress >= 100):
+                return {
+                    "status": "complete",
+                    "state": last_state,
+                    "flash_progress_percent": last_progress,
+                    "activation": activation,
+                    "component": component,
+                }
+            last_error = ""
+        except Exception as exc:
+            last_error = str(exc).splitlines()[0]
+            if progress:
+                progress(
+                    {
+                        "phase": "flash",
+                        "message": f"Waiting for iLO update service: {last_error or 'temporarily unreachable'}.",
+                        "timestamp": datetime.now(timezone.utc).isoformat(),
+                        "progress_percent": 50,
+                    }
+                )
+            try:
+                client._reset_transport()  # type: ignore[attr-defined]
+            except Exception:
+                pass
+        time.sleep(max(poll_interval, 1.0))
+
+    raise ILOError(
+        f"Timed out waiting for iLO update service to complete. "
+        f"Last state: {last_state or 'unknown'}. "
+        f"Last flash progress: {last_progress if last_progress is not None else 'unknown'}. "
+        f"Last error: {last_error or 'none'}."
+    )
+
+
+def find_ilo_repository_component(client: Any, *, expected_version: str, media_filename: str = "") -> dict[str, Any]:
+    if not hasattr(client, "_get"):
+        return {}
+    try:
+        collection = client._get("/redfish/v1/UpdateService/ComponentRepository/")  # type: ignore[attr-defined]
+    except Exception:
+        return {}
+    members = list((collection or {}).get("Members") or [])
+    expected = _normalize_version(expected_version)
+    wanted_name = str(media_filename or "").strip().lower()
+    best: dict[str, Any] = {}
+    for member in members:
+        path = str((member or {}).get("@odata.id") or "").strip()
+        if not path:
+            continue
+        try:
+            item = client._get(path)  # type: ignore[attr-defined]
+        except Exception:
+            continue
+        filename = str(item.get("Filename") or item.get("Filepath") or "").strip()
+        version = _normalize_version(str(item.get("Version") or ""))
+        if wanted_name and filename.lower() == wanted_name:
+            best = item
+            break
+        if expected and version == expected and str(item.get("Name") or "").strip().lower().startswith("ilo"):
+            best = item
+    if not best:
+        return {}
+    return {
+        "filename": str(best.get("Filename") or best.get("Filepath") or "").strip(),
+        "version": _normalize_version(str(best.get("Version") or "")),
+        "activation": str(best.get("Activates") or "").strip(),
+        "component_uri": str(best.get("ComponentUri") or "").strip(),
+    }
+
+
+def request_ilo_activation_reset(client: Any) -> dict[str, Any]:
+    if not hasattr(client, "reset_ilo"):
+        return {"status": "not_available"}
+    try:
+        result = client.reset_ilo(reset_type="GracefulRestart")
+        return {"status": "requested", **(result or {})}
+    except Exception as exc:
+        message = str(exc).splitlines()[0]
+        lowered = message.lower()
+        if any(text in lowered for text in ["connection aborted", "connection reset", "remote end closed", "remotedisconnected", "read timed out", "temporarily unreachable"]):
+            return {"status": "disconnect_after_request", "message": message}
+        raise
 
 
 def wait_for_ilo_firmware_version(

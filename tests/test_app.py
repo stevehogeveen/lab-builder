@@ -69,7 +69,13 @@ def test_validate_execution_scope_allows_warn_only_upgrade_gap(monkeypatch):
     main.validate_execution_scope(cfg, "netapp")
 
 
-def test_upgrade_helper_and_ilo_page_show_ilo_upgrade_actions(client):
+def test_upgrade_helper_runs_ilo_upgrade_while_ilo_page_shows_gate_only(client, monkeypatch):
+    monkeypatch.setattr(main, "scan_upgrade_media", lambda: {
+        "root": "/repo/media",
+        "latest": {"ilo": {"version": "1.76", "filename": "ilo6_176.fwpkg", "path": "/repo/media/ilo6_176.fwpkg"}},
+        "counts": {"ilo": 1},
+        "candidates": [],
+    })
     cfg = main.default_config()
     cfg["upgrade_inventory"] = {
         "ilo": {"current_version": "1.50", "source": "Latest live iLO inventory", "manager_model": "iLO 6"},
@@ -85,13 +91,112 @@ def test_upgrade_helper_and_ilo_page_show_ilo_upgrade_actions(client):
     response = client.get("/ilo")
     assert response.status_code == 200
     assert "iLO firmware upgrade" in response.text
-    assert "Run iLO upgrade" in response.text
-    assert "iLO upgrade status" in response.text
+    assert "1.50" in response.text
+    assert "1.76" in response.text
+    assert "Run iLO upgrade" not in response.text
+    assert "Plan iLO upgrade" not in response.text
+    assert 'hx-post="/run-ilo-upgrade"' not in response.text
+    assert 'hx-post="/plan-ilo-upgrade"' not in response.text
+    assert "iLO upgrade status" not in response.text
 
     response = client.get("/ilo-upgrade-activity")
     assert response.status_code == 200
     assert "iLO upgrade status" in response.text
     assert "progress-bar" in response.text
+
+
+def test_ilo_page_gate_can_read_current_ilo_when_version_unknown(client, monkeypatch):
+    monkeypatch.setattr(main, "scan_upgrade_media", lambda: {
+        "root": "/repo/media",
+        "latest": {"ilo": {"version": "1.76", "filename": "ilo6_176.fwpkg", "path": "/repo/media/ilo6_176.fwpkg"}},
+        "counts": {"ilo": 1},
+        "candidates": [],
+    })
+    cfg = main.default_config()
+    cfg["upgrade_inventory"] = {
+        "ilo": {"current_version": "", "source": "", "manager_model": "iLO 6"},
+    }
+    main.save_kit_config(cfg)
+
+    response = client.get("/ilo")
+
+    assert response.status_code == 200
+    assert "iLO firmware upgrade" in response.text
+    assert "Unknown" in response.text
+    assert "1.76" in response.text
+    assert "Read the current iLO version before prebuild." in response.text
+    assert 'hx-post="/export-ilo-inventory"' in response.text
+    assert 'data-action-start="Connecting to iLO and reading the current firmware version."' in response.text
+    assert "Run iLO upgrade" not in response.text
+    assert "Plan iLO upgrade" not in response.text
+
+
+def test_ilo_upgrade_plan_uses_latest_live_read_when_cached_inventory_is_stale(client, monkeypatch):
+    monkeypatch.setattr(main, "scan_upgrade_media", lambda: {
+        "root": "/repo/media",
+        "latest": {"ilo": {"version": "3.20", "filename": "ilo6_320.fwpkg", "path": "/repo/media/ilo6_320.fwpkg"}},
+        "counts": {"ilo": 1},
+        "candidates": [
+            {"device": "ilo", "version": "3.20", "filename": "ilo6_320.fwpkg", "path": "/repo/media/ilo6_320.fwpkg"},
+        ],
+    })
+    cfg = main.default_config()
+    cfg["site"]["name"] = "Ilo Upgrade Sync Kit"
+    cfg["ilo"]["current_ip"] = "10.10.8.50"
+    cfg["ilo"]["host"] = "10.10.8.50"
+    cfg["ilo"]["username"] = "Administrator"
+    cfg["ilo"]["password"] = "kit-password"
+    cfg["ilo"]["upgrade"] = {
+        "activity": {"status": "blocked", "message": "Read current iLO first so the app can identify the iLO family."},
+        "last_result": {"status": "blocked", "error": "Read current iLO first so the app can identify the iLO family."},
+    }
+    cfg["upgrade_inventory"] = {"ilo": {"current_version": "", "source": "", "manager_model": ""}}
+    main.save_kit_config(cfg)
+    main.export_ilo_inventory_snapshot(cfg, FakeILOClient(None).get_current_config_snapshot(), source_host="10.10.8.50")
+
+    response = client.post("/plan-ilo-upgrade", data={"return_page": "upgrade_helper"})
+
+    assert response.status_code == 200
+    assert "iLO upgrade plan ready" in response.text
+    assert "Read current iLO first" not in response.text
+    saved = main.load_kit_config("Ilo-Upgrade-Sync-Kit")
+    assert saved["upgrade_inventory"]["ilo"]["current_version"] == "3.00"
+    assert saved["upgrade_inventory"]["ilo"]["manager_model"] == "iLO 6"
+    assert saved["ilo"]["upgrade"]["last_plan"]["ready"] is True
+    assert saved["ilo"]["upgrade"]["last_plan"]["media_filename"] == "ilo6_320.fwpkg"
+    assert saved["ilo"]["upgrade"]["activity"] == {}
+    assert saved["ilo"]["upgrade"]["last_result"] == {}
+
+
+def test_run_ilo_upgrade_uses_latest_live_read_when_cached_inventory_is_stale(client, monkeypatch):
+    monkeypatch.setattr(main, "scan_upgrade_media", lambda: {
+        "root": "/repo/media",
+        "latest": {"ilo": {"version": "3.20", "filename": "ilo6_320.fwpkg", "path": "/repo/media/ilo6_320.fwpkg"}},
+        "counts": {"ilo": 1},
+        "candidates": [
+            {"device": "ilo", "version": "3.20", "filename": "ilo6_320.fwpkg", "path": "/repo/media/ilo6_320.fwpkg"},
+        ],
+    })
+    monkeypatch.setattr(main, "_start_ilo_upgrade_worker", lambda cfg, media_scan: None)
+    cfg = main.default_config()
+    cfg["site"]["name"] = "Ilo Upgrade Run Sync Kit"
+    cfg["ilo"]["current_ip"] = "10.10.8.50"
+    cfg["ilo"]["host"] = "10.10.8.50"
+    cfg["ilo"]["username"] = "Administrator"
+    cfg["ilo"]["password"] = "kit-password"
+    cfg["upgrade_inventory"] = {"ilo": {"current_version": "", "source": "", "manager_model": ""}}
+    main.save_kit_config(cfg)
+    main.export_ilo_inventory_snapshot(cfg, FakeILOClient(None).get_current_config_snapshot(), source_host="10.10.8.50")
+
+    response = client.post("/run-ilo-upgrade", data={"return_page": "upgrade_helper"})
+
+    assert response.status_code == 200
+    assert "iLO upgrade started" in response.text
+    assert "iLO upgrade blocked" not in response.text
+    saved = main.load_kit_config("Ilo-Upgrade-Run-Sync-Kit")
+    assert saved["upgrade_inventory"]["ilo"]["current_version"] == "3.00"
+    assert saved["ilo"]["upgrade"]["activity"]["status"] == "running"
+    assert saved["ilo"]["upgrade"]["last_plan"]["ready"] is True
 
 
 def test_upgrade_helper_shows_netapp_and_cisco_upgrade_actions(client):
@@ -1811,6 +1916,26 @@ def test_page_precheck_summary_uses_state_instead_of_duplicate_target_card():
     assert summary["summary_value_label"] == "State"
 
 
+def test_cisco_header_uses_cisco_context_not_global_netapp_focus(client):
+    cfg = main.default_config()
+    cfg["site"]["name"] = "Cisco Header Kit"
+    cfg["included"]["netapp"] = True
+    cfg["included"]["cisco_switch"] = True
+    cfg["netapp"]["storage_protocol"] = "iscsi"
+    cfg["cisco_switch"]["management_ip"] = ""
+    main.save_kit_config(cfg)
+
+    response = client.get("/cisco")
+
+    assert response.status_code == 200
+    hero = response.text.split('<section class="hero">', 1)[1].split("</section>", 1)[0]
+    assert "Cisco Switch" in hero
+    assert "SSH credentials" in hero
+    assert "ONTAP policy blocks the build" not in hero
+    assert "Protocol" not in hero
+    assert "ISCSI" not in hero
+
+
 def test_save_ilo_settings_rejects_invalid_primary_credentials(client):
     cfg = main.default_config()
     cfg["site"]["name"] = "Ilo Invalid Credentials Kit"
@@ -2265,6 +2390,8 @@ def test_ad_hoc_inventory_export_can_save_values_to_current_kit(client, monkeypa
     assert cfg_after["ilo"]["host"] == "ilo-temp.lab.local"
     assert cfg_after["ilo"]["username"] == "new-user"
     assert cfg_after["ilo"]["password"] == "new-password"
+    assert cfg_after["upgrade_inventory"]["ilo"]["current_version"] == "3.00"
+    assert cfg_after["upgrade_inventory"]["ilo"]["manager_model"] == "iLO 6"
 
 
 def test_latest_live_summary_and_raw_downloads_use_new_export_layout(client, monkeypatch):
@@ -2428,6 +2555,10 @@ def test_export_ilo_inventory_renders_summary_and_download_actions_on_ilo_page(c
     assert "serial_number: ABC123" in response.text
     assert "Download current iLO summary" in response.text
     assert "Download raw iLO data" in response.text
+    saved = main.load_kit_config("Ilo-Read-Kit")
+    assert saved["upgrade_inventory"]["ilo"]["current_version"] == "3.00"
+    assert saved["upgrade_inventory"]["ilo"]["manager_model"] == "iLO 6"
+    assert saved["upgrade_inventory"]["ilo"]["source"] == "Latest live iLO inventory"
 
 
 def test_ilo_page_shows_advanced_tab_empty_state_without_live_read(client):
@@ -11100,11 +11231,17 @@ def test_cisco_page_separates_live_state_from_desired_template(client):
     response = client.get("/cisco")
 
     assert response.status_code == 200
-    assert "Current step" in response.text
+    assert "Upgrade, access, then approve" in response.text
+    assert "Console access" in response.text
+    assert "Current console config" in response.text
     assert "Test console access" in response.text
-    assert "Configure IP using console" in response.text
+    assert "Apply Access Configs" in response.text
+    assert "Switch Config and Run Approval" in response.text
+    assert "Current Switch Config" in response.text
+    assert "Save to config" in response.text
+    assert "Approve config" in response.text
     assert "Run Cisco upgrade" not in response.text
-    assert "Ports and config" in response.text
+    assert "Port map" in response.text
     assert "GigabitEthernet1/0/24" in response.text
 
 
@@ -11139,6 +11276,78 @@ def test_cisco_approve_config_plan_includes_switch_for_run_center(client, monkey
     saved = main.load_kit_config()
     assert saved["included"]["cisco_switch"] is True
     assert saved["cisco_switch"]["config_approval"]["state"] == "approved"
+
+
+def test_cisco_approve_config_plan_uses_nonblocking_upgrade_helper_gate(client, monkeypatch):
+    cfg = main.default_config()
+    cfg["site"]["name"] = "Cisco Nonblocking Gate Kit"
+    cfg["included"]["cisco_switch"] = False
+    cfg["cisco_switch"].update(
+        {
+            "last_ssh_test": {"ok": True},
+            "last_discovered_version": "17.09.04a",
+            "ports": {"GigabitEthernet1/0/1": {"profile": "client_device"}},
+        }
+    )
+    main.save_kit_config(cfg)
+
+    monkeypatch.setattr(
+        cisco_module_routes.service,
+        "preview_config",
+        lambda _context, mode="full", selected_ports=None: {
+            "ok": True,
+            "config": "hostname sw01",
+            "validation": {"ok": True, "errors": [], "warnings": []},
+        },
+    )
+    monkeypatch.setattr(
+        main,
+        "upgrade_gate_entry",
+        lambda _cfg, key: {"key": key, "label": "Cisco", "blocks_run": False, "comparison": "warning_only"},
+    )
+
+    response = client.post("/modules/cisco/approve-config-plan", data={"mode": "full"})
+
+    assert response.status_code == 200
+    assert "Cisco config plan approved" in response.text
+    assert "Review the Cisco upgrade gate" not in response.text
+    saved = main.load_kit_config()
+    assert saved["included"]["cisco_switch"] is True
+    assert saved["cisco_switch"]["config_approval"]["state"] == "approved"
+
+
+def test_cisco_approve_config_plan_shows_blocked_result_inline(client, monkeypatch):
+    cfg = main.default_config()
+    cfg["site"]["name"] = "Cisco Blocked Approval Kit"
+    cfg["cisco_switch"].update(
+        {
+            "management_ip": "10.10.8.5",
+            "username": "admin",
+            "password": "Secret123!",
+            "last_ssh_test": {"ok": False},
+            "upgrade": {"last_plan": {"comparison": "already_current"}},
+        }
+    )
+    main.save_kit_config(cfg)
+
+    monkeypatch.setattr(
+        cisco_module_routes.service,
+        "preview_config",
+        lambda _context, mode="full", selected_ports=None: {
+            "ok": True,
+            "config": "hostname sw01",
+            "validation": {"ok": True, "errors": [], "warnings": []},
+        },
+    )
+
+    response = client.post("/modules/cisco/approve-config-plan", data={"mode": "full"})
+
+    assert response.status_code == 200
+    assert "Cisco config plan not approved" in response.text
+    assert "Approval result: blocked" in response.text
+    assert "SSH must pass before the Cisco config plan can be approved for Run Center." in response.text
+    saved = main.load_kit_config()
+    assert saved["cisco_switch"]["config_approval"]["state"] == "blocked"
 
 
 def test_cisco_discover_version_uses_posted_management_fields(client, monkeypatch):

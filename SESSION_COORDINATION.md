@@ -133,6 +133,8 @@ Copy this block and update it in place.
   - 2026-05-12 America/Toronto - Finished the remaining page-fit pass for ESXi, iLO, Windows, QNAP, and Cisco, including legacy input styling cleanup and long-value truncation.
   - 2026-05-15 America/Toronto - Added Cisco console failure classification, visible probe results, and focused diagnostics tests for no-adapter, permission, and no-prompt cases.
   - 2026-05-15 America/Toronto - Tightened Cisco serial discovery to verify exec prompts with read-only show version output and downgrade generic non-Cisco prompts before auto-selection.
+  - 2026-05-15 America/Toronto - Added Cisco operator findings for weak secrets, IP-plan overrides, missing management VLANs, unexpected connected-port VLANs, and bootstrap port selection choices.
+  - 2026-05-15 America/Toronto - Added Cisco current-version button with console fallback and introduced local per-card HTMX action feedback so button results appear near the initiating workflow.
 - Next intended change:
   - Finish app-wide wording/layout cleanup pass and rerun regression tests.
 
@@ -232,3 +234,16 @@ Current entries:
 2026-05-13 America/Toronto - Ran the first live iLO firmware upgrade on Lab-Uplands-G10: detected iLO 5 v3.03 on 10.10.8.110, matched `media/ilo5_319.fwpkg`, observed UpdateService `Updating -> Complete -> Idle`, and verified final live firmware `iLO 5 v3.19`.
 2026-05-13 America/Toronto - Added matching planner/executor scaffolding for ONTAP and Cisco upgrades: ONTAP image upload/validate/start/poll helpers plus NetApp UI/routes, and Cisco SSH/SCP planner/executor plus UI/routes. Tested planners/UI with focused pytest; live ONTAP/Cisco execution still unproven.
 2026-05-15 America/Toronto - Resumed the upgrade-helper/Cisco/iLO slice, restored iLO page upgrade actions plus live status through the upgrade gate panel, and verified the full pytest suite: 382 passed.
+2026-05-15 America/Toronto - Decluttered the Cisco page into upgrade/access/findings/Run Center steps, added clearer next-blocker hero text, and expanded console verification output for switch IP/SSH/SCP proof.
+2026-05-15 America/Toronto - Removed Cisco step number badges and changed Cisco action feedback from a large result card into compact inline text under the relevant workflow button group.
+2026-05-15 America/Toronto - Routed Cisco action feedback to local inline messages across workflow, permission, advanced, and factory-reset blocks; suppressed the default top feedback message.
+2026-05-15 America/Toronto - Disabled the shared receipt banner for Cisco pages so console/action feedback appears only inline under the relevant Cisco controls.
+2026-05-15 America/Toronto - Simplified Cisco hero and workflow: removed Current step/most-important-finding/verify buttons, split Console access beside Current console config, and moved approval into a lower Run Center approval block.
+2026-05-15 America/Toronto - Updated Cisco no-config flow: access credentials now appear before upgrade checks, version discovery tries console before SSH, console verification captures full show running-config, and Run Center approval no longer shows Preview plan.
+2026-05-15 America/Toronto - Moved Cisco Switch-side proof to the bottom and reduced it to expandable show-run evidence only, removing route/status tiles and route diagnostic text from that section.
+2026-05-15 America/Toronto - Regrouped Cisco Ports/config with Run Center approval and moved the Approve plan action to the bottom of the config section.
+2026-05-15 America/Toronto - Reworked Cisco Switch Config and Run Approval section: removed baud/network/apply controls, added SNMP fields sourced from global config, limited section actions to Save to config and Approve config, and moved Findings to the bottom.
+2026-05-15 America/Toronto - Updated Cisco access/current-config wording: added Apply Access Configs to Access Settings, renamed Switch-side proof to Current Switch Config, and standardized Cisco running-config reads to `show run`.
+2026-05-15 America/Toronto - Scoped the top hero/status bar to the active setup page so Cisco no longer shows unrelated ONTAP/NetApp protocol blockers in its page header.
+2026-05-15 America/Toronto - Made Cisco Approve config visibly report approved/blocked state inline, including first blocker text and explicit busy text on the approve action.
+2026-05-15 America/Toronto - Fixed Cisco approval gate mismatch so Approve config accepts a non-blocking Upgrade Helper Cisco gate instead of requiring a stale local Cisco upgrade plan.

@@ -47,7 +47,6 @@ CISCO_PROFILE_FIELDS = {
 
 DEFAULT_CISCO_VLANS: list[dict[str, Any]] = [
     {"id": 10, "name": "MANAGEMENT", "svi_enabled": True, "description": "Management VLAN"},
-    {"id": 999, "name": "BLACK-HOLE", "svi_enabled": False, "description": "Black Hole VLAN"},
 ]
 
 
@@ -68,7 +67,7 @@ DEFAULT_CISCO_PORT_PROFILES: dict[str, dict[str, Any]] = {
     },
     "unused_blackhole": {
         "mode": "access",
-        "access_vlan": 999,
+        "access_vlan": 10,
         "allowed_vlans": [],
         "native_vlan": "",
         "description": "UNUSED",
@@ -83,7 +82,7 @@ DEFAULT_CISCO_PORT_PROFILES: dict[str, dict[str, Any]] = {
     "uplink_trunk": {
         "mode": "trunk",
         "access_vlan": "",
-        "allowed_vlans": [10, 999],
+        "allowed_vlans": [10],
         "native_vlan": "",
         "description": "Uplink",
         "enabled": True,
@@ -271,6 +270,7 @@ PROMPT_PATTERNS: list[tuple[str, re.Pattern[str], int]] = [
     ("username", re.compile(r"(?im)(?:^|\r|\n)\s*Username:\s*$"), 80),
     ("password", re.compile(r"(?im)(?:^|\r|\n)\s*Password:\s*$"), 75),
     ("rommon", re.compile(r"(?im)(?:^|\r|\n)\s*rommon\s*>\s*$"), 70),
+    ("setup_enable_secret", re.compile(r"(?im)(?:^|\r|\n)\s*(?:(?:Enter|Confirm)\s+)?enable secret:\s*$"), 68),
     ("initial_dialog", re.compile(r"(?is)initial configuration dialog|would you like to enter the initial configuration dialog"), 65),
 ]
 
@@ -755,7 +755,8 @@ class CiscoSerialClient:
             f"username {username} privilege 15 secret {secret}",
             "crypto key generate rsa modulus 2048",
             "ip ssh version 2",
-            "line vty 0 15",
+            "ip scp server enable",
+            "line vty 0 31",
             "login local",
             "transport input ssh",
             "end",
@@ -907,6 +908,8 @@ def normalize_cisco_switch_config(cfg: dict[str, Any]) -> dict[str, Any]:
     base["dns_servers"] = [str(item).strip() for item in list(base.get("dns_servers") or []) if str(item).strip()]
     base["ntp_servers"] = [str(item).strip() for item in list(base.get("ntp_servers") or []) if str(item).strip()]
     base["custom_global_commands"] = [str(item).strip() for item in list(base.get("custom_global_commands") or []) if str(item).strip()]
+    if not raw.get("ports"):
+        base["ports"] = {f"GigabitEthernet1/0/{index}": {"profile": "client_device"} for index in range(1, 25)}
     return base
 
 
@@ -1133,10 +1136,26 @@ def render_cisco_baseline_config(cfg: dict[str, Any], *, mask: bool = True) -> s
     password = str(cisco_cfg.get("password") or "").strip()
     if username and password:
         lines.append(f"username {username} privilege 15 secret {SECRET_MASK if mask else password}")
+    snmp_cfg = dict(cisco_cfg.get("snmp") or {})
+    snmp_user = str(snmp_cfg.get("v3_username") or "").strip()
+    snmp_auth_protocol = str(snmp_cfg.get("v3_auth_protocol") or "SHA").strip().lower() or "sha"
+    snmp_auth_password = str(snmp_cfg.get("v3_auth_password") or "").strip()
+    snmp_priv_protocol = str(snmp_cfg.get("v3_priv_protocol") or "AES").strip().lower() or "aes"
+    snmp_priv_keyword = "aes 128" if snmp_priv_protocol == "aes" else snmp_priv_protocol
+    snmp_priv_password = str(snmp_cfg.get("v3_priv_password") or "").strip()
+    if snmp_user:
+        lines.append(f"snmp-server group {snmp_user} v3 priv")
+        if snmp_auth_password and snmp_priv_password:
+            lines.append(
+                "snmp-server user "
+                f"{snmp_user} {snmp_user} v3 auth {snmp_auth_protocol} "
+                f"{SECRET_MASK if mask else snmp_auth_password} priv {snmp_priv_keyword} "
+                f"{SECRET_MASK if mask else snmp_priv_password}"
+            )
     for command in cisco_cfg.get("custom_global_commands") or []:
         lines.append(str(command))
     rendered = "\n".join(lines).strip()
-    return mask_secrets(rendered, [password]) if mask else rendered
+    return mask_secrets(rendered, [password, snmp_auth_password, snmp_priv_password]) if mask else rendered
 
 
 def render_cisco_vlan_config(cfg: dict[str, Any]) -> str:

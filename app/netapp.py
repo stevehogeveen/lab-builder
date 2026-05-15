@@ -357,9 +357,9 @@ class NetAppClient:
         records, _ = self._records_with_fallback(
             "/api/storage/luns",
             [
-                "name,os_type,location,space,comment,svm,state,serial_number",
-                "name,os_type,location,svm,state,comment",
-                "name,os_type,svm,state",
+                "name,os_type,location,space,comment,svm,status.state,serial_number",
+                "name,os_type,location,svm,status.state,comment",
+                "name,os_type,svm,status.state",
                 None,
             ],
         )
@@ -563,7 +563,12 @@ class NetAppClient:
         try:
             luns, capability_status["luns"] = self._records_with_fallback(
                 "/api/storage/luns",
-                ["name,os_type,location,space,comment,svm,state,serial_number", "name,os_type,location,svm,state,comment", "name,os_type,svm,state", None],
+                [
+                    "name,os_type,location,space,comment,svm,status.state,serial_number",
+                    "name,os_type,location,svm,status.state,comment",
+                    "name,os_type,svm,status.state",
+                    None,
+                ],
             )
         except NetAppError:
             luns = []
@@ -885,12 +890,13 @@ class NetAppClient:
             if not name:
                 continue
             location = lun.get("location") or {}
+            status = lun.get("status") or {}
             lun_details.append(
                 {
                     "name": name,
                     "svm": str(((lun.get("svm") or {}).get("name") or "")).strip(),
                     "os_type": str(lun.get("os_type") or "").strip(),
-                    "state": str(lun.get("state") or "").strip(),
+                    "state": str(lun.get("state") or (status.get("state") if isinstance(status, dict) else "") or "").strip(),
                     "comment": str(lun.get("comment") or "").strip(),
                     "volume": str(((location.get("volume") or {}).get("name") or "")).strip(),
                 }

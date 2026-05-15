@@ -6,6 +6,7 @@
 - Full usage guide: [HOWTO.md](HOWTO.md)
 - Dependency setup is documented in [HOWTO.md](HOWTO.md#1-install-dependencies).
 - Python packages are pinned in [../requirements.txt](../requirements.txt).
+- Offline ONTAP REST compatibility catalog: [ontap-api-catalog.md](ontap-api-catalog.md)
 
 ## UI Sections
 

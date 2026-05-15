@@ -58,6 +58,7 @@ Default URL: `http://localhost:8000`
 
 - Main docs index: [docs/README.md](docs/README.md)
 - Full operator + maintainer guide: [docs/HOWTO.md](docs/HOWTO.md)
+- Offline ONTAP REST compatibility catalog: [docs/ontap-api-catalog.md](docs/ontap-api-catalog.md)
 - Health check: `./scripts/health-check`
 - Existing operations references:
   - [docs/automation-principles.md](docs/automation-principles.md)

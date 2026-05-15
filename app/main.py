@@ -2021,6 +2021,33 @@ def load_latest_live_inventory_snapshot_for_cfg(cfg: dict[str, Any]) -> dict[str
     return {}
 
 
+def sync_ilo_upgrade_inventory_from_latest_live(cfg: dict[str, Any]) -> bool:
+    live_snapshot = load_latest_live_inventory_snapshot_for_cfg(cfg)
+    live_summary = dict(live_snapshot.get("summary") or {})
+    live_raw_summary = (((live_snapshot.get("raw") or {}).get("inventory") or {}).get("summary") or {})
+    live_manager = dict((live_raw_summary.get("manager") or {}))
+    ilo_version = _first_non_empty(live_summary.get("ilo_firmware_version"), live_manager.get("firmware"))
+    manager_model = str(live_manager.get("model") or "").strip()
+    if not ilo_version:
+        return False
+
+    existing_ilo_inventory = dict((build_upgrade_inventory(cfg).get("ilo") or {}))
+    existing_ilo_source = str(existing_ilo_inventory.get("source") or "").strip().lower()
+    preserve_verified_ilo = existing_ilo_source == "post-upgrade ilo verification" and str(existing_ilo_inventory.get("current_version") or "").strip()
+    if preserve_verified_ilo:
+        return False
+
+    record_upgrade_inventory(
+        cfg,
+        "ilo",
+        current_version=ilo_version,
+        source="Latest live iLO inventory",
+        raw_version=ilo_version,
+        manager_model=manager_model,
+    )
+    return True
+
+
 def load_latest_storage_discovery_snapshot(cfg: dict[str, Any]) -> dict[str, Any]:
     export_paths = latest_storage_discovery_export(cfg, allow_global_fallback=False)
     if not export_paths:
@@ -2872,7 +2899,7 @@ def build_validation_checks(cfg: dict[str, Any], workflow: str) -> list[dict[str
                     bool(target),
                     target or "Cisco management IP is missing.",
                     why="Run Center applies Cisco config over SSH after console bootstrap.",
-                    fix="Open Cisco and use Configure IP using console.",
+                    fix="Open Cisco and use Apply Access Configs.",
                     href="/cisco",
                 ),
                 validation_check(
@@ -2888,7 +2915,7 @@ def build_validation_checks(cfg: dict[str, Any], workflow: str) -> list[dict[str
                     approval.get("state") == "approved",
                     "Ready" if approval.get("state") == "approved" else "Cisco config plan is not approved.",
                     why="Run Center should only apply the config plan after preview and approval.",
-                    fix="Open Cisco, preview the config, then approve it for Run Center.",
+                    fix="Open Cisco, save the switch config, then approve it for Run Center.",
                     href="/cisco",
                 ),
             ]
@@ -3177,7 +3204,7 @@ def build_setup_precheck_summary(
     workflow_keys = ["ilo"]
     if included.get("storage"):
         workflow_keys.append("storage")
-    for key in ["esxi", "windows", "qnap", "netapp"]:
+    for key in ["esxi", "windows", "qnap", "netapp", "cisco_switch"]:
         if included.get(key):
             workflow_keys.append(key)
     cards = [build_workflow_precheck_card(key, cfg, workflow_contexts) for key in workflow_keys]
@@ -3311,6 +3338,7 @@ def build_page_precheck_summary(
         "windows": "windows",
         "qnap": "qnap",
         "netapp": "netapp",
+        "cisco": "cisco_switch",
     }
     workflow_key = workflow_map.get(active_page)
     if not workflow_key:
@@ -3328,20 +3356,8 @@ def build_upgrade_helper_card(cfg: dict[str, Any]) -> dict[str, Any]:
     live_snapshot = load_latest_live_inventory_snapshot_for_cfg(cfg)
     live_summary = dict(live_snapshot.get("summary") or {})
     live_raw_summary = (((live_snapshot.get("raw") or {}).get("inventory") or {}).get("summary") or {})
-    ilo_version = str(live_summary.get("ilo_firmware_version") or "").strip()
     manager_model = str(((live_raw_summary.get("manager") or {}).get("model")) or "").strip()
-    existing_ilo_inventory = dict((build_upgrade_inventory(cfg).get("ilo") or {}))
-    existing_ilo_source = str(existing_ilo_inventory.get("source") or "").strip().lower()
-    preserve_verified_ilo = existing_ilo_source == "post-upgrade ilo verification" and str(existing_ilo_inventory.get("current_version") or "").strip()
-    if ilo_version and not preserve_verified_ilo:
-        record_upgrade_inventory(
-            cfg,
-            "ilo",
-            current_version=ilo_version,
-            source="Latest live iLO inventory",
-            raw_version=ilo_version,
-            manager_model=manager_model,
-        )
+    sync_ilo_upgrade_inventory_from_latest_live(cfg)
     inventory = build_upgrade_inventory(cfg)
     current_versions = {key: str((inventory.get(key) or {}).get("current_version") or "").strip() for key in ("ilo", "netapp", "cisco_switch")}
     current_sources = {key: str((inventory.get(key) or {}).get("source") or "").strip() for key in ("ilo", "netapp", "cisco_switch")}
@@ -3492,6 +3508,7 @@ def build_workflow_contexts(cfg: dict[str, Any], job: dict[str, Any], history: l
         ("windows", "Windows", (cfg.get("windows", {}).get("ip_address") or cfg.get("ip_plan", {}).get("windows") or "").strip(), (cfg.get("windows", {}).get("vm_name") or "").strip()),
         ("qnap", "QNAP", (cfg.get("qnap", {}).get("ip") or cfg.get("ip_plan", {}).get("qnap") or "").strip(), (cfg.get("qnap", {}).get("hostname") or "").strip()),
         ("netapp", "NetApp", (cfg.get("netapp", {}).get("host") or cfg.get("ip_plan", {}).get("netapp") or "").strip(), (cfg.get("netapp", {}).get("storage_protocol") or "nfs").strip().upper()),
+        ("cisco_switch", "Cisco Switch", (cfg.get("cisco_switch", {}).get("management_ip") or cfg.get("cisco_switch", {}).get("ip") or cfg.get("ip_plan", {}).get("switch") or "").strip(), f"Approval {dict(cfg.get('cisco_switch', {}).get('config_approval') or {}).get('state') or 'not approved'}"),
     ]:
         checks = build_validation_checks(cfg, key)
         state, label, tone = checks_status(checks)
@@ -3510,7 +3527,7 @@ def build_workflow_contexts(cfg: dict[str, Any], job: dict[str, Any], history: l
             "approved_summary": "This workflow uses saved settings directly." if cfg.get("included", {}).get(key) else "This workflow is currently not included in the kit.",
             "result_summary": (latest.get("status") or "No run has been recorded yet.") if latest else "No run has been recorded yet.",
             "checks": checks,
-            "review_href": f"/{key}",
+            "review_href": "/cisco" if key == "cisco_switch" else f"/{key}",
         }
 
     return contexts
@@ -3529,7 +3546,7 @@ def build_recommended_next_step(cfg: dict[str, Any], workflow_contexts: dict[str
         return {"title": "Set the iLO target", "summary": "Start on the iLO page and save the current iLO address and credentials first.", "href": "/ilo"}
     if cfg.get("included", {}).get("storage") and workflow_contexts["storage"]["state"] in {"not_started", "discovered", "planned", "stale"}:
         return {"title": "Finish storage review", "summary": "Go to Storage / RAID, confirm the current server, and approve the exact storage plan before the final run.", "href": "/storage"}
-    for key in ["esxi", "windows", "qnap", "netapp"]:
+    for key in ["esxi", "windows", "qnap", "netapp", "cisco_switch"]:
         if cfg.get("included", {}).get(key) and workflow_contexts[key]["state"] in {"not_started", "failed"}:
             return {"title": f"Open {workflow_contexts[key]['name']} page", "summary": f"Open the {workflow_contexts[key]['name']} page and finish the saved setup values.", "href": workflow_contexts[key]["review_href"]}
     return {"title": "Review the run", "summary": "Open Run Center to review the included stages, checks, and warnings before starting.", "href": "/execution"}
@@ -14426,11 +14443,13 @@ async def upload_upgrade_media_route(
 @app.post("/plan-ilo-upgrade", response_class=HTMLResponse)
 async def plan_ilo_upgrade_route(request: Request, return_page: str = Form("upgrade_helper")):
     cfg = load_kit_config()
+    sync_ilo_upgrade_inventory_from_latest_live(cfg)
     media_scan = scan_upgrade_media()
     plan = build_ilo_upgrade_plan(cfg, media_scan)
     cfg.setdefault("ilo", {})
     cfg["ilo"].setdefault("upgrade", {})
     cfg["ilo"]["upgrade"]["last_plan"] = plan
+    _clear_stale_ilo_upgrade_block(cfg, plan)
     save_kit_config(cfg)
     details = list(plan.get("blockers") or []) + list(plan.get("warnings") or []) + list(plan.get("notes") or [])
     return render_page(
@@ -14491,6 +14510,19 @@ def _record_ilo_upgrade_activity(cfg: dict[str, Any], event: dict[str, Any], *, 
     return activity
 
 
+def _clear_stale_ilo_upgrade_block(cfg: dict[str, Any], plan: dict[str, Any]) -> None:
+    if not plan.get("ready"):
+        return
+    upgrade = cfg.setdefault("ilo", {}).setdefault("upgrade", {})
+    activity = dict(upgrade.get("activity") or {})
+    result = dict(upgrade.get("last_result") or {})
+    stale_statuses = {str(activity.get("status") or "").lower(), str(result.get("status") or "").lower()}
+    if "blocked" not in stale_statuses:
+        return
+    upgrade["activity"] = {}
+    upgrade["last_result"] = {}
+
+
 def _start_ilo_upgrade_worker(cfg: dict[str, Any], media_scan: dict[str, Any]) -> None:
     def progress(event: dict[str, Any]) -> None:
         _record_ilo_upgrade_activity(cfg, event, status="running")
@@ -14537,6 +14569,7 @@ def _start_ilo_upgrade_worker(cfg: dict[str, Any], media_scan: dict[str, Any]) -
 @app.post("/run-ilo-upgrade", response_class=HTMLResponse)
 async def run_ilo_upgrade_route(request: Request, return_page: str = Form("upgrade_helper")):
     cfg = load_kit_config()
+    sync_ilo_upgrade_inventory_from_latest_live(cfg)
     media_scan = scan_upgrade_media()
     plan = build_ilo_upgrade_plan(cfg, media_scan)
     cfg.setdefault("ilo", {})

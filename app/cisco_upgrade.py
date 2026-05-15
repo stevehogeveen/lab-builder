@@ -266,7 +266,7 @@ def _is_scp_server_enabled(host: str, username: str, password: str) -> bool:
         host,
         username,
         password,
-        ["terminal length 0", "show running-config | include ^ip scp server enable"],
+        ["terminal length 0", "show run | include ^ip scp server enable"],
         timeout=30,
         label="interactive ssh: check scp server",
     )

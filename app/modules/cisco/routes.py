@@ -100,15 +100,8 @@ def _render_cisco_page(request: Request, cfg: dict, *, action_feedback: dict | N
         request,
         cfg,
         active_page="cisco",
-        action_feedback=action_feedback
-        or main.build_action_feedback(
-            "Cisco",
-            "Use the current step below.",
-            tone="progress",
-            status_label="Ready",
-            outcomes=[],
-        ),
-        extra_context={"cisco_payload": service.status(context)},
+        action_feedback=action_feedback,
+        extra_context={"cisco_payload": service.status(context), "suppress_action_feedback_banner": True},
     )
 
 
@@ -130,7 +123,7 @@ def _split_multiline(raw: str) -> list[str]:
     return [line.strip() for line in str(raw or "").splitlines() if line.strip()]
 
 
-def _update_cisco_model_from_form(cisco_cfg: dict, form: dict[str, Any]) -> None:
+def _update_cisco_model_from_form(cisco_cfg: dict, form: dict[str, Any], cfg: dict[str, Any] | None = None) -> None:
     for form_key, cfg_key in (
         ("cisco_switch_hostname", "hostname"),
         ("cisco_management_ip", "management_ip"),
@@ -159,6 +152,37 @@ def _update_cisco_model_from_form(cisco_cfg: dict, form: dict[str, Any]) -> None
             cisco_cfg[cfg_key] = _parse_yaml_value(str(form.get(form_key) or ""), default)
     if "cisco_custom_global_commands" in form:
         cisco_cfg["custom_global_commands"] = _split_multiline(str(form.get("cisco_custom_global_commands") or ""))
+    snmp_form_keys = {
+        "cisco_snmp_v3_username",
+        "cisco_snmp_v3_auth_protocol",
+        "cisco_snmp_v3_auth_password",
+        "cisco_snmp_v3_priv_protocol",
+        "cisco_snmp_v3_priv_password",
+    }
+    if any(key in form for key in snmp_form_keys):
+        existing = dict(cisco_cfg.get("snmp") or {})
+        shared = dict((cfg or {}).get("shared_snmp") or {})
+        snmp_cfg = {
+            "v3_username": str(form.get("cisco_snmp_v3_username") or existing.get("v3_username") or shared.get("v3_username") or "").strip(),
+            "v3_auth_protocol": str(form.get("cisco_snmp_v3_auth_protocol") or existing.get("v3_auth_protocol") or shared.get("v3_auth_protocol") or "SHA").strip() or "SHA",
+            "v3_auth_password": str(form.get("cisco_snmp_v3_auth_password") or existing.get("v3_auth_password") or shared.get("v3_auth_password") or ""),
+            "v3_priv_protocol": str(form.get("cisco_snmp_v3_priv_protocol") or existing.get("v3_priv_protocol") or shared.get("v3_priv_protocol") or "AES").strip() or "AES",
+            "v3_priv_password": str(form.get("cisco_snmp_v3_priv_password") or existing.get("v3_priv_password") or shared.get("v3_priv_password") or ""),
+        }
+        cisco_cfg["snmp"] = snmp_cfg
+        if cfg is not None:
+            shared_snmp = cfg.setdefault("shared_snmp", {})
+            shared_snmp.update(snmp_cfg)
+            users = list(shared_snmp.get("users") or [])
+            if snmp_cfg["v3_username"]:
+                primary = {
+                    "username": snmp_cfg["v3_username"],
+                    "auth_protocol": snmp_cfg["v3_auth_protocol"],
+                    "auth_password": snmp_cfg["v3_auth_password"],
+                    "priv_protocol": snmp_cfg["v3_priv_protocol"],
+                    "priv_password": snmp_cfg["v3_priv_password"],
+                }
+                shared_snmp["users"] = [primary] + users[1:] if users else [primary]
 
 
 @router.get("/modules/cisco", response_class=HTMLResponse)
@@ -181,6 +205,8 @@ async def cisco_discover_version(
     cisco_switch_username: str = Form(""),
     cisco_switch_password: str = Form(""),
     cisco_management_ip: str = Form(""),
+    cisco_console_port: str = Form(""),
+    cisco_console_baud: int = Form(9600),
 ):
     from app import main
 
@@ -192,9 +218,11 @@ async def cisco_discover_version(
         username=cisco_switch_username,
         password=cisco_switch_password,
         management_ip=cisco_management_ip,
+        console_port=cisco_console_port,
+        console_baud=cisco_console_baud,
     )
     context = {"cfg": cfg}
-    result = service.discover(context)
+    result = service.discover_version_any(context)
     if result.get("ok"):
         version = str(result.get("version") or "").strip()
         cisco_cfg["last_discovered_version"] = version
@@ -218,11 +246,12 @@ async def cisco_discover_version(
         main.save_kit_config(cfg)
         feedback = main.build_action_feedback(
             "Cisco version read",
-            "Read the current switch software version and cached it for Upgrade Helper.",
+            f"Read the current switch software version by {str(result.get('source') or 'auto')} and cached it for Upgrade Helper.",
             tone="ready",
             outcomes=[
                 f"Target: {str(result.get('target') or '').strip() or 'Not set'}",
                 f"Version: {version or 'Unknown'}",
+                f"Source: {str(result.get('source') or 'auto')}",
             ],
             details=list(result.get("warnings") or []),
         )
@@ -459,6 +488,8 @@ async def cisco_bootstrap_management(
         check = service.verify_console_bootstrap({"cfg": cfg})
         cisco_cfg["last_console_bootstrap_check"] = {key: value for key, value in check.items() if key not in {"status", "raw_output"}}
         cisco_cfg["last_raw_console_bootstrap_check"] = str(check.get("raw_output") or "")
+        if check.get("raw_output"):
+            cisco_cfg["last_console_management_state"] = str(check.get("raw_output") or "")
         cisco_cfg["connection_method"] = "ssh" if check.get("ok") else "console"
     main.save_kit_config(cfg)
     bootstrap_check = dict(cisco_cfg.get("last_console_bootstrap_check") or {})
@@ -481,6 +512,8 @@ async def cisco_verify_console_bootstrap(request: Request):
     result = service.verify_console_bootstrap({"cfg": cfg})
     cisco_cfg["last_console_bootstrap_check"] = {key: value for key, value in result.items() if key not in {"status", "raw_output"}}
     cisco_cfg["last_raw_console_bootstrap_check"] = str(result.get("raw_output") or "")
+    if result.get("raw_output"):
+        cisco_cfg["last_console_management_state"] = str(result.get("raw_output") or "")
     cisco_cfg["last_cisco_action"] = {
         "mode": "verify_console_bootstrap",
         "ok": bool(result.get("ok")),
@@ -537,7 +570,7 @@ async def cisco_save_port_map(request: Request):
     cisco_cfg = cfg.setdefault("cisco_switch", {})
     form_data = await request.form()
     form = dict(form_data)
-    _update_cisco_model_from_form(cisco_cfg, form)
+    _update_cisco_model_from_form(cisco_cfg, form, cfg)
     selected = [str(item) for item in form_data.getlist("selected_ports") if str(item).strip()]
     bulk_profile = str(form.get("bulk_profile") or "").strip()
     if selected and bulk_profile:
@@ -548,9 +581,9 @@ async def cisco_save_port_map(request: Request):
     main.save_kit_config(cfg)
     feedback = main.build_action_feedback(
         "Cisco port map saved",
-        "Saved the port profiles, VLANs, overrides, and global Cisco defaults.",
+        "Saved the port profiles, VLANs, overrides, and Cisco SNMP defaults.",
         tone="ready",
-        outcomes=[f"Ports: {len(cisco_cfg.get('ports') or {})}", f"Apply mode: {cisco_cfg.get('apply_mode') or 'initial_install'}"],
+        outcomes=[f"Ports saved: {len(cisco_cfg.get('ports') or {})}"],
     )
     return _render_cisco_page(request, cfg, action_feedback=feedback)
 
@@ -676,7 +709,7 @@ async def cisco_preview_config(request: Request, mode: str = Form("full")):
     cisco_cfg = cfg.setdefault("cisco_switch", {})
     form_data = await request.form()
     form = dict(form_data)
-    _update_cisco_model_from_form(cisco_cfg, form)
+    _update_cisco_model_from_form(cisco_cfg, form, cfg)
     selected_ports = [str(item) for item in form_data.getlist("selected_ports") if str(item).strip()]
     result = service.preview_config({"cfg": cfg}, mode=mode, selected_ports=selected_ports)
     cisco_cfg["last_config_preview"] = str(result.get("config") or "")
@@ -702,7 +735,7 @@ async def cisco_apply_config(request: Request, mode: str = Form("full")):
     cisco_cfg = cfg.setdefault("cisco_switch", {})
     form_data = await request.form()
     form = dict(form_data)
-    _update_cisco_model_from_form(cisco_cfg, form)
+    _update_cisco_model_from_form(cisco_cfg, form, cfg)
     selected_ports = [str(item) for item in form_data.getlist("selected_ports") if str(item).strip()]
     result = service.apply_config({"cfg": cfg}, mode=mode, selected_ports=selected_ports)
     cisco_cfg["last_config_preview"] = str(result.get("config") or "")
@@ -727,7 +760,7 @@ async def cisco_approve_config_plan(request: Request, mode: str = Form("full")):
     cisco_cfg = cfg.setdefault("cisco_switch", {})
     form_data = await request.form()
     form = dict(form_data)
-    _update_cisco_model_from_form(cisco_cfg, form)
+    _update_cisco_model_from_form(cisco_cfg, form, cfg)
     result = service.preview_config({"cfg": cfg}, mode=mode)
     validation = dict(result.get("validation") or {})
     cisco_cfg["last_config_preview"] = str(result.get("config") or "")
@@ -742,7 +775,16 @@ async def cisco_approve_config_plan(request: Request, mode: str = Form("full")):
     upgrade_result = dict(upgrade.get("last_result") or {})
     upgrade_plan = dict(upgrade.get("last_plan") or {})
     upgrade_override = bool((((cfg.get("upgrade_helper") or {}).get("overrides") or {}).get("cisco_switch")))
-    upgrade_ok = upgrade_override or upgrade_result.get("status") == "completed" or upgrade_plan.get("comparison") in {"current_enough", "already_current", "equal"}
+    upgrade_gate = main.upgrade_gate_entry(cfg, "cisco_switch")
+    nonblocking_gate = bool(upgrade_gate) and not bool(upgrade_gate.get("blocks_run"))
+    upgrade_comparison = upgrade_plan.get("comparison")
+    upgrade_ok = (
+        upgrade_override
+        or str(upgrade_result.get("status") or "").lower() == "completed"
+        or upgrade_comparison in {"current_enough", "already_current", "equal"}
+        or upgrade_comparison == 0
+        or nonblocking_gate
+    )
     if not upgrade_ok:
         blockers.append("Review the Cisco upgrade gate on Upgrade Helper, complete the upgrade, or enable the override before approving the final config plan.")
     blockers.extend(str(item) for item in validation.get("errors") or [])
@@ -767,6 +809,8 @@ async def cisco_approve_config_plan(request: Request, mode: str = Form("full")):
             details=list(validation.get("warnings") or []),
         )
     else:
+        blocker_count = len(blockers)
+        first_blocker = blockers[0] if blockers else "Cisco approval was blocked by validation."
         cisco_cfg["config_approval"] = {
             "state": "blocked",
             "mode": mode,
@@ -776,9 +820,9 @@ async def cisco_approve_config_plan(request: Request, mode: str = Form("full")):
         cisco_cfg["last_cisco_action"] = {"mode": "approve_config_plan", "ok": False, "completed_at": datetime.now(timezone.utc).isoformat()}
         feedback = main.build_action_feedback(
             "Cisco config plan not approved",
-            "Finish the Cisco workflow steps above before sending the final switch config to Run Center.",
+            first_blocker,
             tone="pending",
-            outcomes=[f"Mode: {mode}"],
+            outcomes=[f"Mode: {mode}", f"Blocked by {blocker_count} issue{'s' if blocker_count != 1 else ''}"],
             details=blockers + list(validation.get("warnings") or []),
         )
 

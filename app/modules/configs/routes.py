@@ -6,8 +6,28 @@ from typing import Any, Callable
 from fastapi import Form, Request, UploadFile
 from fastapi.responses import FileResponse, HTMLResponse
 
+from app.upgrade_helper import record_upgrade_inventory
+
 
 ConfigsRuntime = dict[str, Callable[..., Any]]
+
+
+def _record_ilo_upgrade_inventory_from_snapshot(cfg: dict[str, Any], inventory: dict[str, Any]) -> bool:
+    summary = dict((inventory.get("summary") or {}))
+    manager = dict(summary.get("manager") or {})
+    firmware = str(manager.get("firmware") or "").strip()
+    model = str(manager.get("model") or "").strip()
+    if not firmware:
+        return False
+    record_upgrade_inventory(
+        cfg,
+        "ilo",
+        current_version=firmware,
+        raw_version=firmware,
+        source="Latest live iLO inventory",
+        manager_model=model,
+    )
+    return True
 
 
 async def view_latest_live_summary_handler(request: Request, runtime: ConfigsRuntime, return_page: str = Form("configs")):
@@ -747,10 +767,13 @@ async def export_ilo_inventory_handler(request: Request, runtime: ConfigsRuntime
         client = runtime["build_ilo_client"](host=host, username=username, password=password)
         inventory = client.get_current_config_snapshot()
         export_paths = runtime["export_ilo_inventory_snapshot"](cfg, inventory)
+        inventory_recorded = _record_ilo_upgrade_inventory_from_snapshot(cfg, inventory)
         try:
             runtime["db_persist_ilo_inventory"](cfg, inventory, source_host=host)
         except Exception:
             pass
+        if inventory_recorded:
+            runtime["save_kit_config"](cfg)
         yaml_text = export_paths["summary"].read_text(encoding="utf-8")
         return runtime["render_page"](
             request,
@@ -814,6 +837,7 @@ async def export_ad_hoc_ilo_inventory_handler(
             cfg["ilo"]["current_ip"] = host
             cfg["ilo"]["username"] = username
             cfg["ilo"]["password"] = password
+            _record_ilo_upgrade_inventory_from_snapshot(cfg, inventory)
             runtime["save_kit_config"](cfg)
             saved_msg = " Saved these connection values to the current kit."
         yaml_text = export_paths["summary"].read_text(encoding="utf-8")

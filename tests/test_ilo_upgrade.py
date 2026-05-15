@@ -93,6 +93,89 @@ def test_execute_ilo_upgrade_updates_cached_inventory():
     assert events[-1]["progress_percent"] == 100
 
 
+def test_execute_ilo_upgrade_waits_for_hpe_flash_and_resets_for_activation():
+    cfg = {
+        "ilo": {
+            "current_ip": "10.10.8.50",
+            "host": "10.10.8.50",
+            "username": "Administrator",
+            "password": "secret",
+        },
+        "upgrade_inventory": {
+            "ilo": {
+                "current_version": "1.50",
+                "source": "Latest live iLO inventory",
+                "manager_model": "iLO 6",
+            }
+        },
+    }
+    media_scan = {
+        "root": "/repo/media",
+        "latest": {"ilo": {"version": "1.76", "filename": "ilo6_176.fwpkg", "path": "/repo/media/ilo6_176.fwpkg"}},
+        "counts": {"ilo": 1},
+        "candidates": [
+            {"device": "ilo", "version": "1.76", "filename": "ilo6_176.fwpkg", "path": "/repo/media/ilo6_176.fwpkg"},
+        ],
+    }
+
+    class FakeClient:
+        def __init__(self):
+            self.version = "1.50"
+            self.reset_calls = []
+            self.service_calls = 0
+
+        def upload_firmware_component(self, file_path, **kwargs):
+            return {"status_code": 200}
+
+        def get_update_service(self):
+            self.service_calls += 1
+            if self.service_calls == 1:
+                return {"Oem": {"Hpe": {"State": "Updating", "FlashProgressPercent": 52}}}
+            return {"Oem": {"Hpe": {"State": "Complete", "FlashProgressPercent": 100}}}
+
+        def _get(self, path):
+            if path == "/redfish/v1/UpdateService/ComponentRepository/":
+                return {"Members": [{"@odata.id": "/redfish/v1/UpdateService/ComponentRepository/ilo"}]}
+            if path == "/redfish/v1/UpdateService/ComponentRepository/ilo":
+                return {
+                    "Name": "iLO 6",
+                    "Filename": "ilo6_176.fwpkg",
+                    "Version": "1.76",
+                    "Activates": "AfterDeviceReset",
+                }
+            raise AssertionError(path)
+
+        def reset_ilo(self, reset_type="GracefulRestart"):
+            self.reset_calls.append(reset_type)
+            self.version = "1.76"
+            return {"path": "/redfish/v1/Managers/1/Actions/Manager.Reset", "reset_type": reset_type}
+
+        def get_summary(self):
+            return {"manager_firmware": self.version}
+
+    fake = FakeClient()
+    events = []
+
+    result = execute_ilo_upgrade(
+        cfg,
+        media_scan,
+        build_client=lambda **_: fake,
+        wait_timeout=4,
+        poll_interval=0.01,
+        progress=events.append,
+    )
+
+    assert result["status"] == "completed"
+    assert result["update_service"]["state"] == "Complete"
+    assert result["update_service"]["activation"] == "AfterDeviceReset"
+    assert result["reset"]["status"] == "requested"
+    assert fake.reset_calls == ["GracefulRestart"]
+    assert cfg["upgrade_inventory"]["ilo"]["current_version"] == "1.76"
+    phases = [event["phase"] for event in events]
+    assert "flash" in phases
+    assert "reset" in phases
+
+
 def test_execute_ilo_upgrade_blocks_when_prechecks_fail():
     cfg = {
         "ilo": {"current_ip": "", "host": "", "username": "", "password": ""},

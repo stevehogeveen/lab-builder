@@ -1,6 +1,9 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import ipaddress
+import json
+import platform
 import re
 import shutil
 import subprocess
@@ -202,6 +205,7 @@ class CiscoModuleService:
             "last_bootstrap": last_bootstrap,
             "last_ssh_test": dict(cisco_cfg.get("last_ssh_test") or {}),
             "last_console_diagnostics": dict(cisco_cfg.get("last_console_diagnostics") or {}),
+            "last_console_management_state": str(cisco_cfg.get("last_console_management_state") or ""),
             "port_map": port_map_rows(cisco_cfg),
             "port_profiles": dict(normalize_cisco_switch_config(cisco_cfg).get("port_profiles") or {}),
             "vlans": list(normalize_cisco_switch_config(cisco_cfg).get("vlans") or []),
@@ -228,7 +232,335 @@ class CiscoModuleService:
             "last_host_fix": dict(cisco_cfg.get("last_host_fix") or {}),
             "last_console_bootstrap_check": dict(cisco_cfg.get("last_console_bootstrap_check") or {}),
             "config_approval": dict(cisco_cfg.get("config_approval") or {}),
+            "operator_findings": self._operator_findings(cfg, cisco_cfg),
         }
+
+    def _operator_findings(self, cfg: dict[str, Any], cisco_cfg: dict[str, Any]) -> list[dict[str, Any]]:
+        findings: list[dict[str, Any]] = []
+        ip_plan = dict(cfg.get("ip_plan") or {})
+        check = dict(cisco_cfg.get("last_console_bootstrap_check") or {})
+        action = dict(cisco_cfg.get("last_cisco_action") or {})
+        diagnostics = dict(cisco_cfg.get("last_console_diagnostics") or {})
+        management_vlan = int(cisco_cfg.get("management_vlan") or 10)
+        management_ip = str(cisco_cfg.get("management_ip") or cisco_cfg.get("ip") or "").strip()
+        planned_switch_ip = str(ip_plan.get("switch") or "").strip()
+        gateway = str(cisco_cfg.get("gateway") or ip_plan.get("gateway") or "").strip()
+        netmask = str(cisco_cfg.get("subnet_mask") or ip_plan.get("netmask") or "").strip()
+
+        def add(severity: str, title: str, detail: str, *, actions: list[str] | None = None) -> None:
+            findings.append({"severity": severity, "title": title, "detail": detail, "actions": list(actions or [])})
+
+        if diagnostics.get("permission_denied"):
+            add(
+                "danger",
+                "Serial adapter permission is blocked",
+                str(diagnostics.get("error_summary") or "The host can see the console adapter but the app cannot open it."),
+                actions=["Run Fix serial access.", "Restart the app service if Linux group membership changed."],
+            )
+        elif diagnostics and not diagnostics.get("serial_imported"):
+            add(
+                "danger",
+                "Python serial support is missing",
+                "The Cisco console workflow cannot use USB serial until pyserial is available.",
+                actions=["Install project requirements.", "Restart Lab Builder."],
+            )
+
+        if action.get("mode") == "discover_console" and action.get("error"):
+            add(
+                "warning",
+                "Console discovery needs attention",
+                str(action.get("error") or ""),
+                actions=list(action.get("suggestions") or diagnostics.get("suggestions") or ["Check the console adapter and retry Test console access."]),
+            )
+
+        password = str(cisco_cfg.get("password") or "")
+        enable_password = str(cisco_cfg.get("enable_password") or "")
+        if password and len(password) < 10:
+            add(
+                "warning",
+                "Cisco login password may fail modern password policy",
+                "The saved Cisco password is shorter than 10 characters. Newer IOS XE setup dialogs often reject weak secrets.",
+                actions=["Use a stronger Cisco password before bootstrap.", "Keep a separate strong enable secret configured."],
+            )
+        if not enable_password:
+            add(
+                "warning",
+                "Enable secret is missing",
+                "Console bootstrap may stop at the Cisco setup dialog until a valid enable secret is supplied.",
+                actions=["Enter an enable secret in More settings.", "Use 10-32 characters with upper/lower case and a digit."],
+            )
+        elif len(enable_password) < 10 or not (re.search(r"[A-Z]", enable_password) and re.search(r"[a-z]", enable_password) and re.search(r"\d", enable_password)):
+            add(
+                "warning",
+                "Enable secret may be rejected by IOS XE",
+                "The saved enable secret does not appear to satisfy the common Cisco strength rule.",
+                actions=["Set a stronger enable secret before running console bootstrap."],
+            )
+
+        if planned_switch_ip and management_ip and management_ip != planned_switch_ip:
+            add(
+                "warning",
+                "Cisco management IP differs from generated IP plan",
+                f"Configured Cisco IP is {management_ip}, but the kit IP plan suggests {planned_switch_ip}.",
+                actions=["Keep the configured override if intentional.", "Change Cisco management IP to the generated switch address before bootstrap."],
+            )
+        if management_ip and gateway and netmask:
+            try:
+                network = ipaddress.ip_network(f"{management_ip}/{netmask}", strict=False)
+                if ipaddress.ip_address(gateway) not in network:
+                    add(
+                        "danger",
+                        "Cisco gateway is outside the management subnet",
+                        f"Gateway {gateway} is not inside {network}. SSH will likely fail after bootstrap.",
+                        actions=["Fix the gateway or management IP before applying console bootstrap."],
+                    )
+            except ValueError:
+                add(
+                    "danger",
+                    "Cisco management network is invalid",
+                    "The configured management IP, subnet mask, or gateway could not be parsed.",
+                    actions=["Correct the Cisco network fields before applying bootstrap."],
+                )
+
+        if check:
+            if check.get("ok") and check.get("host_reachable") is False:
+                route = dict(check.get("host_route") or {})
+                route_detail = str(route.get("summary") or "").strip()
+                add(
+                    "danger",
+                    "No route from this machine to Cisco management IP",
+                    (
+                        f"The switch reports VLAN {management_vlan} and {management_ip} are up, but this host cannot reach {management_ip}. "
+                        + (route_detail or "The host route check did not find a usable local path.")
+                    ),
+                    actions=[
+                        "Make the local interface connected to the switch use an IP in the Cisco management subnet.",
+                        "If using Wi-Fi for 192.168.1.x, connect VLAN 10 to that same LAN or route to it.",
+                        "If using the wired port to the switch, change either the wired IP or the Cisco management IP/mask so they are in the same subnet.",
+                    ],
+                )
+            if check.get("gateway_reachable") is False:
+                add(
+                    "danger",
+                    "Configured Cisco gateway is not reachable from VLAN 10",
+                    f"The Cisco default gateway is set to {gateway}, but the switch cannot ping that address from the management VLAN.",
+                    actions=[
+                        "Connect VLAN 10 to the network where that gateway exists.",
+                        "Use a gateway that actually exists on the Cisco management VLAN.",
+                        "If this is an isolated lab VLAN, leave gateway blank or use a lab router on VLAN 10.",
+                    ],
+                )
+            if check.get("ssh_enabled") and not check.get("scp_enabled"):
+                add(
+                    "warning",
+                    "Cisco SSH is enabled but SCP transfer is not ready",
+                    "The switch accepts SSH, but the SCP server is not enabled. Firmware image transfer needs SCP.",
+                    actions=["Run Configure IP using console again to enable SCP.", "Or let the upgrade workflow temporarily enable SCP during transfer."],
+                )
+            if not check.get("vlan_exists"):
+                add(
+                    "warning",
+                    f"Management VLAN {management_vlan} is missing",
+                    "The switch currently does not have the desired management VLAN in the VLAN database.",
+                    actions=["Run Configure IP using console to create the VLAN/SVI.", "Or change Management VLAN if this switch should use an existing VLAN."],
+                )
+            if check.get("vlan_exists") and not check.get("connected_management_ports"):
+                add(
+                    "warning",
+                    f"No connected port carries VLAN {management_vlan}",
+                    "The management SVI will stay down until an active port carries the management VLAN.",
+                    actions=["Select a bootstrap network port.", "Use trunk mode if the upstream path carries multiple VLANs.", "Use access mode for a single management VLAN uplink."],
+                )
+            connected = list(check.get("all_connected_ports") or [])
+            access_vlans = sorted({str(item.get("vlan") or "") for item in connected if str(item.get("vlan") or "").strip()})
+            if connected and access_vlans and str(management_vlan) not in access_vlans and "trunk" not in {item.lower() for item in access_vlans}:
+                add(
+                    "info",
+                    "Connected ports are on a different VLAN",
+                    f"Connected ports currently show VLAN(s): {', '.join(access_vlans)}. Desired management VLAN is {management_vlan}.",
+                    actions=["Choose the connected port that leads back to Lab Builder.", "Bootstrap can move that port to trunk or access mode."],
+                )
+            if check.get("unexpected_svis"):
+                add(
+                    "warning",
+                    "Unexpected switch management interfaces are present",
+                    "The switch has other SVI addresses besides the desired management VLAN: " + ", ".join(check.get("unexpected_svis")),
+                    actions=["Review whether these are intentional.", "Remove or ignore legacy/default SVIs before final config approval."],
+                )
+            suggested = list(check.get("suggested_bootstrap_ports") or [])
+            if suggested and not str(cisco_cfg.get("bootstrap_network_port") or "").strip():
+                add(
+                    "info",
+                    "Bootstrap port should be selected explicitly",
+                    "Connected switchports were detected, but no bootstrap network port is configured.",
+                    actions=[f"Candidate ports: {', '.join(suggested[:4])}", "Enter the intended port in Network port before bootstrap."],
+                )
+
+        override_keys = [
+            key
+            for key in ("management_ip", "ip", "gateway", "subnet_mask", "management_vlan", "bootstrap_network_port", "bootstrap_network_mode")
+            if cisco_cfg.get(key) not in (None, "", ip_plan.get("switch") if key in {"management_ip", "ip"} else None)
+        ]
+        if override_keys:
+            add(
+                "info",
+                "Cisco has explicit configuration overrides",
+                "The Cisco module is using saved values instead of only generated kit defaults: " + ", ".join(sorted(set(override_keys))),
+                actions=["Review these values before applying config.", "Keep them if they reflect the physical lab."],
+            )
+
+        return findings
+
+    def _interface_kind(self, name: str) -> str:
+        iface = str(name or "").lower()
+        if iface.startswith(("wl", "wifi", "wlan")):
+            return "wifi"
+        if iface.startswith(("en", "eth")):
+            return "wired"
+        if iface.startswith(("br", "docker", "veth")):
+            return "virtual"
+        return "interface"
+
+    def _host_ipv4_addresses(self) -> list[dict[str, Any]]:
+        try:
+            proc = subprocess.run(["ip", "-j", "-4", "addr", "show"], capture_output=True, text=True, check=False, timeout=3)
+        except Exception:
+            return []
+        if proc.returncode != 0:
+            return []
+        try:
+            data = json.loads(proc.stdout or "[]")
+        except json.JSONDecodeError:
+            return []
+        addresses: list[dict[str, Any]] = []
+        for item in list(data or []):
+            iface = str(item.get("ifname") or "")
+            for addr in list(item.get("addr_info") or []):
+                ip = str(addr.get("local") or "")
+                prefix = addr.get("prefixlen")
+                if not ip or prefix is None:
+                    continue
+                addresses.append(
+                    {
+                        "interface": iface,
+                        "kind": self._interface_kind(iface),
+                        "ip": ip,
+                        "prefixlen": int(prefix),
+                    }
+                )
+        return addresses
+
+    def _host_route_to(self, host: str) -> dict[str, str]:
+        try:
+            proc = subprocess.run(["ip", "-4", "route", "get", str(host)], capture_output=True, text=True, check=False, timeout=3)
+        except Exception as exc:
+            return {"error": str(exc).splitlines()[0]}
+        text = " ".join(str(proc.stdout or proc.stderr or "").split())
+        if proc.returncode != 0:
+            return {"error": text or f"ip route get failed ({proc.returncode})"}
+        route: dict[str, str] = {"raw": text}
+        parts = text.split()
+        for key in ("dev", "src", "via"):
+            if key in parts:
+                index = parts.index(key)
+                if index + 1 < len(parts):
+                    route[key] = parts[index + 1]
+        return route
+
+    def _host_network_diagnostics(self, host: str, netmask: str = "", gateway: str = "") -> dict[str, Any]:
+        target = str(host or "").strip()
+        diagnostics: dict[str, Any] = {"target": target}
+        try:
+            target_ip = ipaddress.ip_address(target)
+        except ValueError:
+            diagnostics["summary"] = "Cisco management IP is not a valid IPv4 address."
+            return diagnostics
+
+        route = self._host_route_to(target)
+        addresses = self._host_ipv4_addresses()
+        diagnostics["route"] = route
+        diagnostics["addresses"] = addresses
+
+        cisco_network = None
+        if netmask:
+            try:
+                cisco_network = ipaddress.ip_network(f"{target}/{netmask}", strict=False)
+                diagnostics["cisco_network"] = str(cisco_network)
+            except ValueError:
+                diagnostics["summary"] = f"Subnet mask {netmask} is invalid for Cisco management IP {target}."
+                return diagnostics
+
+        same_subnet = []
+        off_subnet = []
+        for address in addresses:
+            ip_text = str(address.get("ip") or "")
+            try:
+                local_ip = ipaddress.ip_address(ip_text)
+            except ValueError:
+                continue
+            if cisco_network and local_ip in cisco_network:
+                same_subnet.append(address)
+            elif address.get("kind") != "virtual":
+                off_subnet.append(address)
+        diagnostics["same_subnet_addresses"] = same_subnet
+        diagnostics["off_subnet_addresses"] = off_subnet
+
+        route_dev = str(route.get("dev") or "")
+        route_src = str(route.get("src") or "")
+        route_kind = self._interface_kind(route_dev)
+        if route.get("error"):
+            diagnostics["summary"] = f"The host has no route to {target}: {route.get('error')}."
+        elif cisco_network and route_src:
+            try:
+                route_src_ip = ipaddress.ip_address(route_src)
+            except ValueError:
+                route_src_ip = None
+            if route_src_ip and route_src_ip not in cisco_network:
+                diagnostics["summary"] = (
+                    f"This host would send traffic to {target} through {route_dev or 'an unknown interface'} "
+                    f"using source {route_src}, but that source is outside Cisco subnet {cisco_network}."
+                )
+            elif route_src_ip:
+                detail = (
+                    f"This host routes to {target} through {route_dev} ({route_kind}) using source {route_src}, "
+                    f"which is inside Cisco subnet {cisco_network}, but the switch still does not answer."
+                )
+                wired_off_subnet = [item for item in off_subnet if item.get("kind") == "wired"]
+                if route_kind == "wifi" and wired_off_subnet:
+                    detail += " A wired adapter is also active outside that subnet: " + ", ".join(
+                        f"{item.get('interface')}={item.get('ip')}/{item.get('prefixlen')}" for item in wired_off_subnet
+                    ) + ". If the switch is connected to that wired adapter, the wired IP/subnet does not match the Cisco management network."
+                detail += " This usually means the selected switch VLAN is not connected to the same Layer-2 network as that local interface."
+                diagnostics["summary"] = detail
+        if not diagnostics.get("summary"):
+            if same_subnet:
+                diagnostics["summary"] = f"This host has local address(es) in the Cisco subnet, but {target} is still unreachable; check VLAN membership, cabling, and ARP."
+            else:
+                diagnostics["summary"] = f"No non-virtual local interface address is in the Cisco management subnet for {target}."
+
+        if gateway and cisco_network:
+            try:
+                gateway_ip = ipaddress.ip_address(gateway)
+                diagnostics["gateway_in_cisco_subnet"] = gateway_ip in cisco_network
+            except ValueError:
+                diagnostics["gateway_in_cisco_subnet"] = False
+        return diagnostics
+
+    def _host_can_reach(self, host: str) -> bool | None:
+        target = str(host or "").strip()
+        if not target:
+            return None
+        try:
+            ipaddress.ip_address(target)
+        except ValueError:
+            return None
+        count_arg = "-n" if platform.system().lower().startswith("win") else "-c"
+        wait_arg = "-w" if platform.system().lower().startswith("win") else "-W"
+        try:
+            proc = subprocess.run(["ping", count_arg, "1", wait_arg, "1", target], capture_output=True, text=True, check=False, timeout=3)
+        except Exception:
+            return None
+        return proc.returncode == 0
 
     def _console_probe_results(self, candidates: list[Any]) -> list[dict[str, Any]]:
         return [
@@ -383,6 +715,64 @@ class CiscoModuleService:
                 "status": status,
             }
 
+    def discover_version_any(self, context: dict[str, Any]) -> dict[str, Any]:
+        cfg = dict(context.get("cfg") or {})
+        cisco_cfg = dict(cfg.get("cisco_switch") or {})
+        port = str(cisco_cfg.get("console_port") or "").strip()
+        baud = int(cisco_cfg.get("console_baud") or 9600)
+
+        console_warning = ""
+        if port:
+            try:
+                with CiscoSerialClient(port, baud) as client:
+                    output = client.read_prompt()
+                    output += client.run_command("terminal length 0", wait_seconds=1.0)
+                    output += client.run_command("show version", wait_seconds=5.0)
+                parsed = parse_cisco_show_version(output)
+                if parsed.get("version"):
+                    return {
+                        "module": "cisco",
+                        "action": "discover",
+                        "ok": True,
+                        "target": port,
+                        "username": self._username(context),
+                        "source": "console",
+                        "version": str(parsed.get("version") or ""),
+                        "hostname": str(parsed.get("hostname") or ""),
+                        "model": str(parsed.get("model") or ""),
+                        "platform": str(parsed.get("platform") or ""),
+                        "raw_excerpt": mask_secrets(str(parsed.get("raw_excerpt") or ""), [self._password(context), str(cisco_cfg.get("enable_password") or "")]),
+                        "warnings": [],
+                        "status": self._status_payload(context),
+                    }
+                console_warning = "Console responded, but Cisco version could not be parsed from show version output."
+            except Exception as exc:
+                console_warning = f"Console version read failed: {str(exc).splitlines()[0]}"
+
+        ssh_result = self.discover(context)
+        if ssh_result.get("ok"):
+            ssh_result["source"] = "ssh"
+            warnings = list(ssh_result.get("warnings") or [])
+            if not port:
+                warnings.append("Console version read skipped because no console port is selected.")
+            elif console_warning:
+                warnings.append(console_warning)
+            ssh_result["warnings"] = warnings
+            return ssh_result
+
+        if port:
+            return {
+                **ssh_result,
+                "source": "console_ssh_failed",
+                "warnings": list(ssh_result.get("warnings") or []) + ([console_warning] if console_warning else []),
+            }
+
+        return {
+            **ssh_result,
+            "source": "ssh",
+            "warnings": list(ssh_result.get("warnings") or []) + ["Console version read skipped because no console port is selected."],
+        }
+
     def discover_console(self, context: dict[str, Any]) -> dict[str, Any]:
         status = self._status_payload(context)
         diagnostics = serial_runtime_diagnostics()
@@ -474,15 +864,25 @@ class CiscoModuleService:
         port = str(cisco_cfg.get("console_port") or "").strip()
         baud = int(cisco_cfg.get("console_baud") or 9600)
         management_vlan = int(cisco_cfg.get("management_vlan") or 1)
+        management_ip = self._management_ip(context)
+        subnet_mask = str(cisco_cfg.get("subnet_mask") or "").strip()
+        gateway = str(cisco_cfg.get("gateway") or cfg.get("ip_plan", {}).get("gateway") or "").strip()
         if not port:
             return {"module": "cisco", "action": "verify_console_bootstrap", "ok": False, "error": "Cisco console port is not selected.", "status": self._status_payload(context)}
         commands = [
             "terminal length 0",
             "show ip interface brief",
             "show vlan brief",
+            f"show run interface Vlan{management_vlan}",
+            "show run | include ^ip default-gateway|^ip domain-name|^ip ssh|^ip scp|^username",
+            "show run | section ^line vty",
             "show interfaces status",
             "show ip ssh",
+            "show run | include ^ip scp server enable",
+            "show run",
+            f"ping {gateway} repeat 2 timeout 1" if gateway else "",
         ]
+        commands = [command for command in commands if command]
         try:
             with CiscoSerialClient(port, baud) as client:
                 output = client.read_prompt()
@@ -496,8 +896,34 @@ class CiscoModuleService:
         interface_status = parse_show_interfaces_status(_extract_command_output(output, "show interfaces status", "show ip ssh"))
         svi_name = f"Vlan{management_vlan}"
         svi = dict(ip_interfaces.get(svi_name) or {})
+        unexpected_svis = [
+            f"{name} {data.get('ip_address')}"
+            for name, data in sorted(ip_interfaces.items())
+            if name.lower().startswith("vlan")
+            and name != svi_name
+            and str(data.get("ip_address") or "").strip().lower() not in {"", "unassigned"}
+        ]
         vlan_exists = bool(re.search(rf"(?im)^\s*{management_vlan}\s+\S+\s+active\b", output))
         ssh_enabled = "SSH Enabled" in output
+        scp_enabled = bool(re.search(r"(?im)^ip scp server enable\s*$", output))
+        host_reachable = self._host_can_reach(management_ip) if vlan_exists else None
+        host_route = self._host_network_diagnostics(management_ip, subnet_mask, gateway) if vlan_exists else {}
+        gateway_reachable = None
+        if gateway:
+            gateway_output = _extract_command_output(output, f"ping {gateway} repeat 2 timeout 1", "")
+            if "Success rate is" in gateway_output:
+                gateway_reachable = not re.search(r"Success rate is\s+0\s+percent", gateway_output, flags=re.IGNORECASE)
+        all_connected_ports = [
+            {
+                "name": name,
+                "vlan": str(data.get("vlan") or ""),
+                "speed": str(data.get("speed") or ""),
+                "type": str(data.get("type") or ""),
+                "description": str(data.get("name") or data.get("description") or ""),
+            }
+            for name, data in sorted(interface_status.items(), key=lambda item: item[0])
+            if str(data.get("status") or "").lower() == "connected"
+        ]
         connected_ports = [
             name
             for name, data in interface_status.items()
@@ -515,6 +941,14 @@ class CiscoModuleService:
             warnings.append(f"No connected switchport is currently carrying VLAN {management_vlan}.")
         if not ssh_enabled:
             warnings.append("SSH is not enabled on the switch.")
+        if not scp_enabled:
+            warnings.append("Cisco SCP server is not enabled; image transfer for upgrade will need to enable it before upload.")
+        if vlan_exists and svi_admin_status == "up" and svi_protocol == "up" and host_reachable is False:
+            warnings.append(f"Cisco management IP {management_ip} is configured and up on the switch, but this Lab Builder host cannot reach it. {host_route.get('summary') or ''}".strip())
+        if gateway and gateway_reachable is False:
+            warnings.append(f"Cisco default gateway {gateway} is configured, but the switch cannot ping it from the management VLAN.")
+        if unexpected_svis:
+            warnings.append("Unexpected SVI address exists: " + ", ".join(unexpected_svis))
         ok = bool(vlan_exists and ssh_enabled and svi_admin_status == "up" and svi_protocol == "up")
         return {
             "module": "cisco",
@@ -525,7 +959,14 @@ class CiscoModuleService:
             "management_svi": svi,
             "vlan_exists": vlan_exists,
             "ssh_enabled": ssh_enabled,
+            "scp_enabled": scp_enabled,
+            "host_reachable": host_reachable,
+            "host_route": host_route,
+            "gateway_reachable": gateway_reachable,
+            "unexpected_svis": unexpected_svis,
             "connected_management_ports": connected_ports,
+            "all_connected_ports": all_connected_ports,
+            "suggested_bootstrap_ports": [item["name"] for item in all_connected_ports if not item["name"].lower().startswith("ap")],
             "warnings": warnings,
             "raw_output": mask_secrets(output, [self._password(context), str(cisco_cfg.get("enable_password") or "")]),
             "status": self._status_payload(context),
@@ -557,14 +998,14 @@ class CiscoModuleService:
                     "terminal length 0",
                     "show interfaces status",
                     "show ip interface brief",
-                    "show running-config | section ^interface",
+                    "show run | section ^interface",
                 ]
             )
             output = str(status.get("output") or "")
             discovery = parse_cisco_discovery_outputs(
                 _extract_command_output(output, "show interfaces status", "show ip interface brief"),
-                _extract_command_output(output, "show ip interface brief", "show running-config | section ^interface"),
-                _extract_command_output(output, "show running-config | section ^interface", ""),
+                _extract_command_output(output, "show ip interface brief", "show run | section ^interface"),
+                _extract_command_output(output, "show run | section ^interface", ""),
             )
             return {"module": "cisco", "action": "discover_ports", "ok": True, "host": host, "discovery": discovery, "raw_output": mask_secrets(output, [password]), "status": self._status_payload(context)}
         except Exception as exc:
@@ -611,7 +1052,7 @@ class CiscoModuleService:
 
     def backup_config(self, context: dict[str, Any]) -> dict[str, Any]:
         try:
-            result = CiscoSSHClient(self._management_ip(context), self._username(context), self._password(context), timeout=30).run_commands(["terminal length 0", "show running-config"])
+            result = CiscoSSHClient(self._management_ip(context), self._username(context), self._password(context), timeout=30).run_commands(["terminal length 0", "show run"])
             return {"module": "cisco", "action": "backup_config", "ok": True, "host": self._management_ip(context), "running_config": result.get("output", ""), "status": self._status_payload(context)}
         except Exception as exc:
             return {"module": "cisco", "action": "backup_config", "ok": False, "host": self._management_ip(context), "error": str(exc), "status": self._status_payload(context)}

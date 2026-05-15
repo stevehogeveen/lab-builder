@@ -38,9 +38,11 @@
     {% endif %}
     <div class="actions mt-4">
         <a class="btn" href="/upgrade-helper">Open Upgrade Helper</a>
-        {% if upgrade_device_key == 'ilo' and gate_entry %}
-        <button class="btn" type="button" hx-post="/plan-ilo-upgrade" hx-vals='{"return_page":"{{ upgrade_return_page }}"}' hx-target="#main-content" hx-swap="outerHTML">Plan iLO upgrade</button>
-        <button class="btn btn-primary" type="button" hx-post="/run-ilo-upgrade" hx-vals='{"return_page":"{{ upgrade_return_page }}"}' hx-target="#main-content" hx-swap="outerHTML" data-action-title="Starting iLO upgrade" data-action-start="Queueing iLO firmware upload and verification. The iLO upgrade status panel will keep updating." data-action-complete="iLO upgrade worker started. Watch the status panel.">Run iLO upgrade</button>
+        {% if upgrade_device_key == 'cisco_switch' %}
+        <button class="btn btn-primary" type="submit" hx-post="/modules/cisco/discover-version" hx-vals='{"return_page":"{{ upgrade_return_page }}"}' hx-target="#main-content" hx-swap="outerHTML" data-action-title="Checking Cisco version" data-action-start="Reading show version by SSH, with console fallback if SSH is not ready." data-action-complete="Cisco version check finished.">Check current Cisco version</button>
+        {% endif %}
+        {% if upgrade_device_key == 'ilo' and not gate_entry.get('current_version') %}
+        <button class="btn btn-primary" type="button" hx-post="/export-ilo-inventory" hx-vals='{"return_page":"{{ upgrade_return_page }}"}' hx-target="#main-content" hx-swap="outerHTML" data-action-title="Reading current iLO" data-action-start="Connecting to iLO and reading the current firmware version.">Read current iLO</button>
         {% endif %}
         <label class="check card card-compact">
             <input type="checkbox" name="override_upgrade_gate" value="true" {% if gate_override %}checked{% endif %} hx-post="/save-upgrade-override" hx-target="#main-content" hx-swap="outerHTML" hx-vals='{"return_page":"{{ upgrade_return_page }}","device_key":"{{ upgrade_device_key }}"}' hx-trigger="change">
@@ -48,6 +50,3 @@
         </label>
     </div>
 </section>
-{% if upgrade_device_key == 'ilo' %}
-{% include "partials/components/ilo_upgrade_activity.html" %}
-{% endif %}

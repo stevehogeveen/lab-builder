@@ -564,6 +564,29 @@
         scrollIntoViewSoon(card);
     }
 
+    function updateLocalActionPanel(trigger, payload) {
+        if (!trigger || typeof trigger.closest !== "function") return;
+        const panel = trigger.closest("[data-action-panel]") || trigger.closest(".card") || trigger.closest("section");
+        if (!panel) return;
+        let card = panel.querySelector(":scope > .local-action-status");
+        if (!card) {
+            card = document.createElement("div");
+            card.className = "result local-action-status";
+            card.style.marginBottom = "1rem";
+            panel.insertBefore(card, panel.firstElementChild || null);
+        }
+        card.innerHTML = [
+            '<div class="flex items-center justify-between gap-3">',
+            `<div class="font-semibold">${escapeHtml(payload.title || "Working")}</div>`,
+            `<span class="status ${escapeHtml(payload.tone || "progress")}">${escapeHtml(payload.label || "Working")}</span>`,
+            "</div>",
+            `<div class="text-sm text-slate-300 mt-2">${escapeHtml(payload.summary || "The app is working on your request.")}</div>`,
+            '<div class="progress-shell mt-3">',
+            `<div class="progress-bar" style="width:${escapeHtml(String(payload.progress == null ? 35 : payload.progress))}%;"></div>`,
+            "</div>",
+        ].join("");
+    }
+
     function deriveActionPayload(source) {
         const trigger = source && source.triggeringEvent && source.triggeringEvent.detail ? source.triggeringEvent.detail.elt : null;
         const form = trigger && typeof trigger.closest === "function" ? trigger.closest("form") : null;
@@ -728,6 +751,7 @@
             if (!target || target.id !== "main-content") return;
             const payload = deriveActionPayload(event.detail.requestConfig || {});
             updateActionStatusCard({ title: payload.title, summary: payload.start, label: "Working", tone: "progress", progress: 35 });
+            updateLocalActionPanel(event.detail.elt, { title: payload.title, summary: payload.start, label: "Working", tone: "progress", progress: 35 });
         });
         document.body.addEventListener("htmx:afterRequest", function (event) {
             if (isBackgroundStatusPoll(event)) return;
@@ -738,6 +762,13 @@
             updateActionStatusCard({
                 title: payload.title,
                 summary: successful ? payload.complete : "The action needs attention. Review the message on the page for details.",
+                label: successful ? "Done" : "Warning",
+                tone: successful ? "ready" : "pending",
+                progress: 100,
+            });
+            updateLocalActionPanel(event.detail.elt, {
+                title: payload.title,
+                summary: successful ? payload.complete : "The action needs attention. Review the message in this section for details.",
                 label: successful ? "Done" : "Warning",
                 tone: successful ? "ready" : "pending",
                 progress: 100,

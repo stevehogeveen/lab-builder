@@ -56,7 +56,7 @@ def test_execute_cisco_upgrade_enables_scp_before_transfer(monkeypatch):
 
     def fake_prep(host, username, password, commands, *, timeout, **kwargs):
         prep_calls.append((host, username, password, commands, timeout, kwargs))
-        if "show running-config" in " ".join(commands):
+        if "show run" in " ".join(commands):
             return {"command": "check", "output_excerpt": ""}
         if "dir flash:" in " ".join(commands):
             return {"command": "dir", "output_excerpt": "Directory of flash:/\n188448  -rw-        293623808  May 14 2026 17:20:02 +00:00  cat9k_lite_iosxe.17.09.04.SPA.bin"}

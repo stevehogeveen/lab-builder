@@ -144,6 +144,8 @@ def test_detect_cisco_prompt_patterns():
     assert cisco.detect_cisco_prompt("Username:")[0] == "username"
     assert cisco.detect_cisco_prompt("Password:")[0] == "password"
     assert cisco.detect_cisco_prompt("rommon >")[0] == "rommon"
+    assert cisco.detect_cisco_prompt("Enter enable secret:")[0] == "setup_enable_secret"
+    assert cisco.detect_cisco_prompt("Confirm enable secret:")[0] == "setup_enable_secret"
     assert cisco.detect_cisco_prompt("Would you like to enter the initial configuration dialog?")[0] == "initial_dialog"
 
 
