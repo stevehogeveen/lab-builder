@@ -42,15 +42,13 @@
     {% include "partials/components/setup_strip.html" %}
 
     <div class="space-y-3">
-        <div class="card identity-soft-card">
-            <div class="flex items-center justify-between gap-3 flex-wrap mb-3">
-                <div>
-                    <div class="text-lg font-semibold">Readiness at a glance</div>
-                    <div class="text-sm text-slate-400">Each checkpoint stays visible without blowing the page into full-height tiles.</div>
-                </div>
+        <details class="card identity-soft-card">
+            <summary class="summary-row">
+                <span class="text-lg font-semibold">Readiness at a glance</span>
                 <span class="status progress">{{ storage_page_readiness|length }} checks</span>
-            </div>
-            <div class="ops-row-list">
+            </summary>
+            <div class="text-sm text-slate-400 mt-3">Each checkpoint stays available without blowing the page into full-height tiles.</div>
+            <div class="ops-row-list mt-3">
                 {% for item in storage_page_readiness %}
                 <div class="ops-row-item">
                     <div class="ops-row-copy">
@@ -63,7 +61,7 @@
                 </div>
                 {% endfor %}
             </div>
-        </div>
+        </details>
 
         {% if storage_repair_action %}
         <div class="card" style="border-color: color-mix(in srgb, var(--bad) 35%, var(--border));">
@@ -605,9 +603,12 @@
         {% endif %}
 
         {% if storage_controller_capabilities %}
-        <div class="card">
-            <div class="text-lg font-semibold mb-2">Controller apply capabilities</div>
-            <div class="text-sm text-slate-400 mb-3">Discovery is non-destructive. A visible <code>/Volumes</code> path does not count as create verification by itself.</div>
+        <details class="card">
+            <summary class="summary-row">
+                <span class="text-lg font-semibold">Controller apply capabilities</span>
+                <span class="status progress">technical</span>
+            </summary>
+            <div class="text-sm text-slate-400 mt-3 mb-3">Discovery is non-destructive. A visible <code>/Volumes</code> path does not count as create verification by itself.</div>
             <table>
                 <thead><tr><th>Controller</th><th>Create</th><th>Delete</th><th>Method</th><th>Verified</th><th>Reason</th></tr></thead>
                 <tbody>
@@ -623,7 +624,7 @@
                 {% endfor %}
                 </tbody>
             </table>
-        </div>
+        </details>
         {% endif %}
 
         {% if storage_plan %}

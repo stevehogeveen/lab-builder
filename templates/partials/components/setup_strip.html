@@ -1,7 +1,7 @@
 {% set strip = setup_strip or [] %}
 {% if strip %}
 {% set strip_items = strip['items'] if strip is mapping and 'items' in strip else strip %}
-<section class="card identity-soft-card">
+<section class="card identity-soft-card setup-strip-card">
     {% if (strip is mapping and 'title' in strip) or (strip is mapping and 'subtitle' in strip) %}
     <div class="flex items-start justify-between gap-3 flex-wrap mb-4">
         <div>

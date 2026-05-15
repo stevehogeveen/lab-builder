@@ -294,7 +294,7 @@
         }
 
         .main {
-            padding: clamp(16px, 2vw, 28px);
+            padding: clamp(14px, 1.8vw, 24px);
         }
 
         .hero {
@@ -302,12 +302,12 @@
             border: 1px solid var(--border);
             border-radius: 14px;
             box-shadow: 0 10px 26px rgba(28, 49, 77, 0.06);
-            padding: 18px 20px;
-            margin-bottom: 18px;
+            padding: 14px 16px;
+            margin-bottom: 14px;
             display: grid;
             grid-template-columns: minmax(0, 1.2fr) minmax(0, 1fr);
             align-items: start;
-            gap: 16px;
+            gap: 14px;
             position: relative;
             overflow: hidden;
         }
@@ -330,8 +330,8 @@
 
         .command-title {
             margin-top: 4px;
-            font-size: clamp(1.75rem, 2.7vw, 2.65rem);
-            line-height: 1.05;
+            font-size: clamp(1.45rem, 2.2vw, 2.15rem);
+            line-height: 1.08;
             letter-spacing: 0;
         }
 
@@ -340,7 +340,7 @@
             flex-wrap: wrap;
             gap: 10px 14px;
             align-items: center;
-            margin-top: 12px;
+            margin-top: 9px;
         }
 
         .panel, .card {
@@ -351,8 +351,8 @@
             transition: border-color 0.18s ease, box-shadow 0.18s ease, background 0.18s ease;
         }
 
-        .panel { padding: 18px; }
-        .card { padding: 14px; }
+        .panel { padding: 16px; }
+        .card { padding: 13px; }
         .panel, .card, .main, #main-content { min-width: 0; }
 
         a.card {
@@ -406,13 +406,13 @@
             align-items: center;
             justify-content: center;
             gap: 8px;
-            min-height: 40px;
+            min-height: 38px;
             max-width: 100%;
             background: linear-gradient(180deg, white, color-mix(in srgb, var(--info-soft) 42%, white 58%));
             color: color-mix(in srgb, var(--info) 76%, var(--text) 24%);
             border: 1px solid color-mix(in srgb, var(--info) 22%, var(--border-strong));
             border-radius: 10px;
-            padding: 9px 13px;
+            padding: 8px 12px;
             font-size: 0.9rem;
             font-weight: 800;
             line-height: 1.2;
@@ -768,6 +768,24 @@
             background:
                 radial-gradient(circle at top right, color-mix(in srgb, var(--accent) 8%, white 92%) 0%, transparent 34%),
                 linear-gradient(180deg, color-mix(in srgb, white 94%, var(--panel2) 6%), white);
+        }
+
+        .compact-action-receipt {
+            padding: 12px 14px;
+            border-radius: 14px;
+            box-shadow: 0 10px 24px rgba(28, 49, 77, 0.06);
+        }
+
+        .compact-action-receipt .receipt-grid {
+            grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+            gap: 8px;
+            margin-top: 10px;
+        }
+
+        .compact-action-receipt .result {
+            padding: 9px 10px;
+            font-size: 0.88rem;
+            line-height: 1.35;
         }
 
         .receipt-grid {
@@ -1396,6 +1414,15 @@
             transition: border-color 0.18s ease, box-shadow 0.18s ease, background 0.18s ease;
         }
 
+        textarea {
+            min-height: 84px;
+            resize: vertical;
+        }
+
+        details textarea {
+            min-height: 72px;
+        }
+
         input::placeholder,
         textarea::placeholder {
             color: var(--muted-soft);
@@ -1411,7 +1438,7 @@
 
         .msg, .result, .error, .codeblock {
             margin-top: 14px;
-            padding: 13px 15px;
+            padding: 11px 13px;
             border-radius: 14px;
             border: 1px solid var(--border);
             white-space: pre-wrap;
@@ -1424,6 +1451,15 @@
             padding: 11px 13px;
             border-radius: 13px;
         }
+
+        .result.local-action-status {
+            margin-top: 10px;
+            padding: 9px 11px;
+            border-radius: 12px;
+            font-size: 0.9rem;
+            box-shadow: none;
+        }
+
         .error { background: color-mix(in srgb, var(--bad) 10%, var(--panel)); color: var(--text); border-color: color-mix(in srgb, var(--bad) 35%, var(--border)); }
 
         .workflow-tabs {
@@ -1637,7 +1673,7 @@
 
         .ops-strip-grid {
             display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(min(100%, 150px), 1fr));
+            grid-template-columns: repeat(auto-fit, minmax(min(100%, 135px), 1fr));
             gap: 8px;
         }
 
@@ -1669,6 +1705,14 @@
             padding: 10px 12px;
         }
 
+        .setup-strip-card {
+            padding: 12px;
+        }
+
+        .setup-strip-card .ops-strip-card {
+            padding: 8px 10px;
+        }
+
         .ops-row-list {
             display: grid;
             gap: 8px;
@@ -1680,7 +1724,7 @@
             align-items: start;
             gap: 12px;
             min-width: 0;
-            padding: 11px 12px;
+            padding: 9px 11px;
             border-radius: 12px;
             border: 1px solid color-mix(in srgb, var(--accent) 8%, var(--border));
             background: linear-gradient(180deg, color-mix(in srgb, white 96%, var(--panel2) 4%), color-mix(in srgb, white 91%, var(--panel2) 9%));
@@ -1716,6 +1760,50 @@
             justify-content: flex-end;
             flex-wrap: wrap;
             min-width: 0;
+        }
+
+        .setup-flow-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(min(100%, 320px), 1fr));
+            gap: 12px;
+            align-items: start;
+        }
+
+        .setup-step-card {
+            border: 1px solid color-mix(in srgb, var(--accent) 10%, var(--border));
+            border-radius: 14px;
+            background: linear-gradient(180deg, color-mix(in srgb, white 95%, var(--panel2) 5%), white);
+            padding: 12px;
+        }
+
+        .setup-step-title {
+            display: flex;
+            align-items: flex-start;
+            justify-content: space-between;
+            gap: 10px;
+            margin-bottom: 10px;
+        }
+
+        .setup-step-title h3 {
+            margin: 0;
+            font-size: 1rem;
+            line-height: 1.2;
+            font-weight: 800;
+        }
+
+        .setup-step-copy {
+            color: var(--muted);
+            font-size: 0.9rem;
+            margin-bottom: 10px;
+        }
+
+        .local-action-status,
+        .action-result-inline {
+            margin-top: 10px;
+            padding: 9px 11px;
+            border-radius: 12px;
+            font-size: 0.9rem;
+            box-shadow: none;
         }
 
         .global-warning-popup {
@@ -1773,6 +1861,18 @@
         .precheck-detail-drawer {
             border-top: 1px solid color-mix(in srgb, var(--border) 76%, transparent);
             padding-top: 12px;
+        }
+
+        .precheck-summary-card {
+            padding: 12px;
+        }
+
+        .precheck-summary-card .ops-strip-card {
+            padding: 8px 10px;
+        }
+
+        .precheck-summary-card .ops-strip-grid {
+            margin-top: 10px;
         }
 
         .artifact-path,
@@ -1891,7 +1991,7 @@
 
         th, td {
             border-bottom: 1px solid var(--border);
-            padding: 13px 12px;
+            padding: 10px 11px;
             text-align: left;
             vertical-align: top;
         }
@@ -1916,27 +2016,27 @@
             min-width: 360px;
             display: grid;
             grid-template-columns: repeat(3, minmax(0, 1fr));
-            gap: 12px;
+            gap: 8px;
         }
 
         .hero-stat {
             background: color-mix(in srgb, white 86%, var(--panel3) 14%);
             border: 1px solid var(--border);
             border-radius: 10px;
-            padding: 12px 14px;
+            padding: 9px 11px;
             box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.68);
         }
 
         .hero-stat-label {
             color: var(--muted);
             font-size: .78rem;
-            margin-bottom: 6px;
+            margin-bottom: 4px;
             text-transform: uppercase;
             letter-spacing: .08em;
         }
 
         .hero-stat-value {
-            font-size: 1rem;
+            font-size: 0.94rem;
             line-height: 1.25;
             font-weight: 700;
             overflow-wrap: anywhere;
@@ -1947,21 +2047,11 @@
             line-height: 1.2;
         }
 
-        body[data-active-page="global_settings"] .hero,
-        body[data-active-page="configuration"] .hero,
-        body[data-active-page="ilo"] .hero,
-        body[data-active-page="storage"] .hero,
-        body[data-active-page="esxi"] .hero,
-        body[data-active-page="execution"] .hero {
-            padding: 16px 20px;
+        body:not([data-active-page="dashboard"]) .hero {
+            padding: 14px 16px;
         }
 
-        body[data-active-page="global_settings"] .hero .muted,
-        body[data-active-page="configuration"] .hero .muted,
-        body[data-active-page="ilo"] .hero .muted,
-        body[data-active-page="storage"] .hero .muted,
-        body[data-active-page="esxi"] .hero .muted,
-        body[data-active-page="execution"] .hero .muted {
+        body:not([data-active-page="dashboard"]) .hero .muted {
             font-size: 0.95rem;
             max-width: 56rem;
         }
@@ -1971,7 +2061,15 @@
         body[data-active-page="ilo"] #main-content,
         body[data-active-page="storage"] #main-content,
         body[data-active-page="esxi"] #main-content,
-        body[data-active-page="execution"] #main-content {
+        body[data-active-page="windows"] #main-content,
+        body[data-active-page="qnap"] #main-content,
+        body[data-active-page="netapp"] #main-content,
+        body[data-active-page="cisco"] #main-content,
+        body[data-active-page="ovf_templates"] #main-content,
+        body[data-active-page="upgrade_helper"] #main-content,
+        body[data-active-page="execution"] #main-content,
+        body[data-active-page="configs"] #main-content,
+        body[data-active-page="history"] #main-content {
             max-width: min(100%, 1280px);
         }
 
@@ -1980,6 +2078,12 @@
         body[data-active-page="ilo"] #main-content > .panel:first-of-type,
         body[data-active-page="storage"] #main-content > .panel:first-of-type,
         body[data-active-page="esxi"] #main-content > .panel:first-of-type,
+        body[data-active-page="windows"] #main-content > .panel:first-of-type,
+        body[data-active-page="qnap"] #main-content > .panel:first-of-type,
+        body[data-active-page="netapp"] #main-content > .panel:first-of-type,
+        body[data-active-page="cisco"] #main-content > .panel:first-of-type,
+        body[data-active-page="ovf_templates"] #main-content > .panel:first-of-type,
+        body[data-active-page="upgrade_helper"] #main-content > .panel:first-of-type,
         body[data-active-page="execution"] #main-content > .panel:first-of-type {
             border-color: color-mix(in srgb, var(--accent) 22%, var(--border));
             background: linear-gradient(180deg, color-mix(in srgb, var(--panel) 92%, var(--panel2) 8%), var(--panel));
@@ -1990,6 +2094,12 @@
         body[data-active-page="ilo"] #main-content > .panel:first-of-type .card,
         body[data-active-page="storage"] #main-content > .panel:first-of-type .card,
         body[data-active-page="esxi"] #main-content > .panel:first-of-type .card,
+        body[data-active-page="windows"] #main-content > .panel:first-of-type .card,
+        body[data-active-page="qnap"] #main-content > .panel:first-of-type .card,
+        body[data-active-page="netapp"] #main-content > .panel:first-of-type .card,
+        body[data-active-page="cisco"] #main-content > .panel:first-of-type .card,
+        body[data-active-page="ovf_templates"] #main-content > .panel:first-of-type .card,
+        body[data-active-page="upgrade_helper"] #main-content > .panel:first-of-type .card,
         body[data-active-page="execution"] #main-content > .panel:first-of-type .card {
             background: color-mix(in srgb, var(--panel2) 72%, transparent);
         }
@@ -2317,7 +2427,7 @@
         {% set hero_next_blocker = hero_summary.get('next_blocker') if hero_summary else none %}
         <section class="hero">
             <div>
-                <div class="command-kicker">{{ current_kit }}</div>
+                <div class="command-kicker">{{ current_kit }}{% if active_page != 'dashboard' and page_precheck_summary %} / {{ page_precheck_summary.get('name', title) }}{% endif %}</div>
                 <h1 class="command-title font-bold">{{ title }}</h1>
                 <div class="muted mt-1">{{ page_subtitle }}</div>
                 <div class="hero-status-shell">
@@ -2359,14 +2469,6 @@
                 </div>
                 {% elif page_precheck_summary %}
                 <div class="hero-stat">
-                    <div class="hero-stat-label">Workspace</div>
-                    <div class="hero-stat-value">{{ current_kit }}</div>
-                </div>
-                <div class="hero-stat">
-                    <div class="hero-stat-label">Module</div>
-                    <div class="hero-stat-value">{{ page_precheck_summary.get('name', title) }}</div>
-                </div>
-                <div class="hero-stat">
                     <div class="hero-stat-label">State</div>
                     <div class="hero-stat-value">{{ page_precheck_summary.get('state_label') or page_precheck_summary.get('label', 'Review') }}</div>
                 </div>
@@ -2379,14 +2481,10 @@
                     <div class="hero-stat-value">{{ page_precheck_summary.get('blockers', 0) }}</div>
                 </div>
                 <div class="hero-stat">
-                    <div class="hero-stat-label">Next Fix</div>
+                    <div class="hero-stat-label">Next</div>
                     <div class="hero-stat-value">{{ page_precheck_summary.next_blocker.label if page_precheck_summary.next_blocker else 'No blockers' }}</div>
                 </div>
                 {% else %}
-                <div class="hero-stat">
-                    <div class="hero-stat-label">Workspace</div>
-                    <div class="hero-stat-value">{{ current_kit }}</div>
-                </div>
                 <div class="hero-stat">
                     <div class="hero-stat-label">Subnet</div>
                     <div class="hero-stat-value">{{ cfg.get('shared_network', {}).get('subnet', '') or 'Not set' }}</div>
@@ -2483,14 +2581,20 @@
 
     function updateLocalActionPanel(elt, payload) {
         if (!elt || typeof elt.closest !== "function") return;
-        const panel = elt.closest("[data-action-panel]") || elt.closest(".card") || elt.closest("section");
-        if (!panel) return;
-        let card = panel.querySelector(":scope > .local-action-status");
+        const actionRoot = elt.closest("[data-action-title]") || elt.closest("form") || elt;
+        const host = actionRoot && actionRoot.parentElement ? actionRoot.parentElement : (elt.closest("[data-action-panel]") || elt.closest(".card") || elt.closest("section"));
+        if (!host || !actionRoot) return;
+        let card = actionRoot.nextElementSibling && actionRoot.nextElementSibling.classList && actionRoot.nextElementSibling.classList.contains("local-action-status")
+            ? actionRoot.nextElementSibling
+            : null;
         if (!card) {
             card = document.createElement("div");
-            card.className = "result local-action-status";
-            card.style.marginBottom = "1rem";
-            panel.insertBefore(card, panel.firstElementChild || null);
+            card.className = "result local-action-status action-result-inline";
+            if (actionRoot.parentNode) {
+                actionRoot.parentNode.insertBefore(card, actionRoot.nextSibling);
+            } else {
+                host.appendChild(card);
+            }
         }
         card.innerHTML = [
             '<div class="flex items-center justify-between gap-3">',

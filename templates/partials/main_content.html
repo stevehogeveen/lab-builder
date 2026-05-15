@@ -19,14 +19,16 @@
     </section>
     {% endif %}
     {% if action_feedback and not suppress_action_feedback_banner %}
-    <section class="card receipt-banner">
-        <div class="flex items-center justify-between gap-3 mb-3">
-            <div class="text-lg font-semibold">{{ action_feedback.title }}</div>
+    <section class="card receipt-banner compact-action-receipt">
+        <div class="flex items-center justify-between gap-3 flex-wrap">
+            <div>
+                <div class="dashboard-kicker">What happened last</div>
+                <div class="font-semibold">{{ action_feedback.title }}</div>
+            </div>
             <span class="status {{ action_feedback.tone }}">{{ action_feedback.status_label }}</span>
         </div>
-        <div class="text-sm">{{ action_feedback.summary }}</div>
+        <div class="text-sm text-slate-400 mt-2">{{ action_feedback.summary }}</div>
         {% if action_feedback.outcomes %}
-        <div class="dashboard-kicker mt-4">What happened last</div>
         <div class="receipt-grid">
             {% for outcome in action_feedback.outcomes %}
             <div class="result" style="margin-top: 0;">{{ outcome }}</div>
