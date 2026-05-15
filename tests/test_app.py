@@ -24,6 +24,8 @@ from app.core.stage_registry import StageRegistry, CallableStagePlugin
 from app.stages.ilo.runtime import build_snmp_readback_checks, current_snmp_matches, verify_final_ilo_state
 import app.ilo as ilo_module
 import app.main as main
+import app.modules.cisco.routes as cisco_module_routes
+import app.modules.cisco.service as cisco_service
 from app.debug_bundle import redact_value
 
 
@@ -78,11 +80,18 @@ def test_upgrade_helper_and_ilo_page_show_ilo_upgrade_actions(client):
     assert response.status_code == 200
     assert "Plan iLO upgrade" in response.text
     assert "Run iLO upgrade" in response.text
+    assert "iLO upgrade status" in response.text
 
     response = client.get("/ilo")
     assert response.status_code == 200
     assert "iLO firmware upgrade" in response.text
     assert "Run iLO upgrade" in response.text
+    assert "iLO upgrade status" in response.text
+
+    response = client.get("/ilo-upgrade-activity")
+    assert response.status_code == 200
+    assert "iLO upgrade status" in response.text
+    assert "progress-bar" in response.text
 
 
 def test_upgrade_helper_shows_netapp_and_cisco_upgrade_actions(client):
@@ -100,6 +109,76 @@ def test_upgrade_helper_shows_netapp_and_cisco_upgrade_actions(client):
     assert "Review Cisco upgrade plan" in response.text
     assert "Run Cisco upgrade" in response.text
     assert "Upgrade Helper" in response.text
+
+
+def test_cisco_discover_console_surfaces_permission_denied(client, monkeypatch):
+    monkeypatch.setattr(
+        cisco_module_routes.service,
+        "discover_console",
+        lambda _context: {
+            "ok": False,
+            "error": "No Cisco console prompt was detected.",
+            "warnings": [],
+            "candidates": [],
+            "probe_results": [
+                {
+                    "port": "/dev/ttyUSB0",
+                    "baud": 9600,
+                    "description": "USB serial",
+                    "hardware_id": "USB VID:PID=067B:2303",
+                    "manufacturer": "Prolific",
+                    "prompt_type": "",
+                    "score": 0,
+                    "error": "[Errno 13] Permission denied: '/dev/ttyUSB0'",
+                }
+            ],
+            "diagnostics": {
+                "serial_imported": True,
+                "ordered_ports": ["/dev/ttyUSB0"],
+                "group_names": ["administrator", "plugdev"],
+                "permission_denied": True,
+                "error_summary": "The Lab Builder process can see the serial adapter but cannot open it. The server user needs access to the serial device group.",
+            },
+        },
+    )
+
+    response = client.post("/modules/cisco/discover-console")
+
+    assert response.status_code == 200
+    assert "Host permission needed" in response.text
+    assert "cannot open it" in response.text
+    assert "Permission denied" in response.text
+
+    cfg = main.load_kit_config()
+    assert "cannot open it" in cfg["cisco_switch"]["last_discovery_error"]
+
+
+def test_cisco_fix_serial_permissions_renders_password_prompt_and_result(client, monkeypatch):
+    monkeypatch.setattr(
+        cisco_module_routes.service,
+        "fix_serial_permissions",
+        lambda _context, _password: {
+            "ok": True,
+            "error": "",
+            "applied": ["Added administrator to dialout."],
+            "warnings": ["Lab Builder must be restarted from a fresh login or service session before the dialout group membership applies to the running process."],
+            "restart_required": True,
+            "diagnostics": {
+                "permission_denied": True,
+                "group_names": ["administrator"],
+                "ordered_ports": ["/dev/ttyUSB0"],
+            },
+        },
+    )
+
+    response = client.post("/modules/cisco/fix-serial-permissions", data={"cisco_host_sudo_password": "pw"})
+
+    assert response.status_code == 200
+    assert "Serial permissions updated" in response.text
+    assert "Fix serial access" in response.text
+
+    cfg = main.load_kit_config()
+    assert cfg["cisco_switch"]["last_host_fix"]["ok"] is True
 
 
 def test_upgrade_helper_preserves_post_upgrade_ilo_version_over_stale_live_snapshot(monkeypatch):
@@ -1358,6 +1437,46 @@ def test_save_global_settings_updates_shared_defaults(client):
     assert cfg["included"]["storage"] is True
 
 
+def test_save_global_settings_preserves_module_fields_when_form_is_shared_only(client):
+    cfg = main.default_config()
+    cfg["site"]["name"] = "Shared Only Kit"
+    cfg["ip_plan"].update({"ilo": "10.10.8.11", "esxi": "10.10.8.10", "netapp": "10.10.8.45"})
+    cfg["included"].update({"ilo": True, "storage": True, "netapp": True})
+    cfg["netapp"].update({"host": "10.10.8.45", "username": "admin", "password": "secret", "storage_protocol": "iscsi"})
+    cfg["cisco_switch"].update({"hostname": "sw01", "username": "admin", "password": "switchsecret"})
+    main.save_kit_config(cfg)
+
+    response = client.post(
+        "/save-global-settings",
+        data={
+            "return_page": "global_settings",
+            "site_name": "Shared Only Kit",
+            "shared_subnet": "10.10.8.0/24",
+            "gateway_ip": "10.10.8.1",
+            "dns1": "1.1.1.1",
+            "dns2": "8.8.8.8",
+            "dns3": "",
+            "dns4": "",
+            "snmp_v3_username": "snmpuser",
+            "snmp_v3_auth_protocol": "SHA",
+            "snmp_v3_auth_password": "authsecret",
+            "snmp_v3_priv_protocol": "AES",
+            "snmp_v3_priv_password": "privsecret",
+        },
+    )
+
+    assert response.status_code == 200
+    saved = main.load_kit_config("Shared-Only-Kit")
+    assert saved["shared_network"]["subnet"] == "10.10.8.0/24"
+    assert saved["ip_plan"]["gateway"] == "10.10.8.1"
+    assert saved["ip_plan"]["ilo"] == "10.10.8.11"
+    assert saved["ip_plan"]["netapp"] == "10.10.8.45"
+    assert saved["included"]["netapp"] is True
+    assert saved["netapp"]["host"] == "10.10.8.45"
+    assert saved["netapp"]["password"] == "secret"
+    assert saved["cisco_switch"]["password"] == "switchsecret"
+
+
 def test_save_global_settings_persists_additional_snmp_users(client):
     response = client.post(
         "/save-global-settings",
@@ -2030,11 +2149,14 @@ def test_global_settings_and_workflow_pages_show_defaults_and_dependencies(clien
     assert global_response.status_code == 200
     assert "Use a single printable name, 32 characters or less." in global_response.text
     assert "Global Settings" in global_response.text
-    assert "Default addresses" in global_response.text
     assert "Shared DNS and alerts" in global_response.text
     assert "Advanced SNMPv3 users" in global_response.text
-    assert "Advanced kit pages" in global_response.text
     assert "Save shared defaults" in global_response.text
+    assert "Default addresses" not in global_response.text
+    assert "Advanced kit pages" not in global_response.text
+    assert 'name="esxi_ip"' not in global_response.text
+    assert 'name="netapp_host"' not in global_response.text
+    assert 'name="cisco_switch_hostname"' not in global_response.text
     assert "Open reports &amp; technical details" not in global_response.text
 
     esxi_response = client.get("/esxi")
@@ -4295,6 +4417,47 @@ def test_execute_real_single_esxi_scope_uses_registry_executor(monkeypatch):
     ]
     final_job = main.load_job(kit_name)
     assert final_job.get("stage_statuses", {}).get("esxi") == "completed"
+
+
+def test_execute_real_single_cisco_scope_applies_approved_plan(monkeypatch):
+    cfg = main.default_config()
+    cfg["site"]["name"] = "Single Cisco Scope Kit"
+    cfg["cisco_switch"].update(
+        {
+            "management_ip": "10.10.8.2",
+            "ip": "10.10.8.2",
+            "username": "admin",
+            "password": "secret",
+            "last_ssh_test": {"ok": True},
+            "config_approval": {"state": "approved", "mode": "full"},
+        }
+    )
+    main.save_kit_config(cfg)
+    kit_name = main.sanitize_kit_name(cfg["site"]["name"])
+    main.initialize_background_job(kit_name, "cisco_switch")
+    calls = []
+    launch_options = main.build_execution_launch_options(cfg, "cisco_switch")
+    assert launch_options["real"]["scope"] == "cisco_switch"
+    assert main.execution_mode_for_scope("cisco_switch")["key"] == "real"
+
+    class FakeCiscoService:
+        def preview_config(self, context, mode="full", selected_ports=None):
+            calls.append(("preview", mode, (context.get("cfg") or {}).get("cisco_switch", {}).get("management_ip")))
+            return {"ok": True, "config": "hostname sw01", "validation": {"ok": True, "errors": [], "warnings": []}}
+
+        def apply_config(self, context, mode="full", selected_ports=None):
+            calls.append(("apply", mode, (context.get("cfg") or {}).get("cisco_switch", {}).get("management_ip")))
+            return {"ok": True, "applied": True, "config": "hostname sw01", "validation": {"ok": True, "errors": [], "warnings": []}}
+
+    monkeypatch.setattr(cisco_service, "CiscoModuleService", FakeCiscoService)
+
+    main.execute_real_job_in_background(cfg, "cisco_switch")
+
+    assert calls == [("preview", "full", "10.10.8.2"), ("apply", "full", "10.10.8.2")]
+    final_job = main.load_job(kit_name)
+    assert final_job.get("stage_statuses", {}).get("cisco_switch") == "completed"
+    saved = main.load_kit_config()
+    assert saved["cisco_switch"]["last_cisco_action"]["applied"] is True
 
 
 def test_initialize_background_job_sets_stage_statuses_for_selected_scope():
@@ -10915,9 +11078,108 @@ def test_dashboard_load_previous_kit_uses_saved_kit_dropdown(client):
 
     assert response.status_code == 200
     assert 'name="selected_kit"' in response.text
+    assert "Switch active kit" in response.text
     selector_section = response.text.split('name="selected_kit"', 1)[1]
     assert ">Older-Dash-Kit<" in selector_section
     assert ">Primary-Dash-Kit<" not in selector_section
+
+
+def test_cisco_page_separates_live_state_from_desired_template(client):
+    cfg = main.default_config()
+    cfg["site"]["name"] = "Cisco State Kit"
+    cfg["cisco_switch"]["last_discovered_version"] = "17.09.04a"
+    cfg["cisco_switch"]["last_discovered_at"] = "2026-05-14T12:00:00+00:00"
+    cfg["cisco_switch"]["last_port_discovery"] = {
+        "interfaces": {
+            "GigabitEthernet1/0/24": {"status": "connected", "vlan": "10", "description": "Live Uplink"},
+        }
+    }
+    cfg["cisco_switch"]["last_running_config_backup"] = "interface GigabitEthernet1/0/24"
+    main.save_kit_config(cfg)
+
+    response = client.get("/cisco")
+
+    assert response.status_code == 200
+    assert "Current step" in response.text
+    assert "Test console access" in response.text
+    assert "Configure IP using console" in response.text
+    assert "Run Cisco upgrade" not in response.text
+    assert "Ports and config" in response.text
+    assert "GigabitEthernet1/0/24" in response.text
+
+
+def test_cisco_approve_config_plan_includes_switch_for_run_center(client, monkeypatch):
+    cfg = main.default_config()
+    cfg["site"]["name"] = "Cisco Approval Kit"
+    cfg["included"]["cisco_switch"] = False
+    cfg["cisco_switch"].update(
+        {
+            "last_ssh_test": {"ok": True},
+            "last_discovered_version": "17.09.04a",
+            "upgrade": {"last_plan": {"comparison": "already_current"}},
+            "ports": {"GigabitEthernet1/0/1": {"profile": "client_device"}},
+        }
+    )
+    main.save_kit_config(cfg)
+
+    monkeypatch.setattr(
+        cisco_module_routes.service,
+        "preview_config",
+        lambda _context, mode="full", selected_ports=None: {
+            "ok": True,
+            "config": "hostname sw01\nusername admin secret ********",
+            "validation": {"ok": True, "errors": [], "warnings": []},
+        },
+    )
+
+    response = client.post("/modules/cisco/approve-config-plan", data={"mode": "full"})
+
+    assert response.status_code == 200
+    assert "Cisco config plan approved" in response.text
+    saved = main.load_kit_config()
+    assert saved["included"]["cisco_switch"] is True
+    assert saved["cisco_switch"]["config_approval"]["state"] == "approved"
+
+
+def test_cisco_discover_version_uses_posted_management_fields(client, monkeypatch):
+    cfg = main.default_config()
+    cfg["site"]["name"] = "Cisco Posted State Kit"
+    cfg["cisco_switch"]["ip"] = ""
+    cfg["cisco_switch"]["management_ip"] = ""
+    cfg["cisco_switch"]["username"] = ""
+    cfg["cisco_switch"]["password"] = ""
+    main.save_kit_config(cfg)
+
+    def fake_discover(context):
+        cisco_cfg = (context.get("cfg") or {}).get("cisco_switch") or {}
+        assert cisco_cfg.get("ip") == "10.10.8.2"
+        assert cisco_cfg.get("username") == "admin"
+        assert cisco_cfg.get("password") == "secret"
+        return {
+            "ok": True,
+            "target": "10.10.8.2",
+            "version": "17.09.04a",
+            "raw_excerpt": "Cisco IOS XE Software, Version 17.09.04a",
+            "model": "C9300-48P",
+            "platform": "C9300-UNIVERSALK9-M",
+            "hostname": "sw01",
+            "warnings": [],
+        }
+
+    monkeypatch.setattr(cisco_module_routes.service, "discover", fake_discover)
+
+    response = client.post(
+        "/modules/cisco/discover-version",
+        data={
+            "cisco_switch_hostname": "sw01",
+            "cisco_switch_username": "admin",
+            "cisco_switch_password": "secret",
+            "cisco_management_ip": "10.10.8.2",
+        },
+    )
+
+    assert response.status_code == 200
+    assert "17.09.04a" in response.text
 
 
 def test_dashboard_job_status_lists_passed_and_failed_with_dates(client):
@@ -11839,12 +12101,12 @@ def test_build_default_ip_plan_uses_expected_offsets():
     }
 
 
-def test_global_settings_renders_netapp_fields_and_execution_includes_netapp_scope(client):
+def test_global_settings_omits_module_specific_fields_and_execution_includes_netapp_scope(client):
     global_settings = client.get("/global-settings")
     assert global_settings.status_code == 200
-    assert 'name="netapp_host"' in global_settings.text
-    assert 'name="netapp_storage_protocol"' in global_settings.text
-    assert 'name="included_netapp"' in global_settings.text
+    assert 'name="netapp_host"' not in global_settings.text
+    assert 'name="netapp_storage_protocol"' not in global_settings.text
+    assert 'name="included_netapp"' not in global_settings.text
 
     execution = client.get("/execution")
     assert execution.status_code == 200

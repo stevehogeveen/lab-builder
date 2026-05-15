@@ -5,6 +5,9 @@
             <span class="status progress" id="page-action-status-label">Working</span>
         </div>
         <div class="text-sm text-slate-300" id="page-action-status-summary">The page will update when this action finishes.</div>
+        <div class="progress-shell">
+            <div class="progress-bar" id="page-action-status-bar" style="width: 0%;"></div>
+        </div>
     </div>
     {% if error_message %}
     <section class="global-warning-popup" role="alert" aria-live="assertive" tabindex="-1">

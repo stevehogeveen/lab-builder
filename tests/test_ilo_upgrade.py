@@ -74,17 +74,23 @@ def test_execute_ilo_upgrade_updates_cached_inventory():
             return {"manager_firmware": self.version}
 
     fake = FakeClient()
+    events = []
     result = execute_ilo_upgrade(
         cfg,
         media_scan,
         build_client=lambda **_: fake,
         wait_timeout=2,
         poll_interval=0.01,
+        progress=events.append,
     )
 
     assert result["target_version"] == "1.76"
     assert cfg["upgrade_inventory"]["ilo"]["current_version"] == "1.76"
     assert cfg["ilo"]["upgrade"]["last_result"]["status"] == "completed"
+    phases = [event["phase"] for event in events]
+    assert phases[:3] == ["precheck", "upload", "verify"]
+    assert phases[-1] == "complete"
+    assert events[-1]["progress_percent"] == 100
 
 
 def test_execute_ilo_upgrade_blocks_when_prechecks_fail():

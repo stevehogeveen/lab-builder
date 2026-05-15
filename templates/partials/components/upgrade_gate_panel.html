@@ -1,0 +1,53 @@
+{% set gate_entry = ((upgrade_helper_summary.get('planner', {}).get('entries', []) | selectattr('key', 'equalto', upgrade_device_key) | list | first) | default({}, true)) if upgrade_helper_summary else {} %}
+{% set gate_override = upgrade_helper_summary.get('overrides', {}).get(upgrade_device_key) if upgrade_helper_summary else false %}
+{% set gate_blocks = gate_entry and gate_entry.get('blocks_run') %}
+{% set gate_title = 'iLO firmware upgrade' if upgrade_device_key == 'ilo' else upgrade_device_label ~ ' version gate' %}
+<section class="card identity-soft-card">
+    <div class="flex items-start justify-between gap-4">
+        <div>
+            <div class="text-lg font-semibold">{{ gate_title }}</div>
+            <div class="text-sm text-slate-400 mt-1">Upgrade Helper tracks the matched media and this page shows whether the saved version is allowed to continue configuration setup.</div>
+        </div>
+        <span class="status {{ 'pending' if gate_blocks else ('progress' if gate_override else 'ready') }}">{{ 'Blocked' if gate_blocks else ('Override' if gate_override else 'Ready') }}</span>
+    </div>
+    <div class="grid grid-cols-1 md:grid-cols-4 gap-4 mt-4">
+        <div class="ops-strip-card" style="margin-top: 0;">
+            <div class="dashboard-kicker">Current</div>
+            <div class="font-semibold">{{ gate_entry.get('current_version') or 'Unknown' }}</div>
+            {% if gate_entry.get('current_source') %}<div class="text-xs text-slate-400 mt-1">{{ gate_entry.get('current_source') }}</div>{% endif %}
+        </div>
+        <div class="ops-strip-card" style="margin-top: 0;">
+            <div class="dashboard-kicker">Needed</div>
+            <div class="font-semibold">{{ gate_entry.get('media_version') or 'No media' }}</div>
+            {% if gate_entry.get('media_filename') %}<div class="text-xs text-slate-400 mt-1 truncate-wrap">{{ gate_entry.get('media_filename') }}</div>{% endif %}
+        </div>
+        <div class="ops-strip-card" style="margin-top: 0;">
+            <div class="dashboard-kicker">Policy</div>
+            <div class="font-semibold">{{ (gate_entry.get('policy') or 'block') | title }}</div>
+        </div>
+        <div class="ops-strip-card" style="margin-top: 0;">
+            <div class="dashboard-kicker">Decision</div>
+            <div class="font-semibold">{{ (gate_entry.get('comparison') or 'not checked') | replace('_', ' ') | title }}</div>
+        </div>
+    </div>
+    {% if gate_entry.get('compatibility_summary') %}
+    <div class="text-sm mt-4">{{ gate_entry.get('compatibility_summary') }}</div>
+    {% endif %}
+    {% if gate_entry.get('recommended_action') %}
+    <div class="text-sm text-slate-400 mt-2">{{ gate_entry.get('recommended_action') }}</div>
+    {% endif %}
+    <div class="actions mt-4">
+        <a class="btn" href="/upgrade-helper">Open Upgrade Helper</a>
+        {% if upgrade_device_key == 'ilo' and gate_entry %}
+        <button class="btn" type="button" hx-post="/plan-ilo-upgrade" hx-vals='{"return_page":"{{ upgrade_return_page }}"}' hx-target="#main-content" hx-swap="outerHTML">Plan iLO upgrade</button>
+        <button class="btn btn-primary" type="button" hx-post="/run-ilo-upgrade" hx-vals='{"return_page":"{{ upgrade_return_page }}"}' hx-target="#main-content" hx-swap="outerHTML" data-action-title="Starting iLO upgrade" data-action-start="Queueing iLO firmware upload and verification. The iLO upgrade status panel will keep updating." data-action-complete="iLO upgrade worker started. Watch the status panel.">Run iLO upgrade</button>
+        {% endif %}
+        <label class="check card card-compact">
+            <input type="checkbox" name="override_upgrade_gate" value="true" {% if gate_override %}checked{% endif %} hx-post="/save-upgrade-override" hx-target="#main-content" hx-swap="outerHTML" hx-vals='{"return_page":"{{ upgrade_return_page }}","device_key":"{{ upgrade_device_key }}"}' hx-trigger="change">
+            Override upgrade gate for config setup
+        </label>
+    </div>
+</section>
+{% if upgrade_device_key == 'ilo' %}
+{% include "partials/components/ilo_upgrade_activity.html" %}
+{% endif %}

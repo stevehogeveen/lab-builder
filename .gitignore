@@ -7,6 +7,7 @@ artifacts/exports/
 artifacts/generated/
 artifacts/history/
 artifacts/jobs/
+artifacts/logs/
 artifacts/runs/
 artifacts/debug-bundles/
 artifacts/lab-builder.sqlite3

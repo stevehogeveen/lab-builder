@@ -262,7 +262,7 @@
         const rawNode = document.getElementById("execution-live-logs");
         if (rawNode) {
             rawNode.textContent = rawLogs.length
-                ? rawLogs.join("\n")
+                ? rawLogs.slice().reverse().join("\n")
                 : "Nothing is running right now. Start a preview or a real run to see live updates here.";
         }
     }
@@ -552,6 +552,7 @@
         const title = document.getElementById("page-action-status-title");
         const label = document.getElementById("page-action-status-label");
         const summary = document.getElementById("page-action-status-summary");
+        const bar = document.getElementById("page-action-status-bar");
         card.style.display = "";
         if (title) title.textContent = payload.title || "Working";
         if (label) {
@@ -559,6 +560,7 @@
             label.className = `status ${payload.tone || "progress"}`;
         }
         if (summary) summary.textContent = payload.summary || "";
+        if (bar) bar.style.width = `${payload.progress == null ? 35 : payload.progress}%`;
         scrollIntoViewSoon(card);
     }
 
@@ -657,10 +659,6 @@
         const card = document.getElementById("execution-live-card");
         if (!card || !opts || !opts.kitName) return;
         const liveLogDetails = card.querySelector(".execution-live-log");
-        const existingRawLogs = document.getElementById("execution-live-logs");
-        if (existingRawLogs) {
-            updateExecutionLogViews(existingRawLogs.textContent.split("\n"));
-        }
 
         const proto = window.location.protocol === "https:" ? "wss" : "ws";
         const wsUrl = `${proto}://${window.location.host}/ws/job/${encodeURIComponent(opts.kitName)}`;
@@ -717,13 +715,22 @@
     }
     document.body && document.body.addEventListener("htmx:afterSwap", scrollToHashTargetSoon);
     if (document.body) {
+        function isBackgroundStatusPoll(event) {
+            const detail = event.detail || {};
+            const target = detail.target;
+            const path = detail.pathInfo && detail.pathInfo.requestPath || detail.requestConfig && detail.requestConfig.path || "";
+            if (String(path).includes("upgrade-activity")) return true;
+            return Boolean(target && typeof target.closest === "function" && target.closest("#cisco-upgrade-activity, #netapp-upgrade-activity, #ilo-upgrade-activity"));
+        }
         document.body.addEventListener("htmx:beforeRequest", function (event) {
+            if (isBackgroundStatusPoll(event)) return;
             const target = event.detail && event.detail.target;
             if (!target || target.id !== "main-content") return;
             const payload = deriveActionPayload(event.detail.requestConfig || {});
-            updateActionStatusCard({ title: payload.title, summary: payload.start, label: "Working", tone: "progress" });
+            updateActionStatusCard({ title: payload.title, summary: payload.start, label: "Working", tone: "progress", progress: 35 });
         });
         document.body.addEventListener("htmx:afterRequest", function (event) {
+            if (isBackgroundStatusPoll(event)) return;
             const target = event.detail && event.detail.target;
             if (!target || target.id !== "main-content") return;
             const payload = deriveActionPayload(event.detail.requestConfig || {});
@@ -733,6 +740,7 @@
                 summary: successful ? payload.complete : "The action needs attention. Review the message on the page for details.",
                 label: successful ? "Done" : "Warning",
                 tone: successful ? "ready" : "pending",
+                progress: 100,
             });
         });
     }

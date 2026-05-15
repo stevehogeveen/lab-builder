@@ -96,12 +96,12 @@
             </div>
         </div>
     </div>
-    <details class="execution-live-log execution-technical-log mt-4" {% if activity_status in ['running', 'failed', 'blocked'] %}open{% endif %}>
+    <details class="execution-live-log execution-technical-log log-drawer mt-4" {% if activity_status in ['running', 'failed', 'blocked'] %}open{% endif %}>
         <summary class="summary-row">
             <span class="text-sm font-bold text-slate-300">Technical log</span>
             <span class="status progress">raw</span>
         </summary>
-        <div class="codeblock max-h-96 overflow-y-auto mt-3">{% if events %}{% for event in events %}{{ event.get('timestamp', '') }} [{{ event.get('phase', 'event') }}] {{ event.get('message', '') }}{% if event.get('job_uuid') %} | job={{ event.get('job_uuid') }}{% endif %}{% if event.get('job_state') %} | state={{ event.get('job_state') }}{% endif %}
+        <div class="codeblock max-h-96 overflow-y-auto mt-3">{% if events %}{% for event in events | reverse %}{{ event.get('timestamp', '') }} [{{ event.get('phase', 'event') }}] {{ event.get('message', '') }}{% if event.get('job_uuid') %} | job={{ event.get('job_uuid') }}{% endif %}{% if event.get('job_state') %} | state={{ event.get('job_state') }}{% endif %}
 {% if event.get('validation_results') %}{% for result in event.get('validation_results') %}  - {{ result.get('status', '') }}: {{ result.get('update_check', '') }} | {{ result.get('issue', {}).get('message', '') }} | {{ result.get('action', {}).get('message', '') }}
 {% endfor %}{% endif %}{% endfor %}{% else %}Nothing is running right now. Start an ONTAP upgrade to see live updates here.{% endif %}</div>
     </details>

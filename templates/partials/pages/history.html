@@ -5,7 +5,7 @@
                 <h2 class="text-2xl font-bold title-with-icon"><span class="page-icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 8v5l3 2"/><circle cx="12" cy="12" r="8"/><path d="M12 4v2"/><path d="M12 18v2"/></svg></span><span>Run History</span></h2>
                 <div class="text-sm text-slate-400">A friendlier activity feed first, with deeper execution detail still available when you need it.</div>
             </div>
-            <a class="btn btn-primary" href="/configs">Open Reports</a>
+            <a class="btn" href="/configs">Open Reports</a>
         </div>
 
         <div class="grid grid-cols-1 md:grid-cols-3 gap-3">
@@ -85,7 +85,7 @@
                         <form hx-post="/view-report" hx-target="#main-content" hx-swap="outerHTML">
                             <input type="hidden" name="return_page" value="history">
                             <input type="hidden" name="report_path" value="{{ bundle.run_summary_path }}">
-                            <button class="btn btn-primary" type="submit">Open run summary</button>
+                            <button class="btn" type="submit">Open run summary</button>
                         </form>
                         {% endif %}
                         <a class="btn" href="/configs?report_query={{ bundle.related_reports_query | urlencode }}">Related reports</a>
@@ -128,7 +128,7 @@
                         <form hx-post="/view-report" hx-target="#main-content" hx-swap="outerHTML">
                             <input type="hidden" name="return_page" value="history">
                             <input type="hidden" name="report_path" value="{{ item.get('run_summary_path') }}">
-                            <button class="btn btn-primary" type="submit">Open run summary</button>
+                            <button class="btn" type="submit">Open run summary</button>
                         </form>
                         {% endif %}
                         <a class="btn" href="/configs?report_query={{ (item.get('config_summary', {}).get('storage_plan_path') or item.get('scope', '')) | urlencode }}">Related reports</a>
@@ -143,7 +143,7 @@
                     <div class="truncate-wrap" title="{{ item.get('current_stage', '') or item.get('event', '') or 'Not recorded' }}"><span class="text-slate-400">Full story:</span> {{ item.get('current_stage', '') or item.get('event', '') or 'Not recorded' }}</div>
                     <div><span class="text-slate-400">Completed:</span> {{ item.get('completed_steps', 0) }} / {{ item.get('total_steps', 0) }}</div>
                     {% if item.get('config_summary') %}
-                    <details>
+                    <details class="log-drawer">
                         <summary class="summary-row">
                             <span class="text-sm font-bold text-slate-300">Config used</span>
                             <span class="status progress">details</span>
@@ -174,7 +174,7 @@
                     {% endif %}
                     {% set cfgsum = item.get('config_summary', {}) %}
                     {% if cfgsum.get('dns_apply_status') or cfgsum.get('snmp_apply_status') or cfgsum.get('ilo_reset_status') or cfgsum.get('storage_server_reboot_status') %}
-                    <details>
+                    <details class="log-drawer">
                         <summary class="summary-row">
                             <span class="text-sm font-bold text-slate-300">Applied results</span>
                             <span class="status progress">details</span>

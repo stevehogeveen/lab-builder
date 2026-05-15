@@ -179,7 +179,7 @@
                     {% if storage_latest_receipt.run_summary_path %}
                     <form hx-post="/view-run-summary" hx-target="#main-content" hx-swap="outerHTML">
                         <input type="hidden" name="report_path" value="{{ storage_latest_receipt.run_summary_path }}">
-                        <button class="btn btn-primary" type="submit">Open log</button>
+                        <button class="btn" type="submit">Open log</button>
                     </form>
                     {% endif %}
                     <a class="btn" href="/configs?report_query={{ storage_latest_receipt.related_reports_query | urlencode }}">Related reports</a>
@@ -273,7 +273,7 @@
                 <div class="progress-shell mb-3">
                     <div id="storage-progress-bar" class="progress-bar" style="width: {{ job.get('progress_percent', 0) }}%;"></div>
                 </div>
-                <details>
+                <details class="log-drawer">
                     <summary class="summary-row">
                         <span class="text-sm font-bold text-slate-300">View live step log</span>
                         <span class="status progress">details</span>
@@ -304,7 +304,7 @@
             <div class="result" style="margin-top: 0;">No storage read has been run on this page yet.</div>
             <form hx-post="/read-current-storage" hx-target="#main-content" hx-swap="outerHTML" class="actions mt-3" data-action-title="Reading current storage" data-action-start="Connecting to iLO and reading the current controller, volumes, and drives.">
                 <input type="hidden" name="return_page" value="storage">
-                <button class="btn btn-primary action-button" type="submit">Display current storage setup</button>
+                <button class="btn action-button" type="submit">Display current storage setup</button>
             </form>
             {% endif %}
             {% if storage_discovery %}

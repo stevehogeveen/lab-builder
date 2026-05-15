@@ -1,0 +1,68 @@
+{% set cisco_upgrade = cfg.get('cisco_switch', {}).get('upgrade', {}) %}
+{% set activity = cisco_upgrade.get('activity', {}) %}
+{% set result = cisco_upgrade.get('last_result', {}) %}
+{% set activity_status = activity.get('status') or result.get('status') or 'not_started' %}
+{% set progress_percent = activity.get('progress_percent', 0) %}
+{% if activity_status in ['completed', 'failed', 'blocked'] %}
+    {% set progress_percent = 100 %}
+{% endif %}
+{% set events = activity.get('events') or [] %}
+<section
+    class="card execution-live-card"
+    id="cisco-upgrade-activity"
+    {% if activity_status == 'running' %}hx-get="/modules/cisco/upgrade-activity" hx-trigger="every 5s" hx-swap="outerHTML"{% endif %}
+>
+    <div class="flex items-center justify-between gap-3 mb-4">
+        <div class="text-lg font-semibold">Cisco upgrade status</div>
+        <span class="status {{ 'ready' if activity_status == 'completed' else ('pending' if activity_status in ['failed', 'blocked'] else ('progress' if activity_status == 'running' else 'ready')) }}">{{ activity_status | replace('_', ' ') | title }}</span>
+    </div>
+    <div class="ops-strip-grid mb-4">
+        <div class="ops-strip-card execution-live-summary">
+            <div class="text-xs font-bold uppercase text-slate-400 mb-1">Current step</div>
+            <div class="text-sm font-semibold">{{ activity.get('phase') or 'Idle' }}</div>
+        </div>
+        <div class="ops-strip-card execution-live-summary">
+            <div class="text-xs font-bold uppercase text-slate-400 mb-1">Progress</div>
+            <div class="text-sm font-semibold">{{ progress_percent }}%</div>
+        </div>
+        <div class="ops-strip-card execution-live-summary">
+            <div class="text-xs font-bold uppercase text-slate-400 mb-1">Image</div>
+            <div class="text-sm font-semibold">{{ (cisco_upgrade.get('last_plan') or {}).get('media_filename') or result.get('media_filename') or 'Not selected' }}</div>
+        </div>
+        <div class="ops-strip-card execution-live-summary">
+            <div class="text-xs font-bold uppercase text-slate-400 mb-1">Target</div>
+            <div class="text-sm font-semibold">{{ (cisco_upgrade.get('last_plan') or {}).get('host') or result.get('host') or 'Not set' }}</div>
+        </div>
+    </div>
+    <div class="progress-shell mb-4">
+        <div class="progress-bar" style="width: {{ progress_percent }}%;"></div>
+    </div>
+    <div class="ops-row-list">
+        <div class="ops-row-item">
+            <div class="ops-row-copy">
+                <div class="dashboard-kicker">Latest message</div>
+                <div class="font-semibold">{{ activity.get('message') or result.get('error') or 'No Cisco upgrade is running.' }}</div>
+                {% if activity.get('updated_at') %}<div class="text-sm text-slate-400 mt-1">{{ activity.get('updated_at') }}</div>{% endif %}
+            </div>
+        </div>
+        {% if result.get('error') %}
+        <div class="ops-row-item">
+            <div class="ops-row-copy">
+                <div class="dashboard-kicker">Last error</div>
+                <div class="text-sm text-amber-300 whitespace-pre-wrap">{{ result.get('error') }}</div>
+                {% if 'Administratively disabled' in result.get('error', '') %}
+                <div class="text-sm text-slate-300 mt-2">Reason: the switch accepted SSH but rejected SCP file transfer because the Cisco SCP server was disabled. Lab Builder now enables <span class="artifact-path">ip scp server enable</span> before copying the image.</div>
+                {% endif %}
+            </div>
+        </div>
+        {% endif %}
+    </div>
+    <details class="execution-live-log execution-technical-log log-drawer mt-4" {% if activity_status in ['running', 'failed', 'blocked'] %}open{% endif %}>
+        <summary class="summary-row">
+            <span class="text-sm font-bold text-slate-300">Upgrade log</span>
+            <span class="status progress">raw</span>
+        </summary>
+        <div class="codeblock max-h-96 overflow-y-auto mt-3">{% if events %}{% for event in events | reverse %}{{ event.get('timestamp', '') }} [{{ event.get('phase', 'event') }}] {{ event.get('message', '') }}
+{% endfor %}{% else %}Nothing is running right now. Start a Cisco upgrade to see live updates here.{% endif %}</div>
+    </details>
+</section>

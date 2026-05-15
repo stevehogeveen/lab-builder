@@ -1,87 +1,341 @@
 {% set cisco = (cisco_payload or {}).get('status', {}) %}
+{% set cisco_cfg = cfg.get('cisco_switch', {}) %}
+{% set upgrade_result = cisco_cfg.get('upgrade', {}).get('last_result', {}) %}
+{% set upgrade_plan = cisco_cfg.get('upgrade', {}).get('last_plan', {}) %}
+{% set cisco_gate_entry = ((upgrade_helper_summary.get('planner', {}).get('entries', []) | selectattr('key', 'equalto', 'cisco_switch') | list | first) | default({}, true)) if upgrade_helper_summary else {} %}
+{% set cisco_upgrade_override = upgrade_helper_summary.get('overrides', {}).get('cisco_switch') if upgrade_helper_summary else false %}
+{% set cisco_upgrade_blocked = cisco_gate_entry and cisco_gate_entry.get('blocks_run') %}
+{% set has_console = (cisco.console_port or cisco_cfg.get('console_port')) %}
+{% set has_management_ip = (cisco.management_ip or cisco.target or cisco_cfg.get('management_ip') or cisco_cfg.get('ip')) %}
+{% set has_ssh = cisco.last_ssh_test.get('ok') %}
+{% set has_version = cisco.last_discovered_version %}
+{% set upgrade_ready = upgrade_result.get('status') == 'completed' or cisco_upgrade_override or (not cisco_upgrade_blocked and cisco_gate_entry) or upgrade_plan.get('comparison') in ['current_enough', 'already_current', 'equal'] %}
+{% set approval = cisco.config_approval or {} %}
+{% set can_approve_config = has_ssh and has_version and upgrade_ready %}
+{% set console_check = cisco.last_console_bootstrap_check or {} %}
+{% set console_diag = cisco.last_console_diagnostics or {} %}
+{% set console_suggestions = cisco.last_console_suggestions or console_diag.get('suggestions', []) %}
+{% set console_error_summary = console_diag.get('error_summary') or cisco.last_discovery_error or cisco.last_cisco_action.get('error') %}
+{% set step = 1 %}
+{% if has_console and not has_ssh %}
+    {% set step = 2 %}
+{% elif has_ssh and not has_version %}
+    {% set step = 3 %}
+{% elif has_ssh and has_version and not upgrade_ready %}
+    {% set step = 4 %}
+{% elif can_approve_config and approval.get('state') != 'approved' %}
+    {% set step = 5 %}
+{% elif approval.get('state') == 'approved' %}
+    {% set step = 6 %}
+{% endif %}
+
 <section class="panel space-y-6">
+    <style>
+        .cisco-step-button { font-size: 0.9rem; padding: 0.65rem 0.85rem; min-height: 2.65rem; }
+        .cisco-big-title { font-size: clamp(1.2rem, 1.3vw, 1.5rem); line-height: 1.2; }
+        .cisco-access-line { display: flex; flex-wrap: wrap; gap: .75rem 1.25rem; color: var(--muted); font-size: .9rem; margin-top: .65rem; }
+    </style>
+
     <div>
-        <h2 class="text-2xl font-bold title-with-icon"><span class="page-icon icon-tone-progress" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M5 8h14"/><path d="M5 16h14"/><path d="M7 8v8"/><path d="M17 8v8"/><path d="M3 12h4"/><path d="M17 12h4"/></svg></span><span>Cisco setup</span></h2>
-        <div class="text-sm text-slate-400">Read the current switch version here, then let Upgrade Helper compare it against the best matching file under <span class="artifact-path">/media</span>.</div>
+        <h2 class="text-3xl font-bold title-with-icon"><span class="page-icon icon-tone-progress" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M5 8h14"/><path d="M5 16h14"/><path d="M7 8v8"/><path d="M17 8v8"/><path d="M3 12h4"/><path d="M17 12h4"/></svg></span><span>Cisco setup</span></h2>
     </div>
 
-    <section class="card identity-soft-card">
-        <div class="flex items-start justify-between gap-4">
-            <div>
-                <div class="text-lg font-semibold">Cisco version inventory</div>
-                <div class="text-sm text-slate-400 mt-1">This is read-only. It only captures the current software version and keeps the result for prebuild checks.</div>
+    <form class="space-y-6" hx-target="#main-content" hx-swap="outerHTML">
+        <section class="card identity-soft-card">
+            <div class="grid grid-cols-1 xl:grid-cols-[minmax(0,1fr)_auto] gap-5 items-center">
+                <div>
+                    <div class="dashboard-kicker">Current step</div>
+                    <div class="font-semibold cisco-big-title mt-2">
+                        {% if step == 1 %}Test console access{% elif step == 2 %}Configure IP from console{% elif step == 3 %}Read switch version{% elif step == 4 %}Resolve upgrade gate{% elif step == 5 %}Approve config for Run Center{% else %}Ready for Run Center{% endif %}
+                    </div>
+                    <div class="cisco-access-line">
+                        <span>Current IP: <strong>{{ has_management_ip or 'not set' }}</strong></span>
+                        <span>Console port: <strong>{{ has_console or 'not found' }}</strong></span>
+                    </div>
+                </div>
+                <div class="actions">
+                    <button class="btn cisco-step-button" type="button" hx-post="/modules/cisco/discover-console">Test console access</button>
+                    <button class="btn btn-primary cisco-step-button" type="submit" hx-post="/modules/cisco/bootstrap-management">Configure IP using console</button>
+                    <button class="btn cisco-step-button" type="submit" hx-post="/modules/cisco/test-ssh">Test SSH</button>
+                    <button class="btn cisco-step-button" type="submit" hx-post="/modules/cisco/discover-state">Read switch version</button>
+                    {% if step == 4 %}
+                    <a class="btn cisco-step-button" href="/upgrade-helper">Open Upgrade Helper</a>
+                    {% elif step == 5 %}
+                    <button class="btn cisco-step-button" type="submit" hx-post="/modules/cisco/preview-config" hx-vals='{"mode":"full"}'>Preview config</button>
+                    <button class="btn btn-primary cisco-step-button" type="submit" hx-post="/modules/cisco/approve-config-plan" hx-vals='{"mode":"full"}'>Approve for Run Center</button>
+                    {% elif step == 6 %}
+                    <a class="btn cisco-step-button" href="/execution">Open Run Center</a>
+                    {% endif %}
+                </div>
             </div>
-            <form hx-post="/modules/cisco/discover-version" hx-target="#main-content" hx-swap="outerHTML">
-                <button class="btn btn-primary" type="submit">Read Cisco version</button>
-            </form>
-        </div>
-        <div class="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-4 mt-4">
-            <div class="ops-strip-card" style="margin-top: 0;">
-                <div class="dashboard-kicker">Target</div>
-                <div class="font-semibold">{{ cisco.target or cfg.get('ip_plan', {}).get('switch', '') or 'Not set' }}</div>
-            </div>
-            <div class="ops-strip-card" style="margin-top: 0;">
-                <div class="dashboard-kicker">Username</div>
-                <div class="font-semibold">{{ cisco.username or cfg.get('cisco_switch', {}).get('username', '') or 'Not set' }}</div>
-            </div>
-            <div class="ops-strip-card" style="margin-top: 0;">
-                <div class="dashboard-kicker">Current version</div>
-                <div class="font-semibold">{{ cisco.last_discovered_version or 'Unknown' }}</div>
-            </div>
-            <div class="ops-strip-card" style="margin-top: 0;">
-                <div class="dashboard-kicker">Last read</div>
-                <div class="font-semibold">{{ cisco.last_discovered_at or 'Not run yet' }}</div>
-            </div>
-        </div>
-        {% if cisco.last_discovery_error %}
-        <div class="result mt-4">{{ cisco.last_discovery_error }}</div>
-        {% endif %}
-        {% if cisco.last_show_version %}
-        <details class="card card-compact mt-4">
-            <summary class="summary-row">
-                <span class="font-semibold">Last show version excerpt</span>
-            </summary>
-            <pre class="mt-3 whitespace-pre-wrap text-sm text-slate-300">{{ cisco.last_show_version }}</pre>
-        </details>
-        {% endif %}
-    </section>
+        </section>
 
-    {% set cisco_upgrade = cfg.get('cisco_switch', {}).get('upgrade', {}) %}
-    {% set cisco_upgrade_plan = cisco_upgrade.get('last_plan', {}) %}
-    {% set cisco_upgrade_result = cisco_upgrade.get('last_result', {}) %}
-    <section class="card identity-soft-card">
-        <div class="flex items-start justify-between gap-4">
-            <div>
-                <div class="text-lg font-semibold">Cisco software upgrade</div>
-                <div class="text-sm text-slate-400 mt-1">Planner and executor for the matched Cisco image under <span class="artifact-path">media/</span>. This path is implemented but still unproven on live hardware in this workspace.</div>
+        {% set upgrade_device_key = 'cisco_switch' %}
+        {% set upgrade_device_label = 'Cisco' %}
+        {% set upgrade_return_page = 'cisco' %}
+        {% include "partials/components/upgrade_gate_panel.html" %}
+
+        {% if console_diag.get('permission_denied') %}
+        <section class="card identity-soft-card">
+            <div class="font-semibold text-lg">Host permission needed</div>
+            <div class="text-sm text-slate-400 mt-1">{{ console_diag.get('error_summary') or 'The serial adapter exists, but the app process cannot open it.' }}</div>
+            <div class="grid grid-cols-1 md:grid-cols-[minmax(0,1fr)_auto] gap-3 mt-4 items-end">
+                <div>
+                    <label class="block text-sm font-bold text-slate-300 mb-2">Sudo password</label>
+                    <input type="password" name="cisco_host_sudo_password" value="" class="input" autocomplete="current-password">
+                </div>
+                <button class="btn btn-primary cisco-step-button" type="submit" hx-post="/modules/cisco/fix-serial-permissions">Fix serial access</button>
             </div>
-            <span class="status {{ 'ready' if cisco_upgrade_plan.get('ready') else 'progress' }}">{{ 'Ready' if cisco_upgrade_plan.get('ready') else 'Review' }}</span>
-        </div>
-        <div class="grid grid-cols-1 md:grid-cols-4 gap-4 mt-4">
-            <div class="ops-strip-card" style="margin-top: 0;">
-                <div class="dashboard-kicker">Current</div>
-                <div class="font-semibold">{{ cisco_upgrade_plan.get('current_version') or cisco.last_discovered_version or 'Unknown' }}</div>
-            </div>
-            <div class="ops-strip-card" style="margin-top: 0;">
-                <div class="dashboard-kicker">Matched media</div>
-                <div class="font-semibold">{{ cisco_upgrade_plan.get('media_version') or 'Not found' }}</div>
-            </div>
-            <div class="ops-strip-card" style="margin-top: 0;">
-                <div class="dashboard-kicker">Model</div>
-                <div class="font-semibold">{{ cfg.get('upgrade_inventory', {}).get('cisco_switch', {}).get('model') or 'Unknown' }}</div>
-            </div>
-            <div class="ops-strip-card" style="margin-top: 0;">
-                <div class="dashboard-kicker">Last result</div>
-                <div class="font-semibold">{{ cisco_upgrade_result.get('status', 'Not run') | replace('_', ' ') | title }}</div>
-            </div>
-        </div>
-        {% if cisco_upgrade_result.get('error') %}
-        <div class="result mt-4">{{ cisco_upgrade_result.get('error') }}</div>
+        </section>
         {% endif %}
-        <div class="actions mt-4">
-            <button class="btn" type="button" hx-post="/modules/cisco/plan-upgrade" hx-vals='{"return_page":"cisco"}' hx-target="#main-content" hx-swap="outerHTML">Review Cisco upgrade plan</button>
-            <button class="btn btn-primary" type="button" hx-post="/modules/cisco/run-upgrade" hx-vals='{"return_page":"cisco"}' hx-target="#main-content" hx-swap="outerHTML">Run Cisco upgrade</button>
-            <a class="btn" href="/upgrade-helper">Open Upgrade Helper</a>
+
+        {% if console_error_summary or console_suggestions or console_check.get('warnings') or approval.get('blockers') or upgrade_plan.get('blockers') %}
+        <section class="card identity-soft-card">
+            <div class="font-semibold text-lg">Needs attention</div>
+            {% if console_error_summary %}<div class="text-amber-300 mt-2">{{ console_error_summary }}</div>{% endif %}
+            {% for suggestion in console_suggestions %}<div class="text-slate-300 mt-2">Next: {{ suggestion }}</div>{% endfor %}
+            {% for warning in console_check.get('warnings', []) %}<div class="text-amber-300 mt-2">{{ warning }}</div>{% endfor %}
+            {% for blocker in approval.get('blockers', []) %}<div class="text-amber-300 mt-2">{{ blocker }}</div>{% endfor %}
+            {% for blocker in upgrade_plan.get('blockers', []) %}<div class="text-amber-300 mt-2">{{ blocker }}</div>{% endfor %}
+        </section>
+        {% endif %}
+
+        {% if console_diag or cisco.last_console_probe_results %}
+        <section class="card identity-soft-card">
+            <div class="flex flex-wrap items-start justify-between gap-3">
+                <div>
+                    <div class="font-semibold text-lg">Console connection result</div>
+                    <div class="text-sm text-slate-400 mt-1">{{ console_error_summary or 'Last console test completed.' }}</div>
+                </div>
+                <span class="status {{ 'ready' if cisco.last_console_candidates else 'pending' }}">{{ 'console found' if cisco.last_console_candidates else 'not connected' }}</span>
+            </div>
+            <div class="grid grid-cols-1 md:grid-cols-4 gap-3 mt-4">
+                <div class="metric-card">
+                    <span class="metric-label">Serial support</span>
+                    <strong>{{ 'Ready' if console_diag.get('serial_imported') else 'Missing' }}</strong>
+                </div>
+                <div class="metric-card">
+                    <span class="metric-label">Visible adapters</span>
+                    <strong>{{ (console_diag.get('ordered_ports') or []) | length }}</strong>
+                </div>
+                <div class="metric-card">
+                    <span class="metric-label">App user</span>
+                    <strong>{{ console_diag.get('user') or 'unknown' }}</strong>
+                </div>
+                <div class="metric-card">
+                    <span class="metric-label">Selected console</span>
+                    <strong>{{ has_console or 'none' }}</strong>
+                </div>
+            </div>
+            {% if cisco.last_console_probe_results %}
+            <div class="overflow-x-auto mt-4">
+                <table class="w-full text-sm">
+                    <thead>
+                        <tr class="text-left text-slate-400">
+                            <th class="py-2 pr-3">Port</th>
+                            <th class="py-2 pr-3">Baud</th>
+                            <th class="py-2 pr-3">Result</th>
+                            <th class="py-2 pr-3">Error</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for probe in cisco.last_console_probe_results %}
+                        <tr class="border-t border-slate-800">
+                            <td class="py-2 pr-3 font-semibold">{{ probe.port }}</td>
+                            <td class="py-2 pr-3">{{ probe.baud }}</td>
+                            <td class="py-2 pr-3">{{ probe.prompt_type or ('opened, no prompt' if not probe.error else 'probe failed') }}</td>
+                            <td class="py-2 pr-3 text-slate-400">{{ probe.error or 'none' }}</td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+            {% elif console_diag.get('ordered_ports') %}
+            <div class="text-sm text-slate-400 mt-4">Detected adapters: {{ console_diag.get('ordered_ports') | join(', ') }}</div>
+            {% endif %}
+        </section>
+        {% endif %}
+
+        <section class="card identity-soft-card">
+            <div class="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-4">
+                <div>
+                    <label class="block text-sm font-bold text-slate-300 mb-2">Console port</label>
+                    <select name="cisco_console_port" class="input" style="font-size: 1rem;">
+                        {% if not cisco.console_port %}<option value="">Select after test</option>{% endif %}
+                        {% for item in cisco.last_console_candidates %}
+                        <option value="{{ item.port }}" {% if item.port == cisco.console_port %}selected{% endif %}>{{ item.port }} @ {{ item.baud }}</option>
+                        {% endfor %}
+                        {% if cisco.console_port and not cisco.last_console_candidates %}<option value="{{ cisco.console_port }}" selected>{{ cisco.console_port }}</option>{% endif %}
+                    </select>
+                </div>
+                <div>
+                    <label class="block text-sm font-bold text-slate-300 mb-2">Management IP</label>
+                    <input type="text" name="cisco_management_ip" value="{{ cisco.management_ip or cisco.target or cfg.get('ip_plan', {}).get('switch', '') }}" class="input" style="font-size: 1rem;">
+                </div>
+                <div>
+                    <label class="block text-sm font-bold text-slate-300 mb-2">Gateway</label>
+                    <input type="text" name="cisco_gateway" value="{{ cisco.gateway or cfg.get('ip_plan', {}).get('gateway', '') }}" class="input" style="font-size: 1rem;">
+                </div>
+                <div>
+                    <label class="block text-sm font-bold text-slate-300 mb-2">VLAN</label>
+                    <input type="number" name="cisco_management_vlan" value="{{ cisco.management_vlan or 10 }}" class="input" style="font-size: 1rem;">
+                </div>
+                <div>
+                    <label class="block text-sm font-bold text-slate-300 mb-2">Subnet mask</label>
+                    <input type="text" name="cisco_subnet_mask" value="{{ cisco.subnet_mask or cisco_cfg.get('subnet_mask', '255.255.255.0') }}" class="input" style="font-size: 1rem;">
+                </div>
+                <div>
+                    <label class="block text-sm font-bold text-slate-300 mb-2">Username</label>
+                    <input type="text" name="cisco_switch_username" value="{{ cisco.username or cisco_cfg.get('username', 'admin') }}" class="input" style="font-size: 1rem;">
+                </div>
+                <div>
+                    <label class="block text-sm font-bold text-slate-300 mb-2">Password</label>
+                    <input type="password" name="cisco_switch_password" value="{{ cisco_cfg.get('password', '') }}" class="input" style="font-size: 1rem;">
+                </div>
+                <div>
+                    <label class="block text-sm font-bold text-slate-300 mb-2">Network port</label>
+                    <input type="text" name="cisco_bootstrap_network_port" value="{{ cisco_cfg.get('bootstrap_network_port', '') }}" class="input" placeholder="{{ cisco.effective_bootstrap_network_port or 'optional' }}" style="font-size: 1rem;">
+                </div>
+            </div>
+        </section>
+
+        <div class="{% if cisco_upgrade_blocked and not cisco_upgrade_override %}upgrade-gated-content{% endif %}">
+
+        <details class="card identity-soft-card">
+            <summary class="summary-row"><span class="font-semibold">More settings</span></summary>
+            <div class="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-4 mt-4">
+                <div>
+                    <label class="block text-sm font-bold text-slate-300 mb-2">Baud</label>
+                    <input type="number" name="cisco_console_baud" value="{{ cisco.console_baud or 9600 }}" class="input">
+                </div>
+                <div>
+                    <label class="block text-sm font-bold text-slate-300 mb-2">Hostname</label>
+                    <input type="text" name="cisco_switch_hostname" value="{{ cisco.hostname or cisco_cfg.get('hostname', 'sw01') }}" class="input">
+                </div>
+                <div>
+                    <label class="block text-sm font-bold text-slate-300 mb-2">Domain</label>
+                    <input type="text" name="cisco_domain_name" value="{{ cisco_cfg.get('domain_name', 'lab.local') }}" class="input">
+                </div>
+                <div>
+                    <label class="block text-sm font-bold text-slate-300 mb-2">Enable password</label>
+                    <input type="password" name="cisco_enable_password" value="{{ cisco_cfg.get('enable_password', '') }}" class="input">
+                </div>
+                <div>
+                    <label class="block text-sm font-bold text-slate-300 mb-2">Network mode</label>
+                    {% set bootstrap_mode = cisco_cfg.get('bootstrap_network_mode', 'trunk') %}
+                    <select name="cisco_bootstrap_network_mode" class="input">
+                        <option value="trunk" {% if bootstrap_mode == 'trunk' %}selected{% endif %}>Trunk</option>
+                        <option value="access" {% if bootstrap_mode == 'access' %}selected{% endif %}>Access</option>
+                    </select>
+                </div>
+                <div>
+                    <label class="block text-sm font-bold text-slate-300 mb-2">Apply mode</label>
+                    {% set apply_mode = cisco_cfg.get('apply_mode', 'initial_install') %}
+                    <select name="cisco_apply_mode" class="input">
+                        <option value="initial_install" {% if apply_mode == 'initial_install' %}selected{% endif %}>Initial install</option>
+                        <option value="audit_lockdown" {% if apply_mode == 'audit_lockdown' %}selected{% endif %}>Audit lockdown</option>
+                    </select>
+                </div>
+                <div>
+                    <label class="block text-sm font-bold text-slate-300 mb-2">DNS servers</label>
+                    <textarea name="cisco_dns_servers" class="input" rows="3">{{ (cisco_cfg.get('dns_servers') or []) | join('\n') }}</textarea>
+                </div>
+                <div>
+                    <label class="block text-sm font-bold text-slate-300 mb-2">NTP servers</label>
+                    <textarea name="cisco_ntp_servers" class="input" rows="3">{{ (cisco_cfg.get('ntp_servers') or []) | join('\n') }}</textarea>
+                </div>
+            </div>
+        </details>
+
+        <section class="card identity-soft-card" style="border-color: color-mix(in srgb, var(--bad) 45%, var(--border));">
+            <div class="flex items-start justify-between gap-4">
+                <div>
+                    <div class="text-lg font-semibold">Factory reset switch</div>
+                    <div class="text-sm text-slate-400 mt-1">Deletes startup-config and vlan.dat, then reloads the switch. Running config is cleared by the reload.</div>
+                </div>
+                <span class="status danger">destructive</span>
+            </div>
+            <div class="grid grid-cols-1 md:grid-cols-[minmax(0,1fr)_auto] gap-3 mt-4 items-end">
+                <div>
+                    <label class="block text-sm font-bold text-slate-300 mb-2">Type FACTORY RESET to confirm</label>
+                    <input class="input" name="cisco_factory_reset_confirm" value="" autocomplete="off">
+                </div>
+                <button class="btn btn-danger" type="submit" hx-post="/modules/cisco/factory-reset" data-action-title="Factory resetting Cisco switch" data-action-start="Issuing write erase, deleting vlan.dat, and reloading the switch.">Factory reset switch</button>
+            </div>
+            {% if cisco_cfg.get('last_factory_reset', {}).get('error') %}
+            <div class="result mt-4">{{ cisco_cfg.get('last_factory_reset', {}).get('error') }}</div>
+            {% endif %}
+        </section>
+
+        <details class="card identity-soft-card">
+            <summary class="summary-row"><span class="font-semibold">Ports and config</span></summary>
+            <div class="actions mt-4">
+                <button class="btn" type="submit" hx-post="/modules/cisco/discover-ports">Discover ports</button>
+                <button class="btn" type="submit" hx-post="/modules/cisco/backup-config">Backup config</button>
+                <button class="btn" type="submit" hx-post="/modules/cisco/save-port-map">Save port map</button>
+                <button class="btn" type="submit" hx-post="/modules/cisco/apply-config" hx-vals='{"mode":"baseline"}' {% if not can_approve_config %}disabled{% endif %}>Apply baseline</button>
+                <button class="btn" type="submit" hx-post="/modules/cisco/apply-config" hx-vals='{"mode":"ports"}' {% if not can_approve_config %}disabled{% endif %}>Apply selected ports</button>
+                <button class="btn btn-primary" type="submit" hx-post="/modules/cisco/apply-config" hx-vals='{"mode":"full"}' {% if not can_approve_config %}disabled{% endif %}>Apply full config</button>
+            </div>
+            <div class="overflow-x-auto mt-4">
+                <table class="w-full text-sm">
+                    <thead>
+                        <tr class="text-left text-slate-400">
+                            <th class="py-2 pr-3">Select</th>
+                            <th class="py-2 pr-3">Port</th>
+                            <th class="py-2 pr-3">Profile</th>
+                            <th class="py-2 pr-3">VLAN</th>
+                            <th class="py-2 pr-3">Enabled</th>
+                            <th class="py-2 pr-3">Description</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for row in cisco.port_map %}
+                        <tr class="border-t border-slate-800">
+                            <td class="py-2 pr-3"><input type="checkbox" name="selected_ports" value="{{ row.port }}"></td>
+                            <td class="py-2 pr-3 font-semibold">{{ row.short_port }}</td>
+                            <td class="py-2 pr-3">{{ row.profile_label }}</td>
+                            <td class="py-2 pr-3">{{ row.vlan }}</td>
+                            <td class="py-2 pr-3">{{ 'Yes' if row.enabled else 'No' }}</td>
+                            <td class="py-2 pr-3">{{ row.description }}</td>
+                        </tr>
+                        {% else %}
+                        <tr><td class="py-3 text-slate-400" colspan="6">No desired ports are defined yet.</td></tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+            <details class="card card-compact mt-4">
+                <summary class="summary-row"><span class="font-semibold">Raw model editor</span></summary>
+                <div class="grid grid-cols-1 xl:grid-cols-2 gap-4 mt-4">
+                    <textarea name="cisco_vlans_yaml" class="input" rows="12">{{ cisco_cfg.get('vlans', []) | tojson(indent=2) }}</textarea>
+                    <textarea name="cisco_port_profiles_yaml" class="input" rows="12">{{ cisco_cfg.get('port_profiles', cisco.port_profiles) | tojson(indent=2) }}</textarea>
+                    <textarea name="cisco_ports_yaml" class="input" rows="12">{{ cisco_cfg.get('ports', {}) | tojson(indent=2) }}</textarea>
+                    <textarea name="cisco_custom_port_commands_yaml" class="input" rows="12">{{ cisco_cfg.get('custom_port_commands', {}) | tojson(indent=2) }}</textarea>
+                </div>
+                <textarea name="cisco_custom_global_commands" class="input mt-4" rows="4">{{ (cisco_cfg.get('custom_global_commands') or []) | join('\n') }}</textarea>
+            </details>
+            {% if cisco_cfg.get('last_config_validation', {}).get('errors') or cisco_cfg.get('last_config_validation', {}).get('warnings') %}
+            <div class="result mt-4">
+                {% for item in cisco_cfg.get('last_config_validation', {}).get('errors', []) %}<div class="text-amber-300">{{ item }}</div>{% endfor %}
+                {% for item in cisco_cfg.get('last_config_validation', {}).get('warnings', []) %}<div>{{ item }}</div>{% endfor %}
+            </div>
+            {% endif %}
+            <details class="card card-compact mt-4" {% if cisco_cfg.get('last_config_preview') %}open{% endif %}>
+                <summary class="summary-row"><span class="font-semibold">Config preview</span></summary>
+                <pre class="mt-3 whitespace-pre-wrap text-sm text-slate-300">{{ cisco_cfg.get('last_config_preview', 'No preview yet.') }}</pre>
+            </details>
+        </details>
         </div>
-    </section>
+
+        <details class="card identity-soft-card">
+            <summary class="summary-row"><span class="font-semibold">Technical details</span></summary>
+            {% if cisco.last_show_version %}<pre class="mt-3 whitespace-pre-wrap text-sm text-slate-300">{{ cisco.last_show_version }}</pre>{% endif %}
+            {% if cisco.last_serial_output %}<pre class="mt-3 whitespace-pre-wrap text-sm text-slate-300">{{ cisco.last_serial_output }}</pre>{% endif %}
+            {% if cisco.last_console_diagnostics %}<pre class="mt-3 whitespace-pre-wrap text-sm text-slate-300">{{ cisco.last_console_diagnostics | tojson(indent=2) }}</pre>{% endif %}
+            {% if cisco.last_console_probe_results %}<pre class="mt-3 whitespace-pre-wrap text-sm text-slate-300">{{ cisco.last_console_probe_results | tojson(indent=2) }}</pre>{% endif %}
+            {% if cisco.last_raw_port_discovery %}<pre class="mt-3 whitespace-pre-wrap text-sm text-slate-300">{{ cisco.last_raw_port_discovery }}</pre>{% endif %}
+            {% if cisco.last_running_config_backup %}<pre class="mt-3 whitespace-pre-wrap text-sm text-slate-300">{{ cisco.last_running_config_backup }}</pre>{% endif %}
+        </details>
+    </form>
 </section>

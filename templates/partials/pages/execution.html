@@ -239,16 +239,16 @@
                 <div class="codeblock mt-3" id="execution-failure-codex">{{ job.get('failure_codex_handoff') or '' }}</div>
             </details>
         </section>
-        <details class="execution-live-log execution-technical-log mt-4" {% if job.get('status') not in ['Idle', 'Complete', 'Preview complete', 'Completed'] or job.get('status') == 'Failed' %}open{% endif %}>
+        <details class="execution-live-log execution-technical-log log-drawer mt-4" {% if job.get('status') not in ['Idle', 'Complete', 'Preview complete', 'Completed'] or job.get('status') == 'Failed' %}open{% endif %}>
             <summary class="summary-row">
                 <span class="text-sm font-bold text-slate-300">Technical log</span>
                 <span class="status progress">raw</span>
             </summary>
-            <div class="codeblock max-h-96 overflow-y-auto mt-3" id="execution-live-logs">{% if job.get('logs') %}{% for line in job.get('logs', []) %}{{ line }}
+            <div class="codeblock max-h-96 overflow-y-auto mt-3" id="execution-live-logs">{% if job.get('logs') %}{% for line in job.get('logs', []) | reverse %}{{ line }}
 {% endfor %}{% else %}Nothing is running right now. Start a preview or a real run to see live updates here.{% endif %}</div>
         </details>
         {% if job.get('esxi_ks_cfg', {}).get('preview_redacted') %}
-        <details class="execution-live-log mt-4">
+        <details class="execution-live-log log-drawer mt-4">
             <summary class="summary-row">
                 <span class="text-sm font-bold text-slate-300">Generated KS.CFG preview</span>
                 <span class="status progress">redacted</span>
@@ -596,7 +596,7 @@
                     <form hx-post="/view-run-summary" hx-target="#main-content" hx-swap="outerHTML">
                         <input type="hidden" name="scope" value="{{ confirm_scope }}">
                         <input type="hidden" name="return_page" value="execution">
-                        <button class="btn btn-primary" type="submit">Open summary</button>
+                        <button class="btn" type="submit">Open summary</button>
                     </form>
                     <form action="/download-run-summary" method="post">
                         <input type="hidden" name="scope" value="{{ confirm_scope }}">

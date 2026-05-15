@@ -24,6 +24,11 @@
             --accent-soft: #edf4ff;
             --good: #337c5b;
             --good-soft: #eef8f3;
+            --ok: var(--good);
+            --action: #2f7661;
+            --action-soft: #eef8f4;
+            --info: #2f6fdb;
+            --info-soft: #edf4ff;
             --warn: #a66c21;
             --warn-soft: #fff7ea;
             --bad: #c2665d;
@@ -43,10 +48,7 @@
 
         body {
             margin: 0;
-            background:
-                radial-gradient(circle at top, color-mix(in srgb, var(--accent) 7%, white 93%) 0%, transparent 24%),
-                radial-gradient(circle at 85% 10%, color-mix(in srgb, var(--good) 4%, white 96%) 0%, transparent 20%),
-                linear-gradient(180deg, color-mix(in srgb, var(--bg) 98%, white 2%) 0%, var(--bg) 100%);
+            background: linear-gradient(180deg, #fbfcfe 0%, var(--bg) 48%, #f4f7fb 100%);
             color: var(--text);
             font-family: "Inter", "Segoe UI", "Helvetica Neue", sans-serif;
             line-height: 1.55;
@@ -147,6 +149,13 @@
             transition: background 0.18s ease, border-color 0.18s ease, transform 0.18s ease, box-shadow 0.18s ease;
         }
 
+        .upgrade-gated-content {
+            opacity: 0.42;
+            filter: grayscale(0.75);
+            pointer-events: none;
+            user-select: none;
+        }
+
         .nav-link-shell {
             display: grid;
             grid-template-columns: auto auto minmax(0, 1fr);
@@ -182,6 +191,11 @@
             align-items: center;
             gap: 12px;
             min-width: 0;
+        }
+
+        .panel > :first-child:has(.title-with-icon) {
+            padding-bottom: 14px;
+            border-bottom: 1px solid color-mix(in srgb, var(--border) 82%, transparent);
         }
 
         .page-icon {
@@ -284,11 +298,11 @@
         }
 
         .hero {
-            background: var(--hero-bg);
+            background: linear-gradient(180deg, white 0%, color-mix(in srgb, var(--hero-bg) 96%, var(--panel2) 4%) 100%);
             border: 1px solid var(--border);
-            border-radius: 18px;
-            box-shadow: var(--card-shadow);
-            padding: 16px 18px;
+            border-radius: 14px;
+            box-shadow: 0 10px 26px rgba(28, 49, 77, 0.06);
+            padding: 18px 20px;
             margin-bottom: 18px;
             display: grid;
             grid-template-columns: minmax(0, 1.2fr) minmax(0, 1fr);
@@ -299,29 +313,40 @@
         }
 
         .hero::before {
-            content: "";
-            position: absolute;
-            inset: 0;
-            background:
-                linear-gradient(180deg, color-mix(in srgb, var(--accent) 6%, white 94%), transparent 45%);
-            pointer-events: none;
+            display: none;
         }
 
         .hero::after {
-            content: "";
-            position: absolute;
-            inset: auto -10% -35% 35%;
-            height: 140px;
-            background: linear-gradient(90deg, transparent, color-mix(in srgb, var(--accent) 8%, white 92%), transparent);
-            transform: rotate(-8deg);
-            pointer-events: none;
-            opacity: 0.65;
+            display: none;
+        }
+
+        .command-kicker {
+            color: var(--info);
+            font-size: 0.75rem;
+            font-weight: 800;
+            letter-spacing: 0.12em;
+            text-transform: uppercase;
+        }
+
+        .command-title {
+            margin-top: 4px;
+            font-size: clamp(1.75rem, 2.7vw, 2.65rem);
+            line-height: 1.05;
+            letter-spacing: 0;
+        }
+
+        .hero-status-shell {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 10px 14px;
+            align-items: center;
+            margin-top: 12px;
         }
 
         .panel, .card {
             background: var(--panel);
             border: 1px solid var(--border);
-            border-radius: 18px;
+            border-radius: 14px;
             box-shadow: var(--card-shadow);
             transition: border-color 0.18s ease, box-shadow 0.18s ease, background 0.18s ease;
         }
@@ -355,6 +380,7 @@
         .ready { color: var(--good); background: var(--good-soft); border-color: color-mix(in srgb, var(--good) 18%, var(--border)); }
         .progress { color: var(--accent); background: var(--accent-soft); border-color: color-mix(in srgb, var(--accent) 18%, var(--border)); }
         .pending { color: var(--warn); background: var(--warn-soft); border-color: color-mix(in srgb, var(--warn) 18%, var(--border)); }
+        .danger { color: var(--bad); background: var(--bad-soft); border-color: color-mix(in srgb, var(--bad) 24%, var(--border)); }
 
         .live-inventory-spinner {
             width: 14px;
@@ -376,14 +402,26 @@
         }
 
         .btn {
-            background: linear-gradient(180deg, color-mix(in srgb, white 74%, var(--panel2) 26%), color-mix(in srgb, white 50%, var(--panel2) 50%));
-            color: var(--text);
-            border: 1px solid var(--border-strong);
-            border-radius: 14px;
-            padding: 11px 16px;
-            font-weight: bold;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            gap: 8px;
+            min-height: 40px;
+            max-width: 100%;
+            background: linear-gradient(180deg, white, color-mix(in srgb, var(--info-soft) 42%, white 58%));
+            color: color-mix(in srgb, var(--info) 76%, var(--text) 24%);
+            border: 1px solid color-mix(in srgb, var(--info) 22%, var(--border-strong));
+            border-radius: 10px;
+            padding: 9px 13px;
+            font-size: 0.9rem;
+            font-weight: 800;
+            line-height: 1.2;
+            text-align: center;
+            text-decoration: none;
+            white-space: normal;
+            overflow-wrap: anywhere;
             cursor: pointer;
-            box-shadow: 0 6px 14px rgba(31, 54, 84, 0.05);
+            box-shadow: 0 5px 12px rgba(31, 54, 84, 0.04);
             transition: transform 0.18s ease, border-color 0.18s ease, background 0.18s ease, box-shadow 0.18s ease;
         }
 
@@ -410,9 +448,9 @@
         }
 
         .btn:hover {
-            border-color: var(--accent);
+            border-color: color-mix(in srgb, var(--info) 46%, var(--border));
             transform: translateY(-1px);
-            box-shadow: 0 10px 20px rgba(42, 103, 209, 0.1);
+            box-shadow: 0 10px 20px rgba(42, 103, 209, 0.08);
         }
 
         .btn:focus-visible,
@@ -423,20 +461,24 @@
             outline-offset: 2px;
         }
 
+        .btn-info {
+            background: linear-gradient(180deg, white, color-mix(in srgb, var(--info-soft) 64%, white 36%));
+            color: color-mix(in srgb, var(--info) 82%, var(--text) 18%);
+            border-color: color-mix(in srgb, var(--info) 28%, var(--border));
+        }
+
         .btn-primary,
-        button[type="submit"],
-        input[type="submit"] {
-            background: linear-gradient(180deg, color-mix(in srgb, var(--accent) 82%, white 18%), var(--accent));
+        .btn-action {
+            background: linear-gradient(180deg, color-mix(in srgb, var(--action) 78%, white 22%), var(--action));
             color: white;
-            border-color: color-mix(in srgb, var(--accent) 72%, black 28%);
-            box-shadow: 0 12px 24px rgba(42, 103, 209, 0.16);
+            border-color: color-mix(in srgb, var(--action) 72%, black 28%);
+            box-shadow: 0 12px 24px rgba(47, 118, 97, 0.16);
         }
 
         .btn-primary:hover,
-        button[type="submit"]:hover,
-        input[type="submit"]:hover {
-            border-color: color-mix(in srgb, var(--accent) 56%, black 44%);
-            box-shadow: 0 14px 28px rgba(42, 103, 209, 0.22);
+        .btn-action:hover {
+            border-color: color-mix(in srgb, var(--action) 56%, black 44%);
+            box-shadow: 0 14px 28px rgba(47, 118, 97, 0.2);
         }
 
         .btn-danger {
@@ -446,8 +488,13 @@
             box-shadow: 0 8px 18px rgba(194, 90, 82, 0.08);
         }
 
+        .btn-danger:hover {
+            border-color: color-mix(in srgb, var(--bad) 48%, var(--border));
+            box-shadow: 0 12px 24px rgba(194, 90, 82, 0.14);
+        }
+
         .action-button {
-            min-height: 44px;
+            min-height: 42px;
             font-weight: 700;
         }
 
@@ -803,21 +850,14 @@
             gap: 16px;
             padding: 20px;
             border: 1px solid color-mix(in srgb, var(--accent) 24%, var(--border));
-            border-radius: 18px;
+            border-radius: 14px;
             background:
-                linear-gradient(135deg, color-mix(in srgb, white 96%, var(--accent-soft) 4%), color-mix(in srgb, white 88%, var(--good-soft) 12%) 58%, white);
-            box-shadow: 0 24px 54px rgba(28, 49, 77, 0.12);
+                linear-gradient(135deg, white, color-mix(in srgb, var(--good-soft) 46%, white 54%) 58%, white);
+            box-shadow: 0 18px 42px rgba(28, 49, 77, 0.1);
         }
 
         .dashboard-command-center::before {
-            content: "";
-            position: absolute;
-            inset: 0;
-            pointer-events: none;
-            background:
-                linear-gradient(90deg, rgba(255,255,255,0.72), transparent 38%),
-                repeating-linear-gradient(90deg, transparent 0 38px, color-mix(in srgb, var(--accent) 5%, transparent) 38px 39px);
-            opacity: 0.72;
+            display: none;
         }
 
         .dashboard-command-main,
@@ -836,9 +876,9 @@
 
         .dashboard-command-copy h2 {
             margin: 0;
-            font-size: clamp(2rem, 3vw, 3.15rem);
-            line-height: 1;
-            font-weight: 850;
+            font-size: clamp(1.35rem, 1.8vw, 1.85rem);
+            line-height: 1.15;
+            font-weight: 800;
             letter-spacing: 0;
         }
 
@@ -1134,7 +1174,7 @@
         .execution-live-card {
             padding: 22px;
             border-color: color-mix(in srgb, var(--accent) 24%, var(--border));
-            box-shadow: 0 18px 36px rgba(4, 10, 18, 0.24);
+            box-shadow: 0 16px 34px rgba(28, 49, 77, 0.08);
         }
 
         .execution-live-summary {
@@ -1234,6 +1274,14 @@
 
         .checklist-label {
             font-weight: 600;
+            min-width: 0;
+            overflow-wrap: anywhere;
+            word-break: break-word;
+        }
+
+        .checklist-details {
+            overflow-wrap: anywhere;
+            word-break: break-word;
         }
 
         .checklist-icon-pending { color: var(--muted); }
@@ -1248,6 +1296,28 @@
         .execution-technical-log .codeblock {
             min-height: clamp(120px, 18vh, 180px);
             color: color-mix(in srgb, var(--text) 86%, var(--muted) 14%);
+        }
+
+        .log-drawer {
+            border: 1px solid color-mix(in srgb, var(--info) 14%, var(--border));
+            border-radius: 12px;
+            background: color-mix(in srgb, white 88%, var(--panel3) 12%);
+            padding: 8px 10px 10px;
+        }
+
+        .log-drawer summary {
+            min-height: 36px;
+            padding: 4px 2px;
+        }
+
+        .log-drawer .codeblock {
+            max-height: 260px;
+            min-height: 96px;
+            overflow-y: auto;
+            background: color-mix(in srgb, white 84%, var(--panel3) 16%);
+            border-color: color-mix(in srgb, var(--info) 10%, var(--border));
+            font-size: 0.84rem;
+            line-height: 1.45;
         }
 
         .execution-controls-card {
@@ -1454,18 +1524,12 @@
         .workflow-hero-card {
             position: relative;
             overflow: hidden;
-            background:
-                radial-gradient(circle at top right, color-mix(in srgb, var(--accent) 8%, white 92%) 0%, transparent 34%),
-                linear-gradient(180deg, color-mix(in srgb, white 95%, var(--accent-soft) 5%), var(--panel));
+            background: linear-gradient(180deg, color-mix(in srgb, white 97%, var(--accent-soft) 3%), var(--panel));
             border-color: color-mix(in srgb, var(--accent) 16%, var(--border));
         }
 
         .workflow-hero-card::before {
-            content: "";
-            position: absolute;
-            inset: 0;
-            pointer-events: none;
-            background: linear-gradient(135deg, rgba(255,255,255,0.5), transparent 44%);
+            display: none;
         }
 
         .workflow-hero-grid {
@@ -1484,18 +1548,12 @@
         .review-shell {
             position: relative;
             overflow: hidden;
-            background:
-                radial-gradient(circle at top right, color-mix(in srgb, var(--accent) 8%, white 92%) 0%, transparent 30%),
-                linear-gradient(180deg, color-mix(in srgb, white 96%, var(--panel2) 4%), var(--panel));
+            background: linear-gradient(180deg, color-mix(in srgb, white 97%, var(--panel2) 3%), var(--panel));
             border-color: color-mix(in srgb, var(--accent) 16%, var(--border));
         }
 
         .review-shell::before {
-            content: "";
-            position: absolute;
-            inset: 0;
-            pointer-events: none;
-            background: linear-gradient(135deg, rgba(255,255,255,0.44), transparent 42%);
+            display: none;
         }
 
         .review-shell > * {
@@ -1539,18 +1597,12 @@
         .identity-hero-card {
             position: relative;
             overflow: hidden;
-            background:
-                radial-gradient(circle at top right, color-mix(in srgb, var(--accent) 7%, white 93%) 0%, transparent 30%),
-                linear-gradient(180deg, color-mix(in srgb, white 95%, var(--accent-soft) 5%), var(--panel));
+            background: linear-gradient(180deg, color-mix(in srgb, white 97%, var(--accent-soft) 3%), var(--panel));
             border-color: color-mix(in srgb, var(--accent) 16%, var(--border));
         }
 
         .identity-hero-card::before {
-            content: "";
-            position: absolute;
-            inset: 0;
-            pointer-events: none;
-            background: linear-gradient(135deg, rgba(255,255,255,0.45), transparent 44%);
+            display: none;
         }
 
         .identity-hero-card > * {
@@ -1627,6 +1679,7 @@
             grid-template-columns: minmax(0, 1fr) auto;
             align-items: start;
             gap: 12px;
+            min-width: 0;
             padding: 11px 12px;
             border-radius: 12px;
             border: 1px solid color-mix(in srgb, var(--accent) 8%, var(--border));
@@ -1639,6 +1692,8 @@
 
         .ops-row-copy > * {
             min-width: 0;
+            overflow-wrap: anywhere;
+            word-break: break-word;
         }
 
         .truncate-single {
@@ -1660,6 +1715,7 @@
             gap: 8px;
             justify-content: flex-end;
             flex-wrap: wrap;
+            min-width: 0;
         }
 
         .global-warning-popup {
@@ -1857,16 +1913,16 @@
         }
 
         .hero-meta {
-            min-width: 220px;
+            min-width: 360px;
             display: grid;
-            grid-template-columns: repeat(2, minmax(0, 1fr));
+            grid-template-columns: repeat(3, minmax(0, 1fr));
             gap: 12px;
         }
 
         .hero-stat {
-            background: color-mix(in srgb, var(--panel3) 58%, white 42%);
+            background: color-mix(in srgb, white 86%, var(--panel3) 14%);
             border: 1px solid var(--border);
-            border-radius: 12px;
+            border-radius: 10px;
             padding: 12px 14px;
             box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.68);
         }
@@ -1880,8 +1936,15 @@
         }
 
         .hero-stat-value {
-            font-size: 1.1rem;
+            font-size: 1rem;
+            line-height: 1.25;
             font-weight: 700;
+            overflow-wrap: anywhere;
+        }
+
+        #main-content .title-with-icon {
+            font-size: 1.35rem;
+            line-height: 1.2;
         }
 
         body[data-active-page="global_settings"] .hero,
@@ -1891,15 +1954,6 @@
         body[data-active-page="esxi"] .hero,
         body[data-active-page="execution"] .hero {
             padding: 16px 20px;
-        }
-
-        body[data-active-page="global_settings"] .hero-meta,
-        body[data-active-page="configuration"] .hero-meta,
-        body[data-active-page="ilo"] .hero-meta,
-        body[data-active-page="storage"] .hero-meta,
-        body[data-active-page="esxi"] .hero-meta,
-        body[data-active-page="execution"] .hero-meta {
-            display: none;
         }
 
         body[data-active-page="global_settings"] .hero .muted,
@@ -2052,12 +2106,12 @@
             }
 
             .hero {
-                flex-direction: column;
-                align-items: stretch;
+                grid-template-columns: 1fr;
             }
 
             .hero-meta {
                 min-width: 0;
+                grid-template-columns: repeat(2, minmax(0, 1fr));
             }
 
             .dashboard-hero-grid,
@@ -2126,7 +2180,8 @@
             }
 
             .hero-meta {
-                grid-template-columns: 1fr;
+                min-width: 0;
+                grid-template-columns: repeat(2, minmax(0, 1fr));
             }
         }
 
@@ -2173,6 +2228,12 @@
                 text-align: center;
             }
 
+            .card > .flex.items-start.justify-between,
+            .panel > .flex.items-start.justify-between {
+                align-items: stretch;
+                flex-direction: column;
+            }
+
             .job-badge,
             .status {
                 align-self: flex-start;
@@ -2180,6 +2241,10 @@
 
             .hero {
                 border-radius: 20px;
+            }
+
+            .hero-meta {
+                grid-template-columns: repeat(2, minmax(0, 1fr));
             }
 
             .execution-live-card {
@@ -2192,7 +2257,7 @@
             }
 
             .dashboard-command-copy h2 {
-                font-size: 2rem;
+                font-size: 1.5rem;
             }
 
             .dashboard-score-ring {
@@ -2227,6 +2292,14 @@
 
             .dashboard-module-meta {
                 grid-column: 2;
+                justify-content: flex-start;
+            }
+
+            .ops-row-item {
+                grid-template-columns: minmax(0, 1fr);
+            }
+
+            .ops-row-meta {
                 justify-content: flex-start;
             }
         }

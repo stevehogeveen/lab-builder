@@ -136,6 +136,13 @@ async def save_config_handler(
     cisco_switch_hostname: str = Form(""),
     cisco_switch_username: str = Form(""),
     cisco_switch_password: str = Form(""),
+    cisco_console_port: str = Form(""),
+    cisco_console_baud: int = Form(9600),
+    cisco_management_vlan: int = Form(10),
+    cisco_management_ip: str = Form(""),
+    cisco_subnet_mask: str = Form(""),
+    cisco_gateway: str = Form(""),
+    cisco_enable_password: str = Form(""),
     netapp_host: str = Form(""),
     netapp_username: str = Form("admin"),
     netapp_password: str = Form(""),
@@ -235,6 +242,26 @@ async def save_config_handler(
             "hostname": cisco_switch_hostname,
             "username": cisco_switch_username,
             "password": preserve_existing_secret(cisco_switch_password, (existing_cfg.get("cisco_switch") or {}).get("password")),
+            "connection_method": str(((existing_cfg.get("cisco_switch") or {}).get("connection_method")) or "auto"),
+            "console_port": cisco_console_port or str(((existing_cfg.get("cisco_switch") or {}).get("console_port")) or ""),
+            "console_baud": int(cisco_console_baud or ((existing_cfg.get("cisco_switch") or {}).get("console_baud")) or 9600),
+            "management_vlan": int(cisco_management_vlan or ((existing_cfg.get("cisco_switch") or {}).get("management_vlan")) or 10),
+            "management_ip": cisco_management_ip or str(((existing_cfg.get("cisco_switch") or {}).get("management_ip")) or ""),
+            "subnet_mask": cisco_subnet_mask or str(((existing_cfg.get("cisco_switch") or {}).get("subnet_mask")) or ""),
+            "gateway": cisco_gateway or str(((existing_cfg.get("cisco_switch") or {}).get("gateway")) or ""),
+            "bootstrap_network_port": str(((existing_cfg.get("cisco_switch") or {}).get("bootstrap_network_port")) or ""),
+            "bootstrap_network_mode": str(((existing_cfg.get("cisco_switch") or {}).get("bootstrap_network_mode")) or "trunk"),
+            "enable_password": preserve_existing_secret(cisco_enable_password, (existing_cfg.get("cisco_switch") or {}).get("enable_password")),
+            "domain_name": str(((existing_cfg.get("cisco_switch") or {}).get("domain_name")) or "lab.local"),
+            "dns_servers": copy.deepcopy((existing_cfg.get("cisco_switch") or {}).get("dns_servers") or []),
+            "ntp_servers": copy.deepcopy((existing_cfg.get("cisco_switch") or {}).get("ntp_servers") or []),
+            "vlans": copy.deepcopy((existing_cfg.get("cisco_switch") or {}).get("vlans") or []),
+            "port_profiles": copy.deepcopy((existing_cfg.get("cisco_switch") or {}).get("port_profiles") or {}),
+            "ports": copy.deepcopy((existing_cfg.get("cisco_switch") or {}).get("ports") or {}),
+            "custom_global_commands": copy.deepcopy((existing_cfg.get("cisco_switch") or {}).get("custom_global_commands") or []),
+            "custom_port_commands": copy.deepcopy((existing_cfg.get("cisco_switch") or {}).get("custom_port_commands") or {}),
+            "apply_mode": str(((existing_cfg.get("cisco_switch") or {}).get("apply_mode")) or "initial_install"),
+            "discovery": copy.deepcopy((existing_cfg.get("cisco_switch") or {}).get("discovery") or {"prefer_console": True, "allow_network_scan": True}),
             "last_discovered_version": str(((existing_cfg.get("cisco_switch") or {}).get("last_discovered_version")) or ""),
             "last_discovered_at": str(((existing_cfg.get("cisco_switch") or {}).get("last_discovered_at")) or ""),
             "last_show_version": str(((existing_cfg.get("cisco_switch") or {}).get("last_show_version")) or ""),
@@ -242,6 +269,10 @@ async def save_config_handler(
             "last_discovered_model": str(((existing_cfg.get("cisco_switch") or {}).get("last_discovered_model")) or ""),
             "last_discovered_platform": str(((existing_cfg.get("cisco_switch") or {}).get("last_discovered_platform")) or ""),
             "last_discovered_hostname": str(((existing_cfg.get("cisco_switch") or {}).get("last_discovered_hostname")) or ""),
+            "last_console_candidates": copy.deepcopy((existing_cfg.get("cisco_switch") or {}).get("last_console_candidates") or []),
+            "last_serial_output": str(((existing_cfg.get("cisco_switch") or {}).get("last_serial_output")) or ""),
+            "last_bootstrap": copy.deepcopy((existing_cfg.get("cisco_switch") or {}).get("last_bootstrap") or {}),
+            "last_ssh_test": copy.deepcopy((existing_cfg.get("cisco_switch") or {}).get("last_ssh_test") or {}),
             "upgrade": copy.deepcopy((existing_cfg.get("cisco_switch") or {}).get("upgrade") or {}),
         },
         "netapp": {
@@ -310,13 +341,13 @@ async def save_global_settings_handler(
     site_name: str = Form(...),
     shared_subnet: str = Form(...),
     gateway_ip: str = Form(...),
-    switch_ip: str = Form(...),
-    esxi_ip: str = Form(...),
-    ilo_target_ip: str = Form(...),
-    windows_ip: str = Form(...),
-    qnap_ip: str = Form(...),
-    iosafe_ip: str = Form(...),
-    netapp_ip: str = Form(""),
+    switch_ip: str | None = Form(None),
+    esxi_ip: str | None = Form(None),
+    ilo_target_ip: str | None = Form(None),
+    windows_ip: str | None = Form(None),
+    qnap_ip: str | None = Form(None),
+    iosafe_ip: str | None = Form(None),
+    netapp_ip: str | None = Form(None),
     dns1: str = Form(""),
     dns2: str = Form(""),
     dns3: str = Form(""),
@@ -334,15 +365,22 @@ async def save_global_settings_handler(
     included_cisco_switch: str | None = Form(None),
     included_storage: str | None = Form(None),
     included_netapp: str | None = Form(None),
-    netapp_host: str = Form(""),
-    netapp_username: str = Form("admin"),
-    netapp_password: str = Form(""),
-    netapp_storage_protocol: str = Form("nfs"),
-    netapp_iscsi_commands: str = Form(""),
-    netapp_nfs_commands: str = Form(""),
-    cisco_switch_hostname: str = Form(""),
-    cisco_switch_username: str = Form("admin"),
-    cisco_switch_password: str = Form(""),
+    netapp_host: str | None = Form(None),
+    netapp_username: str | None = Form(None),
+    netapp_password: str | None = Form(None),
+    netapp_storage_protocol: str | None = Form(None),
+    netapp_iscsi_commands: str | None = Form(None),
+    netapp_nfs_commands: str | None = Form(None),
+    cisco_switch_hostname: str | None = Form(None),
+    cisco_switch_username: str | None = Form(None),
+    cisco_switch_password: str | None = Form(None),
+    cisco_console_port: str | None = Form(None),
+    cisco_console_baud: int | None = Form(None),
+    cisco_management_vlan: int | None = Form(None),
+    cisco_management_ip: str | None = Form(None),
+    cisco_subnet_mask: str | None = Form(None),
+    cisco_gateway: str | None = Form(None),
+    cisco_enable_password: str | None = Form(None),
 ):
     cfg = runtime["load_kit_config"]()
     form = await request.form()
@@ -350,6 +388,7 @@ async def save_global_settings_handler(
     def preserve_existing_secret(submitted: str, existing: Any) -> str:
         submitted_value = str(submitted or "")
         return submitted_value if submitted_value else str(existing or "")
+    previous_subnet = str((cfg.get("shared_network") or {}).get("subnet") or "")
     cfg["site"]["name"] = runtime["sanitize_kit_name"](site_name)
     cfg["shared_network"]["subnet"] = shared_subnet
     cfg["shared_network"]["dns_servers"] = [dns1, dns2, dns3, dns4]
@@ -368,19 +407,19 @@ async def save_global_settings_handler(
             primary_priv_password=snmp_v3_priv_password,
         ),
     }
-    cfg["included"].update(
-        {
-            "ilo": included_ilo == "on",
-            "esxi": included_esxi == "on",
-            "windows": included_windows == "on",
-            "qnap": included_qnap == "on",
-            "iosafe": included_iosafe == "on",
-            "cisco_switch": included_cisco_switch == "on",
-            "storage": included_storage == "on",
-            "netapp": included_netapp == "on",
-        }
-    )
-    cfg["storage"]["include_in_ilo_run"] = cfg["included"]["storage"]
+    included_fields = {
+        "included_ilo": ("ilo", included_ilo),
+        "included_esxi": ("esxi", included_esxi),
+        "included_windows": ("windows", included_windows),
+        "included_qnap": ("qnap", included_qnap),
+        "included_iosafe": ("iosafe", included_iosafe),
+        "included_cisco_switch": ("cisco_switch", included_cisco_switch),
+        "included_storage": ("storage", included_storage),
+        "included_netapp": ("netapp", included_netapp),
+    }
+    if any(field in form for field in included_fields):
+        cfg["included"].update({key: value == "on" for field, (key, value) in included_fields.items()})
+    cfg["storage"]["include_in_ilo_run"] = cfg["included"].get("storage", cfg["storage"].get("include_in_ilo_run", False))
     snmp_input_review = runtime["build_snmp_input_review"](cfg)
     if snmp_input_review["errors"]:
         return runtime["render_page"](
@@ -398,38 +437,82 @@ async def save_global_settings_handler(
                 details=list(snmp_input_review["errors"]) + list(snmp_input_review["notes"]),
             ),
         )
-    cfg["ip_plan"].update(
-        {
-            "gateway": gateway_ip,
-            "switch": switch_ip,
-            "esxi": esxi_ip,
-            "ilo": ilo_target_ip,
-            "windows": windows_ip,
-            "qnap": qnap_ip,
-            "iosafe": iosafe_ip,
-            "netapp": netapp_ip,
-        }
-    )
-    cfg["netapp"].update(
-        {
-            "host": netapp_host,
-            "username": netapp_username,
-            "password": preserve_existing_secret(netapp_password, (cfg.get("netapp") or {}).get("password")),
-            "storage_protocol": netapp_storage_protocol if netapp_storage_protocol in {"nfs", "iscsi"} else "nfs",
-            "command_templates": {
-                "iscsi": netapp_iscsi_commands,
-                "nfs": netapp_nfs_commands,
-            },
-        }
-    )
-    cfg["cisco_switch"].update(
-        {
-            "hostname": cisco_switch_hostname,
-            "username": cisco_switch_username,
-            "password": preserve_existing_secret(cisco_switch_password, (cfg.get("cisco_switch") or {}).get("password")),
-        }
-    )
-    cfg["ilo"]["target_ip"] = ilo_target_ip
+    module_ip_fields = {
+        "switch_ip": ("switch", switch_ip),
+        "esxi_ip": ("esxi", esxi_ip),
+        "ilo_target_ip": ("ilo", ilo_target_ip),
+        "windows_ip": ("windows", windows_ip),
+        "qnap_ip": ("qnap", qnap_ip),
+        "iosafe_ip": ("iosafe", iosafe_ip),
+        "netapp_ip": ("netapp", netapp_ip),
+    }
+    reset_default_ip_plan = previous_subnet != shared_subnet and not all(field in form for field in module_ip_fields)
+    if reset_default_ip_plan:
+        try:
+            cfg["ip_plan"].update(runtime["build_default_ip_plan"](shared_subnet))
+        except Exception as e:
+            return runtime["render_page"](request, cfg, active_page=return_page, error_message=f"Could not save global settings: {e}")
+    cfg["ip_plan"]["gateway"] = gateway_ip
+    for field, (key, value) in module_ip_fields.items():
+        if field in form:
+            cfg["ip_plan"][key] = str(value or "")
+    if "ilo_target_ip" in form:
+        cfg["ilo"]["target_ip"] = str(ilo_target_ip or "")
+
+    netapp_fields = {
+        "netapp_host",
+        "netapp_username",
+        "netapp_password",
+        "netapp_storage_protocol",
+        "netapp_iscsi_commands",
+        "netapp_nfs_commands",
+    }
+    if any(field in form for field in netapp_fields):
+        existing_netapp = cfg.get("netapp") or {}
+        existing_templates = existing_netapp.get("command_templates") or {}
+        cfg["netapp"].update(
+            {
+                "host": str(netapp_host if netapp_host is not None else existing_netapp.get("host", "")),
+                "username": str(netapp_username if netapp_username is not None else existing_netapp.get("username", "admin")),
+                "password": preserve_existing_secret(netapp_password or "", existing_netapp.get("password")),
+                "storage_protocol": netapp_storage_protocol if netapp_storage_protocol in {"nfs", "iscsi"} else existing_netapp.get("storage_protocol", "nfs"),
+                "command_templates": {
+                    "iscsi": str(netapp_iscsi_commands if netapp_iscsi_commands is not None else existing_templates.get("iscsi", "")),
+                    "nfs": str(netapp_nfs_commands if netapp_nfs_commands is not None else existing_templates.get("nfs", "")),
+                },
+            }
+        )
+
+    cisco_fields = {
+        "cisco_switch_hostname",
+        "cisco_switch_username",
+        "cisco_switch_password",
+        "cisco_console_port",
+        "cisco_console_baud",
+        "cisco_management_vlan",
+        "cisco_management_ip",
+        "cisco_subnet_mask",
+        "cisco_gateway",
+        "cisco_enable_password",
+    }
+    if any(field in form for field in cisco_fields):
+        existing_cisco = cfg.get("cisco_switch") or {}
+        cfg["cisco_switch"].update(
+            {
+                "hostname": str(cisco_switch_hostname if cisco_switch_hostname is not None else existing_cisco.get("hostname", "")),
+                "username": str(cisco_switch_username if cisco_switch_username is not None else existing_cisco.get("username", "admin")),
+                "password": preserve_existing_secret(cisco_switch_password or "", existing_cisco.get("password")),
+                "console_port": str(cisco_console_port if cisco_console_port is not None else existing_cisco.get("console_port", "")),
+                "console_baud": int(cisco_console_baud if cisco_console_baud is not None else existing_cisco.get("console_baud", 9600) or 9600),
+                "management_vlan": int(cisco_management_vlan if cisco_management_vlan is not None else existing_cisco.get("management_vlan", 10) or 10),
+                "management_ip": str(cisco_management_ip if cisco_management_ip is not None else existing_cisco.get("management_ip", "")),
+                "subnet_mask": str(cisco_subnet_mask if cisco_subnet_mask is not None else existing_cisco.get("subnet_mask", "")),
+                "gateway": str(cisco_gateway if cisco_gateway is not None else existing_cisco.get("gateway", "")),
+                "bootstrap_network_port": str(existing_cisco.get("bootstrap_network_port") or ""),
+                "bootstrap_network_mode": str(existing_cisco.get("bootstrap_network_mode") or "trunk"),
+                "enable_password": preserve_existing_secret(cisco_enable_password or "", existing_cisco.get("enable_password")),
+            }
+        )
     try:
         cfg = runtime["apply_ip_plan"](cfg)
         runtime["save_kit_config"](cfg)

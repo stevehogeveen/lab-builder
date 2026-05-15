@@ -115,7 +115,7 @@
                         <form hx-post="/view-report" hx-target="#main-content" hx-swap="outerHTML">
                             <input type="hidden" name="return_page" value="configs">
                             <input type="hidden" name="report_path" value="{{ bundle.run_summary_path }}">
-                            <button class="btn btn-primary" type="submit">Open bundle</button>
+                            <button class="btn" type="submit">Open bundle</button>
                         </form>
                         {% endif %}
                         <a class="btn" href="/configs?report_query={{ bundle.related_reports_query | urlencode }}">Related reports</a>
@@ -192,7 +192,7 @@
                 </select>
             </label>
             <div class="flex items-end">
-                <button class="btn btn-primary w-full" type="submit">Search reports</button>
+                <button class="btn w-full" type="submit">Search reports</button>
             </div>
         </form>
         {% if report_center.entry_counts %}

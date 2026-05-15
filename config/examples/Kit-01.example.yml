@@ -85,3 +85,86 @@ cisco_switch:
   ip: 10.10.8.2
   username: admin
   password: CHANGE_ME
+  connection_method: auto
+  console_port: ""
+  console_baud: 9600
+  domain_name: example.local
+  dns_servers:
+    - 10.10.8.1
+  ntp_servers:
+    - 10.10.8.1
+    - 10.10.8.2
+  management_vlan: 10
+  management_ip: 10.10.8.2
+  subnet_mask: 255.255.255.0
+  gateway: 10.10.8.1
+  bootstrap_network_port: TenGigabitEthernet1/1/1
+  bootstrap_network_mode: trunk
+  enable_password: ""
+  vlans:
+    - id: 10
+      name: MANAGEMENT
+      svi_enabled: true
+      description: Management VLAN
+    - id: 999
+      name: BLACK-HOLE
+      svi_enabled: false
+      description: Black Hole VLAN
+  port_profiles:
+    client_device:
+      mode: access
+      access_vlan: 10
+      description: Client Device
+      enabled: true
+      cdp: false
+      lldp: true
+      snmp_trap_link_status: true
+      spanning_tree_portfast: true
+      bpduguard: true
+    unused_blackhole:
+      mode: access
+      access_vlan: 999
+      description: UNUSED
+      enabled: false
+      cdp: false
+      lldp: true
+      snmp_trap_link_status: false
+      spanning_tree_portfast: true
+      bpduguard: true
+    uplink_trunk:
+      mode: trunk
+      description: Uplink
+      enabled: true
+      cdp: true
+      lldp: true
+      snmp_trap_link_status: true
+      spanning_tree_portfast: false
+      bpduguard: false
+      allowed_vlans: [10, 999]
+  ports:
+    GigabitEthernet1/0/1:
+      profile: client_device
+      description: Client Device
+      cdp: true
+      spanning_tree_portfast: false
+      bpduguard: false
+    GigabitEthernet1/0/2:
+      profile: client_device
+    GigabitEthernet1/0/3:
+      profile: client_device
+      description: Printer
+    GigabitEthernet1/0/4:
+      profile: unused_blackhole
+    TenGigabitEthernet1/1/1:
+      profile: uplink_trunk
+      description: Uplink to Core Switch
+  custom_global_commands: []
+  custom_port_commands:
+    GigabitEthernet1/0/3:
+      after_profile:
+        - storm-control broadcast level 5.00
+        - storm-control multicast level 5.00
+  apply_mode: initial_install
+  discovery:
+    prefer_console: true
+    allow_network_scan: true

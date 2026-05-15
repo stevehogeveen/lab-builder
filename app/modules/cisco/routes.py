@@ -1,17 +1,89 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+import threading
+from typing import Any
+
+import yaml
 
 from fastapi import APIRouter, FastAPI, Form, Request
 from fastapi.responses import HTMLResponse
 
-from app.cisco_upgrade import build_cisco_upgrade_plan, execute_cisco_upgrade
+from app.cisco_upgrade import build_cisco_upgrade_plan, execute_cisco_factory_reset, execute_cisco_upgrade
 from app.modules.cisco.service import CiscoModuleService
 from app.upgrade_helper import record_upgrade_inventory
 
 
 router = APIRouter()
 service = CiscoModuleService()
+
+
+def _record_cisco_upgrade_activity(cfg: dict[str, Any], event: dict[str, Any], *, status: str | None = None) -> dict[str, Any]:
+    from app import main
+
+    progress_by_phase = {
+        "queued": 5,
+        "precheck": 10,
+        "transfer": 25,
+        "install": 60,
+        "reload": 75,
+        "verify": 85,
+        "complete": 100,
+        "blocked": 100,
+        "failed": 100,
+    }
+    cfg.setdefault("cisco_switch", {}).setdefault("upgrade", {})
+    activity = cfg["cisco_switch"]["upgrade"].setdefault("activity", {})
+    events = list(activity.get("events") or [])
+    events.append(event)
+    phase = str(event.get("phase") or activity.get("phase") or "")
+    try:
+        progress_percent = int(event.get("progress_percent")) if event.get("progress_percent") is not None else progress_by_phase.get(phase, int(activity.get("progress_percent") or 0))
+    except (TypeError, ValueError):
+        progress_percent = progress_by_phase.get(phase, int(activity.get("progress_percent") or 0))
+    activity.update(
+        {
+            "status": status or activity.get("status") or "running",
+            "phase": phase,
+            "message": event.get("message") or activity.get("message") or "",
+            "updated_at": event.get("timestamp") or activity.get("updated_at") or "",
+            "events": events[-80:],
+            "progress_percent": max(0, min(100, progress_percent)),
+        }
+    )
+    if not activity.get("started_at"):
+        activity["started_at"] = event.get("timestamp") or datetime.now(timezone.utc).isoformat()
+    main.save_kit_config(cfg)
+    return activity
+
+
+def _start_cisco_upgrade_worker(cfg: dict[str, Any]) -> None:
+    from app import main
+
+    def progress(event: dict[str, Any]) -> None:
+        _record_cisco_upgrade_activity(cfg, event, status="running")
+
+    def worker() -> None:
+        try:
+            result = execute_cisco_upgrade(cfg, main.scan_upgrade_media(), progress=progress)
+            cfg.setdefault("cisco_switch", {}).setdefault("upgrade", {})["last_result"] = result
+            _record_cisco_upgrade_activity(
+                cfg,
+                {"phase": "complete", "message": "Cisco upgrade command completed.", "timestamp": result.get("completed_at") or datetime.now(timezone.utc).isoformat(), "progress_percent": 100},
+                status="completed",
+            )
+            main.save_kit_config(cfg)
+        except Exception as exc:
+            error = str(exc).strip() or "Cisco upgrade failed."
+            cfg.setdefault("cisco_switch", {}).setdefault("upgrade", {})["last_result"] = {"status": "failed", "error": error, "failed_at": datetime.now(timezone.utc).isoformat()}
+            _record_cisco_upgrade_activity(
+                cfg,
+                {"phase": "failed", "message": error, "timestamp": datetime.now(timezone.utc).isoformat(), "progress_percent": 100},
+                status="failed",
+            )
+            main.save_kit_config(cfg)
+
+    threading.Thread(target=worker, name="cisco-upgrade-worker", daemon=True).start()
 
 
 def _module_context() -> dict:
@@ -30,11 +102,11 @@ def _render_cisco_page(request: Request, cfg: dict, *, action_feedback: dict | N
         active_page="cisco",
         action_feedback=action_feedback
         or main.build_action_feedback(
-            "Cisco setup",
-            "Read the switch software version here, then let Upgrade Helper compare it against /media.",
+            "Cisco",
+            "Use the current step below.",
             tone="progress",
             status_label="Ready",
-            outcomes=["Cisco workflow is isolated in app/modules/cisco/."],
+            outcomes=[],
         ),
         extra_context={"cisco_payload": service.status(context)},
     )
@@ -44,6 +116,49 @@ def _store_cisco_upgrade_plan(cfg: dict, plan: dict) -> None:
     cfg.setdefault("cisco_switch", {})
     cfg["cisco_switch"].setdefault("upgrade", {})
     cfg["cisco_switch"]["upgrade"]["last_plan"] = plan
+
+
+def _parse_yaml_value(raw: str, default: Any) -> Any:
+    text = str(raw or "").strip()
+    if not text:
+        return default
+    parsed = yaml.safe_load(text)
+    return parsed if parsed is not None else default
+
+
+def _split_multiline(raw: str) -> list[str]:
+    return [line.strip() for line in str(raw or "").splitlines() if line.strip()]
+
+
+def _update_cisco_model_from_form(cisco_cfg: dict, form: dict[str, Any]) -> None:
+    for form_key, cfg_key in (
+        ("cisco_switch_hostname", "hostname"),
+        ("cisco_management_ip", "management_ip"),
+        ("cisco_subnet_mask", "subnet_mask"),
+        ("cisco_gateway", "gateway"),
+        ("cisco_domain_name", "domain_name"),
+        ("cisco_apply_mode", "apply_mode"),
+    ):
+        if form_key in form:
+            cisco_cfg[cfg_key] = str(form.get(form_key) or "").strip()
+    if cisco_cfg.get("management_ip"):
+        cisco_cfg["ip"] = cisco_cfg["management_ip"]
+    if form.get("cisco_management_vlan"):
+        cisco_cfg["management_vlan"] = int(str(form.get("cisco_management_vlan") or "10"))
+    if form.get("cisco_dns_servers") is not None:
+        cisco_cfg["dns_servers"] = _split_multiline(str(form.get("cisco_dns_servers") or ""))
+    if form.get("cisco_ntp_servers") is not None:
+        cisco_cfg["ntp_servers"] = _split_multiline(str(form.get("cisco_ntp_servers") or ""))
+    for form_key, cfg_key, default in (
+        ("cisco_vlans_yaml", "vlans", []),
+        ("cisco_port_profiles_yaml", "port_profiles", {}),
+        ("cisco_ports_yaml", "ports", {}),
+        ("cisco_custom_port_commands_yaml", "custom_port_commands", {}),
+    ):
+        if form_key in form:
+            cisco_cfg[cfg_key] = _parse_yaml_value(str(form.get(form_key) or ""), default)
+    if "cisco_custom_global_commands" in form:
+        cisco_cfg["custom_global_commands"] = _split_multiline(str(form.get("cisco_custom_global_commands") or ""))
 
 
 @router.get("/modules/cisco", response_class=HTMLResponse)
@@ -65,17 +180,19 @@ async def cisco_discover_version(
     cisco_switch_hostname: str = Form(""),
     cisco_switch_username: str = Form(""),
     cisco_switch_password: str = Form(""),
+    cisco_management_ip: str = Form(""),
 ):
     from app import main
 
     cfg = main.load_kit_config()
     cisco_cfg = cfg.setdefault("cisco_switch", {})
-    if cisco_switch_hostname:
-        cisco_cfg["hostname"] = str(cisco_switch_hostname).strip()
-    if cisco_switch_username:
-        cisco_cfg["username"] = str(cisco_switch_username).strip()
-    if cisco_switch_password:
-        cisco_cfg["password"] = str(cisco_switch_password)
+    _update_cisco_access(
+        cisco_cfg,
+        hostname=cisco_switch_hostname,
+        username=cisco_switch_username,
+        password=cisco_switch_password,
+        management_ip=cisco_management_ip,
+    )
     context = {"cfg": cfg}
     result = service.discover(context)
     if result.get("ok"):
@@ -131,6 +248,611 @@ async def cisco_discover_version(
     return _render_cisco_page(request, cfg, action_feedback=feedback)
 
 
+def _update_cisco_access(
+    cisco_cfg: dict,
+    *,
+    hostname: str = "",
+    username: str = "",
+    password: str = "",
+    console_port: str = "",
+    console_baud: int | str = "",
+    management_vlan: int | str = "",
+    management_ip: str = "",
+    subnet_mask: str = "",
+    gateway: str = "",
+    domain_name: str = "",
+    enable_password: str = "",
+    bootstrap_network_port: str = "",
+    bootstrap_network_mode: str = "",
+) -> None:
+    if hostname:
+        cisco_cfg["hostname"] = str(hostname).strip()
+    if username:
+        cisco_cfg["username"] = str(username).strip()
+    if password:
+        cisco_cfg["password"] = str(password)
+    if console_port:
+        cisco_cfg["console_port"] = str(console_port).strip()
+    if console_baud:
+        cisco_cfg["console_baud"] = int(console_baud)
+    if management_vlan:
+        cisco_cfg["management_vlan"] = int(management_vlan)
+    if management_ip:
+        cisco_cfg["management_ip"] = str(management_ip).strip()
+        cisco_cfg["ip"] = str(management_ip).strip()
+    if subnet_mask:
+        cisco_cfg["subnet_mask"] = str(subnet_mask).strip()
+    if gateway:
+        cisco_cfg["gateway"] = str(gateway).strip()
+    if domain_name:
+        cisco_cfg["domain_name"] = str(domain_name).strip()
+    if enable_password:
+        cisco_cfg["enable_password"] = str(enable_password)
+    if bootstrap_network_port:
+        cisco_cfg["bootstrap_network_port"] = str(bootstrap_network_port).strip()
+    if bootstrap_network_mode:
+        cisco_cfg["bootstrap_network_mode"] = str(bootstrap_network_mode).strip()
+
+
+@router.post("/modules/cisco/discover-console", response_class=HTMLResponse)
+async def cisco_discover_console(request: Request, return_page: str = Form("cisco")):
+    from app import main
+
+    cfg = main.load_kit_config()
+    cisco_cfg = cfg.setdefault("cisco_switch", {})
+    result = service.discover_console({"cfg": cfg})
+    candidates = list(result.get("candidates") or [])
+    probe_results = list(result.get("probe_results") or [])
+    diagnostics = dict(result.get("diagnostics") or {})
+    suggestions = list(result.get("suggestions") or diagnostics.get("suggestions") or [])
+    cisco_cfg["last_console_candidates"] = [{key: value for key, value in item.items() if key != "raw_output"} for item in candidates]
+    cisco_cfg["last_console_probe_results"] = probe_results
+    cisco_cfg["last_console_suggestions"] = suggestions
+    cisco_cfg["last_serial_output"] = "\n\n".join(str(item.get("raw_output") or "") for item in candidates if item.get("raw_output"))
+    cisco_cfg["last_console_diagnostics"] = diagnostics
+    cisco_cfg["last_cisco_action"] = {
+        "mode": "discover_console",
+        "ok": bool(result.get("ok")),
+        "error": str(result.get("error") or ""),
+        "suggestions": suggestions,
+        "completed_at": datetime.now(timezone.utc).isoformat(),
+    }
+    cisco_cfg["last_discovery_error"] = ""
+    if len(candidates) == 1:
+        cisco_cfg["console_port"] = str(candidates[0].get("port") or "")
+        cisco_cfg["console_baud"] = int(candidates[0].get("baud") or 9600)
+        cisco_cfg["connection_method"] = "console"
+    elif diagnostics.get("permission_denied"):
+        cisco_cfg["last_discovery_error"] = str(diagnostics.get("error_summary") or result.get("error") or "")
+    elif not result.get("ok"):
+        port_errors = [str(item.get("error") or "").strip() for item in probe_results if str(item.get("error") or "").strip()]
+        cisco_cfg["last_discovery_error"] = port_errors[0] if port_errors else str(result.get("error") or "")
+    main.save_kit_config(cfg)
+    details = list(result.get("warnings") or [])
+    if diagnostics:
+        details.extend(
+            [
+                f"pyserial import status: {'ready' if diagnostics.get('serial_imported') else 'missing'}",
+                f"Visible serial ports: {', '.join(list(diagnostics.get('ordered_ports') or [])) or 'none'}",
+            ]
+        )
+    if diagnostics.get("permission_denied"):
+        details.append("Serial access is blocked by Linux device permissions. Add the Lab Builder server user to the dialout group and restart the app session.")
+    details.extend(suggestions)
+    port_errors = [str(item.get("error") or "").strip() for item in probe_results if str(item.get("error") or "").strip()]
+    if port_errors:
+        details.append(f"Probe error: {port_errors[0]}")
+    main.append_activity_event(
+        cfg["site"]["name"],
+        "cisco_console_discovery",
+        workflow="cisco",
+        state="complete" if result.get("ok") else "failed",
+        summary="Cisco console discovery completed." if result.get("ok") else "Cisco console discovery failed.",
+        target=str(candidates[0].get("port") or "") if len(candidates) == 1 else "",
+        details=details + ([str(result.get("error") or "")] if str(result.get("error") or "").strip() else []),
+    )
+
+    if result.get("ok"):
+        if len(candidates) == 1:
+            outcomes = [f"Console: {cisco_cfg.get('console_port')} @ {cisco_cfg.get('console_baud')}"]
+            title = "Cisco console found"
+        else:
+            outcomes = [f"{len(candidates)} console candidates found", "Select the intended port before configuring management IP."]
+            title = "Choose Cisco console"
+        feedback = main.build_action_feedback(title, "Serial discovery only sent a newline and did not change switch configuration.", tone="ready", outcomes=outcomes, details=details)
+    else:
+        message = str(cisco_cfg.get("last_discovery_error") or result.get("error") or "No Cisco console prompt was detected.")
+        feedback = main.build_action_feedback("Cisco console not found", message, tone="pending", details=details)
+    return _render_cisco_page(request, cfg, action_feedback=feedback)
+
+
+@router.post("/modules/cisco/fix-serial-permissions", response_class=HTMLResponse)
+async def cisco_fix_serial_permissions(
+    request: Request,
+    cisco_host_sudo_password: str = Form(""),
+):
+    from app import main
+
+    cfg = main.load_kit_config()
+    cisco_cfg = cfg.setdefault("cisco_switch", {})
+    result = service.fix_serial_permissions({"cfg": cfg}, cisco_host_sudo_password)
+    diagnostics = dict(result.get("diagnostics") or {})
+    cisco_cfg["last_console_diagnostics"] = diagnostics
+    cisco_cfg["last_host_fix"] = {
+        "ok": bool(result.get("ok")),
+        "applied": list(result.get("applied") or []),
+        "warnings": list(result.get("warnings") or []),
+        "restart_required": bool(result.get("restart_required")),
+        "completed_at": datetime.now(timezone.utc).isoformat(),
+        "error": str(result.get("error") or ""),
+    }
+    cisco_cfg["last_cisco_action"] = {
+        "mode": "fix_serial_permissions",
+        "ok": bool(result.get("ok")),
+        "error": str(result.get("error") or ""),
+        "completed_at": cisco_cfg["last_host_fix"]["completed_at"],
+    }
+    if result.get("ok"):
+        cisco_cfg["last_discovery_error"] = ""
+    else:
+        cisco_cfg["last_discovery_error"] = str(result.get("error") or "")
+    main.save_kit_config(cfg)
+    feedback = main.build_action_feedback(
+        "Serial permissions updated" if result.get("ok") else "Serial permissions update failed",
+        "Applied the host-side serial access fix for the Lab Builder user." if result.get("ok") else str(result.get("error") or "Could not update serial permissions."),
+        tone="ready" if result.get("ok") else "danger",
+        outcomes=list(result.get("applied") or []),
+        details=list(result.get("warnings") or []),
+    )
+    return _render_cisco_page(request, cfg, action_feedback=feedback)
+
+
+@router.post("/modules/cisco/bootstrap-management", response_class=HTMLResponse)
+async def cisco_bootstrap_management(
+    request: Request,
+    return_page: str = Form("cisco"),
+    cisco_switch_hostname: str = Form(""),
+    cisco_switch_username: str = Form(""),
+    cisco_switch_password: str = Form(""),
+    cisco_console_port: str = Form(""),
+    cisco_console_baud: int = Form(9600),
+    cisco_management_vlan: int = Form(10),
+    cisco_management_ip: str = Form(""),
+    cisco_subnet_mask: str = Form(""),
+    cisco_gateway: str = Form(""),
+    cisco_domain_name: str = Form(""),
+    cisco_enable_password: str = Form(""),
+    cisco_bootstrap_network_port: str = Form(""),
+    cisco_bootstrap_network_mode: str = Form("trunk"),
+):
+    from app import main
+
+    cfg = main.load_kit_config()
+    cisco_cfg = cfg.setdefault("cisco_switch", {})
+    _update_cisco_access(
+        cisco_cfg,
+        hostname=cisco_switch_hostname,
+        username=cisco_switch_username,
+        password=cisco_switch_password,
+        console_port=cisco_console_port,
+        console_baud=cisco_console_baud,
+        management_vlan=cisco_management_vlan,
+        management_ip=cisco_management_ip,
+        subnet_mask=cisco_subnet_mask,
+        gateway=cisco_gateway,
+        domain_name=cisco_domain_name,
+        enable_password=cisco_enable_password,
+        bootstrap_network_port=cisco_bootstrap_network_port,
+        bootstrap_network_mode=cisco_bootstrap_network_mode,
+    )
+    matches = list(cisco_cfg.get("last_console_candidates") or [])
+    if not cisco_cfg.get("console_port") and len(matches) > 1:
+        feedback = main.build_action_feedback("Choose Cisco console", "Multiple console ports matched. Select the intended port before configuring management IP.", tone="pending")
+        main.save_kit_config(cfg)
+        return _render_cisco_page(request, cfg, action_feedback=feedback)
+
+    result = service.bootstrap_management({"cfg": cfg})
+    cisco_cfg["last_bootstrap"] = {key: value for key, value in result.items() if key not in {"status", "output"}}
+    cisco_cfg["last_serial_output"] = str(result.get("output") or cisco_cfg.get("last_serial_output") or "")
+    cisco_cfg["last_bootstrap_at"] = datetime.now(timezone.utc).isoformat()
+    if result.get("ok"):
+        check = service.verify_console_bootstrap({"cfg": cfg})
+        cisco_cfg["last_console_bootstrap_check"] = {key: value for key, value in check.items() if key not in {"status", "raw_output"}}
+        cisco_cfg["last_raw_console_bootstrap_check"] = str(check.get("raw_output") or "")
+        cisco_cfg["connection_method"] = "ssh" if check.get("ok") else "console"
+    main.save_kit_config(cfg)
+    bootstrap_check = dict(cisco_cfg.get("last_console_bootstrap_check") or {})
+    feedback = main.build_action_feedback(
+        "Cisco management IP configured" if result.get("ok") else "Cisco management config failed",
+        "Console bootstrap completed. Use Test SSH before running version discovery or upgrades." if result.get("ok") and bootstrap_check.get("ok") else str(result.get("error") or bootstrap_check.get("error") or "Console bootstrap needs attention."),
+        tone="ready" if result.get("ok") and bootstrap_check.get("ok") else ("pending" if result.get("ok") else "danger"),
+        outcomes=[f"Management IP: {cisco_cfg.get('management_ip') or cisco_cfg.get('ip') or 'Not set'}", f"Console: {cisco_cfg.get('console_port') or 'Not selected'}"],
+        details=list(result.get("warnings") or []) + list(bootstrap_check.get("warnings") or []),
+    )
+    return _render_cisco_page(request, cfg, action_feedback=feedback)
+
+
+@router.post("/modules/cisco/verify-console-bootstrap", response_class=HTMLResponse)
+async def cisco_verify_console_bootstrap(request: Request):
+    from app import main
+
+    cfg = main.load_kit_config()
+    cisco_cfg = cfg.setdefault("cisco_switch", {})
+    result = service.verify_console_bootstrap({"cfg": cfg})
+    cisco_cfg["last_console_bootstrap_check"] = {key: value for key, value in result.items() if key not in {"status", "raw_output"}}
+    cisco_cfg["last_raw_console_bootstrap_check"] = str(result.get("raw_output") or "")
+    cisco_cfg["last_cisco_action"] = {
+        "mode": "verify_console_bootstrap",
+        "ok": bool(result.get("ok")),
+        "error": str(result.get("error") or ""),
+        "completed_at": datetime.now(timezone.utc).isoformat(),
+    }
+    main.save_kit_config(cfg)
+    feedback = main.build_action_feedback(
+        "Console bootstrap network is ready" if result.get("ok") else "Console bootstrap network needs attention",
+        "Management SVI and SSH look ready from the console." if result.get("ok") else str(result.get("error") or "Console bootstrap verification failed."),
+        tone="ready" if result.get("ok") else "pending",
+        outcomes=[
+            f"VLAN {result.get('management_vlan') or cisco_cfg.get('management_vlan')}: {'exists' if result.get('vlan_exists') else 'missing'}",
+            f"SSH: {'enabled' if result.get('ssh_enabled') else 'not enabled'}",
+        ],
+        details=list(result.get("warnings") or []),
+    )
+    return _render_cisco_page(request, cfg, action_feedback=feedback)
+
+
+@router.post("/modules/cisco/test-ssh", response_class=HTMLResponse)
+async def cisco_test_ssh(
+    request: Request,
+    return_page: str = Form("cisco"),
+    cisco_switch_username: str = Form(""),
+    cisco_switch_password: str = Form(""),
+    cisco_management_ip: str = Form(""),
+):
+    from app import main
+
+    cfg = main.load_kit_config()
+    cisco_cfg = cfg.setdefault("cisco_switch", {})
+    _update_cisco_access(cisco_cfg, username=cisco_switch_username, password=cisco_switch_password, management_ip=cisco_management_ip)
+    result = service.test_ssh({"cfg": cfg})
+    cisco_cfg["last_ssh_test"] = {"ok": bool(result.get("ok")), "host": str(result.get("host") or ""), "error": str(result.get("error") or ""), "tested_at": datetime.now(timezone.utc).isoformat()}
+    if result.get("ok"):
+        cisco_cfg["connection_method"] = "ssh"
+        cisco_cfg["last_show_version"] = str(result.get("raw_excerpt") or cisco_cfg.get("last_show_version") or "")
+    main.save_kit_config(cfg)
+    feedback = main.build_action_feedback(
+        "Cisco SSH reachable" if result.get("ok") else "Cisco SSH test failed",
+        "SSH is reachable and can be used for normal configuration and upgrades." if result.get("ok") else str(result.get("error") or "SSH test failed."),
+        tone="ready" if result.get("ok") else "pending",
+        outcomes=[f"Target: {result.get('host') or 'Not set'}"],
+    )
+    return _render_cisco_page(request, cfg, action_feedback=feedback)
+
+
+@router.post("/modules/cisco/save-port-map", response_class=HTMLResponse)
+async def cisco_save_port_map(request: Request):
+    from app import main
+
+    cfg = main.load_kit_config()
+    cisco_cfg = cfg.setdefault("cisco_switch", {})
+    form_data = await request.form()
+    form = dict(form_data)
+    _update_cisco_model_from_form(cisco_cfg, form)
+    selected = [str(item) for item in form_data.getlist("selected_ports") if str(item).strip()]
+    bulk_profile = str(form.get("bulk_profile") or "").strip()
+    if selected and bulk_profile:
+        ports = cisco_cfg.setdefault("ports", {})
+        for port in selected:
+            ports.setdefault(port, {})
+            ports[port]["profile"] = bulk_profile
+    main.save_kit_config(cfg)
+    feedback = main.build_action_feedback(
+        "Cisco port map saved",
+        "Saved the port profiles, VLANs, overrides, and global Cisco defaults.",
+        tone="ready",
+        outcomes=[f"Ports: {len(cisco_cfg.get('ports') or {})}", f"Apply mode: {cisco_cfg.get('apply_mode') or 'initial_install'}"],
+    )
+    return _render_cisco_page(request, cfg, action_feedback=feedback)
+
+
+@router.post("/modules/cisco/discover-ports", response_class=HTMLResponse)
+async def cisco_discover_ports(request: Request):
+    from app import main
+
+    cfg = main.load_kit_config()
+    cisco_cfg = cfg.setdefault("cisco_switch", {})
+    form = dict(await request.form())
+    _update_cisco_access(
+        cisco_cfg,
+        hostname=str(form.get("cisco_switch_hostname") or ""),
+        username=str(form.get("cisco_switch_username") or ""),
+        password=str(form.get("cisco_switch_password") or ""),
+        management_ip=str(form.get("cisco_management_ip") or ""),
+    )
+    result = service.discover_ports({"cfg": cfg})
+    if result.get("ok"):
+        discovery = dict(result.get("discovery") or {})
+        cisco_cfg["last_port_discovery"] = discovery
+        existing_ports = cisco_cfg.setdefault("ports", {})
+        for interface in (discovery.get("interfaces") or {}):
+            existing_ports.setdefault(interface, {"profile": "custom"})
+        cisco_cfg["last_raw_port_discovery"] = str(result.get("raw_output") or "")
+    cisco_cfg["last_cisco_action"] = {"mode": "discover", "ok": bool(result.get("ok")), "error": str(result.get("error") or ""), "completed_at": datetime.now(timezone.utc).isoformat()}
+    main.save_kit_config(cfg)
+    feedback = main.build_action_feedback(
+        "Cisco ports discovered" if result.get("ok") else "Cisco port discovery failed",
+        "Discovered interface names are now available in the port map." if result.get("ok") else str(result.get("error") or "Cisco port discovery failed."),
+        tone="ready" if result.get("ok") else "pending",
+        outcomes=[f"Target: {result.get('host') or cisco_cfg.get('management_ip') or 'Not set'}"],
+    )
+    return _render_cisco_page(request, cfg, action_feedback=feedback)
+
+
+@router.post("/modules/cisco/discover-state", response_class=HTMLResponse)
+async def cisco_discover_state(request: Request):
+    from app import main
+
+    cfg = main.load_kit_config()
+    cisco_cfg = cfg.setdefault("cisco_switch", {})
+    form = dict(await request.form())
+    _update_cisco_access(
+        cisco_cfg,
+        hostname=str(form.get("cisco_switch_hostname") or ""),
+        username=str(form.get("cisco_switch_username") or ""),
+        password=str(form.get("cisco_switch_password") or ""),
+        management_ip=str(form.get("cisco_management_ip") or ""),
+    )
+    version_result = service.discover({"cfg": cfg})
+    ports_result = service.discover_ports({"cfg": cfg}) if version_result.get("ok") else {"ok": False, "error": "Skipped because SSH version discovery did not succeed."}
+    backup_result = service.backup_config({"cfg": cfg}) if version_result.get("ok") else {"ok": False, "error": "Skipped because SSH version discovery did not succeed."}
+
+    if version_result.get("ok"):
+        version = str(version_result.get("version") or "").strip()
+        cisco_cfg["last_discovered_version"] = version
+        cisco_cfg["last_discovered_at"] = datetime.now(timezone.utc).isoformat()
+        cisco_cfg["last_show_version"] = str(version_result.get("raw_excerpt") or "").strip()
+        cisco_cfg["last_discovered_model"] = str(version_result.get("model") or "").strip()
+        cisco_cfg["last_discovered_platform"] = str(version_result.get("platform") or "").strip()
+        cisco_cfg["last_discovered_hostname"] = str(version_result.get("hostname") or "").strip()
+        cisco_cfg["last_discovery_error"] = ""
+        record_upgrade_inventory(
+            cfg,
+            "cisco_switch",
+            current_version=version,
+            source="Last Cisco discovery",
+            raw_version=version or str(version_result.get("raw_excerpt") or "").strip(),
+            checked_at=cisco_cfg["last_discovered_at"],
+            model=str(version_result.get("model") or "").strip(),
+            platform=str(version_result.get("platform") or "").strip(),
+            hostname=str(version_result.get("hostname") or "").strip(),
+        )
+    else:
+        cisco_cfg["last_discovery_error"] = str(version_result.get("error") or "").strip()
+
+    if ports_result.get("ok"):
+        discovery = dict(ports_result.get("discovery") or {})
+        cisco_cfg["last_port_discovery"] = discovery
+        cisco_cfg["last_raw_port_discovery"] = str(ports_result.get("raw_output") or "")
+        for interface in (discovery.get("interfaces") or {}):
+            cisco_cfg.setdefault("ports", {}).setdefault(interface, {"profile": "custom"})
+
+    if backup_result.get("ok"):
+        cisco_cfg["last_running_config_backup"] = str(backup_result.get("running_config") or "")
+
+    cisco_cfg["last_cisco_action"] = {
+        "mode": "discover_state",
+        "ok": bool(version_result.get("ok")),
+        "completed_at": datetime.now(timezone.utc).isoformat(),
+        "errors": [str(item) for item in [version_result.get("error"), ports_result.get("error"), backup_result.get("error")] if str(item or "").strip()],
+    }
+    main.save_kit_config(cfg)
+    details: list[str] = []
+    if not version_result.get("ok"):
+        details.append(str(version_result.get("error") or "Cisco version discovery failed."))
+    if version_result.get("ok") and not ports_result.get("ok"):
+        details.append(str(ports_result.get("error") or "Cisco port discovery failed."))
+    if version_result.get("ok") and not backup_result.get("ok"):
+        details.append(str(backup_result.get("error") or "Cisco backup failed."))
+    feedback = main.build_action_feedback(
+        "Cisco live state read" if version_result.get("ok") else "Cisco live state read failed",
+        "Read the current version, discovered live interfaces, and backed up the running config."
+        if version_result.get("ok")
+        else str(version_result.get("error") or "Cisco state discovery failed."),
+        tone="ready" if version_result.get("ok") else "pending",
+        outcomes=[
+            f"Version: {cisco_cfg.get('last_discovered_version') or 'Unknown'}",
+            f"Live interfaces: {len(dict((cisco_cfg.get('last_port_discovery') or {}).get('interfaces') or {}))}",
+        ],
+        details=details,
+    )
+    return _render_cisco_page(request, cfg, action_feedback=feedback)
+
+
+@router.post("/modules/cisco/preview-config", response_class=HTMLResponse)
+async def cisco_preview_config(request: Request, mode: str = Form("full")):
+    from app import main
+
+    cfg = main.load_kit_config()
+    cisco_cfg = cfg.setdefault("cisco_switch", {})
+    form_data = await request.form()
+    form = dict(form_data)
+    _update_cisco_model_from_form(cisco_cfg, form)
+    selected_ports = [str(item) for item in form_data.getlist("selected_ports") if str(item).strip()]
+    result = service.preview_config({"cfg": cfg}, mode=mode, selected_ports=selected_ports)
+    cisco_cfg["last_config_preview"] = str(result.get("config") or "")
+    cisco_cfg["last_config_validation"] = dict(result.get("validation") or {})
+    cisco_cfg["last_cisco_action"] = {"mode": "preview", "ok": bool(result.get("ok")), "completed_at": datetime.now(timezone.utc).isoformat()}
+    main.save_kit_config(cfg)
+    validation = dict(result.get("validation") or {})
+    feedback = main.build_action_feedback(
+        "Cisco config preview ready" if result.get("ok") else "Cisco config needs attention",
+        "Generated the requested Cisco configuration preview without applying it.",
+        tone="ready" if result.get("ok") else "pending",
+        outcomes=[f"Mode: {mode}", f"Selected ports: {len(selected_ports) if selected_ports else 'all'}"],
+        details=list(validation.get("errors") or []) + list(validation.get("warnings") or []),
+    )
+    return _render_cisco_page(request, cfg, action_feedback=feedback)
+
+
+@router.post("/modules/cisco/apply-config", response_class=HTMLResponse)
+async def cisco_apply_config(request: Request, mode: str = Form("full")):
+    from app import main
+
+    cfg = main.load_kit_config()
+    cisco_cfg = cfg.setdefault("cisco_switch", {})
+    form_data = await request.form()
+    form = dict(form_data)
+    _update_cisco_model_from_form(cisco_cfg, form)
+    selected_ports = [str(item) for item in form_data.getlist("selected_ports") if str(item).strip()]
+    result = service.apply_config({"cfg": cfg}, mode=mode, selected_ports=selected_ports)
+    cisco_cfg["last_config_preview"] = str(result.get("config") or "")
+    cisco_cfg["last_cisco_action"] = {"mode": f"apply_{mode}", "ok": bool(result.get("ok")), "applied": bool(result.get("applied")), "error": str(result.get("error") or ""), "completed_at": datetime.now(timezone.utc).isoformat()}
+    main.save_kit_config(cfg)
+    validation = dict(result.get("validation") or {})
+    feedback = main.build_action_feedback(
+        "Cisco config applied" if result.get("applied") else "Cisco config not applied",
+        "Applied the requested Cisco configuration over SSH." if result.get("applied") else str(result.get("error") or "Validation blocked the apply."),
+        tone="ready" if result.get("applied") else "danger",
+        outcomes=[f"Mode: {mode}", f"Selected ports: {len(selected_ports) if selected_ports else 'all'}"],
+        details=list(validation.get("errors") or []) + list(validation.get("warnings") or []),
+    )
+    return _render_cisco_page(request, cfg, action_feedback=feedback)
+
+
+@router.post("/modules/cisco/approve-config-plan", response_class=HTMLResponse)
+async def cisco_approve_config_plan(request: Request, mode: str = Form("full")):
+    from app import main
+
+    cfg = main.load_kit_config()
+    cisco_cfg = cfg.setdefault("cisco_switch", {})
+    form_data = await request.form()
+    form = dict(form_data)
+    _update_cisco_model_from_form(cisco_cfg, form)
+    result = service.preview_config({"cfg": cfg}, mode=mode)
+    validation = dict(result.get("validation") or {})
+    cisco_cfg["last_config_preview"] = str(result.get("config") or "")
+    cisco_cfg["last_config_validation"] = validation
+
+    blockers: list[str] = []
+    if not dict(cisco_cfg.get("last_ssh_test") or {}).get("ok"):
+        blockers.append("SSH must pass before the Cisco config plan can be approved for Run Center.")
+    if not str(cisco_cfg.get("last_discovered_version") or "").strip():
+        blockers.append("Read the current switch version before approving the Cisco config plan.")
+    upgrade = dict(cisco_cfg.get("upgrade") or {})
+    upgrade_result = dict(upgrade.get("last_result") or {})
+    upgrade_plan = dict(upgrade.get("last_plan") or {})
+    upgrade_override = bool((((cfg.get("upgrade_helper") or {}).get("overrides") or {}).get("cisco_switch")))
+    upgrade_ok = upgrade_override or upgrade_result.get("status") == "completed" or upgrade_plan.get("comparison") in {"current_enough", "already_current", "equal"}
+    if not upgrade_ok:
+        blockers.append("Review the Cisco upgrade gate on Upgrade Helper, complete the upgrade, or enable the override before approving the final config plan.")
+    blockers.extend(str(item) for item in validation.get("errors") or [])
+
+    if result.get("ok") and not blockers:
+        approved_at = datetime.now(timezone.utc).isoformat()
+        cisco_cfg["config_approval"] = {
+            "state": "approved",
+            "mode": mode,
+            "approved_at": approved_at,
+            "version": str(cisco_cfg.get("last_discovered_version") or ""),
+            "ports": len(dict(cisco_cfg.get("ports") or {})),
+            "summary": "Cisco config plan approved for Run Center.",
+        }
+        cisco_cfg["last_cisco_action"] = {"mode": "approve_config_plan", "ok": True, "completed_at": approved_at}
+        cfg.setdefault("included", {})["cisco_switch"] = True
+        feedback = main.build_action_feedback(
+            "Cisco config plan approved",
+            "Run Center can now include the Cisco switch stage.",
+            tone="ready",
+            outcomes=[f"Mode: {mode}", f"Ports: {len(dict(cisco_cfg.get('ports') or {}))}", "Cisco switch included in Run Center"],
+            details=list(validation.get("warnings") or []),
+        )
+    else:
+        cisco_cfg["config_approval"] = {
+            "state": "blocked",
+            "mode": mode,
+            "checked_at": datetime.now(timezone.utc).isoformat(),
+            "blockers": blockers,
+        }
+        cisco_cfg["last_cisco_action"] = {"mode": "approve_config_plan", "ok": False, "completed_at": datetime.now(timezone.utc).isoformat()}
+        feedback = main.build_action_feedback(
+            "Cisco config plan not approved",
+            "Finish the Cisco workflow steps above before sending the final switch config to Run Center.",
+            tone="pending",
+            outcomes=[f"Mode: {mode}"],
+            details=blockers + list(validation.get("warnings") or []),
+        )
+
+    main.save_kit_config(cfg)
+    return _render_cisco_page(request, cfg, action_feedback=feedback)
+
+
+@router.post("/modules/cisco/backup-config", response_class=HTMLResponse)
+async def cisco_backup_config(request: Request):
+    from app import main
+
+    cfg = main.load_kit_config()
+    cisco_cfg = cfg.setdefault("cisco_switch", {})
+    form = dict(await request.form())
+    _update_cisco_access(
+        cisco_cfg,
+        hostname=str(form.get("cisco_switch_hostname") or ""),
+        username=str(form.get("cisco_switch_username") or ""),
+        password=str(form.get("cisco_switch_password") or ""),
+        management_ip=str(form.get("cisco_management_ip") or ""),
+    )
+    result = service.backup_config({"cfg": cfg})
+    if result.get("ok"):
+        cisco_cfg["last_running_config_backup"] = str(result.get("running_config") or "")
+    cisco_cfg["last_cisco_action"] = {"mode": "backup_config", "ok": bool(result.get("ok")), "error": str(result.get("error") or ""), "completed_at": datetime.now(timezone.utc).isoformat()}
+    main.save_kit_config(cfg)
+    feedback = main.build_action_feedback(
+        "Cisco config backed up" if result.get("ok") else "Cisco config backup failed",
+        "Captured the current running config for preview and audit." if result.get("ok") else str(result.get("error") or "Backup failed."),
+        tone="ready" if result.get("ok") else "pending",
+    )
+    return _render_cisco_page(request, cfg, action_feedback=feedback)
+
+
+@router.post("/modules/cisco/factory-reset", response_class=HTMLResponse)
+async def cisco_factory_reset(request: Request):
+    from app import main
+
+    cfg = main.load_kit_config()
+    cisco_cfg = cfg.setdefault("cisco_switch", {})
+    form = dict(await request.form())
+    confirm = str(form.get("cisco_factory_reset_confirm") or "").strip().upper()
+    _update_cisco_access(
+        cisco_cfg,
+        hostname=str(form.get("cisco_switch_hostname") or ""),
+        username=str(form.get("cisco_switch_username") or ""),
+        password=str(form.get("cisco_switch_password") or ""),
+        management_ip=str(form.get("cisco_management_ip") or ""),
+    )
+    if confirm != "FACTORY RESET":
+        result = {"status": "blocked", "error": "Type FACTORY RESET to confirm deleting startup-config, vlan.dat, and reloading the switch."}
+        tone = "danger"
+    else:
+        try:
+            result = execute_cisco_factory_reset(
+                str(cisco_cfg.get("ip") or cisco_cfg.get("management_ip") or ""),
+                str(cisco_cfg.get("username") or ""),
+                str(cisco_cfg.get("password") or ""),
+            )
+            tone = "pending"
+        except Exception as exc:
+            result = {"status": "failed", "error": str(exc).strip() or "Cisco factory reset failed."}
+            tone = "danger"
+    cisco_cfg["last_factory_reset"] = result
+    cisco_cfg["last_cisco_action"] = {"mode": "factory_reset", "ok": result.get("status") == "reload_issued", "error": str(result.get("error") or ""), "completed_at": datetime.now(timezone.utc).isoformat()}
+    main.save_kit_config(cfg)
+    feedback = main.build_action_feedback(
+        "Cisco factory reset issued" if result.get("status") == "reload_issued" else "Cisco factory reset blocked",
+        "Startup config and vlan.dat deletion were issued and the switch is reloading." if result.get("status") == "reload_issued" else str(result.get("error") or "Factory reset was not started."),
+        tone=tone,
+    )
+    return _render_cisco_page(request, cfg, action_feedback=feedback)
+
+
 @router.post("/modules/cisco/plan-upgrade", response_class=HTMLResponse)
 async def cisco_plan_upgrade(request: Request, return_page: str = Form("cisco")):
     from app import main
@@ -161,40 +883,71 @@ async def cisco_run_upgrade(request: Request, return_page: str = Form("cisco")):
     from app import main
 
     cfg = main.load_kit_config()
-    try:
-        result = execute_cisco_upgrade(cfg, main.scan_upgrade_media())
-        main.save_kit_config(cfg)
+    plan = build_cisco_upgrade_plan(cfg, main.scan_upgrade_media())
+    _store_cisco_upgrade_plan(cfg, plan)
+    cisco_cfg = cfg.setdefault("cisco_switch", {})
+    activity = dict(((cisco_cfg.get("upgrade") or {}).get("activity") or {}))
+    if str(activity.get("status") or "").lower() == "running":
         feedback = main.build_action_feedback(
-            "Cisco upgrade submitted",
-            "Submitted the Cisco image transfer and install sequence. This path is implemented but not yet live-tested in this workspace.",
-            tone="ready",
-            outcomes=[
-                f"Target: {result.get('host') or 'Not set'}",
-                f"Previous version: {result.get('previous_version') or 'Unknown'}",
-                f"Target version: {result.get('target_version') or 'Unknown'}",
-            ],
-            details=[f"Image: {result.get('media_path') or 'Unknown'}"],
+            "Cisco upgrade already running",
+            "Watch the Cisco upgrade status panel for the latest transfer/install state.",
+            tone="pending",
+            outcomes=[f"Phase: {activity.get('phase') or 'unknown'}", f"Last message: {activity.get('message') or 'waiting'}"],
         )
-    except Exception as exc:
-        plan = build_cisco_upgrade_plan(cfg, main.scan_upgrade_media())
-        _store_cisco_upgrade_plan(cfg, plan)
-        cfg.setdefault("cisco_switch", {}).setdefault("upgrade", {})["last_result"] = {"status": "failed", "error": str(exc).splitlines()[0]}
+    elif not plan.get("ready"):
+        cisco_cfg.setdefault("upgrade", {})["last_result"] = {"status": "blocked", "error": "; ".join(plan.get("blockers") or [])}
+        _record_cisco_upgrade_activity(
+            cfg,
+            {"phase": "blocked", "message": "; ".join(plan.get("blockers") or ["Cisco upgrade prechecks are not satisfied."]), "timestamp": datetime.now(timezone.utc).isoformat(), "progress_percent": 100},
+            status="blocked",
+        )
         main.save_kit_config(cfg)
         feedback = main.build_action_feedback(
-            "Cisco upgrade failed",
-            "The Cisco upgrade command path did not complete cleanly.",
+            "Cisco upgrade blocked",
+            "The app did not start the upgrade because readiness checks did not pass.",
             tone="danger",
             outcomes=[
                 f"Target: {plan.get('host') or 'Not set'}",
                 f"Current version: {plan.get('current_version') or 'Unknown'}",
                 f"Matched media: {plan.get('media_version') or 'Not found'}",
             ],
-            details=[str(exc).splitlines()[0]] + list(plan.get("notes") or []),
+            details=list(plan.get("blockers") or []) + list(plan.get("warnings") or []),
+        )
+    else:
+        now = datetime.now(timezone.utc).isoformat()
+        cisco_cfg.setdefault("upgrade", {})["activity"] = {
+            "status": "running",
+            "phase": "queued",
+            "message": "Cisco upgrade worker queued.",
+            "started_at": now,
+            "updated_at": now,
+            "progress_percent": 5,
+            "events": [{"phase": "queued", "message": "Cisco upgrade worker queued.", "timestamp": now, "progress_percent": 5}],
+        }
+        main.save_kit_config(cfg)
+        _start_cisco_upgrade_worker(cfg)
+        feedback = main.build_action_feedback(
+            "Cisco upgrade started",
+            "The upgrade is running in the background. Watch the Cisco upgrade status panel for transfer, install, completion, or errors.",
+            tone="pending",
+            outcomes=[
+                f"Target: {plan.get('host') or 'Not set'}",
+                f"Current version: {plan.get('current_version') or 'Unknown'}",
+                f"Target version: {plan.get('media_version') or 'Unknown'}",
+            ],
         )
     page = str(return_page or "").strip().lower()
     if page in {"upgrade_helper", "global_settings"}:
         return main.render_page(request, cfg, active_page=page, action_feedback=feedback)
     return _render_cisco_page(request, cfg, action_feedback=feedback)
+
+
+@router.get("/modules/cisco/upgrade-activity", response_class=HTMLResponse)
+async def cisco_upgrade_activity(request: Request):
+    from app import main
+
+    cfg = main.load_kit_config()
+    return main.templates.TemplateResponse(request, "partials/components/cisco_upgrade_activity.html", {"cfg": cfg})
 
 
 def register_module_routes(app: FastAPI) -> None:

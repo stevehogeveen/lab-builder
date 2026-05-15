@@ -77,7 +77,7 @@ Copy this block and update it in place.
 - Status: active
 - Branch: cleanup/project-structure
 - Scope owner: non-NetApp app work
-- Working on: App-wide wording/layout cleanup pass, with narrow NetApp preview wording touch
+- Working on: Cisco console connection diagnostics and operator-facing failure clarity
 - Blocked by: none
 - Ready to hand off: NetApp snapshot slice can hand off after page and discovery updates are recorded here
 - Files claimed:
@@ -94,6 +94,10 @@ Copy this block and update it in place.
   - templates/partials/pages/esxi.html
   - templates/partials/pages/windows.html
   - templates/partials/pages/qnap.html
+  - app/modules/cisco/service.py
+  - app/modules/cisco/routes.py
+  - templates/partials/pages/cisco.html
+  - tests/test_cisco_console_feedback.py
   - templates/partials/components/setup_strip.html
   - templates/partials/components/precheck_summary.html
   - templates/partials/sidebar.html
@@ -127,6 +131,8 @@ Copy this block and update it in place.
   - 2026-05-12 America/Toronto - Fixed the shared setup-strip component, removed stray bottom-of-page CSS output, and compacted Storage planner plus Run Center technical-detail layouts.
   - 2026-05-12 America/Toronto - Added shared truncation/table-fit helpers and applied them to reports, history, and storage artifact/detail surfaces.
   - 2026-05-12 America/Toronto - Finished the remaining page-fit pass for ESXi, iLO, Windows, QNAP, and Cisco, including legacy input styling cleanup and long-value truncation.
+  - 2026-05-15 America/Toronto - Added Cisco console failure classification, visible probe results, and focused diagnostics tests for no-adapter, permission, and no-prompt cases.
+  - 2026-05-15 America/Toronto - Tightened Cisco serial discovery to verify exec prompts with read-only show version output and downgrade generic non-Cisco prompts before auto-selection.
 - Next intended change:
   - Finish app-wide wording/layout cleanup pass and rerun regression tests.
 
@@ -207,7 +213,7 @@ Current entries:
 
 2026-05-13 America/Toronto - Wired Cisco version discovery into Upgrade Helper: SSH show version parsing, cached upgrade inventory, Global Settings Cisco access, and direct read-version actions.
 
-2026-05-13 America/Toronto - Upgrade Helper now resolves repo-local media at /home/administrator/lab-builder/media, recognizes real ONTAP q_image and compact iLO firmware filenames, and exposes an Upgrade planner drill-down in Global Settings.
+2026-05-13 America/Toronto - Upgrade Helper now resolves repo-local media under media/, recognizes real ONTAP q_image and compact iLO firmware filenames, and exposes an Upgrade planner drill-down in Global Settings.
 
 2026-05-13 America/Toronto - Added dedicated /upgrade-helper page, promoted upgrade gates into recommended-next-step routing, and made Global Settings + Upgrade Helper render the same planner state from repo-local media.
 
@@ -225,3 +231,4 @@ Current entries:
 2026-05-13 America/Toronto - Added first iLO firmware-upgrade workflow: family-safe media matching between ilo5/ilo6 `.fwpkg` files, iLO upgrade planning/execution routes, Redfish HttpPush upload support in `app/ilo.py`, and operator actions on Upgrade Helper + iLO pages with targeted upgrade tests.
 2026-05-13 America/Toronto - Ran the first live iLO firmware upgrade on Lab-Uplands-G10: detected iLO 5 v3.03 on 10.10.8.110, matched `media/ilo5_319.fwpkg`, observed UpdateService `Updating -> Complete -> Idle`, and verified final live firmware `iLO 5 v3.19`.
 2026-05-13 America/Toronto - Added matching planner/executor scaffolding for ONTAP and Cisco upgrades: ONTAP image upload/validate/start/poll helpers plus NetApp UI/routes, and Cisco SSH/SCP planner/executor plus UI/routes. Tested planners/UI with focused pytest; live ONTAP/Cisco execution still unproven.
+2026-05-15 America/Toronto - Resumed the upgrade-helper/Cisco/iLO slice, restored iLO page upgrade actions plus live status through the upgrade gate panel, and verified the full pytest suite: 382 passed.

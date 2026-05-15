@@ -2848,7 +2848,7 @@ def build_validation_checks(cfg: dict[str, Any], workflow: str) -> list[dict[str
                 href="/ilo",
             )
         )
-    if workflow in {"ilo", "esxi", "windows", "qnap", "netapp"}:
+    if workflow in {"ilo", "esxi", "windows", "qnap", "netapp", "cisco_switch"}:
         checks.append(
             validation_check(
                 "Shared defaults",
@@ -2858,6 +2858,40 @@ def build_validation_checks(cfg: dict[str, Any], workflow: str) -> list[dict[str
                 fix="Open Global Settings and save the shared subnet and gateway.",
                 href="/global-settings",
             )
+        )
+    if workflow == "cisco_switch":
+        cisco_cfg = cfg.get("cisco_switch", {}) or {}
+        target = str(cisco_cfg.get("management_ip") or cisco_cfg.get("ip") or cfg.get("ip_plan", {}).get("switch") or "").strip()
+        username = str(cisco_cfg.get("username") or "").strip()
+        password = str(cisco_cfg.get("password") or "")
+        approval = dict(cisco_cfg.get("config_approval") or {})
+        checks.extend(
+            [
+                validation_check(
+                    "Management IP",
+                    bool(target),
+                    target or "Cisco management IP is missing.",
+                    why="Run Center applies Cisco config over SSH after console bootstrap.",
+                    fix="Open Cisco and use Configure IP using console.",
+                    href="/cisco",
+                ),
+                validation_check(
+                    "SSH credentials",
+                    bool(username and password and dict(cisco_cfg.get("last_ssh_test") or {}).get("ok")),
+                    "Ready" if (username and password and dict(cisco_cfg.get("last_ssh_test") or {}).get("ok")) else "Save credentials and run Test SSH.",
+                    why="Firmware and config actions must run over SSH, not serial.",
+                    fix="Open Cisco, save the username/password, then run Test SSH.",
+                    href="/cisco",
+                ),
+                validation_check(
+                    "Approved config plan",
+                    approval.get("state") == "approved",
+                    "Ready" if approval.get("state") == "approved" else "Cisco config plan is not approved.",
+                    why="Run Center should only apply the config plan after preview and approval.",
+                    fix="Open Cisco, preview the config, then approve it for Run Center.",
+                    href="/cisco",
+                ),
+            ]
         )
     if workflow == "storage":
         storage_review = build_storage_review_context(cfg)
@@ -3339,8 +3373,26 @@ def build_upgrade_helper_card(cfg: dict[str, Any]) -> dict[str, Any]:
         policies=policies,
         device_details=device_details,
     )
+    overrides = {
+        key: bool(value)
+        for key, value in dict(((cfg.get("upgrade_helper") or {}).get("overrides") or {})).items()
+        if key in {"ilo", "netapp", "cisco_switch"}
+    }
+    for entry in list(planner.get("entries") or []):
+        key = str(entry.get("key") or "")
+        if overrides.get(key) and entry.get("blocks_run"):
+            entry["override_enabled"] = True
+            entry["blocks_run"] = False
+            entry["prebuild_gate"] = False
+            entry["warn_only"] = True
+            entry["severity"] = "progress"
+            entry["recommended_action"] = f"Override enabled. {entry.get('recommended_action') or 'Review the version before continuing.'}"
+    planner["blockers"] = sum(1 for item in list(planner.get("entries") or []) if item.get("blocks_run"))
+    planner["warnings"] = sum(1 for item in list(planner.get("entries") or []) if item.get("warn_only"))
+    planner["ready"] = len([item for item in list(planner.get("entries") or []) if not item.get("blocks_run")])
     card["planner"] = planner
     card["policies"] = policies
+    card["overrides"] = overrides
     blocker_count = int(planner.get("blockers") or card.get("blockers") or 0)
     warning_count = int(planner.get("warnings") or 0)
     unknown_count = sum(1 for item in list(planner.get("entries") or []) if str(item.get("comparison") or "") == "current_unknown" and str(item.get("policy") or "") == "block")
@@ -3387,6 +3439,14 @@ def build_upgrade_helper_card(cfg: dict[str, Any]) -> dict[str, Any]:
 def upgrade_gate_blockers(cfg: dict[str, Any]) -> list[dict[str, Any]]:
     planner = dict((build_upgrade_helper_card(cfg).get("planner") or {}))
     return [dict(item) for item in list(planner.get("entries") or []) if item.get("blocks_run")]
+
+
+def upgrade_gate_entry(cfg: dict[str, Any], key: str) -> dict[str, Any]:
+    planner = dict((build_upgrade_helper_card(cfg).get("planner") or {}))
+    for entry in list(planner.get("entries") or []):
+        if str(entry.get("key") or "") == key:
+            return dict(entry)
+    return {}
 
 
 def build_workflow_contexts(cfg: dict[str, Any], job: dict[str, Any], history: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
@@ -3816,6 +3876,19 @@ def execution_mode_for_scope(scope: str) -> dict[str, str]:
             "run_note": "This is a live NetApp path for supported actions only. Manual and blocked steps are logged but not executed.",
             "live_intro": "Live progress below is tracking a NetApp safe-apply run.",
         }
+    if scope == "cisco_switch":
+        return {
+            "key": "real",
+            "label": "Real execution",
+            "badge": "Real run",
+            "summary": "This path applies the approved Cisco switch config over SSH.",
+            "what_this_does": "Applies the saved and approved Cisco baseline and port configuration.",
+            "real_changes": "Yes",
+            "next_step": "Start the run when the Cisco review looks correct.",
+            "run_button": "Start real Cisco run",
+            "run_note": "This is the live Cisco path. Real switch changes may be made.",
+            "live_intro": "Live progress below is tracking a real Cisco run.",
+        }
     return {
         "key": "preview",
         "label": "Preview / safety mode",
@@ -3849,8 +3922,8 @@ def build_execution_launch_options(cfg: dict[str, Any], scope: str) -> dict[str,
         }
     if scope == "included":
         selected = run_center_scope_keys(scope, cfg)
-        supported_real = [item for item in selected if item in {"ilo", "storage", "esxi", "netapp"}]
-        unsupported_real = [item for item in selected if item not in {"ilo", "storage", "esxi", "netapp"}]
+        supported_real = [item for item in selected if item in {"ilo", "storage", "esxi", "netapp", "cisco_switch"}]
+        unsupported_real = [item for item in selected if item not in {"ilo", "storage", "esxi", "netapp", "cisco_switch"}]
         if unsupported_real:
             return {"preview": preview_option, "real": None}
         if len(supported_real) > 1:
@@ -3903,6 +3976,15 @@ def build_execution_launch_options(cfg: dict[str, Any], scope: str) -> dict[str,
                     "summary": "Runs the supported NetApp API actions and logs blocked/manual steps for anything not yet automated.",
                 },
             }
+        if supported_real == ["cisco_switch"]:
+            return {
+                "preview": preview_option,
+                "real": {
+                    "scope": "cisco_switch",
+                    "label": "Run for real",
+                    "summary": "Applies the approved Cisco switch configuration over SSH.",
+                },
+            }
     if scope == "esxi":
         return {
             "preview": preview_option,
@@ -3930,6 +4012,15 @@ def build_execution_launch_options(cfg: dict[str, Any], scope: str) -> dict[str,
                 "summary": "Runs the supported NetApp API actions and logs blocked/manual steps for anything not yet automated.",
             },
         }
+    if scope == "cisco_switch":
+        return {
+            "preview": preview_option,
+            "real": {
+                "scope": "cisco_switch",
+                "label": "Run for real",
+                "summary": "Applies the approved Cisco switch configuration over SSH.",
+            },
+        }
     if scope == "storage":
         return {
             "preview": preview_option,
@@ -3941,7 +4032,7 @@ def build_execution_launch_options(cfg: dict[str, Any], scope: str) -> dict[str,
         }
     if scope.startswith("multi__"):
         selected = run_center_scope_keys(scope, cfg)
-        if selected and all(item in {"ilo", "storage", "esxi", "netapp"} for item in selected):
+        if selected and all(item in {"ilo", "storage", "esxi", "netapp", "cisco_switch"} for item in selected):
             return {
                 "preview": preview_option,
                 "real": {
@@ -9141,9 +9232,9 @@ def build_execution_review(cfg: dict, scope: str):
         },
         "cisco_switch": {
             "name": "Cisco Switch",
-            "target": cfg["cisco_switch"].get("ip", "") or cfg.get("ip_plan", {}).get("switch", "") or "Not set",
+            "target": cfg["cisco_switch"].get("management_ip", "") or cfg["cisco_switch"].get("ip", "") or cfg.get("ip_plan", {}).get("switch", "") or "Not set",
             "summary": "Run the saved switch management setup and template-driven changes.",
-            "review_href": "/global-settings",
+            "review_href": "/cisco",
         },
         "netapp": {
             "name": "NetApp",
@@ -9207,7 +9298,7 @@ def build_execution_review(cfg: dict, scope: str):
             return []
         if key == "storage":
             return build_validation_checks(cfg, "storage")
-        if key in {"ilo", "esxi", "windows", "qnap", "netapp"}:
+        if key in {"ilo", "esxi", "windows", "qnap", "netapp", "cisco_switch"}:
             return build_validation_checks(cfg, key)
         return []
 
@@ -9229,6 +9320,9 @@ def build_execution_review(cfg: dict, scope: str):
         if key == "netapp":
             protocol = str(cfg.get("netapp", {}).get("storage_protocol") or "nfs").upper()
             return f"Saved NetApp target {cfg['netapp'].get('host') or cfg.get('ip_plan', {}).get('netapp', '') or 'Not set'} with protocol {protocol}"
+        if key == "cisco_switch":
+            cisco_cfg = cfg.get("cisco_switch", {}) or {}
+            return f"Saved Cisco target {cisco_cfg.get('management_ip') or cisco_cfg.get('ip') or cfg.get('ip_plan', {}).get('switch', '') or 'Not set'} with approval {dict(cisco_cfg.get('config_approval') or {}).get('state') or 'not approved'}"
         if key == "storage":
             approval = storage_review.get("approval", {}) or {}
             plan_summary = approval.get("plan_summary", {}) or {}
@@ -9306,6 +9400,17 @@ def build_execution_review(cfg: dict, scope: str):
                 f"Username: {netapp_cfg.get('username') or 'Not set'}",
                 f"Password: {'Saved' if netapp_cfg.get('password') else 'Missing'}",
                 f"Storage protocol: {str(netapp_cfg.get('storage_protocol') or 'nfs').upper()}",
+            ]
+        if key == "cisco_switch":
+            cisco_cfg = cfg.get("cisco_switch", {}) or {}
+            approval = dict(cisco_cfg.get("config_approval") or {})
+            return [
+                f"Management IP: {cisco_cfg.get('management_ip') or cisco_cfg.get('ip') or cfg.get('ip_plan', {}).get('switch') or 'Not set'}",
+                f"Console port: {cisco_cfg.get('console_port') or 'Not set'}",
+                f"Username: {cisco_cfg.get('username') or 'Not set'}",
+                f"Password: {'Saved' if cisco_cfg.get('password') else 'Missing'}",
+                f"SSH test: {'Passed' if dict(cisco_cfg.get('last_ssh_test') or {}).get('ok') else 'Not passed'}",
+                f"Config approval: {approval.get('state') or 'Not approved'}",
             ]
         if key == "storage":
             approval = storage_review.get("approval", {}) or {}
@@ -10014,6 +10119,16 @@ def validate_execution_scope(cfg: dict, scope: str) -> None:
     if upgrade_blockers:
         primary = upgrade_blockers[0]
         raise ValueError(primary.get("recommended_action") or f"{primary.get('label', 'Upgrade gate')} is blocking this run. Review Upgrade Helper first.")
+    def validate_cisco_run_ready() -> None:
+        cisco_cfg = cfg.get("cisco_switch", {}) or {}
+        approval = dict(cisco_cfg.get("config_approval") or {})
+        if approval.get("state") != "approved":
+            raise ValueError("Cisco setup needs an approved config plan before Run Center can run it for real.")
+        if not bool(dict(cisco_cfg.get("last_ssh_test") or {}).get("ok")):
+            raise ValueError("Cisco SSH must test successfully before Run Center can apply switch config.")
+        if not (cisco_cfg.get("management_ip") or cisco_cfg.get("ip") or cfg.get("ip_plan", {}).get("switch") or "").strip():
+            raise ValueError("Cisco management IP is not set.")
+
     if scope == "esxi":
         esxi_values = get_esxi_effective_values(cfg)
         if esxi_values["missing_fields"]:
@@ -10045,6 +10160,11 @@ def validate_execution_scope(cfg: dict, scope: str) -> None:
                 raise ValueError(f"ESXi setup is missing: {', '.join(esxi_values['missing_fields'])}.")
             if esxi_values["validation_errors"]:
                 raise ValueError(f"ESXi setup has invalid saved values: {'; '.join(esxi_values['validation_errors'])}.")
+        if "cisco_switch" in selected:
+            validate_cisco_run_ready()
+        return
+    if scope == "cisco_switch":
+        validate_cisco_run_ready()
         return
     if scope == "storage":
         storage_review = build_storage_review_context(cfg)
@@ -10056,6 +10176,8 @@ def validate_execution_scope(cfg: dict, scope: str) -> None:
     if scope not in {"ilo", "included"}:
         return
     included = cfg.get("included", {})
+    if scope == "included" and included.get("cisco_switch"):
+        validate_cisco_run_ready()
     if scope == "included" and not included.get("storage"):
         return
     if scope == "ilo" or included.get("storage"):
@@ -10235,8 +10357,8 @@ def execute_real_job_in_background(cfg: dict, scope: str):
             selected = selected_tokens
             if not selected:
                 raise RuntimeError("No stages were selected for the real run.")
-            if not all(item in {"ilo", "storage", "esxi", "netapp"} for item in selected):
-                raise RuntimeError("Real selected-stage execution currently supports iLO, storage, ESXi, and NetApp only.")
+            if not all(item in {"ilo", "storage", "esxi", "netapp", "cisco_switch"} for item in selected):
+                raise RuntimeError("Real selected-stage execution currently supports iLO, storage, ESXi, Cisco, and NetApp only.")
             storage_was_handled_by_ilo = False
             if "ilo" in selected:
                 mark_stage("ilo", "running")
@@ -10306,8 +10428,23 @@ def execute_real_job_in_background(cfg: dict, scope: str):
                     mark_stage("netapp", "failed")
                     return
                 mark_stage("netapp", "completed")
+            if "cisco_switch" in selected:
+                mark_stage("cisco_switch", "running")
+                cfg = load_kit_config(kit_name)
+                _execute_cisco_stage(cfg, kit_name)
+                finished_job = load_job(kit_name)
+                if finished_job.get("status") == "Failed":
+                    mark_stage("cisco_switch", "failed")
+                    return
+                mark_stage("cisco_switch", "completed")
             return
-        if scope in {"ilo", "storage", "esxi", "windows", "netapp"}:
+        if scope == "cisco_switch":
+            mark_stage("cisco_switch", "running")
+            cfg = load_kit_config(kit_name)
+            _execute_cisco_stage(cfg, kit_name)
+            finished_job = load_job(kit_name)
+            mark_stage("cisco_switch", "failed" if finished_job.get("status") == "Failed" else "completed")
+        elif scope in {"ilo", "storage", "esxi", "windows", "netapp"}:
             stage = registry.get(scope)
             if stage is None:
                 raise RuntimeError(f"Stage registry entry is missing for scope: {scope}")
@@ -10339,6 +10476,8 @@ def execute_real_job_in_background(cfg: dict, scope: str):
             stage_to_fail = "windows"
         elif "netapp" in current_stage or "ontap" in current_stage:
             stage_to_fail = "netapp"
+        elif "cisco" in current_stage or "switch" in current_stage:
+            stage_to_fail = "cisco_switch"
         elif "ilo" in current_stage:
             stage_to_fail = "ilo"
         if stage_to_fail:
@@ -10423,6 +10562,59 @@ def _execute_windows_stage(cfg: dict[str, Any], kit_name: str) -> None:
     update_job(kit_name, job, "Running", "Simulate deployment", 4, total, "[INFO] Safe mode: no VM deployment actions are executed in this stage yet.")
     job = load_job(kit_name)
     update_job(kit_name, job, "Complete", "Windows safe stage complete", 5, total, "[OK] Windows safe execution completed. No VM changes were made.")
+
+
+def _execute_cisco_stage(cfg: dict[str, Any], kit_name: str) -> None:
+    from app.modules.cisco.service import CiscoModuleService
+
+    cfg = apply_ip_plan(cfg)
+    cisco_cfg = cfg.get("cisco_switch", {}) or {}
+    approval = dict(cisco_cfg.get("config_approval") or {})
+    mode = str(approval.get("mode") or "full").strip() or "full"
+    target = str(cisco_cfg.get("management_ip") or cisco_cfg.get("ip") or cfg.get("ip_plan", {}).get("switch") or "").strip()
+    total = 4
+
+    job = load_job(kit_name)
+    update_job(kit_name, job, "Running", "Validate Cisco run approval", 1, total, "[RUNNING] Checking approved Cisco config plan and SSH readiness.")
+    if approval.get("state") != "approved":
+        raise RuntimeError("Cisco run blocked: approve the Cisco config plan before using Run Center.")
+    if not bool(dict(cisco_cfg.get("last_ssh_test") or {}).get("ok")):
+        raise RuntimeError("Cisco run blocked: Test SSH must pass before Run Center applies switch config.")
+    if not target:
+        raise RuntimeError("Cisco run blocked: management IP is not set.")
+    if not str(cisco_cfg.get("username") or "").strip() or not str(cisco_cfg.get("password") or ""):
+        raise RuntimeError("Cisco run blocked: switch username and password are required.")
+
+    service = CiscoModuleService()
+    job = load_job(kit_name)
+    update_job(kit_name, job, "Running", "Preview Cisco config", 2, total, f"[RUNNING] Rendering Cisco {mode} configuration for {target}.")
+    preview = service.preview_config({"cfg": cfg}, mode=mode)
+    validation = dict(preview.get("validation") or {})
+    cisco_cfg["last_config_preview"] = str(preview.get("config") or "")
+    cisco_cfg["last_config_validation"] = validation
+    if not preview.get("ok"):
+        errors = "; ".join(str(item) for item in validation.get("errors") or []) or "Cisco config validation failed."
+        save_kit_config(cfg)
+        raise RuntimeError(f"Cisco run blocked: {errors}")
+
+    job = load_job(kit_name)
+    update_job(kit_name, job, "Running", "Apply Cisco config", 3, total, "[RUNNING] Applying approved Cisco configuration over SSH.")
+    result = service.apply_config({"cfg": cfg}, mode=mode)
+    cisco_cfg["last_config_preview"] = str(result.get("config") or cisco_cfg.get("last_config_preview") or "")
+    cisco_cfg["last_config_validation"] = dict(result.get("validation") or validation)
+    cisco_cfg["last_cisco_action"] = {
+        "mode": f"run_center_apply_{mode}",
+        "ok": bool(result.get("ok")),
+        "applied": bool(result.get("applied")),
+        "error": str(result.get("error") or ""),
+        "completed_at": datetime.now().astimezone().isoformat(),
+    }
+    save_kit_config(cfg)
+    if not result.get("applied"):
+        raise RuntimeError(str(result.get("error") or "Cisco Run Center apply did not complete."))
+
+    job = load_job(kit_name)
+    update_job(kit_name, job, "Completed", "Cisco config applied", total, total, f"[OK] Cisco {mode} configuration applied to {target}.")
 
 
 def _execute_netapp_stage(cfg: dict[str, Any], kit_name: str) -> None:
@@ -14138,6 +14330,38 @@ async def save_upgrade_policies_route(
     )
 
 
+@app.post("/save-upgrade-override", response_class=HTMLResponse)
+async def save_upgrade_override_route(
+    request: Request,
+    return_page: str = Form("upgrade_helper"),
+    device_key: str = Form(""),
+    override_upgrade_gate: str | None = Form(None),
+):
+    cfg = load_kit_config()
+    key = str(device_key or "").strip()
+    if key not in {"ilo", "netapp", "cisco_switch"}:
+        key = ""
+    cfg.setdefault("upgrade_helper", {}).setdefault("overrides", {})
+    if key:
+        cfg["upgrade_helper"]["overrides"][key] = bool(override_upgrade_gate)
+    save_kit_config(cfg)
+    page = str(return_page or "upgrade_helper").strip().lower()
+    allowed_pages = {"upgrade_helper", "ilo", "netapp", "cisco", "global_settings"}
+    if page not in allowed_pages:
+        page = "upgrade_helper"
+    return render_page(
+        request,
+        cfg,
+        active_page=page,
+        action_feedback=build_action_feedback(
+            "Upgrade override saved",
+            "Updated whether this device can continue configuration setup while the upgrade gate is still unresolved.",
+            tone="progress" if key and cfg["upgrade_helper"]["overrides"].get(key) else "ready",
+            outcomes=[f"Device: {key or 'unknown'}", f"Override: {'enabled' if key and cfg['upgrade_helper']['overrides'].get(key) else 'disabled'}"],
+        ),
+    )
+
+
 def safe_upload_filename(filename: str) -> str:
     name = Path(str(filename or "")).name.strip()
     name = re.sub(r"[^A-Za-z0-9._-]+", "-", name)
@@ -14232,6 +14456,84 @@ async def plan_ilo_upgrade_route(request: Request, return_page: str = Form("upgr
     )
 
 
+def _record_ilo_upgrade_activity(cfg: dict[str, Any], event: dict[str, Any], *, status: str | None = None) -> dict[str, Any]:
+    progress_by_phase = {
+        "queued": 5,
+        "precheck": 10,
+        "upload": 35,
+        "verify": 75,
+        "complete": 100,
+        "blocked": 100,
+        "failed": 100,
+    }
+    cfg.setdefault("ilo", {}).setdefault("upgrade", {})
+    activity = cfg["ilo"]["upgrade"].setdefault("activity", {})
+    events = list(activity.get("events") or [])
+    events.append(event)
+    phase = str(event.get("phase") or activity.get("phase") or "")
+    try:
+        progress_percent = int(event.get("progress_percent")) if event.get("progress_percent") is not None else progress_by_phase.get(phase, int(activity.get("progress_percent") or 0))
+    except (TypeError, ValueError):
+        progress_percent = progress_by_phase.get(phase, int(activity.get("progress_percent") or 0))
+    activity.update(
+        {
+            "status": status or activity.get("status") or "running",
+            "phase": phase,
+            "message": event.get("message") or activity.get("message") or "",
+            "updated_at": event.get("timestamp") or activity.get("updated_at") or "",
+            "events": events[-80:],
+            "progress_percent": max(0, min(100, progress_percent)),
+        }
+    )
+    if not activity.get("started_at"):
+        activity["started_at"] = event.get("timestamp") or datetime.now().isoformat()
+    save_kit_config(cfg)
+    return activity
+
+
+def _start_ilo_upgrade_worker(cfg: dict[str, Any], media_scan: dict[str, Any]) -> None:
+    def progress(event: dict[str, Any]) -> None:
+        _record_ilo_upgrade_activity(cfg, event, status="running")
+
+    def worker() -> None:
+        try:
+            result = execute_ilo_upgrade(
+                cfg,
+                media_scan,
+                build_client=lambda *, host, username, password: ILOClient(
+                    ILOConfig(host=host, username=username, password=password, verify_tls=False, timeout=30)
+                ),
+                progress=progress,
+            )
+            cfg.setdefault("ilo", {}).setdefault("upgrade", {})["last_result"] = result
+            _record_ilo_upgrade_activity(
+                cfg,
+                {
+                    "phase": "complete",
+                    "message": "iLO firmware upgrade completed and version was verified.",
+                    "timestamp": result.get("completed_at") or datetime.now().isoformat(),
+                    "progress_percent": 100,
+                },
+                status="completed",
+            )
+            save_kit_config(cfg)
+        except Exception as exc:
+            error = str(exc).splitlines()[0] if str(exc).strip() else "iLO upgrade failed."
+            cfg.setdefault("ilo", {}).setdefault("upgrade", {})["last_result"] = {
+                "status": "failed",
+                "failed_at": datetime.now().isoformat(),
+                "error": error,
+            }
+            _record_ilo_upgrade_activity(
+                cfg,
+                {"phase": "failed", "message": error, "timestamp": datetime.now().isoformat(), "progress_percent": 100},
+                status="failed",
+            )
+            save_kit_config(cfg)
+
+    threading.Thread(target=worker, name="ilo-upgrade-worker", daemon=True).start()
+
+
 @app.post("/run-ilo-upgrade", response_class=HTMLResponse)
 async def run_ilo_upgrade_route(request: Request, return_page: str = Form("upgrade_helper")):
     cfg = load_kit_config()
@@ -14240,12 +14542,32 @@ async def run_ilo_upgrade_route(request: Request, return_page: str = Form("upgra
     cfg.setdefault("ilo", {})
     cfg["ilo"].setdefault("upgrade", {})
     cfg["ilo"]["upgrade"]["last_plan"] = plan
+    activity = dict((cfg["ilo"].get("upgrade") or {}).get("activity") or {})
+    active_page = return_page if return_page in {"upgrade_helper", "ilo"} else "upgrade_helper"
+    if str(activity.get("status") or "").lower() == "running":
+        return render_page(
+            request,
+            cfg,
+            active_page=active_page,
+            action_feedback=build_action_feedback(
+                "iLO upgrade already running",
+                "Watch the iLO upgrade status panel for upload, verification, completion, or errors.",
+                tone="pending",
+                outcomes=[f"Phase: {activity.get('phase') or 'unknown'}", f"Last message: {activity.get('message') or 'waiting'}"],
+            ),
+        )
     if not plan.get("ready"):
+        cfg["ilo"]["upgrade"]["last_result"] = {"status": "blocked", "error": "; ".join(plan.get("blockers") or [])}
+        _record_ilo_upgrade_activity(
+            cfg,
+            {"phase": "blocked", "message": "; ".join(plan.get("blockers") or ["iLO upgrade prechecks are not satisfied."]), "timestamp": datetime.now().isoformat(), "progress_percent": 100},
+            status="blocked",
+        )
         save_kit_config(cfg)
         return render_page(
             request,
             cfg,
-            active_page=return_page if return_page in {"upgrade_helper", "ilo"} else "upgrade_helper",
+            active_page=active_page,
             action_feedback=build_action_feedback(
                 "iLO upgrade blocked",
                 "The upgrade prechecks did not pass. Review the blockers before trying to flash firmware.",
@@ -14258,58 +14580,39 @@ async def run_ilo_upgrade_route(request: Request, return_page: str = Form("upgra
                 details=list(plan.get("blockers") or []) + list(plan.get("warnings") or []) + list(plan.get("notes") or []),
             ),
         )
-    try:
-        result = execute_ilo_upgrade(
-            cfg,
-            media_scan,
-            build_client=lambda *, host, username, password: ILOClient(
-                ILOConfig(host=host, username=username, password=password, verify_tls=False, timeout=30)
-            ),
-        )
-        save_kit_config(cfg)
-        return render_page(
-            request,
-            cfg,
-            active_page=return_page if return_page in {"upgrade_helper", "ilo"} else "upgrade_helper",
-            action_feedback=build_action_feedback(
-                "iLO upgrade completed",
-                "Uploaded the matched firmware package through the iLO Redfish update service and verified the post-upgrade firmware version.",
-                tone="ready",
-                outcomes=[
-                    f"Target: {result.get('host') or 'Not set'}",
-                    f"Previous version: {result.get('previous_version') or 'Unknown'}",
-                    f"Current version: {((result.get('verification') or {}).get('current_version') or result.get('target_version') or 'Unknown')}",
-                ],
-                details=[
-                    f"Media: {result.get('media_path') or 'Unknown'}",
-                    f"Detected manager: {result.get('manager_model') or 'Unknown'}",
-                    f"Reconnect observed: {'yes' if ((result.get('verification') or {}).get('saw_disconnect')) else 'no'}",
-                ],
-            ),
-        )
-    except Exception as exc:
-        cfg["ilo"]["upgrade"]["last_result"] = {
-            "status": "failed",
-            "failed_at": datetime.now().isoformat(),
-            "error": str(exc).splitlines()[0],
-        }
-        save_kit_config(cfg)
-        return render_page(
-            request,
-            cfg,
-            active_page=return_page if return_page in {"upgrade_helper", "ilo"} else "upgrade_helper",
-            action_feedback=build_action_feedback(
-                "iLO upgrade failed",
-                "The firmware upload or post-upgrade verification did not complete cleanly.",
-                tone="danger",
-                outcomes=[
-                    f"Target: {plan.get('host') or 'Not set'}",
-                    f"Current version: {plan.get('current_version') or 'Unknown'}",
-                    f"Matched media: {plan.get('media_version') or 'Not found'}",
-                ],
-                details=[str(exc).splitlines()[0]] + list(plan.get("notes") or []),
-            ),
-        )
+    now = datetime.now().isoformat()
+    cfg["ilo"]["upgrade"]["activity"] = {
+        "status": "running",
+        "phase": "queued",
+        "message": "iLO upgrade worker queued.",
+        "started_at": now,
+        "updated_at": now,
+        "progress_percent": 5,
+        "events": [{"phase": "queued", "message": "iLO upgrade worker queued.", "timestamp": now, "progress_percent": 5}],
+    }
+    save_kit_config(cfg)
+    _start_ilo_upgrade_worker(cfg, media_scan)
+    return render_page(
+        request,
+        cfg,
+        active_page=active_page,
+        action_feedback=build_action_feedback(
+            "iLO upgrade started",
+            "The firmware upgrade is running in the background. Watch the iLO upgrade status panel for upload, verification, completion, or errors.",
+            tone="pending",
+            outcomes=[
+                f"Target: {plan.get('host') or 'Not set'}",
+                f"Current version: {plan.get('current_version') or 'Unknown'}",
+                f"Target version: {plan.get('media_version') or 'Unknown'}",
+            ],
+        ),
+    )
+
+
+@app.get("/ilo-upgrade-activity", response_class=HTMLResponse)
+async def ilo_upgrade_activity_route(request: Request):
+    cfg = load_kit_config()
+    return templates.TemplateResponse(request, "partials/components/ilo_upgrade_activity.html", {"cfg": cfg})
 
 
 @app.get("/ilo", response_class=HTMLResponse)
@@ -14496,6 +14799,13 @@ async def save_config_route(
     cisco_switch_hostname: str = Form(""),
     cisco_switch_username: str = Form(""),
     cisco_switch_password: str = Form(""),
+    cisco_console_port: str = Form(""),
+    cisco_console_baud: int = Form(9600),
+    cisco_management_vlan: int = Form(10),
+    cisco_management_ip: str = Form(""),
+    cisco_subnet_mask: str = Form(""),
+    cisco_gateway: str = Form(""),
+    cisco_enable_password: str = Form(""),
     netapp_host: str = Form(""),
     netapp_username: str = Form("admin"),
     netapp_password: str = Form(""),
@@ -14578,6 +14888,13 @@ async def save_config_route(
         cisco_switch_hostname=cisco_switch_hostname,
         cisco_switch_username=cisco_switch_username,
         cisco_switch_password=cisco_switch_password,
+        cisco_console_port=cisco_console_port,
+        cisco_console_baud=cisco_console_baud,
+        cisco_management_vlan=cisco_management_vlan,
+        cisco_management_ip=cisco_management_ip,
+        cisco_subnet_mask=cisco_subnet_mask,
+        cisco_gateway=cisco_gateway,
+        cisco_enable_password=cisco_enable_password,
         netapp_host=netapp_host,
         netapp_username=netapp_username,
         netapp_password=netapp_password,
@@ -14594,13 +14911,13 @@ async def save_global_settings_route(
     site_name: str = Form(...),
     shared_subnet: str = Form(...),
     gateway_ip: str = Form(...),
-    switch_ip: str = Form(...),
-    esxi_ip: str = Form(...),
-    ilo_target_ip: str = Form(...),
-    windows_ip: str = Form(...),
-    qnap_ip: str = Form(...),
-    iosafe_ip: str = Form(...),
-    netapp_ip: str = Form(""),
+    switch_ip: str | None = Form(None),
+    esxi_ip: str | None = Form(None),
+    ilo_target_ip: str | None = Form(None),
+    windows_ip: str | None = Form(None),
+    qnap_ip: str | None = Form(None),
+    iosafe_ip: str | None = Form(None),
+    netapp_ip: str | None = Form(None),
     dns1: str = Form(""),
     dns2: str = Form(""),
     dns3: str = Form(""),
@@ -14618,15 +14935,22 @@ async def save_global_settings_route(
     included_cisco_switch: str | None = Form(None),
     included_storage: str | None = Form(None),
     included_netapp: str | None = Form(None),
-    netapp_host: str = Form(""),
-    netapp_username: str = Form("admin"),
-    netapp_password: str = Form(""),
-    netapp_storage_protocol: str = Form("nfs"),
-    netapp_iscsi_commands: str = Form(""),
-    netapp_nfs_commands: str = Form(""),
-    cisco_switch_hostname: str = Form(""),
-    cisco_switch_username: str = Form("admin"),
-    cisco_switch_password: str = Form(""),
+    netapp_host: str | None = Form(None),
+    netapp_username: str | None = Form(None),
+    netapp_password: str | None = Form(None),
+    netapp_storage_protocol: str | None = Form(None),
+    netapp_iscsi_commands: str | None = Form(None),
+    netapp_nfs_commands: str | None = Form(None),
+    cisco_switch_hostname: str | None = Form(None),
+    cisco_switch_username: str | None = Form(None),
+    cisco_switch_password: str | None = Form(None),
+    cisco_console_port: str | None = Form(None),
+    cisco_console_baud: int | None = Form(None),
+    cisco_management_vlan: int | None = Form(None),
+    cisco_management_ip: str | None = Form(None),
+    cisco_subnet_mask: str | None = Form(None),
+    cisco_gateway: str | None = Form(None),
+    cisco_enable_password: str | None = Form(None),
 ):
     return await save_global_settings_handler(
         request,
@@ -14635,6 +14959,7 @@ async def save_global_settings_route(
             "sanitize_kit_name": sanitize_kit_name,
             "extract_snmp_users_from_form": extract_snmp_users_from_form,
             "build_snmp_input_review": build_snmp_input_review,
+            "build_default_ip_plan": build_default_ip_plan,
             "apply_ip_plan": apply_ip_plan,
             "save_kit_config": save_kit_config,
             "render_page": render_page,
@@ -14677,6 +15002,13 @@ async def save_global_settings_route(
         cisco_switch_hostname=cisco_switch_hostname,
         cisco_switch_username=cisco_switch_username,
         cisco_switch_password=cisco_switch_password,
+        cisco_console_port=cisco_console_port,
+        cisco_console_baud=cisco_console_baud,
+        cisco_management_vlan=cisco_management_vlan,
+        cisco_management_ip=cisco_management_ip,
+        cisco_subnet_mask=cisco_subnet_mask,
+        cisco_gateway=cisco_gateway,
+        cisco_enable_password=cisco_enable_password,
     )
 
 

@@ -30,47 +30,15 @@
     ] %}
     {% include "partials/components/setup_strip.html" %}
 
-    {% set ilo_upgrade_entry = (upgrade_helper_summary.get('planner', {}).get('entries', []) | selectattr('key', 'equalto', 'ilo') | list | first) if upgrade_helper_summary else {} %}
-    {% set ilo_upgrade_state = cfg.get('ilo', {}).get('upgrade', {}) %}
-    <section class="card identity-soft-card" x-show="tab === 'basic'">
-        <div class="flex items-start justify-between gap-4 mb-3">
-            <div>
-                <div class="text-lg font-semibold">iLO firmware upgrade</div>
-                <div class="text-sm text-slate-400 mt-1">Use the matched `.fwpkg` from the media folder only after a live iLO read has identified the manager family and firmware version.</div>
-            </div>
-            <span class="status {{ ilo_upgrade_entry.severity if ilo_upgrade_entry else 'progress' }}">{{ (ilo_upgrade_entry.comparison or 'review') | replace('_', ' ') | title if ilo_upgrade_entry else 'Review' }}</span>
-        </div>
-        <div class="grid grid-cols-1 md:grid-cols-4 gap-4">
-            <div class="ops-strip-card" style="margin-top: 0;">
-                <div class="dashboard-kicker">Current</div>
-                <div class="font-semibold">{{ ilo_upgrade_entry.current_version or 'Unknown' }}</div>
-            </div>
-            <div class="ops-strip-card" style="margin-top: 0;">
-                <div class="dashboard-kicker">Matched media</div>
-                <div class="font-semibold">{{ ilo_upgrade_entry.media_version or 'Not found' }}</div>
-            </div>
-            <div class="ops-strip-card" style="margin-top: 0;">
-                <div class="dashboard-kicker">Family</div>
-                <div class="font-semibold">{{ ((cfg.get('upgrade_inventory', {}).get('ilo', {}) or {}).get('manager_model')) or 'Unknown' }}</div>
-            </div>
-            <div class="ops-strip-card" style="margin-top: 0;">
-                <div class="dashboard-kicker">Last result</div>
-                <div class="font-semibold">{{ (ilo_upgrade_state.get('last_result', {}) or {}).get('status', 'Not run') | replace('_', ' ') | title }}</div>
-            </div>
-        </div>
-        {% if ilo_upgrade_entry and ilo_upgrade_entry.compatibility_summary %}
-        <div class="text-sm mt-4">{{ ilo_upgrade_entry.compatibility_summary }}</div>
-        {% endif %}
-        {% if ilo_upgrade_state.get('last_result', {}).get('error') %}
-        <div class="result mt-4" style="margin-top: 1rem;">{{ ilo_upgrade_state.get('last_result', {}).get('error') }}</div>
-        {% endif %}
-        <div class="actions mt-4">
-            <button class="btn" type="button" hx-post="/plan-ilo-upgrade" hx-vals='{"return_page":"ilo"}' hx-target="#main-content" hx-swap="outerHTML">Review iLO upgrade plan</button>
-            <button class="btn btn-primary" type="button" hx-post="/run-ilo-upgrade" hx-vals='{"return_page":"ilo"}' hx-target="#main-content" hx-swap="outerHTML">Run iLO upgrade</button>
-            <a class="btn" href="/upgrade-helper">Open Upgrade Helper</a>
-        </div>
-    </section>
+    {% set ilo_upgrade_entry = ((upgrade_helper_summary.get('planner', {}).get('entries', []) | selectattr('key', 'equalto', 'ilo') | list | first) | default({}, true)) if upgrade_helper_summary else {} %}
+    {% set ilo_upgrade_override = upgrade_helper_summary.get('overrides', {}).get('ilo') if upgrade_helper_summary else false %}
+    {% set ilo_upgrade_blocked = ilo_upgrade_entry and ilo_upgrade_entry.get('blocks_run') %}
+    {% set upgrade_device_key = 'ilo' %}
+    {% set upgrade_device_label = 'iLO' %}
+    {% set upgrade_return_page = 'ilo' %}
+    {% include "partials/components/upgrade_gate_panel.html" %}
 
+    <div class="{% if ilo_upgrade_blocked and not ilo_upgrade_override %}upgrade-gated-content{% endif %}">
     <section class="card workflow-hero-card" x-show="tab === 'basic'">
         <div class="text-lg font-semibold mb-3">Save iLO setup</div>
         <form hx-post="/save-ilo-settings" hx-target="#main-content" hx-swap="outerHTML" class="space-y-4" data-action-title="Saving iLO setup" data-action-start="Saving the latest iLO address and sign-in details.">
@@ -389,7 +357,7 @@
                 {% if ilo_latest_receipt.run_summary_path %}
                 <form hx-post="/view-run-summary" hx-target="#main-content" hx-swap="outerHTML">
                     <input type="hidden" name="report_path" value="{{ ilo_latest_receipt.run_summary_path }}">
-                    <button class="btn btn-primary" type="submit">Open log</button>
+                    <button class="btn" type="submit">Open log</button>
                 </form>
                 {% endif %}
                 <a class="btn" href="/execution">Open Run Center</a>
@@ -402,4 +370,5 @@
         </div>
         {% endif %}
     </details>
+    </div>
 </section>

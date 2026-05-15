@@ -176,6 +176,10 @@ async def execute_scope_handler(
         msg = "Real ESXi automation started in the background. Check Job Monitor for live progress and logs."
     elif scope == "windows":
         msg = "Windows safe execution started in the background. It validates and records the staged install plan without deploying a VM."
+    elif scope == "netapp":
+        msg = "NetApp safe execution started in the background. Check Job Monitor for live progress and logs."
+    elif scope == "cisco_switch":
+        msg = "Real Cisco switch automation started in the background. Check Job Monitor for live progress and logs."
     elif scope.startswith("multi__"):
         msg = "Real selected-stage automation started in the background. Check Job Monitor for live progress and logs."
     else:

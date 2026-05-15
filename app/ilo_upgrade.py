@@ -107,8 +107,18 @@ def execute_ilo_upgrade(
     build_client: Callable[..., Any],
     wait_timeout: int = 1800,
     poll_interval: float = 15.0,
+    progress: Callable[[dict[str, Any]], None] | None = None,
 ) -> dict[str, Any]:
     plan = build_ilo_upgrade_plan(cfg, media_scan)
+    if progress:
+        progress(
+            {
+                "phase": "precheck",
+                "message": "iLO upgrade prechecks completed.",
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+                "progress_percent": 10,
+            }
+        )
     if not plan.get("ready"):
         raise ILOError("; ".join(list(plan.get("blockers") or []) or ["iLO upgrade prechecks are not satisfied."]))
 
@@ -119,12 +129,31 @@ def execute_ilo_upgrade(
     media_path = Path(str(plan.get("media_path") or ""))
     expected_version = str(plan.get("media_version") or "")
 
+    if progress:
+        progress(
+            {
+                "phase": "upload",
+                "message": f"Uploading {media_path.name} to iLO update service.",
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+                "progress_percent": 25,
+            }
+        )
     upload = client.upload_firmware_component(media_path, update_repository=True, update_target=True)
+    if progress:
+        progress(
+            {
+                "phase": "verify",
+                "message": "Firmware upload completed. Waiting for iLO to report the target version.",
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+                "progress_percent": 55,
+            }
+        )
     final = wait_for_ilo_firmware_version(
         client,
         expected_version=expected_version,
         timeout=wait_timeout,
         poll_interval=poll_interval,
+        progress=progress,
     )
     result = {
         "status": "completed",
@@ -150,6 +179,15 @@ def execute_ilo_upgrade(
     cfg["ilo"].setdefault("upgrade", {})
     cfg["ilo"]["upgrade"]["last_plan"] = plan
     cfg["ilo"]["upgrade"]["last_result"] = result
+    if progress:
+        progress(
+            {
+                "phase": "complete",
+                "message": f"iLO firmware verified at {result['target_version']}.",
+                "timestamp": result["completed_at"],
+                "progress_percent": 100,
+            }
+        )
     return result
 
 
@@ -159,6 +197,7 @@ def wait_for_ilo_firmware_version(
     expected_version: str,
     timeout: int = 1800,
     poll_interval: float = 15.0,
+    progress: Callable[[dict[str, Any]], None] | None = None,
 ) -> dict[str, Any]:
     deadline = time.time() + max(timeout, 60)
     saw_disconnect = False
@@ -171,6 +210,15 @@ def wait_for_ilo_firmware_version(
             last_version = _normalize_version(str(summary.get("manager_firmware") or ""))
             if last_version:
                 last_error = ""
+                if progress:
+                    progress(
+                        {
+                            "phase": "verify",
+                            "message": f"iLO reports firmware {last_version}; waiting for {expected_version}.",
+                            "timestamp": datetime.now(timezone.utc).isoformat(),
+                            "progress_percent": 75,
+                        }
+                    )
             if compare_versions(last_version, expected_version) is not None and compare_versions(last_version, expected_version) >= 0:
                 return {
                     "status": "verified",
@@ -181,6 +229,15 @@ def wait_for_ilo_firmware_version(
         except Exception as exc:  # best-effort during reboot window
             saw_disconnect = True
             last_error = str(exc).splitlines()[0]
+            if progress:
+                progress(
+                    {
+                        "phase": "verify",
+                        "message": f"Waiting for iLO to return: {last_error or 'temporarily unreachable'}.",
+                        "timestamp": datetime.now(timezone.utc).isoformat(),
+                        "progress_percent": 70,
+                    }
+                )
             try:
                 client._reset_transport()  # type: ignore[attr-defined]
             except Exception:
