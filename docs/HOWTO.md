@@ -66,6 +66,13 @@ Work through enabled setup pages in order:
 
 For each section: save settings, run preview/check actions, resolve validation warnings.
 
+### Windows OVF/OVA Deployment Notes
+
+- Register the full OVF directory from OVF Templates first; ESXi needs the descriptor plus referenced VMDK/NVRAM sidecars.
+- For standalone ESXi hosts, `scripts/deploy_windows_ovf_to_esxi.py` can deploy the selected Windows OVF source using the current kit ESXi settings.
+- The script first tries VMware NFC import through pyVmomi. If the host rejects that upload path, it falls back to SSH/SCP upload, `vmkfstools -i` conversion, VMX creation, and `vim-cmd solo/registervm`.
+- The fallback leaves the VM powered off unless the caller explicitly requests power-on in code.
+
 ## 5) Run From Run Center
 
 1. Open Run Center (`/execution`).

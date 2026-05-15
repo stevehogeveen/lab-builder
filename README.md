@@ -43,6 +43,7 @@ Default URL: `http://localhost:8000`
 - Python packages are pinned in `requirements.txt`.
 - ESXi ISO customization uses `xorriso`.
 - ESXi live SSH post-config uses `sshpass` when password-based root login is used.
+- Standalone ESXi OVF deployment can use `scripts/deploy_windows_ovf_to_esxi.py`; it tries VMware NFC import first, then falls back to SSH/SCP plus `vmkfstools` registration when a standalone host rejects NFC upload.
 - Browser-based UI sanity checks use Playwright Chromium; install it with `.venv/bin/playwright install chromium`.
 - Local media under `media/` is intentionally not tracked by git. Put ESXi ISOs, firmware, OVA/OVF, and VMDK files there on each machine that needs them, or upload firmware and upgrade media from Upgrade Helper.
 

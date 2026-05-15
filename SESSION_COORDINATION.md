@@ -247,3 +247,4 @@ Current entries:
 2026-05-15 America/Toronto - Scoped the top hero/status bar to the active setup page so Cisco no longer shows unrelated ONTAP/NetApp protocol blockers in its page header.
 2026-05-15 America/Toronto - Made Cisco Approve config visibly report approved/blocked state inline, including first blocker text and explicit busy text on the approve action.
 2026-05-15 America/Toronto - Fixed Cisco approval gate mismatch so Approve config accepts a non-blocking Upgrade Helper Cisco gate instead of requiring a stale local Cisco upgrade plan.
+2026-05-15 America/Toronto - Deployed the local Windows Server 2022 OVF to standalone ESXi 192.168.1.202 as VM `win2022-01` on `datastore1`, added ESXi SSH OVF deployment fallback code, and left the VM powered off for first-boot review.
