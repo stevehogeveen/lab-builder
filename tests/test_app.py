@@ -11554,8 +11554,18 @@ def test_dashboard_uses_simplified_primary_navigation(client):
     assert "Human-readable next move" in response.text
     assert "Take next step" in response.text
     assert "Explain blockers" in response.text
+    assert "Open proof" in response.text
+    assert "Experience lens" in response.text
+    assert "Calm" in response.text
+    assert "Explain" in response.text
+    assert "Expert" in response.text
+    assert "Proof ledger" in response.text
+    assert "Evidence trail" in response.text
+    assert "Current page signal" in response.text
     assert 'data-density-toggle' in response.text
     assert 'data-navigate-href=' in response.text
+    assert 'data-proof-drawer-open' in response.text
+    assert 'data-lens-option="expert"' in response.text
     assert ".sidebar .nav-group:last-of-type" not in response.text
     assert "Run History" not in response.text
     assert "Reset dashboard layout" not in response.text

@@ -25,6 +25,8 @@ This branch explores a more distinctive experience layer for Lab Builder. The go
 - `Human-readable next move` copy using the existing readiness and blocker model.
 - Persistent promises: certainty, control, proof before apply, and no hidden steps.
 - Dashboard `Living kit map`, a spatial representation of setup modules around the run path.
+- Session-local `Experience lens` with Calm, Explain, and Expert modes.
+- Global `Proof ledger` drawer that collects readiness, page signal, latest run signal, and module proof path.
 - `data-navigate-href` button navigation so experimental UI can route without adding duplicate sidebar links.
 
 ## Design Rules
@@ -39,5 +41,5 @@ This branch explores a more distinctive experience layer for Lab Builder. The go
 
 - Add exact field anchors for issue drawer rows.
 - Let the command palette expose safe read-only actions, not only page jumps.
-- Add a session-local “I am new / I know this app” mode that adjusts copy density.
-- Add a proof ledger drawer that collects the latest discovery, preview, approval, and run receipt for the active kit.
+- Feed the proof ledger with richer artifacts as more modules expose stable proof summaries.
+- Allow the experience lens to be set per kit when user preferences need to move between browsers.

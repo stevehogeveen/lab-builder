@@ -570,6 +570,56 @@
             flex-wrap: wrap;
         }
 
+        .experience-lens {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 6px;
+            margin-top: 9px;
+        }
+
+        .lens-option {
+            min-height: 32px;
+            padding: 6px 9px;
+            border: 1px solid color-mix(in srgb, var(--border) 84%, var(--accent));
+            border-radius: 999px;
+            background: color-mix(in srgb, white 84%, var(--panel2) 16%);
+            color: var(--muted);
+            font-size: 0.78rem;
+            font-weight: 850;
+            cursor: pointer;
+            transition: border-color 0.18s ease, background 0.18s ease, color 0.18s ease;
+        }
+
+        .lens-option:hover,
+        .lens-option:focus-visible,
+        .lens-option.is-active {
+            border-color: color-mix(in srgb, var(--accent) 34%, var(--border));
+            background: color-mix(in srgb, var(--accent-soft) 76%, white 24%);
+            color: color-mix(in srgb, var(--accent) 72%, var(--text) 28%);
+            outline: none;
+        }
+
+        .lens-panel {
+            margin-top: 8px;
+            padding: 9px 10px;
+            border: 1px solid color-mix(in srgb, var(--border) 84%, white 16%);
+            border-radius: 12px;
+            background: color-mix(in srgb, white 84%, var(--panel2) 16%);
+            color: var(--muted);
+            font-size: 0.86rem;
+            line-height: 1.34;
+        }
+
+        body[data-lens="calm"] .lens-explain,
+        body[data-lens="calm"] .lens-expert,
+        body[data-lens="expert"] .lens-calm {
+            display: none;
+        }
+
+        body[data-lens="explain"] .lens-expert {
+            display: none;
+        }
+
         .panel, .card {
             background: var(--panel);
             border: 1px solid var(--border);
@@ -1014,6 +1064,101 @@
             border: 1px solid color-mix(in srgb, var(--good) 18%, var(--border));
             border-radius: 15px;
             background: color-mix(in srgb, var(--good-soft) 70%, white 30%);
+        }
+
+        .proof-drawer {
+            position: fixed;
+            inset: 0;
+            z-index: 10016;
+            display: flex;
+            justify-content: flex-end;
+            background: rgba(15, 23, 42, 0.22);
+            backdrop-filter: blur(5px);
+        }
+
+        .proof-drawer[hidden] {
+            display: none;
+        }
+
+        .proof-drawer-panel {
+            width: min(620px, 100vw);
+            height: 100%;
+            overflow-y: auto;
+            padding: 18px;
+            border-left: 1px solid color-mix(in srgb, var(--good) 20%, var(--border));
+            background:
+                radial-gradient(circle at top left, color-mix(in srgb, var(--good) 10%, white 90%) 0%, transparent 34%),
+                linear-gradient(180deg, color-mix(in srgb, white 96%, var(--panel2) 4%), white);
+            box-shadow: -28px 0 70px rgba(15, 23, 42, 0.18);
+        }
+
+        .proof-grid {
+            display: grid;
+            gap: 10px;
+            margin-top: 14px;
+        }
+
+        .proof-card {
+            padding: 12px;
+            border: 1px solid color-mix(in srgb, var(--border) 82%, white 18%);
+            border-radius: 15px;
+            background: color-mix(in srgb, white 88%, var(--panel2) 12%);
+        }
+
+        .proof-card-title {
+            display: flex;
+            justify-content: space-between;
+            gap: 10px;
+            align-items: flex-start;
+            font-weight: 900;
+        }
+
+        .proof-card-copy {
+            margin-top: 5px;
+            color: var(--muted);
+            font-size: 0.9rem;
+            line-height: 1.35;
+        }
+
+        .proof-timeline {
+            display: grid;
+            gap: 8px;
+            margin-top: 10px;
+        }
+
+        .proof-timeline-row {
+            display: grid;
+            grid-template-columns: 16px minmax(0, 1fr) auto;
+            gap: 8px;
+            align-items: start;
+            padding: 9px 10px;
+            border: 1px solid color-mix(in srgb, var(--border) 84%, white 16%);
+            border-radius: 12px;
+            background: color-mix(in srgb, white 86%, var(--panel2) 14%);
+        }
+
+        .proof-dot {
+            width: 10px;
+            height: 10px;
+            margin-top: 5px;
+            border-radius: 999px;
+            background: var(--accent);
+            box-shadow: 0 0 0 4px color-mix(in srgb, var(--accent) 12%, transparent);
+        }
+
+        .proof-dot-ready {
+            background: var(--good);
+            box-shadow: 0 0 0 4px color-mix(in srgb, var(--good) 12%, transparent);
+        }
+
+        .proof-dot-pending {
+            background: var(--warn);
+            box-shadow: 0 0 0 4px color-mix(in srgb, var(--warn) 12%, transparent);
+        }
+
+        .proof-dot-muted {
+            background: var(--muted-soft);
+            box-shadow: 0 0 0 4px color-mix(in srgb, var(--muted-soft) 12%, transparent);
         }
 
         .action-card {
@@ -3228,10 +3373,18 @@
                     <span class="companion-promise">Proof before apply</span>
                     <span class="companion-promise">No hidden steps</span>
                 </div>
+                <div class="experience-lens" aria-label="Experience lens">
+                    <button class="lens-option" type="button" data-lens-option="calm">Calm</button>
+                    <button class="lens-option" type="button" data-lens-option="explain">Explain</button>
+                    <button class="lens-option" type="button" data-lens-option="expert">Expert</button>
+                </div>
+                <div class="lens-panel lens-explain">Explain lens: the app keeps the next decision visible and translates blockers into plain operational language.</div>
+                <div class="lens-panel lens-expert">Expert lens: {{ hero_ready }}/{{ hero_total }} checks ready, {{ hero_blockers }} blockers, active page {{ active_page }}, next route {{ recommended_next_step.href if recommended_next_step else '/dashboard' }}.</div>
             </div>
             <div class="companion-actions">
                 <button class="btn btn-primary action-button" type="button" data-navigate-href="{{ recommended_next_step.href if recommended_next_step else '/dashboard' }}">Take next step</button>
                 <button class="btn" type="button" data-issue-drawer-open aria-haspopup="dialog" aria-controls="issue-drawer">Explain blockers</button>
+                <button class="btn" type="button" data-proof-drawer-open aria-haspopup="dialog" aria-controls="proof-drawer">Open proof</button>
             </div>
         </section>
 
@@ -3291,6 +3444,65 @@
             <div class="text-sm text-slate-500 mt-1">Run preview or discovery actions on setup pages to add fresh proof before final execution.</div>
         </div>
         {% endif %}
+    </aside>
+</div>
+
+<div class="proof-drawer" id="proof-drawer" role="dialog" aria-modal="true" aria-labelledby="proof-drawer-title" hidden>
+    <aside class="proof-drawer-panel">
+        <div class="issue-drawer-header">
+            <div>
+                <div class="dashboard-kicker">Evidence trail</div>
+                <div class="text-xl font-bold" id="proof-drawer-title">Proof ledger</div>
+                <div class="text-sm text-slate-400 mt-1">A compact receipt of what the app knows before the operator allows real work.</div>
+            </div>
+            <button class="btn" type="button" data-proof-drawer-close>Close</button>
+        </div>
+        <div class="proof-grid">
+            <div class="proof-card">
+                <div class="proof-card-title">
+                    <span>Kit readiness proof</span>
+                    <span class="status {{ setup_precheck_summary.tone if setup_precheck_summary else 'progress' }}">{{ setup_precheck_summary.label if setup_precheck_summary else 'Review' }}</span>
+                </div>
+                <div class="proof-card-copy">{{ setup_precheck_summary.ready_workflows if setup_precheck_summary else 0 }}/{{ setup_precheck_summary.total_workflows if setup_precheck_summary else 0 }} workflows ready with {{ setup_precheck_summary.total_blockers if setup_precheck_summary else 0 }} visible blockers.</div>
+            </div>
+
+            <div class="proof-card">
+                <div class="proof-card-title">
+                    <span>Current page signal</span>
+                    <span class="status {{ hero_summary.get('tone', 'progress') if hero_summary else 'progress' }}">{{ hero_summary.get('label', 'Review') if hero_summary else 'Review' }}</span>
+                </div>
+                <div class="proof-card-copy">{{ hero_ready }}/{{ hero_total }} checks ready. {% if hero_next_blocker %}Next blocker: {{ hero_next_blocker.label }}.{% else %}No blocker is visible on this page.{% endif %}</div>
+            </div>
+
+            {% if dashboard_overview %}
+            <div class="proof-card">
+                <div class="proof-card-title">
+                    <span>Latest run signal</span>
+                    <span class="status {{ dashboard_overview.latest_result.tone }}">{{ dashboard_overview.latest_result.label }}</span>
+                </div>
+                <div class="proof-card-copy">{{ dashboard_overview.latest_result.summary }}</div>
+            </div>
+            {% endif %}
+
+            <div class="proof-card">
+                <div class="proof-card-title">
+                    <span>Module proof path</span>
+                    <span class="status progress">{{ dashboard_overview.module_rows | length if dashboard_overview else 0 }} modules</span>
+                </div>
+                <div class="proof-timeline">
+                    {% for item in dashboard_overview.module_rows if dashboard_overview %}
+                    <div class="proof-timeline-row">
+                        <span class="proof-dot proof-dot-{{ item.tone }}"></span>
+                        <span>
+                            <span class="font-semibold">{{ item.name }}</span>
+                            <span class="block text-sm text-slate-500">{{ item.summary }}</span>
+                        </span>
+                        <span class="status {{ item.tone }}">{{ item.checks_ready }}/{{ item.total_checks }}</span>
+                    </div>
+                    {% endfor %}
+                </div>
+            </div>
+        </div>
     </aside>
 </div>
 
@@ -3505,6 +3717,43 @@
         });
     }
 
+    const lensButtons = Array.from(document.querySelectorAll("[data-lens-option]"));
+
+    function readStoredLens() {
+        try {
+            return window.localStorage.getItem("lab-builder-lens") || "explain";
+        } catch (_) {
+            return "explain";
+        }
+    }
+
+    function storeLens(mode) {
+        try {
+            window.localStorage.setItem("lab-builder-lens", mode);
+        } catch (_) {
+            // The lens is an enhancement; blocked storage should not affect the workflow.
+        }
+    }
+
+    function applyLens(mode) {
+        const allowed = { calm: true, explain: true, expert: true };
+        const nextMode = allowed[mode] ? mode : "explain";
+        document.body.setAttribute("data-lens", nextMode);
+        lensButtons.forEach(function (button) {
+            const active = button.getAttribute("data-lens-option") === nextMode;
+            button.classList.toggle("is-active", active);
+            button.setAttribute("aria-pressed", active ? "true" : "false");
+        });
+        storeLens(nextMode);
+    }
+
+    applyLens(readStoredLens());
+    lensButtons.forEach(function (button) {
+        button.addEventListener("click", function () {
+            applyLens(button.getAttribute("data-lens-option"));
+        });
+    });
+
     const palette = document.getElementById("command-palette");
     const paletteInput = document.getElementById("command-palette-search");
     const paletteList = document.getElementById("command-palette-list");
@@ -3661,7 +3910,9 @@
     });
 
     const issueDrawer = document.getElementById("issue-drawer");
+    const proofDrawer = document.getElementById("proof-drawer");
     let issueDrawerReturnFocus = null;
+    let proofDrawerReturnFocus = null;
 
     function openIssueDrawer(trigger) {
         if (!issueDrawer) return;
@@ -3703,6 +3954,44 @@
         if (event.key === "Escape" && issueDrawer && !issueDrawer.hidden) {
             event.preventDefault();
             closeIssueDrawer();
+        }
+    });
+
+    function openProofDrawer(trigger) {
+        if (!proofDrawer) return;
+        proofDrawerReturnFocus = trigger || document.activeElement;
+        proofDrawer.hidden = false;
+        const closeButton = proofDrawer.querySelector("[data-proof-drawer-close]");
+        if (closeButton) window.setTimeout(function () { closeButton.focus(); }, 0);
+    }
+
+    function closeProofDrawer() {
+        if (!proofDrawer) return;
+        proofDrawer.hidden = true;
+        if (proofDrawerReturnFocus && typeof proofDrawerReturnFocus.focus === "function") {
+            proofDrawerReturnFocus.focus({ preventScroll: true });
+        }
+    }
+
+    document.body.addEventListener("click", function (event) {
+        const openButton = event.target.closest && event.target.closest("[data-proof-drawer-open]");
+        if (openButton) {
+            openProofDrawer(openButton);
+            return;
+        }
+        if (event.target.closest && event.target.closest("[data-proof-drawer-close]")) {
+            closeProofDrawer();
+            return;
+        }
+        if (proofDrawer && !proofDrawer.hidden && event.target === proofDrawer) {
+            closeProofDrawer();
+        }
+    });
+
+    document.addEventListener("keydown", function (event) {
+        if (event.key === "Escape" && proofDrawer && !proofDrawer.hidden) {
+            event.preventDefault();
+            closeProofDrawer();
         }
     });
 

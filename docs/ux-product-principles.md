@@ -45,3 +45,4 @@ This file captures the UI techniques being folded into Lab Builder so future cle
 - Add command-palette actions for the safest read-only operations, such as opening current config or reading current versions.
 - Link issue-drawer rows to exact fields once setup pages expose stable field anchors.
 - Evaluate the `experience/operator-companion` branch for a more spatial, human-readable operator guidance layer before merging it into `main`.
+- Evaluate the experimental `Experience lens` and `Proof ledger` patterns for broad adoption if they reduce operator confusion during live runs.

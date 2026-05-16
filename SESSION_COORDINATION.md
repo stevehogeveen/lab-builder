@@ -132,6 +132,8 @@ Copy this block and update it in place.
   - 2026-05-15 America/Toronto - Created experience/operator-companion branch for experimental calm/adaptive operator experience work.
   - 2026-05-15 America/Toronto - Added universal operator companion, dashboard living kit map, and experimental UX branch notes.
   - 2026-05-15 America/Toronto - Full regression passed for operator companion branch.
+  - 2026-05-15 America/Toronto - Added experience lens and proof ledger experimental layer.
+  - 2026-05-15 America/Toronto - Full regression passed after lens/proof layer wording fix.
 - Next intended change:
   - Review experimental branch and decide whether to merge all, refine, or cherry-pick pieces.
 
