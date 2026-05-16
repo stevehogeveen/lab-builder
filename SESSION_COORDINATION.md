@@ -139,8 +139,10 @@ Copy this block and update it in place.
   - 2026-05-15 America/Toronto - Full regression passed for Cosmic mode slice.
   - 2026-05-15 America/Toronto - Added Reality engine controls for cosmic intensity, drift, orbit, cursor aura, presets, and emergency normal mode.
   - 2026-05-15 America/Toronto - Full regression passed for Reality engine slice.
+  - 2026-05-16 America/Toronto - Reworked experience lens into app-wide Calm, Normal, and Expert behavior for detail/log visibility.
+  - 2026-05-16 America/Toronto - Full regression passed for app-wide lens alignment slice.
 - Next intended change:
-  - Review experimental branch and decide whether to merge all, refine, or cherry-pick pieces.
+  - Review experimental branch and decide whether to merge, refine, or cherry-pick pieces.
 
 ## Shared File Ledger
 

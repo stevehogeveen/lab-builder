@@ -813,14 +813,70 @@
             line-height: 1.34;
         }
 
-        body[data-lens="calm"] .lens-explain,
+        body[data-lens="calm"] .lens-normal,
         body[data-lens="calm"] .lens-expert,
         body[data-lens="expert"] .lens-calm {
             display: none;
         }
 
-        body[data-lens="explain"] .lens-expert {
+        body[data-lens="normal"] .lens-expert {
             display: none;
+        }
+
+        body[data-lens="calm"] .companion-orb,
+        body[data-lens="calm"] .companion-promises,
+        body[data-lens="calm"] .dashboard-operator-panel,
+        body[data-lens="calm"] .constellation-story,
+        body[data-lens="calm"] .receipt-grid,
+        body[data-lens="calm"] .dashboard-receipt-grid,
+        body[data-lens="calm"] .precheck-detail-drawer,
+        body[data-lens="calm"] .execution-technical-log,
+        body[data-lens="calm"] .log-drawer,
+        body[data-lens="calm"] .codeblock,
+        body[data-lens="calm"] .checklist-details:not(.checklist-details-always),
+        body[data-lens="calm"] .proof-card-copy,
+        body[data-lens="calm"] .proof-timeline {
+            display: none !important;
+        }
+
+        body[data-lens="calm"] .operator-companion {
+            grid-template-columns: minmax(0, 1fr) auto;
+        }
+
+        body[data-lens="calm"] .hero-meta {
+            grid-template-columns: repeat(2, minmax(0, 1fr));
+        }
+
+        body[data-lens="calm"] .hero-meta .hero-stat:nth-child(n+3),
+        body[data-lens="calm"] .dashboard-signal-grid .dashboard-signal-card:nth-child(n+3) {
+            display: none;
+        }
+
+        body[data-lens="calm"] .panel,
+        body[data-lens="calm"] .card,
+        body[data-lens="calm"] .section-card,
+        body[data-lens="calm"] .dashboard-path-panel,
+        body[data-lens="calm"] .dashboard-side-panel {
+            box-shadow: 0 8px 18px rgba(28, 49, 77, 0.04);
+        }
+
+        body[data-lens="expert"] .lens-normal {
+            display: none;
+        }
+
+        body[data-lens="expert"] .codeblock,
+        body[data-lens="expert"] .log-drawer .codeblock,
+        body[data-lens="expert"] .execution-live-log .codeblock,
+        body[data-lens="expert"] .execution-technical-log .codeblock {
+            max-height: none;
+            min-height: 160px;
+        }
+
+        body[data-lens="expert"] .precheck-detail-drawer,
+        body[data-lens="expert"] .log-drawer,
+        body[data-lens="expert"] .execution-technical-log {
+            border-color: color-mix(in srgb, var(--accent) 24%, var(--border));
+            background: color-mix(in srgb, var(--accent-soft) 18%, var(--panel));
         }
 
         .panel, .card {
@@ -3665,10 +3721,10 @@
                 </div>
                 <div class="experience-lens" aria-label="Experience lens">
                     <button class="lens-option" type="button" data-lens-option="calm">Calm</button>
-                    <button class="lens-option" type="button" data-lens-option="explain">Explain</button>
+                    <button class="lens-option" type="button" data-lens-option="normal">Normal</button>
                     <button class="lens-option" type="button" data-lens-option="expert">Expert</button>
                 </div>
-                <div class="lens-panel lens-explain">Explain lens: the app keeps the next decision visible and translates blockers into plain operational language.</div>
+                <div class="lens-panel lens-normal">Normal lens: the app keeps the next decision visible, shows helpful context, and keeps deep technical proof one click away.</div>
                 <div class="lens-panel lens-expert">Expert lens: {{ hero_ready }}/{{ hero_total }} checks ready, {{ hero_blockers }} blockers, active page {{ active_page }}, next route {{ recommended_next_step.href if recommended_next_step else '/dashboard' }}.</div>
             </div>
             <div class="companion-actions">
@@ -4208,11 +4264,19 @@
 
     const lensButtons = Array.from(document.querySelectorAll("[data-lens-option]"));
 
+    function captureLensDetailDefaults() {
+        Array.from(document.querySelectorAll("details")).forEach(function (detail) {
+            if (!detail.hasAttribute("data-lens-default-open")) {
+                detail.setAttribute("data-lens-default-open", detail.open ? "true" : "false");
+            }
+        });
+    }
+
     function readStoredLens() {
         try {
-            return window.localStorage.getItem("lab-builder-lens") || "explain";
+            return window.localStorage.getItem("lab-builder-lens") || "normal";
         } catch (_) {
-            return "explain";
+            return "normal";
         }
     }
 
@@ -4224,17 +4288,38 @@
         }
     }
 
+    function alignLensDetails(mode) {
+        captureLensDetailDefaults();
+        Array.from(document.querySelectorAll("details")).forEach(function (detail) {
+            if (mode === "expert") {
+                detail.open = true;
+                return;
+            }
+            if (mode === "calm") {
+                detail.open = false;
+                return;
+            }
+            detail.open = detail.getAttribute("data-lens-default-open") === "true";
+        });
+    }
+
     function applyLens(mode) {
-        const allowed = { calm: true, explain: true, expert: true };
-        const nextMode = allowed[mode] ? mode : "explain";
+        const normalizedMode = mode === "explain" ? "normal" : mode;
+        const allowed = { calm: true, normal: true, expert: true };
+        const nextMode = allowed[normalizedMode] ? normalizedMode : "normal";
         document.body.setAttribute("data-lens", nextMode);
         lensButtons.forEach(function (button) {
             const active = button.getAttribute("data-lens-option") === nextMode;
             button.classList.toggle("is-active", active);
             button.setAttribute("aria-pressed", active ? "true" : "false");
         });
+        alignLensDetails(nextMode);
         storeLens(nextMode);
     }
+
+    document.body.addEventListener("htmx:afterSettle", function () {
+        alignLensDetails(document.body.getAttribute("data-lens") || readStoredLens());
+    });
 
     applyLens(readStoredLens());
     lensButtons.forEach(function (button) {

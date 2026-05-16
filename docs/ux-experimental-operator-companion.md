@@ -25,7 +25,8 @@ This branch explores a more distinctive experience layer for Lab Builder. The go
 - `Human-readable next move` copy using the existing readiness and blocker model.
 - Persistent promises: certainty, control, proof before apply, and no hidden steps.
 - Dashboard `Living kit map`, a spatial representation of setup modules around the run path.
-- Session-local `Experience lens` with Calm, Explain, and Expert modes.
+- Session-local `Experience lens` with Calm, Normal, and Expert modes.
+- App-wide lens alignment: Calm closes detail drawers and suppresses technical/log surfaces, Normal restores page defaults, and Expert opens detail drawers with expanded technical surfaces, including after HTMX page swaps.
 - Global `Proof ledger` drawer that collects readiness, page signal, latest run signal, and module proof path.
 - Opt-in `Cosmic mode`, a psychedelic visual atmosphere that changes depth, glow, color, and motion without changing operational data or routes.
 - `Reality engine`, a browser-local visual synthesizer for cosmic intensity, drift, orbit, cursor aura, stabilization, maximum trip, and emergency normal mode.
@@ -49,3 +50,4 @@ This branch explores a more distinctive experience layer for Lab Builder. The go
 - Allow the experience lens to be set per kit when user preferences need to move between browsers.
 - Test whether Cosmic mode helps the app feel more alive without making real operational work less trustworthy.
 - Explore whether the Reality engine should stay branch-only or become a hidden theme lab for future UI experiments.
+- Add stable semantic classes for every module's technical/log/detail surfaces so the lenses can become more precise than shared CSS selectors.
