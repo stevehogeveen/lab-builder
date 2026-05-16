@@ -93,8 +93,9 @@
         <div class="dashboard-path-panel">
             <div class="dashboard-panel-heading">
                 <div>
-                    <div class="dashboard-kicker">Build path</div>
-                    <div class="text-lg font-semibold">No hidden steps</div>
+                    <div class="dashboard-kicker">Continue setup</div>
+                    <div class="text-lg font-semibold">Build path</div>
+                    <div class="text-sm text-slate-400 mt-1">No hidden steps: configure, prove, approve, then run.</div>
                 </div>
                 <span class="status {{ dashboard_overview.tone }}">{{ dashboard_overview.headline }}</span>
             </div>
@@ -167,43 +168,7 @@
     {% include "partials/components/precheck_summary.html" %}
 
     <section class="dashboard-workspace-grid">
-        <div class="dashboard-workspace-panel">
-            <div class="dashboard-panel-heading">
-                <div>
-                    <div class="dashboard-kicker">Continue setup</div>
-                    <div class="text-lg font-semibold">Module readiness</div>
-                </div>
-                <span class="status {{ dashboard_overview.tone }}">{{ dashboard_overview.headline }}</span>
-            </div>
-            <div class="dashboard-module-map">
-                {% for item in dashboard_overview.module_rows %}
-                <a class="dashboard-module-row" href="{{ item.href }}">
-                    <span class="dashboard-module-dot dashboard-module-dot-{{ item.tone }}"></span>
-                    <span class="dashboard-module-copy">
-                        <span class="dashboard-module-name">{{ item.name }}</span>
-                        <span class="dashboard-module-summary truncate-single" title="{{ item.summary }}">{{ item.summary }}</span>
-                    </span>
-                    <span class="dashboard-module-meta">
-                        <span class="status {{ item.tone }}">{{ item.label }}</span>
-                        <span class="dashboard-module-checks">{{ item.checks_ready }} / {{ item.total_checks }}</span>
-                    </span>
-                </a>
-                {% endfor %}
-                <a class="dashboard-module-row dashboard-module-row-final" href="/execution">
-                    <span class="dashboard-module-dot dashboard-module-dot-progress"></span>
-                    <span class="dashboard-module-copy">
-                        <span class="dashboard-module-name">Run Center</span>
-                        <span class="dashboard-module-summary">Final review, preview, execution, and live job status.</span>
-                    </span>
-                    <span class="dashboard-module-meta">
-                        <span class="status progress">Final review</span>
-                        <span class="dashboard-module-checks">Open</span>
-                    </span>
-                </a>
-            </div>
-        </div>
-
-        <aside class="dashboard-side-panel">
+        <aside class="dashboard-side-panel dashboard-side-panel-wide">
             <details class="dashboard-kit-drawer">
                 <summary class="summary-row">
                     <span class="text-sm font-bold text-slate-300">Kit management</span>

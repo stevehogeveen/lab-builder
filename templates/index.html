@@ -1190,7 +1190,6 @@
         }
 
         .dashboard-signal-card,
-        .dashboard-workspace-panel,
         .dashboard-side-panel {
             border: 1px solid var(--border);
             border-radius: 16px;
@@ -1235,12 +1234,11 @@
 
         .dashboard-workspace-grid {
             display: grid;
-            grid-template-columns: minmax(0, 1.35fr) minmax(330px, 0.65fr);
+            grid-template-columns: minmax(0, 1fr);
             gap: 16px;
             align-items: start;
         }
 
-        .dashboard-workspace-panel,
         .dashboard-side-panel {
             padding: 16px;
         }
@@ -1253,93 +1251,14 @@
             margin-bottom: 12px;
         }
 
-        .dashboard-module-map {
-            display: grid;
-            gap: 8px;
-        }
-
-        .dashboard-module-row {
-            display: grid;
-            grid-template-columns: auto minmax(0, 1fr) auto;
-            align-items: center;
-            gap: 12px;
-            min-width: 0;
-            padding: 12px;
-            border: 1px solid color-mix(in srgb, var(--border) 84%, white 16%);
-            border-radius: 14px;
-            background: linear-gradient(180deg, color-mix(in srgb, white 94%, var(--panel2) 6%), white);
-            color: var(--text);
-            text-decoration: none;
-            transition: transform 0.18s ease, border-color 0.18s ease, box-shadow 0.18s ease;
-        }
-
-        .dashboard-module-row:hover {
-            transform: translateY(-1px);
-            border-color: color-mix(in srgb, var(--accent) 22%, var(--border));
-            box-shadow: 0 14px 28px rgba(28, 49, 77, 0.08);
-        }
-
-        .dashboard-module-row-final {
-            border-color: color-mix(in srgb, var(--accent) 18%, var(--border));
-            background: linear-gradient(180deg, color-mix(in srgb, var(--accent-soft) 58%, white 42%), white);
-        }
-
-        .dashboard-module-dot {
-            width: 12px;
-            height: 12px;
-            border-radius: 999px;
-            background: var(--border-strong);
-            box-shadow: 0 0 0 4px color-mix(in srgb, var(--border) 45%, transparent);
-        }
-
-        .dashboard-module-dot-ready {
-            background: var(--good);
-            box-shadow: 0 0 0 4px color-mix(in srgb, var(--good) 12%, transparent);
-        }
-
-        .dashboard-module-dot-progress {
-            background: var(--accent);
-            box-shadow: 0 0 0 4px color-mix(in srgb, var(--accent) 12%, transparent);
-        }
-
-        .dashboard-module-dot-pending {
-            background: var(--warn);
-            box-shadow: 0 0 0 4px color-mix(in srgb, var(--warn) 12%, transparent);
-        }
-
-        .dashboard-module-copy {
-            display: grid;
-            min-width: 0;
-        }
-
-        .dashboard-module-name {
-            font-weight: 800;
-            line-height: 1.2;
-        }
-
-        .dashboard-module-summary {
-            color: var(--muted);
-            font-size: 0.9rem;
-        }
-
-        .dashboard-module-meta {
-            display: flex;
-            align-items: center;
-            gap: 10px;
-            justify-content: flex-end;
-            min-width: 0;
-        }
-
-        .dashboard-module-checks {
-            color: var(--muted);
-            font-size: 0.82rem;
-            font-weight: 800;
-            white-space: nowrap;
-        }
-
         .dashboard-side-panel {
             display: grid;
             gap: 12px;
+        }
+
+        .dashboard-side-panel-wide {
+            grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+            align-items: start;
         }
 
         .dashboard-kit-drawer,
@@ -2591,7 +2510,6 @@
             .dashboard-command-rail,
             .dashboard-rail-top,
             .dashboard-panel-heading,
-            .dashboard-module-meta,
             .dashboard-action-stack {
                 align-items: stretch;
                 flex-direction: column;
@@ -2607,16 +2525,6 @@
 
             .dashboard-signal-grid {
                 grid-template-columns: 1fr;
-            }
-
-            .dashboard-module-row {
-                grid-template-columns: auto minmax(0, 1fr);
-                align-items: start;
-            }
-
-            .dashboard-module-meta {
-                grid-column: 2;
-                justify-content: flex-start;
             }
 
             .ops-row-item {

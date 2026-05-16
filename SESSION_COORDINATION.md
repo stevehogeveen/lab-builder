@@ -77,7 +77,7 @@ Copy this block and update it in place.
 - Status: active
 - Branch: main
 - Scope owner: non-NetApp app work
-- Working on: Command-center dashboard/rail guidance polish
+- Working on: Remove duplicate dashboard readiness views after build-path polish
 - Blocked by: none
 - Ready to hand off: Dashboard/sidebar polish slice can hand off after tests and commit are complete
 - Files claimed:
@@ -121,6 +121,8 @@ Copy this block and update it in place.
   - 2026-05-15 America/Toronto - Added Cisco current-version button with console fallback and introduced local per-card HTMX action feedback so button results appear near the initiating workflow.
   - 2026-05-15 America/Toronto - Claimed dashboard/sidebar command-center guidance polish slice.
   - 2026-05-15 America/Toronto - Added guided dashboard build path, operator model card, and sidebar kit-state meter; full regression passed.
+  - 2026-05-15 America/Toronto - Claimed follow-up dashboard duplicate-readiness cleanup slice.
+  - 2026-05-15 America/Toronto - Removed duplicate dashboard module-readiness panel and promoted kit/job widgets into a compact two-column workspace block.
 - Next intended change:
   - Continue page-by-page simplification using the same proof-first UI pattern.
 
