@@ -141,6 +141,8 @@ Copy this block and update it in place.
   - 2026-05-15 America/Toronto - Full regression passed for Reality engine slice.
   - 2026-05-16 America/Toronto - Reworked experience lens into app-wide Calm, Normal, and Expert behavior for detail/log visibility.
   - 2026-05-16 America/Toronto - Full regression passed for app-wide lens alignment slice.
+  - 2026-05-16 America/Toronto - Added lens cockpit visuals, shortcuts, and safe Expert keep-closed handling for destructive panels.
+  - 2026-05-16 America/Toronto - Full regression passed for lens cockpit slice.
 - Next intended change:
   - Review experimental branch and decide whether to merge, refine, or cherry-pick pieces.
 

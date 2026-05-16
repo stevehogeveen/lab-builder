@@ -813,14 +813,161 @@
             line-height: 1.34;
         }
 
+        .lens-status-line {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 8px;
+            align-items: center;
+            margin-top: 8px;
+            color: var(--muted);
+            font-size: 0.8rem;
+            line-height: 1.3;
+        }
+
+        .lens-status-copy {
+            font-weight: 700;
+        }
+
+        .lens-shortcut-hint {
+            display: inline-flex;
+            gap: 5px;
+            align-items: center;
+            color: var(--muted-soft);
+        }
+
+        .lens-scope {
+            display: grid;
+            grid-template-columns: repeat(3, minmax(0, 1fr));
+            gap: 7px;
+            margin-top: 9px;
+        }
+
+        .lens-scope-card {
+            position: relative;
+            min-width: 0;
+            overflow: hidden;
+            padding: 8px 9px;
+            border: 1px solid color-mix(in srgb, var(--border) 82%, white 18%);
+            border-radius: 12px;
+            background: color-mix(in srgb, white 84%, var(--panel2) 16%);
+            color: var(--muted);
+            transition: opacity 0.18s ease, transform 0.18s ease, border-color 0.18s ease, background 0.18s ease;
+        }
+
+        .lens-scope-card::before {
+            content: "";
+            position: absolute;
+            inset: 0 auto 0 0;
+            width: 3px;
+            background: color-mix(in srgb, var(--accent) 36%, transparent);
+            opacity: 0.42;
+        }
+
+        .lens-scope-label {
+            display: block;
+            color: var(--text);
+            font-size: 0.76rem;
+            font-weight: 900;
+            line-height: 1.15;
+        }
+
+        .lens-scope-copy {
+            display: block;
+            margin-top: 3px;
+            font-size: 0.72rem;
+            line-height: 1.22;
+        }
+
         body[data-lens="calm"] .lens-normal,
         body[data-lens="calm"] .lens-expert,
-        body[data-lens="expert"] .lens-calm {
+        body[data-lens="normal"] .lens-calm,
+        body[data-lens="normal"] .lens-expert,
+        body[data-lens="expert"] .lens-calm,
+        body[data-lens="expert"] .lens-normal {
             display: none;
         }
 
-        body[data-lens="normal"] .lens-expert {
+        body[data-lens="calm"] .lens-scope-card:not(.lens-scope-calm),
+        body[data-lens="normal"] .lens-scope-card:not(.lens-scope-normal),
+        body[data-lens="expert"] .lens-scope-card:not(.lens-scope-expert) {
+            opacity: 0.42;
+            transform: scale(0.985);
+        }
+
+        body[data-lens="calm"] .lens-scope-calm,
+        body[data-lens="normal"] .lens-scope-normal,
+        body[data-lens="expert"] .lens-scope-expert {
+            border-color: color-mix(in srgb, var(--accent) 24%, var(--border));
+            background: color-mix(in srgb, var(--accent-soft) 62%, white 38%);
+            color: color-mix(in srgb, var(--accent) 72%, var(--text) 28%);
+            box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.52);
+        }
+
+        body[data-lens="calm"] .lens-scope-calm::before,
+        body[data-lens="normal"] .lens-scope-normal::before,
+        body[data-lens="expert"] .lens-scope-expert::before {
+            opacity: 1;
+        }
+
+        body[data-lens="calm"] .hero,
+        body[data-lens="calm"] .operator-companion {
+            background:
+                linear-gradient(180deg, color-mix(in srgb, var(--panel) 96%, var(--good-soft) 4%), var(--panel));
+        }
+
+        body[data-lens="expert"] .hero,
+        body[data-lens="expert"] .operator-companion {
+            background:
+                radial-gradient(circle at 96% 0%, color-mix(in srgb, var(--accent) 13%, transparent) 0%, transparent 32%),
+                linear-gradient(180deg, color-mix(in srgb, var(--panel) 91%, var(--accent-soft) 9%), var(--panel));
+        }
+
+        body[data-lens="calm"] .companion-actions .btn:not(.btn-primary) {
             display: none;
+        }
+
+        body[data-lens="calm"] .lens-scope {
+            grid-template-columns: minmax(0, 1fr);
+        }
+
+        body[data-lens="calm"] .lens-scope-card:not(.lens-scope-calm) {
+            display: none;
+        }
+
+        body[data-lens="expert"] .lens-scope {
+            grid-template-columns: repeat(3, minmax(0, 1fr));
+        }
+
+        body[data-lens="expert"] .lens-status-line {
+            color: color-mix(in srgb, var(--accent) 68%, var(--muted) 32%);
+        }
+
+        body[data-lens="expert"] .lens-scope-card {
+            min-height: 74px;
+        }
+
+        body[data-lens="expert"] .proof-drawer-panel,
+        body[data-lens="expert"] .issue-drawer-panel {
+            box-shadow: 0 28px 90px rgba(15, 23, 42, 0.34), 0 0 0 1px color-mix(in srgb, var(--accent) 14%, transparent);
+        }
+
+        body[data-lens="calm"] .lens-shortcut-hint,
+        body[data-lens="calm"] .hero-status-shell span:nth-child(n+3),
+        body[data-lens="calm"] .nav-link-subtitle {
+            display: none;
+        }
+
+        body[data-lens="calm"] .nav-link {
+            padding-top: 8px;
+            padding-bottom: 8px;
+        }
+
+        body[data-lens="expert"] .nav-link-subtitle {
+            color: color-mix(in srgb, var(--accent) 38%, var(--muted) 62%);
+        }
+
+        body[data-lens="expert"] .status.progress {
+            box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent) 10%, transparent), 0 0 20px color-mix(in srgb, var(--accent) 7%, transparent);
         }
 
         body[data-lens="calm"] .companion-orb,
@@ -858,10 +1005,6 @@
         body[data-lens="calm"] .dashboard-path-panel,
         body[data-lens="calm"] .dashboard-side-panel {
             box-shadow: 0 8px 18px rgba(28, 49, 77, 0.04);
-        }
-
-        body[data-lens="expert"] .lens-normal {
-            display: none;
         }
 
         body[data-lens="expert"] .codeblock,
@@ -3541,6 +3684,14 @@
                 justify-content: flex-start;
             }
 
+            .lens-scope {
+                grid-template-columns: 1fr;
+            }
+
+            .lens-shortcut-hint {
+                display: none;
+            }
+
             .constellation-field {
                 display: grid;
                 gap: 8px;
@@ -3612,7 +3763,7 @@
         }
     </style>
 </head>
-<body data-active-page="{{ active_page }}">
+<body data-active-page="{{ active_page }}" data-lens="normal" data-density="comfortable" data-visual="normal">
 <a class="skip-link" href="#main-content">Skip to content</a>
 <div class="app-shell">
     {% include "partials/sidebar.html" %}
@@ -3720,12 +3871,31 @@
                     <span class="companion-promise">No hidden steps</span>
                 </div>
                 <div class="experience-lens" aria-label="Experience lens">
-                    <button class="lens-option" type="button" data-lens-option="calm">Calm</button>
-                    <button class="lens-option" type="button" data-lens-option="normal">Normal</button>
-                    <button class="lens-option" type="button" data-lens-option="expert">Expert</button>
+                    <button class="lens-option" type="button" data-lens-option="calm" title="Alt+1">Calm</button>
+                    <button class="lens-option" type="button" data-lens-option="normal" title="Alt+2">Normal</button>
+                    <button class="lens-option" type="button" data-lens-option="expert" title="Alt+3">Expert</button>
                 </div>
+                <div class="lens-status-line" aria-live="polite">
+                    <span class="lens-status-copy" data-lens-current-copy>Normal lens is active across the whole app.</span>
+                    <span class="lens-shortcut-hint"><span class="kbd">Alt 1</span><span>minimum</span><span class="kbd">Alt 2</span><span>guide</span><span class="kbd">Alt 3</span><span>proof</span></span>
+                </div>
+                <div class="lens-panel lens-calm">Calm lens: only the next useful action stays prominent. Logs, deep proof, and optional detail drawers stay out of the way.</div>
                 <div class="lens-panel lens-normal">Normal lens: the app keeps the next decision visible, shows helpful context, and keeps deep technical proof one click away.</div>
                 <div class="lens-panel lens-expert">Expert lens: {{ hero_ready }}/{{ hero_total }} checks ready, {{ hero_blockers }} blockers, active page {{ active_page }}, next route {{ recommended_next_step.href if recommended_next_step else '/dashboard' }}.</div>
+                <div class="lens-scope" aria-label="Lens scope">
+                    <div class="lens-scope-card lens-scope-calm">
+                        <span class="lens-scope-label">Minimum interface</span>
+                        <span class="lens-scope-copy">Next action, fewer stats, quiet navigation.</span>
+                    </div>
+                    <div class="lens-scope-card lens-scope-normal">
+                        <span class="lens-scope-label">Guided workflow</span>
+                        <span class="lens-scope-copy">Context, blockers, and proof remain one click away.</span>
+                    </div>
+                    <div class="lens-scope-card lens-scope-expert">
+                        <span class="lens-scope-label">Full proof mode</span>
+                        <span class="lens-scope-copy">Drawers open, logs expand, technical evidence surfaces.</span>
+                    </div>
+                </div>
             </div>
             <div class="companion-actions">
                 <button class="btn btn-primary action-button" type="button" data-navigate-href="{{ recommended_next_step.href if recommended_next_step else '/dashboard' }}">Take next step</button>
@@ -4263,6 +4433,18 @@
     });
 
     const lensButtons = Array.from(document.querySelectorAll("[data-lens-option]"));
+    const lensStatusCopy = document.querySelector("[data-lens-current-copy]");
+    const lensModeCopy = {
+        calm: "Calm lens is active across the whole app: minimum chrome, next action first, technical detail quiet.",
+        normal: "Normal lens is active across the whole app: guided context with proof one click away.",
+        expert: "Expert lens is active across the whole app: expanded drawers, logs, and technical evidence."
+    };
+
+    function isTypingTarget(target) {
+        if (!target) return false;
+        const tag = target.tagName ? target.tagName.toLowerCase() : "";
+        return tag === "input" || tag === "textarea" || tag === "select" || target.isContentEditable;
+    }
 
     function captureLensDetailDefaults() {
         Array.from(document.querySelectorAll("details")).forEach(function (detail) {
@@ -4292,6 +4474,10 @@
         captureLensDetailDefaults();
         Array.from(document.querySelectorAll("details")).forEach(function (detail) {
             if (mode === "expert") {
+                if (detail.hasAttribute("data-lens-keep-closed")) {
+                    detail.open = false;
+                    return;
+                }
                 detail.open = true;
                 return;
             }
@@ -4313,6 +4499,9 @@
             button.classList.toggle("is-active", active);
             button.setAttribute("aria-pressed", active ? "true" : "false");
         });
+        if (lensStatusCopy) {
+            lensStatusCopy.textContent = lensModeCopy[nextMode] || lensModeCopy.normal;
+        }
         alignLensDetails(nextMode);
         storeLens(nextMode);
     }
@@ -4326,6 +4515,18 @@
         button.addEventListener("click", function () {
             applyLens(button.getAttribute("data-lens-option"));
         });
+    });
+
+    document.addEventListener("keydown", function (event) {
+        if (!event.altKey || event.ctrlKey || event.metaKey || event.shiftKey || isTypingTarget(event.target)) {
+            return;
+        }
+        const shortcutMap = { "1": "calm", "2": "normal", "3": "expert" };
+        const mode = shortcutMap[event.key];
+        if (mode) {
+            event.preventDefault();
+            applyLens(mode);
+        }
     });
 
     const palette = document.getElementById("command-palette");

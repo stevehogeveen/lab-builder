@@ -48,3 +48,4 @@ This file captures the UI techniques being folded into Lab Builder so future cle
 - Evaluate the experimental `Experience lens` and `Proof ledger` patterns for broad adoption if they reduce operator confusion during live runs.
 - Keep psychedelic or theatrical visuals opt-in only; operational trust comes before spectacle during real infrastructure work.
 - Experience lenses should change the whole app, not only copy: Calm should minimize, Normal should guide, and Expert should expose logs, proof, and technical detail.
+- Verbose modes must still respect safety boundaries: expanding proof should not automatically expose destructive controls.

@@ -704,7 +704,7 @@
             {% if cisco.last_running_config_backup %}<pre class="mt-4 whitespace-pre-wrap text-sm text-slate-300">{{ cisco.last_running_config_backup }}</pre>{% endif %}
         </details>
 
-        <details class="card identity-soft-card cisco-advanced" style="border-color: color-mix(in srgb, var(--bad) 45%, var(--border));">
+        <details class="card identity-soft-card cisco-advanced" data-lens-keep-closed style="border-color: color-mix(in srgb, var(--bad) 45%, var(--border));">
             <summary class="summary-row"><span class="font-semibold">Factory reset switch</span><span class="status danger">destructive</span></summary>
             <div class="text-sm text-slate-400 mt-3">Deletes startup-config and vlan.dat, then reloads the switch.</div>
             <div class="grid grid-cols-1 md:grid-cols-[minmax(0,1fr)_auto] gap-3 mt-4 items-end">

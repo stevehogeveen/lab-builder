@@ -11247,6 +11247,7 @@ def test_cisco_page_separates_live_state_from_desired_template(client):
     assert "Approve config" in response.text
     assert "Run Cisco upgrade" not in response.text
     assert "Port map" in response.text
+    assert "data-lens-keep-closed" in response.text
     assert "GigabitEthernet1/0/24" in response.text
 
 
@@ -11559,7 +11560,13 @@ def test_dashboard_uses_simplified_primary_navigation(client):
     assert "Calm" in response.text
     assert "Normal" in response.text
     assert "Expert" in response.text
+    assert "Calm lens" in response.text
     assert "Normal lens" in response.text
+    assert "Minimum interface" in response.text
+    assert "Guided workflow" in response.text
+    assert "Full proof mode" in response.text
+    assert "Alt 1" in response.text
+    assert "data-lens-current-copy" in response.text
     assert "Proof ledger" in response.text
     assert "Evidence trail" in response.text
     assert "Current page signal" in response.text
@@ -11570,6 +11577,9 @@ def test_dashboard_uses_simplified_primary_navigation(client):
     assert "Emergency normal" in response.text
     assert "data-reality-range" in response.text
     assert 'data-density-toggle' in response.text
+    assert 'data-lens="normal"' in response.text
+    assert 'data-density="comfortable"' in response.text
+    assert 'data-visual="normal"' in response.text
     assert 'data-visual-toggle' in response.text
     assert 'data-reality-engine-open' in response.text
     assert 'lab-builder-reality-engine' in response.text
@@ -11581,6 +11591,7 @@ def test_dashboard_uses_simplified_primary_navigation(client):
     assert 'body[data-lens="calm"] .codeblock' in response.text
     assert "captureLensDetailDefaults" in response.text
     assert "alignLensDetails" in response.text
+    assert "isTypingTarget" in response.text
     assert "htmx:afterSettle" in response.text
     assert ".sidebar .nav-group:last-of-type" not in response.text
     assert "Run History" not in response.text
