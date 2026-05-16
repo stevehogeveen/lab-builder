@@ -11564,8 +11564,14 @@ def test_dashboard_uses_simplified_primary_navigation(client):
     assert "Current page signal" in response.text
     assert "Cosmic mode" in response.text
     assert "Trip" in response.text
+    assert "Reality engine" in response.text
+    assert "Maximum trip" in response.text
+    assert "Emergency normal" in response.text
+    assert "data-reality-range" in response.text
     assert 'data-density-toggle' in response.text
     assert 'data-visual-toggle' in response.text
+    assert 'data-reality-engine-open' in response.text
+    assert 'lab-builder-reality-engine' in response.text
     assert 'lab-builder-visual-mode' in response.text
     assert 'data-navigate-href=' in response.text
     assert 'data-proof-drawer-open' in response.text

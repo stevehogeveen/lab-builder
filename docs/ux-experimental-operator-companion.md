@@ -28,6 +28,7 @@ This branch explores a more distinctive experience layer for Lab Builder. The go
 - Session-local `Experience lens` with Calm, Explain, and Expert modes.
 - Global `Proof ledger` drawer that collects readiness, page signal, latest run signal, and module proof path.
 - Opt-in `Cosmic mode`, a psychedelic visual atmosphere that changes depth, glow, color, and motion without changing operational data or routes.
+- `Reality engine`, a browser-local visual synthesizer for cosmic intensity, drift, orbit, cursor aura, stabilization, maximum trip, and emergency normal mode.
 - `data-navigate-href` button navigation so experimental UI can route without adding duplicate sidebar links.
 
 ## Design Rules
@@ -38,6 +39,7 @@ This branch explores a more distinctive experience layer for Lab Builder. The go
 4. Spatial UI is allowed only when it clarifies workflow state; it must collapse back to a simple list on small screens.
 5. Experimental surfaces must be backed by existing data and routes, not new hidden state.
 6. Psychedelic visuals must be opt-in, reversible, readable, and respect reduced-motion preferences.
+7. The user must always have a one-click way back to normal visual mode.
 
 ## Next Experiments
 
@@ -46,3 +48,4 @@ This branch explores a more distinctive experience layer for Lab Builder. The go
 - Feed the proof ledger with richer artifacts as more modules expose stable proof summaries.
 - Allow the experience lens to be set per kit when user preferences need to move between browsers.
 - Test whether Cosmic mode helps the app feel more alive without making real operational work less trustworthy.
+- Explore whether the Reality engine should stay branch-only or become a hidden theme lab for future UI experiments.

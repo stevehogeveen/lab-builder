@@ -38,6 +38,11 @@
             --card-shadow: 0 12px 30px rgba(28, 49, 77, 0.06);
             --card-shadow-hover: 0 18px 40px rgba(28, 49, 77, 0.1);
             --panel-glow: rgba(47, 111, 219, 0.05);
+            --cursor-x: 50vw;
+            --cursor-y: 50vh;
+            --cosmic-intensity: 0.65;
+            --cosmic-drift: 1;
+            --cosmic-orbit: 1;
         }
 
         html {
@@ -122,15 +127,15 @@
 
         body[data-visual="cosmic"]::before,
         body[data-visual="cosmic"]::after {
-            opacity: 1;
+            opacity: calc(0.35 + (var(--cosmic-intensity) * 0.55));
         }
 
         body[data-visual="cosmic"]::before {
-            animation: cosmic-aurora 18s ease-in-out infinite alternate;
+            animation: cosmic-aurora calc(24s - (var(--cosmic-drift) * 10s)) ease-in-out infinite alternate;
         }
 
         body[data-visual="cosmic"]::after {
-            animation: cosmic-grid 26s linear infinite;
+            animation: cosmic-grid calc(34s - (var(--cosmic-drift) * 13s)) linear infinite;
         }
 
         body[data-visual="cosmic"] .app-shell {
@@ -177,8 +182,8 @@
             background:
                 conic-gradient(from 120deg, transparent, rgba(85, 214, 255, 0.2), rgba(255, 61, 242, 0.16), rgba(111, 255, 201, 0.18), transparent);
             filter: blur(28px);
-            opacity: 0.5;
-            animation: cosmic-spin 22s linear infinite;
+            opacity: calc(0.22 + (var(--cosmic-intensity) * 0.46));
+            animation: cosmic-spin calc(30s - (var(--cosmic-orbit) * 14s)) linear infinite;
         }
 
         body[data-visual="cosmic"] .command-title,
@@ -220,8 +225,24 @@
             box-shadow: 0 18px 44px rgba(0,0,0,0.28), 0 0 28px rgba(85, 214, 255, 0.14);
         }
 
+        body[data-visual="cosmic"] .cosmic-cursor {
+            opacity: calc(0.18 + (var(--cosmic-intensity) * 0.36));
+        }
+
         body[data-visual="cosmic"] .status {
             box-shadow: inset 0 0 0 1px rgba(255,255,255,0.08), 0 0 16px rgba(85, 214, 255, 0.08);
+        }
+
+        .cosmic-cursor {
+            position: fixed;
+            inset: 0;
+            z-index: 0;
+            pointer-events: none;
+            opacity: 0;
+            transition: opacity 0.28s ease;
+            background:
+                radial-gradient(circle 260px at var(--cursor-x) var(--cursor-y), rgba(255, 255, 255, 0.22), rgba(85, 214, 255, 0.12) 24%, rgba(255, 61, 242, 0.09) 42%, transparent 68%);
+            mix-blend-mode: screen;
         }
 
         @keyframes cosmic-aurora {
@@ -1341,6 +1362,93 @@
         .proof-dot-muted {
             background: var(--muted-soft);
             box-shadow: 0 0 0 4px color-mix(in srgb, var(--muted-soft) 12%, transparent);
+        }
+
+        .reality-engine {
+            position: fixed;
+            inset: 0;
+            z-index: 10018;
+            display: grid;
+            place-items: end center;
+            padding: 18px;
+            background: rgba(3, 8, 23, 0.18);
+            backdrop-filter: blur(5px);
+        }
+
+        .reality-engine[hidden] {
+            display: none;
+        }
+
+        .reality-engine-panel {
+            width: min(780px, calc(100vw - 28px));
+            overflow: hidden;
+            border: 1px solid color-mix(in srgb, var(--accent) 24%, var(--border));
+            border-radius: 24px;
+            background:
+                radial-gradient(circle at 12% 0%, rgba(85, 214, 255, 0.2), transparent 38%),
+                radial-gradient(circle at 88% 4%, rgba(255, 61, 242, 0.18), transparent 34%),
+                linear-gradient(135deg, color-mix(in srgb, var(--panel) 88%, transparent), color-mix(in srgb, var(--panel2) 86%, transparent));
+            box-shadow: 0 30px 90px rgba(0, 0, 0, 0.3), 0 0 48px rgba(85, 214, 255, 0.1);
+        }
+
+        .reality-engine-header {
+            display: flex;
+            align-items: flex-start;
+            justify-content: space-between;
+            gap: 14px;
+            padding: 16px;
+            border-bottom: 1px solid color-mix(in srgb, var(--border) 82%, transparent);
+        }
+
+        .reality-controls {
+            display: grid;
+            grid-template-columns: repeat(3, minmax(0, 1fr));
+            gap: 12px;
+            padding: 14px 16px;
+        }
+
+        .reality-control {
+            display: grid;
+            gap: 8px;
+            padding: 12px;
+            border: 1px solid color-mix(in srgb, var(--border) 84%, transparent);
+            border-radius: 16px;
+            background: color-mix(in srgb, var(--panel2) 78%, transparent);
+        }
+
+        .reality-control-label {
+            display: flex;
+            justify-content: space-between;
+            gap: 8px;
+            align-items: center;
+            font-weight: 900;
+        }
+
+        .reality-control-copy {
+            color: var(--muted);
+            font-size: 0.84rem;
+            line-height: 1.32;
+        }
+
+        .reality-control input[type="range"] {
+            padding: 0;
+            accent-color: var(--accent);
+            box-shadow: none;
+        }
+
+        .reality-engine-footer {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 8px;
+            justify-content: space-between;
+            align-items: center;
+            padding: 13px 16px 16px;
+            border-top: 1px solid color-mix(in srgb, var(--border) 82%, transparent);
+        }
+
+        .reality-signal {
+            color: var(--muted);
+            font-size: 0.86rem;
         }
 
         .action-card {
@@ -3574,6 +3682,55 @@
     </main>
 </div>
 
+<div class="cosmic-cursor" id="cosmic-cursor" aria-hidden="true"></div>
+
+<div class="reality-engine" id="reality-engine" role="dialog" aria-modal="true" aria-labelledby="reality-engine-title" hidden>
+    <div class="reality-engine-panel">
+        <div class="reality-engine-header">
+            <div>
+                <div class="dashboard-kicker">Experimental visual synthesizer</div>
+                <div class="text-xl font-bold" id="reality-engine-title">Reality engine</div>
+                <div class="text-sm text-slate-400 mt-1">Tune the psychedelic layer without changing any operational data, routes, approvals, or run behavior.</div>
+            </div>
+            <button class="btn" type="button" data-reality-engine-close>Close</button>
+        </div>
+        <div class="reality-controls">
+            <label class="reality-control">
+                <span class="reality-control-label">
+                    <span>Intensity</span>
+                    <span class="kbd" data-reality-value="intensity">65</span>
+                </span>
+                <input type="range" min="0" max="100" step="1" value="65" data-reality-range="intensity">
+                <span class="reality-control-copy">Controls glow, aura strength, and how strongly the cosmic skin bends the page atmosphere.</span>
+            </label>
+            <label class="reality-control">
+                <span class="reality-control-label">
+                    <span>Drift</span>
+                    <span class="kbd" data-reality-value="drift">50</span>
+                </span>
+                <input type="range" min="0" max="100" step="1" value="50" data-reality-range="drift">
+                <span class="reality-control-copy">Controls aurora and background-grid motion speed.</span>
+            </label>
+            <label class="reality-control">
+                <span class="reality-control-label">
+                    <span>Orbit</span>
+                    <span class="kbd" data-reality-value="orbit">55</span>
+                </span>
+                <input type="range" min="0" max="100" step="1" value="55" data-reality-range="orbit">
+                <span class="reality-control-copy">Controls rotational field motion around command and constellation surfaces.</span>
+            </label>
+        </div>
+        <div class="reality-engine-footer">
+            <div class="reality-signal">Reality engine is cosmetic only. Use Normal mode before critical live execution if visual calm matters.</div>
+            <div class="actions">
+                <button class="btn" type="button" data-reality-preset="stabilize">Stabilize</button>
+                <button class="btn btn-primary" type="button" data-reality-preset="maximum">Maximum trip</button>
+                <button class="btn btn-danger" type="button" data-visual-normal>Emergency normal</button>
+            </div>
+        </div>
+    </div>
+</div>
+
 <div class="command-palette" id="command-palette" role="dialog" aria-modal="true" aria-labelledby="command-palette-title" hidden>
     <div class="command-palette-card">
         <div class="command-palette-header">
@@ -3901,6 +4058,9 @@
 
     const visualToggle = document.querySelector("[data-visual-toggle]");
     const visualLabel = document.querySelector("[data-visual-label]");
+    const realityEngine = document.getElementById("reality-engine");
+    const realityRanges = Array.from(document.querySelectorAll("[data-reality-range]"));
+    let realityEngineReturnFocus = null;
 
     function readStoredVisualMode() {
         try {
@@ -3936,6 +4096,115 @@
             applyVisualMode(document.body.getAttribute("data-visual") === "cosmic" ? "normal" : "cosmic");
         });
     }
+
+    function readRealitySettings() {
+        try {
+            const parsed = JSON.parse(window.localStorage.getItem("lab-builder-reality-engine") || "{}");
+            return {
+                intensity: Number.isFinite(Number(parsed.intensity)) ? Number(parsed.intensity) : 65,
+                drift: Number.isFinite(Number(parsed.drift)) ? Number(parsed.drift) : 50,
+                orbit: Number.isFinite(Number(parsed.orbit)) ? Number(parsed.orbit) : 55,
+            };
+        } catch (_) {
+            return { intensity: 65, drift: 50, orbit: 55 };
+        }
+    }
+
+    function storeRealitySettings(settings) {
+        try {
+            window.localStorage.setItem("lab-builder-reality-engine", JSON.stringify(settings));
+        } catch (_) {
+            // Cosmetic preference only.
+        }
+    }
+
+    function applyRealitySettings(settings) {
+        const normalized = {
+            intensity: Math.max(0, Math.min(100, Number(settings.intensity) || 0)),
+            drift: Math.max(0, Math.min(100, Number(settings.drift) || 0)),
+            orbit: Math.max(0, Math.min(100, Number(settings.orbit) || 0)),
+        };
+        document.documentElement.style.setProperty("--cosmic-intensity", String(normalized.intensity / 100));
+        document.documentElement.style.setProperty("--cosmic-drift", String(normalized.drift / 100));
+        document.documentElement.style.setProperty("--cosmic-orbit", String(normalized.orbit / 100));
+        realityRanges.forEach(function (range) {
+            const key = range.getAttribute("data-reality-range");
+            range.value = String(normalized[key]);
+            const label = document.querySelector(`[data-reality-value="${key}"]`);
+            if (label) label.textContent = String(normalized[key]);
+        });
+        storeRealitySettings(normalized);
+    }
+
+    applyRealitySettings(readRealitySettings());
+
+    realityRanges.forEach(function (range) {
+        range.addEventListener("input", function () {
+            const current = readRealitySettings();
+            current[range.getAttribute("data-reality-range")] = Number(range.value);
+            applyRealitySettings(current);
+            applyVisualMode("cosmic");
+        });
+    });
+
+    document.addEventListener("pointermove", function (event) {
+        if (document.body.getAttribute("data-visual") !== "cosmic") return;
+        document.documentElement.style.setProperty("--cursor-x", `${event.clientX}px`);
+        document.documentElement.style.setProperty("--cursor-y", `${event.clientY}px`);
+    }, { passive: true });
+
+    function openRealityEngine(trigger) {
+        if (!realityEngine) return;
+        realityEngineReturnFocus = trigger || document.activeElement;
+        realityEngine.hidden = false;
+        applyVisualMode("cosmic");
+        const firstRange = realityEngine.querySelector("[data-reality-range]");
+        if (firstRange) window.setTimeout(function () { firstRange.focus(); }, 0);
+    }
+
+    function closeRealityEngine() {
+        if (!realityEngine) return;
+        realityEngine.hidden = true;
+        if (realityEngineReturnFocus && typeof realityEngineReturnFocus.focus === "function") {
+            realityEngineReturnFocus.focus({ preventScroll: true });
+        }
+    }
+
+    document.body.addEventListener("click", function (event) {
+        const openButton = event.target.closest && event.target.closest("[data-reality-engine-open]");
+        if (openButton) {
+            openRealityEngine(openButton);
+            return;
+        }
+        if (event.target.closest && event.target.closest("[data-reality-engine-close]")) {
+            closeRealityEngine();
+            return;
+        }
+        if (event.target.closest && event.target.closest("[data-visual-normal]")) {
+            applyVisualMode("normal");
+            closeRealityEngine();
+            return;
+        }
+        const presetButton = event.target.closest && event.target.closest("[data-reality-preset]");
+        if (presetButton) {
+            const preset = presetButton.getAttribute("data-reality-preset");
+            applyRealitySettings(preset === "maximum"
+                ? { intensity: 100, drift: 92, orbit: 96 }
+                : { intensity: 35, drift: 18, orbit: 20 });
+            applyVisualMode("cosmic");
+            return;
+        }
+        if (realityEngine && !realityEngine.hidden && event.target === realityEngine) {
+            closeRealityEngine();
+        }
+    });
+
+    document.addEventListener("keydown", function (event) {
+        if (event.key === "Escape" && realityEngine && !realityEngine.hidden) {
+            event.preventDefault();
+            closeRealityEngine();
+        }
+    });
 
     const lensButtons = Array.from(document.querySelectorAll("[data-lens-option]"));
 
