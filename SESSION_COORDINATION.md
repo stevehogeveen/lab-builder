@@ -74,12 +74,12 @@ Copy this block and update it in place.
   - Use operator feedback from the next manual test pass to tighten layout, wording, and any remaining protocol-detail validations.
 
 ### Session: rest-of-app
-- Status: active
+- Status: paused
 - Branch: experience/operator-companion
 - Scope owner: non-NetApp app work
-- Working on: Psychedelic cosmic visual transformation layer
+- Working on: Paused after experimental operator companion and app-wide lens polish
 - Blocked by: none
-- Ready to hand off: Experimental branch can hand off after tests, commit, and branch push are complete
+- Ready to hand off: Branch is pushed, full regression passed, and `SESSION_CATCHUP_NEXT_CODEX.md` has the next-session handoff
 - Files claimed:
   - SESSION_COORDINATION.md
   - templates/index.html
@@ -143,8 +143,9 @@ Copy this block and update it in place.
   - 2026-05-16 America/Toronto - Full regression passed for app-wide lens alignment slice.
   - 2026-05-16 America/Toronto - Added lens cockpit visuals, shortcuts, and safe Expert keep-closed handling for destructive panels.
   - 2026-05-16 America/Toronto - Full regression passed for lens cockpit slice.
+  - 2026-05-16 America/Toronto - Stopped app servers and wrote `SESSION_CATCHUP_NEXT_CODEX.md` handoff note.
 - Next intended change:
-  - Review experimental branch and decide whether to merge, refine, or cherry-pick pieces.
+  - Resume from `SESSION_CATCHUP_NEXT_CODEX.md`, then decide whether to merge, refine, or cherry-pick the experimental branch.
 
 ## Shared File Ledger
 
