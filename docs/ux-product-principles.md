@@ -1,0 +1,45 @@
+# Lab Builder UX Product Principles
+
+This file captures the UI techniques being folded into Lab Builder so future cleanup work stays consistent instead of becoming one-off decoration.
+
+## Principles
+
+1. Keep status visible.
+   - Every page should make the current kit state, blockers, and next action obvious without requiring the operator to hunt for it.
+   - Source pattern: Nielsen Norman Group visibility-of-system-status heuristic and Apple feedback guidance.
+
+2. Use task-list navigation for long workflows.
+   - Setup modules are a task list: each item should have a clear name, short status, whole-row navigation, and no mystery next step.
+   - Source pattern: GOV.UK task-list component.
+
+3. Give feedback where the action happened.
+   - Button results should appear in the same block as the button, with plain-language status and concise next steps.
+   - Source pattern: Apple feedback guidance and Atlassian information-message guidance.
+
+4. Make empty states useful.
+   - Empty cards should say what will appear there, why it is empty, and the one best action to take next.
+   - Source pattern: IBM Carbon empty-state guidance.
+
+5. Support expert speed without hurting beginners.
+   - Great operational apps provide keyboard shortcuts and fast navigation while preserving visible buttons and labels.
+   - Applied pattern: `Ctrl+K` command palette built from the visible sidebar navigation.
+
+6. Let density adapt to the workspace.
+   - Operators move between browsers, laptop screens, remote consoles, and large monitors. The app should support a compact view without hiding required information.
+   - Applied pattern: local `Compact view` toggle stored in browser local storage.
+
+7. Accessibility is product quality.
+   - Keyboard access, visible focus, skip links, status text, and non-color-only status cues are part of the app's operational reliability.
+
+## Applied In This Slice
+
+- Added a global `Skip to content` link.
+- Added sidebar `Quick jump` with `Ctrl+K` command palette.
+- Added a browser-local `Compact view` density toggle.
+- Kept all commands sourced from existing sidebar links so route names and module behavior stay unchanged.
+
+## Next Candidates
+
+- Add command-palette actions for the safest read-only operations, such as opening current config or reading current versions.
+- Standardize empty-state copy across every module using one reusable component.
+- Add an app-wide issue drawer that summarizes blockers from the current page and links directly to the relevant field or module.

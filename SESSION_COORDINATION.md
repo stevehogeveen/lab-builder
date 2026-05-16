@@ -77,15 +77,16 @@ Copy this block and update it in place.
 - Status: active
 - Branch: main
 - Scope owner: non-NetApp app work
-- Working on: Remove duplicate dashboard readiness views after build-path polish
+- Working on: App-wide command palette, density, and accessibility polish
 - Blocked by: none
-- Ready to hand off: Dashboard/sidebar polish slice can hand off after tests and commit are complete
+- Ready to hand off: UX technique slice can hand off after tests and commit are complete
 - Files claimed:
   - SESSION_COORDINATION.md
   - templates/index.html
   - templates/partials/pages/dashboard.html
   - templates/partials/components/precheck_summary.html
   - templates/partials/sidebar.html
+  - docs/ux-product-principles.md
   - tests/test_app.py
 - Shared files touched with caution:
   - app/main.py
@@ -123,8 +124,10 @@ Copy this block and update it in place.
   - 2026-05-15 America/Toronto - Added guided dashboard build path, operator model card, and sidebar kit-state meter; full regression passed.
   - 2026-05-15 America/Toronto - Claimed follow-up dashboard duplicate-readiness cleanup slice.
   - 2026-05-15 America/Toronto - Removed duplicate dashboard module-readiness panel and promoted kit/job widgets into a compact two-column workspace block.
+  - 2026-05-15 America/Toronto - Claimed app-wide command palette, density, and accessibility polish slice.
+  - 2026-05-15 America/Toronto - Added command palette, compact-view toggle, skip link, and UX product-principles notes.
 - Next intended change:
-  - Continue page-by-page simplification using the same proof-first UI pattern.
+  - Validate the UX polish slice, then continue with standardized empty-state and issue-drawer candidates.
 
 ## Shared File Ledger
 

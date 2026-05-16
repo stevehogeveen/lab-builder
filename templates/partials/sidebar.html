@@ -38,6 +38,17 @@
         </div>
     </div>
 
+    <div class="sidebar-utility-grid" aria-label="Operator shortcuts">
+        <button class="sidebar-tool-button" type="button" data-command-palette-open aria-haspopup="dialog" aria-controls="command-palette">
+            <span>Quick jump</span>
+            <span class="kbd">Ctrl K</span>
+        </button>
+        <button class="sidebar-tool-button" type="button" data-density-toggle aria-pressed="false">
+            <span data-density-label>Compact view</span>
+            <span class="kbd">View</span>
+        </button>
+    </div>
+
     <div class="nav-group">
         <div class="nav-label">Overview</div>
         <a class="nav-link{% if active_page == 'dashboard' %} nav-link-active{% endif %}" href="/dashboard">

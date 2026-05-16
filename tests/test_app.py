@@ -11542,6 +11542,12 @@ def test_dashboard_uses_simplified_primary_navigation(client):
     assert "Technical details" in response.text
     assert 'href="/execution"' in response.text
     assert "Run Center" in response.text
+    assert "Skip to content" in response.text
+    assert "Command palette" in response.text
+    assert "Quick jump" in response.text
+    assert "Ctrl K" in response.text
+    assert "Compact view" in response.text
+    assert 'data-density-toggle' in response.text
     assert ".sidebar .nav-group:last-of-type" not in response.text
     assert "Run History" not in response.text
     assert "Reset dashboard layout" not in response.text

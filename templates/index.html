@@ -58,6 +58,28 @@
             -moz-osx-font-smoothing: grayscale;
         }
 
+        .skip-link {
+            position: fixed;
+            top: 12px;
+            left: 12px;
+            z-index: 10030;
+            transform: translateY(-140%);
+            padding: 10px 14px;
+            border-radius: 999px;
+            background: var(--text);
+            color: white;
+            font-weight: 800;
+            text-decoration: none;
+            box-shadow: 0 14px 34px rgba(15, 23, 42, 0.22);
+            transition: transform 0.16s ease;
+        }
+
+        .skip-link:focus {
+            transform: translateY(0);
+            outline: 3px solid color-mix(in srgb, var(--accent) 38%, white);
+            outline-offset: 3px;
+        }
+
         ::selection {
             background: color-mix(in srgb, var(--accent) 18%, white 82%);
             color: var(--text);
@@ -164,6 +186,57 @@
             color: var(--muted);
             font-size: 0.76rem;
             line-height: 1.25;
+        }
+
+        .sidebar-utility-grid {
+            display: grid;
+            grid-template-columns: 1fr;
+            gap: 8px;
+            margin: -6px 0 18px;
+        }
+
+        .sidebar-tool-button {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 10px;
+            width: 100%;
+            min-height: 38px;
+            padding: 8px 10px;
+            border: 1px solid color-mix(in srgb, var(--border) 86%, var(--accent));
+            border-radius: 12px;
+            background: color-mix(in srgb, white 88%, var(--panel2) 12%);
+            color: var(--text);
+            font-size: 0.84rem;
+            font-weight: 750;
+            text-align: left;
+            cursor: pointer;
+            transition: border-color 0.18s ease, box-shadow 0.18s ease, transform 0.18s ease;
+        }
+
+        .sidebar-tool-button:hover,
+        .sidebar-tool-button:focus-visible {
+            transform: translateX(1px);
+            border-color: color-mix(in srgb, var(--accent) 28%, var(--border));
+            box-shadow: 0 10px 24px rgba(42, 103, 209, 0.08);
+            outline: none;
+        }
+
+        .kbd {
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            min-width: 28px;
+            padding: 2px 6px;
+            border-radius: 7px;
+            border: 1px solid color-mix(in srgb, var(--border-strong) 82%, white 18%);
+            background: color-mix(in srgb, white 82%, var(--panel3) 18%);
+            color: var(--muted);
+            font-size: 0.72rem;
+            font-weight: 850;
+            line-height: 1.2;
+            white-space: nowrap;
+            box-shadow: inset 0 -1px 0 rgba(24, 37, 53, 0.06);
         }
 
         .eyebrow {
@@ -412,6 +485,47 @@
         .card { padding: 13px; }
         .panel, .card, .main, #main-content { min-width: 0; }
 
+        body[data-density="compact"] .main {
+            padding: 14px;
+        }
+
+        body[data-density="compact"] .hero {
+            padding: 12px 13px;
+            margin-bottom: 12px;
+            gap: 12px;
+        }
+
+        body[data-density="compact"] .panel,
+        body[data-density="compact"] .card,
+        body[data-density="compact"] .section-card,
+        body[data-density="compact"] .metric-card,
+        body[data-density="compact"] .identity-soft-card,
+        body[data-density="compact"] .dashboard-path-panel,
+        body[data-density="compact"] .dashboard-operator-panel,
+        body[data-density="compact"] .dashboard-signal-card,
+        body[data-density="compact"] .dashboard-side-panel,
+        body[data-density="compact"] .execution-section-card,
+        body[data-density="compact"] .execution-stage-card {
+            padding: 11px 12px;
+            border-radius: 13px;
+        }
+
+        body[data-density="compact"] .form-grid,
+        body[data-density="compact"] .responsive-grid,
+        body[data-density="compact"] .dashboard-cockpit,
+        body[data-density="compact"] .dashboard-guidance-grid,
+        body[data-density="compact"] .dashboard-workspace-grid {
+            gap: 10px;
+        }
+
+        body[data-density="compact"] .dashboard-path-step,
+        body[data-density="compact"] .operator-principle,
+        body[data-density="compact"] .ops-row-item,
+        body[data-density="compact"] .checklist-item {
+            padding: 9px 10px;
+            border-radius: 12px;
+        }
+
         a.card {
             transition: transform 0.18s ease, box-shadow 0.18s ease, border-color 0.18s ease;
         }
@@ -612,6 +726,109 @@
             color: var(--muted);
             font-size: 0.92rem;
             line-height: 1.45;
+        }
+
+        .command-palette {
+            position: fixed;
+            inset: 0;
+            z-index: 10020;
+            display: grid;
+            place-items: start center;
+            padding: min(11vh, 88px) 18px 24px;
+            background: rgba(15, 23, 42, 0.34);
+            backdrop-filter: blur(8px);
+        }
+
+        .command-palette[hidden] {
+            display: none;
+        }
+
+        .command-palette-card {
+            width: min(720px, calc(100vw - 28px));
+            overflow: hidden;
+            border: 1px solid color-mix(in srgb, var(--accent) 22%, var(--border));
+            border-radius: 22px;
+            background:
+                radial-gradient(circle at top right, color-mix(in srgb, var(--accent) 9%, white 91%) 0%, transparent 34%),
+                linear-gradient(180deg, color-mix(in srgb, white 96%, var(--panel2) 4%), white);
+            box-shadow: 0 28px 80px rgba(15, 23, 42, 0.28);
+        }
+
+        .command-palette-header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 12px;
+            padding: 14px 16px;
+            border-bottom: 1px solid color-mix(in srgb, var(--border) 82%, transparent);
+        }
+
+        .command-palette-title {
+            font-weight: 850;
+        }
+
+        .command-palette-search {
+            width: 100%;
+            border: 0;
+            border-radius: 0;
+            padding: 15px 16px;
+            font-size: 1rem;
+            background: color-mix(in srgb, white 84%, var(--accent-soft) 16%);
+            box-shadow: none;
+        }
+
+        .command-palette-search:focus {
+            border-color: transparent;
+            box-shadow: inset 0 0 0 3px color-mix(in srgb, var(--accent) 16%, transparent);
+        }
+
+        .command-palette-list {
+            display: grid;
+            gap: 6px;
+            max-height: min(52vh, 430px);
+            overflow: auto;
+            padding: 10px;
+        }
+
+        .command-item {
+            display: grid;
+            grid-template-columns: minmax(0, 1fr) auto;
+            gap: 12px;
+            width: 100%;
+            padding: 11px 12px;
+            border: 1px solid transparent;
+            border-radius: 14px;
+            background: transparent;
+            color: var(--text);
+            text-align: left;
+            cursor: pointer;
+        }
+
+        .command-item:hover,
+        .command-item.is-active,
+        .command-item:focus-visible {
+            border-color: color-mix(in srgb, var(--accent) 22%, var(--border));
+            background: color-mix(in srgb, var(--accent-soft) 58%, white 42%);
+            outline: none;
+        }
+
+        .command-item-title {
+            display: block;
+            font-weight: 850;
+            line-height: 1.15;
+        }
+
+        .command-item-subtitle {
+            display: block;
+            margin-top: 2px;
+            color: var(--muted);
+            font-size: 0.86rem;
+        }
+
+        .command-empty {
+            padding: 22px 14px;
+            color: var(--muted);
+            text-align: center;
         }
 
         .action-card {
@@ -2538,6 +2755,7 @@
     </style>
 </head>
 <body data-active-page="{{ active_page }}">
+<a class="skip-link" href="#main-content">Skip to content</a>
 <div class="app-shell">
     {% include "partials/sidebar.html" %}
 
@@ -2629,6 +2847,23 @@
 
         {% include "partials/main_content.html" %}
     </main>
+</div>
+
+<div class="command-palette" id="command-palette" role="dialog" aria-modal="true" aria-labelledby="command-palette-title" hidden>
+    <div class="command-palette-card">
+        <div class="command-palette-header">
+            <div>
+                <div class="dashboard-kicker">Operator shortcut</div>
+                <div class="command-palette-title" id="command-palette-title">Command palette</div>
+            </div>
+            <div class="flex items-center gap-2">
+                <span class="kbd">Esc</span>
+                <button class="btn" type="button" data-command-palette-close>Close</button>
+            </div>
+        </div>
+        <input class="command-palette-search" id="command-palette-search" type="search" placeholder="Jump to a page or setup module" autocomplete="off" aria-label="Search pages">
+        <div class="command-palette-list" id="command-palette-list" role="listbox" aria-label="Available pages"></div>
+    </div>
 </div>
 
 <div class="request-overlay" id="request-overlay" aria-live="polite" aria-hidden="true">
@@ -2802,6 +3037,192 @@
 
     document.body.addEventListener("htmx:sendError", function () {
         showGlobalWarning("The app could not send the request. Check that the server is still running.");
+    });
+
+    const densityToggle = document.querySelector("[data-density-toggle]");
+    const densityLabel = document.querySelector("[data-density-label]");
+
+    function readStoredDensity() {
+        try {
+            return window.localStorage.getItem("lab-builder-density") || "comfortable";
+        } catch (_) {
+            return "comfortable";
+        }
+    }
+
+    function storeDensity(mode) {
+        try {
+            window.localStorage.setItem("lab-builder-density", mode);
+        } catch (_) {
+            // Local storage can be blocked; the visible control still updates this page.
+        }
+    }
+
+    function applyDensity(mode) {
+        const nextMode = mode === "compact" ? "compact" : "comfortable";
+        document.body.setAttribute("data-density", nextMode);
+        if (densityToggle) {
+            densityToggle.setAttribute("aria-pressed", nextMode === "compact" ? "true" : "false");
+        }
+        if (densityLabel) {
+            densityLabel.textContent = nextMode === "compact" ? "Comfort view" : "Compact view";
+        }
+        storeDensity(nextMode);
+    }
+
+    applyDensity(readStoredDensity());
+    if (densityToggle) {
+        densityToggle.addEventListener("click", function () {
+            applyDensity(document.body.getAttribute("data-density") === "compact" ? "comfortable" : "compact");
+        });
+    }
+
+    const palette = document.getElementById("command-palette");
+    const paletteInput = document.getElementById("command-palette-search");
+    const paletteList = document.getElementById("command-palette-list");
+    let paletteCommands = [];
+    let paletteMatches = [];
+    let paletteActiveIndex = 0;
+    let paletteReturnFocus = null;
+
+    function commandStatusLabel(tone) {
+        if (tone === "ready") return "Ready";
+        if (tone === "pending") return "Review";
+        if (tone === "muted") return "Off";
+        return "Open";
+    }
+
+    function toneFromNavLink(link) {
+        const dot = link.querySelector(".nav-dot");
+        const classes = dot ? dot.className : "";
+        const match = classes.match(/nav-dot-(ready|pending|progress|muted)/);
+        return match ? match[1] : "progress";
+    }
+
+    function collectPaletteCommands() {
+        paletteCommands = Array.from(document.querySelectorAll(".sidebar .nav-link[href]")).map(function (link) {
+            const group = link.closest(".nav-group");
+            const groupLabel = group && group.querySelector(".nav-label") ? group.querySelector(".nav-label").textContent.trim() : "Page";
+            const title = link.querySelector(".nav-link-title") ? link.querySelector(".nav-link-title").textContent.trim() : link.textContent.trim();
+            const subtitle = link.querySelector(".nav-link-subtitle") ? link.querySelector(".nav-link-subtitle").textContent.trim() : groupLabel;
+            const tone = toneFromNavLink(link);
+            return {
+                href: link.getAttribute("href"),
+                label: title,
+                subtitle: `${groupLabel}${subtitle && subtitle !== groupLabel ? " / " + subtitle : ""}`,
+                tone: tone,
+            };
+        }).filter(function (item, index, items) {
+            return item.href && items.findIndex(function (candidate) { return candidate.href === item.href; }) === index;
+        });
+    }
+
+    function setPaletteActive(index) {
+        if (!paletteList) return;
+        paletteActiveIndex = Math.max(0, Math.min(index, Math.max(0, paletteMatches.length - 1)));
+        Array.from(paletteList.querySelectorAll(".command-item")).forEach(function (item, itemIndex) {
+            const active = itemIndex === paletteActiveIndex;
+            item.classList.toggle("is-active", active);
+            item.setAttribute("aria-selected", active ? "true" : "false");
+        });
+    }
+
+    function renderPalette(query) {
+        if (!paletteList) return;
+        const normalized = String(query || "").trim().toLowerCase();
+        paletteMatches = paletteCommands.filter(function (item) {
+            const haystack = `${item.label} ${item.subtitle} ${item.href}`.toLowerCase();
+            return !normalized || haystack.includes(normalized);
+        });
+        if (!paletteMatches.length) {
+            paletteList.innerHTML = '<div class="command-empty">No matching page. Try iLO, Storage, Run Center, Cisco, NetApp, or Reports.</div>';
+            return;
+        }
+        paletteList.innerHTML = paletteMatches.map(function (item, index) {
+            return [
+                `<button class="command-item${index === 0 ? " is-active" : ""}" type="button" role="option" aria-selected="${index === 0 ? "true" : "false"}" data-command-href="${escapeHtml(item.href)}">`,
+                "<span>",
+                `<span class="command-item-title">${escapeHtml(item.label)}</span>`,
+                `<span class="command-item-subtitle">${escapeHtml(item.subtitle)}</span>`,
+                "</span>",
+                `<span class="status ${escapeHtml(item.tone)}">${escapeHtml(commandStatusLabel(item.tone))}</span>`,
+                "</button>",
+            ].join("");
+        }).join("");
+        setPaletteActive(0);
+    }
+
+    function openPalette(trigger) {
+        if (!palette || !paletteInput) return;
+        paletteReturnFocus = trigger || document.activeElement;
+        collectPaletteCommands();
+        palette.hidden = false;
+        paletteInput.value = "";
+        renderPalette("");
+        window.setTimeout(function () { paletteInput.focus(); }, 0);
+    }
+
+    function closePalette() {
+        if (!palette) return;
+        palette.hidden = true;
+        if (paletteReturnFocus && typeof paletteReturnFocus.focus === "function") {
+            paletteReturnFocus.focus({ preventScroll: true });
+        }
+    }
+
+    function activatePaletteMatch(index) {
+        const item = paletteMatches[index];
+        if (!item || !item.href) return;
+        window.location.href = item.href;
+    }
+
+    document.body.addEventListener("click", function (event) {
+        const openButton = event.target.closest && event.target.closest("[data-command-palette-open]");
+        if (openButton) {
+            openPalette(openButton);
+            return;
+        }
+        if (event.target.closest && event.target.closest("[data-command-palette-close]")) {
+            closePalette();
+            return;
+        }
+        const commandButton = event.target.closest && event.target.closest("[data-command-href]");
+        if (commandButton) {
+            window.location.href = commandButton.getAttribute("data-command-href");
+            return;
+        }
+        if (palette && !palette.hidden && event.target === palette) {
+            closePalette();
+        }
+    });
+
+    if (paletteInput) {
+        paletteInput.addEventListener("input", function () {
+            renderPalette(paletteInput.value);
+        });
+    }
+
+    document.addEventListener("keydown", function (event) {
+        const key = event.key;
+        if ((event.ctrlKey || event.metaKey) && key.toLowerCase() === "k") {
+            event.preventDefault();
+            openPalette(document.querySelector("[data-command-palette-open]"));
+            return;
+        }
+        if (!palette || palette.hidden) return;
+        if (key === "Escape") {
+            event.preventDefault();
+            closePalette();
+        } else if (key === "ArrowDown") {
+            event.preventDefault();
+            setPaletteActive(paletteActiveIndex + 1);
+        } else if (key === "ArrowUp") {
+            event.preventDefault();
+            setPaletteActive(paletteActiveIndex - 1);
+        } else if (key === "Enter") {
+            event.preventDefault();
+            activatePaletteMatch(paletteActiveIndex);
+        }
     });
 
     const kitName = {{ current_kit|tojson }};
