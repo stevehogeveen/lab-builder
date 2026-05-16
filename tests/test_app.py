@@ -11550,7 +11550,12 @@ def test_dashboard_uses_simplified_primary_navigation(client):
     assert "Open issues" in response.text
     assert "Readiness issues" in response.text
     assert "Blockers and next fixes" in response.text
+    assert "Operator companion" in response.text
+    assert "Human-readable next move" in response.text
+    assert "Take next step" in response.text
+    assert "Explain blockers" in response.text
     assert 'data-density-toggle' in response.text
+    assert 'data-navigate-href=' in response.text
     assert ".sidebar .nav-group:last-of-type" not in response.text
     assert "Run History" not in response.text
     assert "Reset dashboard layout" not in response.text
@@ -11568,6 +11573,9 @@ def test_dashboard_and_windows_page_show_precheck_summary(client):
     assert "Ready workflows" in dashboard.text
     assert "Next fix" in dashboard.text
     assert "Mission control overview" in dashboard.text
+    assert "Living kit map" in dashboard.text
+    assert "The app carries the build state for the operator." in dashboard.text
+    assert "Calm by default" in dashboard.text
 
     windows = client.get("/windows")
     assert windows.status_code == 200

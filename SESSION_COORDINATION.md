@@ -75,11 +75,11 @@ Copy this block and update it in place.
 
 ### Session: rest-of-app
 - Status: active
-- Branch: main
+- Branch: experience/operator-companion
 - Scope owner: non-NetApp app work
-- Working on: App-wide readiness issue drawer
+- Working on: Experimental operator-companion experience branch
 - Blocked by: none
-- Ready to hand off: UX technique slice can hand off after tests and commit are complete
+- Ready to hand off: Experimental branch can hand off after tests, commit, and branch push are complete
 - Files claimed:
   - SESSION_COORDINATION.md
   - templates/index.html
@@ -87,6 +87,7 @@ Copy this block and update it in place.
   - templates/partials/components/precheck_summary.html
   - templates/partials/sidebar.html
   - docs/ux-product-principles.md
+  - docs/ux-experimental-operator-companion.md
   - tests/test_app.py
 - Shared files touched with caution:
   - app/main.py
@@ -128,8 +129,11 @@ Copy this block and update it in place.
   - 2026-05-15 America/Toronto - Added command palette, compact-view toggle, skip link, and UX product-principles notes.
   - 2026-05-15 America/Toronto - Claimed app-wide readiness issue drawer slice.
   - 2026-05-15 America/Toronto - Added global readiness issue drawer with blocker summaries and page navigation; full regression passed.
+  - 2026-05-15 America/Toronto - Created experience/operator-companion branch for experimental calm/adaptive operator experience work.
+  - 2026-05-15 America/Toronto - Added universal operator companion, dashboard living kit map, and experimental UX branch notes.
+  - 2026-05-15 America/Toronto - Full regression passed for operator companion branch.
 - Next intended change:
-  - Continue with standardized empty-state copy and exact-field issue anchors when safe.
+  - Review experimental branch and decide whether to merge all, refine, or cherry-pick pieces.
 
 ## Shared File Ledger
 

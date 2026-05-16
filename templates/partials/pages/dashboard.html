@@ -89,6 +89,54 @@
         </div>
     </section>
 
+    <section class="dashboard-constellation" aria-label="Living kit map">
+        <div class="constellation-field">
+            <div class="constellation-core">
+                <div>
+                    <div class="dashboard-kicker">Living kit map</div>
+                    <div class="constellation-score">{{ dashboard_overview.readiness_percent }}%</div>
+                    <div class="text-sm text-slate-500">ready to run</div>
+                </div>
+            </div>
+            {% for item in dashboard_overview.module_rows %}
+            <button class="constellation-node constellation-node-{{ item.tone }}" type="button" data-navigate-href="{{ item.href }}" style="--node-angle: {{ loop.index0 * 43 }};">
+                <span class="constellation-node-title">{{ item.name }}</span>
+                <span class="constellation-node-summary truncate-single" title="{{ item.summary }}">{{ item.label }} · {{ item.checks_ready }}/{{ item.total_checks }} checks</span>
+            </button>
+            {% endfor %}
+            <button class="constellation-node constellation-node-progress" type="button" data-navigate-href="/execution" style="--node-angle: {{ (dashboard_overview.module_rows | length) * 43 }};">
+                <span class="constellation-node-title">Run Center</span>
+                <span class="constellation-node-summary">Final approval and live proof</span>
+            </button>
+        </div>
+
+        <div class="constellation-story">
+            <div>
+                <div class="dashboard-kicker">Experience layer</div>
+                <div class="text-xl font-bold">The app carries the build state for the operator.</div>
+                <div class="text-sm text-slate-400 mt-2">Instead of forcing memory, every page should answer: where am I, what changed, what is safe, and what proof exists?</div>
+            </div>
+            <div class="constellation-principles">
+                <div class="constellation-principle">
+                    <div class="constellation-principle-title">Calm by default</div>
+                    <div class="constellation-principle-copy">Critical items surface; everything else stays available but quiet.</div>
+                </div>
+                <div class="constellation-principle">
+                    <div class="constellation-principle-title">Spatial memory</div>
+                    <div class="constellation-principle-copy">Modules hold a stable place so the kit feels like a map, not a stack.</div>
+                </div>
+                <div class="constellation-principle">
+                    <div class="constellation-principle-title">Trust through proof</div>
+                    <div class="constellation-principle-copy">Discovery, warnings, approvals, and logs are treated as first-class UI.</div>
+                </div>
+                <div class="constellation-principle">
+                    <div class="constellation-principle-title">Human override</div>
+                    <div class="constellation-principle-copy">The app recommends the next move but never hides operator control.</div>
+                </div>
+            </div>
+        </div>
+    </section>
+
     <section class="dashboard-guidance-grid">
         <div class="dashboard-path-panel">
             <div class="dashboard-panel-heading">

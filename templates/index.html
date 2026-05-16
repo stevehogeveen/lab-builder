@@ -473,6 +473,103 @@
             margin-top: 9px;
         }
 
+        .operator-companion {
+            position: relative;
+            display: grid;
+            grid-template-columns: auto minmax(0, 1fr) auto;
+            gap: 14px;
+            align-items: center;
+            margin: -3px 0 14px;
+            padding: 13px 14px;
+            overflow: hidden;
+            border: 1px solid color-mix(in srgb, var(--accent) 18%, var(--border));
+            border-radius: 16px;
+            background:
+                radial-gradient(circle at 8% 0%, color-mix(in srgb, var(--accent) 12%, white 88%) 0%, transparent 30%),
+                radial-gradient(circle at 92% 0%, color-mix(in srgb, var(--good) 9%, white 91%) 0%, transparent 34%),
+                linear-gradient(180deg, color-mix(in srgb, white 94%, var(--panel2) 6%), white);
+            box-shadow: 0 14px 34px rgba(28, 49, 77, 0.08);
+        }
+
+        .operator-companion::before {
+            content: "";
+            position: absolute;
+            inset: 0;
+            pointer-events: none;
+            background-image:
+                linear-gradient(90deg, color-mix(in srgb, var(--accent) 8%, transparent) 1px, transparent 1px),
+                linear-gradient(0deg, color-mix(in srgb, var(--accent) 6%, transparent) 1px, transparent 1px);
+            background-size: 42px 42px;
+            opacity: 0.32;
+            mask-image: linear-gradient(90deg, black, transparent 74%);
+        }
+
+        .operator-companion > * {
+            position: relative;
+            z-index: 1;
+        }
+
+        .companion-orb {
+            width: 52px;
+            height: 52px;
+            display: grid;
+            place-items: center;
+            border-radius: 18px;
+            background:
+                radial-gradient(circle, white 0 44%, transparent 45%),
+                conic-gradient(var(--good) calc(var(--companion-score, 0) * 1%), color-mix(in srgb, var(--border) 74%, white 26%) 0);
+            border: 1px solid color-mix(in srgb, var(--good) 18%, var(--border));
+            box-shadow: inset 0 1px 0 rgba(255,255,255,0.82), 0 12px 26px rgba(51, 124, 91, 0.1);
+            font-size: 0.78rem;
+            font-weight: 900;
+            color: var(--text);
+        }
+
+        .companion-copy {
+            display: grid;
+            gap: 3px;
+            min-width: 0;
+        }
+
+        .companion-title {
+            font-weight: 900;
+            line-height: 1.18;
+        }
+
+        .companion-line {
+            color: var(--muted);
+            font-size: 0.92rem;
+            line-height: 1.35;
+        }
+
+        .companion-promises {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 7px;
+            margin-top: 5px;
+        }
+
+        .companion-promise {
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            padding: 5px 8px;
+            border: 1px solid color-mix(in srgb, var(--border) 84%, white 16%);
+            border-radius: 999px;
+            background: color-mix(in srgb, white 82%, var(--panel2) 18%);
+            color: var(--muted);
+            font-size: 0.77rem;
+            font-weight: 800;
+            white-space: nowrap;
+        }
+
+        .companion-actions {
+            display: flex;
+            gap: 8px;
+            justify-content: flex-end;
+            flex-wrap: wrap;
+        }
+
         .panel, .card {
             background: var(--panel);
             border: 1px solid var(--border);
@@ -516,6 +613,12 @@
         body[data-density="compact"] .dashboard-guidance-grid,
         body[data-density="compact"] .dashboard-workspace-grid {
             gap: 10px;
+        }
+
+        body[data-density="compact"] .operator-companion {
+            margin-bottom: 10px;
+            padding: 10px 11px;
+            border-radius: 13px;
         }
 
         body[data-density="compact"] .dashboard-path-step,
@@ -1334,6 +1437,146 @@
             display: grid;
             grid-template-columns: repeat(4, minmax(0, 1fr));
             gap: 12px;
+        }
+
+        .dashboard-constellation {
+            display: grid;
+            grid-template-columns: minmax(360px, 0.9fr) minmax(0, 1.1fr);
+            gap: 16px;
+            align-items: stretch;
+            padding: 16px;
+            border: 1px solid color-mix(in srgb, var(--accent) 18%, var(--border));
+            border-radius: 18px;
+            background:
+                radial-gradient(circle at 18% 18%, color-mix(in srgb, var(--accent) 12%, white 88%) 0%, transparent 34%),
+                radial-gradient(circle at 82% 12%, color-mix(in srgb, var(--good) 10%, white 90%) 0%, transparent 32%),
+                linear-gradient(180deg, color-mix(in srgb, white 94%, var(--panel2) 6%), white);
+            box-shadow: var(--card-shadow);
+        }
+
+        .constellation-field {
+            position: relative;
+            min-height: 370px;
+            overflow: hidden;
+            border: 1px solid color-mix(in srgb, var(--accent) 14%, var(--border));
+            border-radius: 18px;
+            background:
+                radial-gradient(circle at center, transparent 0 21%, color-mix(in srgb, var(--accent) 8%, transparent) 21.5% 22%, transparent 22.5% 38%, color-mix(in srgb, var(--accent) 7%, transparent) 38.5% 39%, transparent 39.5% 55%, color-mix(in srgb, var(--accent) 6%, transparent) 55.5% 56%, transparent 56.5%),
+                linear-gradient(135deg, color-mix(in srgb, white 86%, var(--accent-soft) 14%), color-mix(in srgb, white 92%, var(--good-soft) 8%));
+        }
+
+        .constellation-core,
+        .constellation-node {
+            position: absolute;
+            left: 50%;
+            top: 50%;
+            color: var(--text);
+            text-decoration: none;
+        }
+
+        .constellation-core {
+            width: 156px;
+            min-height: 126px;
+            transform: translate(-50%, -50%);
+            display: grid;
+            place-items: center;
+            padding: 16px;
+            border: 1px solid color-mix(in srgb, var(--accent) 28%, var(--border));
+            border-radius: 28px;
+            background:
+                radial-gradient(circle at top, color-mix(in srgb, var(--accent-soft) 72%, white 28%), white 62%);
+            box-shadow: 0 22px 46px rgba(47, 111, 219, 0.14);
+            text-align: center;
+        }
+
+        .constellation-score {
+            font-size: 2.1rem;
+            line-height: 1;
+            font-weight: 950;
+        }
+
+        .constellation-node {
+            width: 132px;
+            min-height: 72px;
+            transform:
+                translate(-50%, -50%)
+                rotate(calc(var(--node-angle, 0) * 1deg))
+                translate(0, -138px)
+                rotate(calc(var(--node-angle, 0) * -1deg));
+            display: grid;
+            gap: 4px;
+            align-content: center;
+            padding: 10px;
+            border: 1px solid color-mix(in srgb, var(--border) 80%, white 20%);
+            border-radius: 16px;
+            background: color-mix(in srgb, white 88%, var(--panel2) 12%);
+            box-shadow: 0 12px 28px rgba(28, 49, 77, 0.08);
+            cursor: pointer;
+            text-align: left;
+            transition: transform 0.18s ease, border-color 0.18s ease, box-shadow 0.18s ease;
+        }
+
+        .constellation-node:hover,
+        .constellation-node:focus-visible {
+            border-color: color-mix(in srgb, var(--accent) 30%, var(--border));
+            box-shadow: 0 18px 34px rgba(47, 111, 219, 0.13);
+            outline: none;
+        }
+
+        .constellation-node-ready {
+            border-color: color-mix(in srgb, var(--good) 22%, var(--border));
+        }
+
+        .constellation-node-pending {
+            border-color: color-mix(in srgb, var(--warn) 26%, var(--border));
+            background: color-mix(in srgb, var(--warn-soft) 48%, white 52%);
+        }
+
+        .constellation-node-progress {
+            border-color: color-mix(in srgb, var(--accent) 24%, var(--border));
+            background: color-mix(in srgb, var(--accent-soft) 50%, white 50%);
+        }
+
+        .constellation-node-title {
+            font-weight: 900;
+            line-height: 1.1;
+        }
+
+        .constellation-node-summary {
+            color: var(--muted);
+            font-size: 0.78rem;
+            line-height: 1.2;
+        }
+
+        .constellation-story {
+            display: grid;
+            align-content: start;
+            gap: 12px;
+        }
+
+        .constellation-principles {
+            display: grid;
+            grid-template-columns: repeat(2, minmax(0, 1fr));
+            gap: 9px;
+        }
+
+        .constellation-principle {
+            padding: 11px;
+            border: 1px solid color-mix(in srgb, var(--border) 84%, white 16%);
+            border-radius: 14px;
+            background: color-mix(in srgb, white 86%, var(--panel2) 14%);
+        }
+
+        .constellation-principle-title {
+            font-weight: 900;
+            line-height: 1.15;
+        }
+
+        .constellation-principle-copy {
+            color: var(--muted);
+            font-size: 0.86rem;
+            line-height: 1.32;
+            margin-top: 4px;
         }
 
         .dashboard-guidance-grid {
@@ -2654,6 +2897,7 @@
             .dashboard-hero-grid,
             .dashboard-metric-grid,
             .dashboard-command-center,
+            .dashboard-constellation,
             .dashboard-guidance-grid,
             .dashboard-workspace-grid {
                 grid-template-columns: 1fr;
@@ -2710,6 +2954,10 @@
             }
 
             .dashboard-command-center {
+                grid-template-columns: 1fr;
+            }
+
+            .dashboard-constellation {
                 grid-template-columns: 1fr;
             }
 
@@ -2787,6 +3035,43 @@
 
             .hero-meta {
                 grid-template-columns: repeat(2, minmax(0, 1fr));
+            }
+
+            .operator-companion {
+                grid-template-columns: 1fr;
+                align-items: stretch;
+            }
+
+            .companion-orb {
+                display: none;
+            }
+
+            .companion-actions {
+                justify-content: flex-start;
+            }
+
+            .constellation-field {
+                display: grid;
+                gap: 8px;
+                min-height: 0;
+                padding: 10px;
+            }
+
+            .constellation-core,
+            .constellation-node {
+                position: static;
+                width: auto;
+                min-height: 0;
+                transform: none;
+            }
+
+            .constellation-core {
+                justify-items: start;
+                text-align: left;
+            }
+
+            .constellation-principles {
+                grid-template-columns: 1fr;
             }
 
             .execution-live-card {
@@ -2924,6 +3209,29 @@
                     <div class="hero-stat-value">{{ setup_precheck_summary.next_blocker.label if setup_precheck_summary and setup_precheck_summary.next_blocker else 'No blockers' }}</div>
                 </div>
                 {% endif %}
+            </div>
+        </section>
+
+        <section class="operator-companion" aria-label="Operator companion" style="--companion-score: {{ dashboard_overview.readiness_percent if dashboard_overview else 0 }};">
+            <div class="companion-orb" aria-hidden="true">{{ dashboard_overview.readiness_percent if dashboard_overview else hero_ready }}</div>
+            <div class="companion-copy">
+                <div class="dashboard-kicker">Operator companion</div>
+                <div class="companion-title">Human-readable next move</div>
+                {% if hero_next_blocker %}
+                <div class="companion-line">This area needs attention: {{ hero_next_blocker.label }}{% if hero_next_blocker.get('fix') %}. Suggested fix: {{ hero_next_blocker.get('fix') }}{% endif %}</div>
+                {% else %}
+                <div class="companion-line">This area has no visible blocker. Keep moving through the build path, collect proof, then approve from Run Center.</div>
+                {% endif %}
+                <div class="companion-promises" aria-label="Experience promises">
+                    <span class="companion-promise">Certainty first</span>
+                    <span class="companion-promise">Operator control</span>
+                    <span class="companion-promise">Proof before apply</span>
+                    <span class="companion-promise">No hidden steps</span>
+                </div>
+            </div>
+            <div class="companion-actions">
+                <button class="btn btn-primary action-button" type="button" data-navigate-href="{{ recommended_next_step.href if recommended_next_step else '/dashboard' }}">Take next step</button>
+                <button class="btn" type="button" data-issue-drawer-open aria-haspopup="dialog" aria-controls="issue-drawer">Explain blockers</button>
             </div>
         </section>
 
@@ -3321,6 +3629,13 @@
             renderPalette(paletteInput.value);
         });
     }
+
+    document.body.addEventListener("click", function (event) {
+        const navTarget = event.target.closest && event.target.closest("[data-navigate-href]");
+        if (!navTarget) return;
+        const href = navTarget.getAttribute("data-navigate-href");
+        if (href) window.location.href = href;
+    });
 
     document.addEventListener("keydown", function (event) {
         const key = event.key;

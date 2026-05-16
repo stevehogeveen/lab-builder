@@ -44,3 +44,4 @@ This file captures the UI techniques being folded into Lab Builder so future cle
 - Standardize empty-state copy across every module using one reusable component.
 - Add command-palette actions for the safest read-only operations, such as opening current config or reading current versions.
 - Link issue-drawer rows to exact fields once setup pages expose stable field anchors.
+- Evaluate the `experience/operator-companion` branch for a more spatial, human-readable operator guidance layer before merging it into `main`.
