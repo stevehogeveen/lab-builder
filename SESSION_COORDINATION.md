@@ -77,7 +77,7 @@ Copy this block and update it in place.
 - Status: active
 - Branch: main
 - Scope owner: non-NetApp app work
-- Working on: App-wide command palette, density, and accessibility polish
+- Working on: App-wide readiness issue drawer
 - Blocked by: none
 - Ready to hand off: UX technique slice can hand off after tests and commit are complete
 - Files claimed:
@@ -126,8 +126,10 @@ Copy this block and update it in place.
   - 2026-05-15 America/Toronto - Removed duplicate dashboard module-readiness panel and promoted kit/job widgets into a compact two-column workspace block.
   - 2026-05-15 America/Toronto - Claimed app-wide command palette, density, and accessibility polish slice.
   - 2026-05-15 America/Toronto - Added command palette, compact-view toggle, skip link, and UX product-principles notes.
+  - 2026-05-15 America/Toronto - Claimed app-wide readiness issue drawer slice.
+  - 2026-05-15 America/Toronto - Added global readiness issue drawer with blocker summaries and page navigation; full regression passed.
 - Next intended change:
-  - Validate the UX polish slice, then continue with standardized empty-state and issue-drawer candidates.
+  - Continue with standardized empty-state copy and exact-field issue anchors when safe.
 
 ## Shared File Ledger
 

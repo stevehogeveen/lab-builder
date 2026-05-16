@@ -11547,6 +11547,9 @@ def test_dashboard_uses_simplified_primary_navigation(client):
     assert "Quick jump" in response.text
     assert "Ctrl K" in response.text
     assert "Compact view" in response.text
+    assert "Open issues" in response.text
+    assert "Readiness issues" in response.text
+    assert "Blockers and next fixes" in response.text
     assert 'data-density-toggle' in response.text
     assert ".sidebar .nav-group:last-of-type" not in response.text
     assert "Run History" not in response.text

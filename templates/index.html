@@ -831,6 +831,88 @@
             text-align: center;
         }
 
+        .issue-drawer {
+            position: fixed;
+            inset: 0;
+            z-index: 10015;
+            display: flex;
+            justify-content: flex-end;
+            background: rgba(15, 23, 42, 0.24);
+            backdrop-filter: blur(5px);
+        }
+
+        .issue-drawer[hidden] {
+            display: none;
+        }
+
+        .issue-drawer-panel {
+            width: min(520px, 100vw);
+            height: 100%;
+            overflow-y: auto;
+            padding: 18px;
+            border-left: 1px solid color-mix(in srgb, var(--accent) 20%, var(--border));
+            background:
+                radial-gradient(circle at top left, color-mix(in srgb, var(--warn) 8%, white 92%) 0%, transparent 34%),
+                linear-gradient(180deg, color-mix(in srgb, white 96%, var(--panel2) 4%), white);
+            box-shadow: -28px 0 70px rgba(15, 23, 42, 0.18);
+        }
+
+        .issue-drawer-header {
+            display: flex;
+            align-items: flex-start;
+            justify-content: space-between;
+            gap: 14px;
+            padding-bottom: 14px;
+            border-bottom: 1px solid color-mix(in srgb, var(--border) 82%, transparent);
+        }
+
+        .issue-list {
+            display: grid;
+            gap: 10px;
+            margin-top: 14px;
+        }
+
+        .issue-item {
+            display: grid;
+            grid-template-columns: minmax(0, 1fr) auto;
+            gap: 12px;
+            align-items: start;
+            width: 100%;
+            padding: 12px;
+            border: 1px solid color-mix(in srgb, var(--warn) 18%, var(--border));
+            border-radius: 15px;
+            background: color-mix(in srgb, var(--warn-soft) 54%, white 46%);
+            color: var(--text);
+            text-align: left;
+            cursor: pointer;
+        }
+
+        .issue-item:hover,
+        .issue-item:focus-visible {
+            border-color: color-mix(in srgb, var(--warn) 34%, var(--border));
+            box-shadow: 0 14px 30px rgba(166, 108, 33, 0.1);
+            outline: none;
+        }
+
+        .issue-title {
+            font-weight: 850;
+            line-height: 1.2;
+        }
+
+        .issue-copy {
+            color: var(--muted);
+            font-size: 0.9rem;
+            margin-top: 4px;
+        }
+
+        .issue-empty {
+            margin-top: 14px;
+            padding: 16px;
+            border: 1px solid color-mix(in srgb, var(--good) 18%, var(--border));
+            border-radius: 15px;
+            background: color-mix(in srgb, var(--good-soft) 70%, white 30%);
+        }
+
         .action-card {
             border-color: color-mix(in srgb, var(--border) 82%, var(--accent));
             background: linear-gradient(180deg, color-mix(in srgb, white 92%, var(--panel2) 8%), var(--panel));
@@ -2866,6 +2948,44 @@
     </div>
 </div>
 
+<div class="issue-drawer" id="issue-drawer" role="dialog" aria-modal="true" aria-labelledby="issue-drawer-title" hidden>
+    <aside class="issue-drawer-panel">
+        <div class="issue-drawer-header">
+            <div>
+                <div class="dashboard-kicker">Readiness issues</div>
+                <div class="text-xl font-bold" id="issue-drawer-title">Blockers and next fixes</div>
+                <div class="text-sm text-slate-400 mt-1">A single place to see what is stopping the active kit from moving forward.</div>
+            </div>
+            <button class="btn" type="button" data-issue-drawer-close>Close</button>
+        </div>
+        {% set issue_cards = setup_precheck_summary.get('items', []) if setup_precheck_summary else [] %}
+        {% if setup_precheck_summary and setup_precheck_summary.total_blockers %}
+        <div class="issue-list">
+            {% for item in issue_cards %}
+            {% if item.get('blockers', 0) %}
+            {% set blocker = item.get('next_blocker') %}
+            <button class="issue-item" type="button" data-issue-href="{{ item.get('href', '/dashboard') }}">
+                <span>
+                    <span class="issue-title">{{ item.get('name', 'Setup item') }}</span>
+                    <span class="issue-copy">{{ blocker.label if blocker else item.get('state_label', 'Review this setup item') }}</span>
+                    {% if blocker and blocker.get('fix') %}
+                    <span class="issue-copy">Fix: {{ blocker.get('fix') }}</span>
+                    {% endif %}
+                </span>
+                <span class="status {{ item.get('tone', 'pending') }}">{{ item.get('blockers', 0) }} issue{% if item.get('blockers', 0) != 1 %}s{% endif %}</span>
+            </button>
+            {% endif %}
+            {% endfor %}
+        </div>
+        {% else %}
+        <div class="issue-empty">
+            <div class="font-semibold">No blockers are currently visible.</div>
+            <div class="text-sm text-slate-500 mt-1">Run preview or discovery actions on setup pages to add fresh proof before final execution.</div>
+        </div>
+        {% endif %}
+    </aside>
+</div>
+
 <div class="request-overlay" id="request-overlay" aria-live="polite" aria-hidden="true">
     <div class="request-overlay-card" role="status">
         <div class="request-overlay-spinner" aria-hidden="true"></div>
@@ -3222,6 +3342,52 @@
         } else if (key === "Enter") {
             event.preventDefault();
             activatePaletteMatch(paletteActiveIndex);
+        }
+    });
+
+    const issueDrawer = document.getElementById("issue-drawer");
+    let issueDrawerReturnFocus = null;
+
+    function openIssueDrawer(trigger) {
+        if (!issueDrawer) return;
+        issueDrawerReturnFocus = trigger || document.activeElement;
+        issueDrawer.hidden = false;
+        const closeButton = issueDrawer.querySelector("[data-issue-drawer-close]");
+        if (closeButton) window.setTimeout(function () { closeButton.focus(); }, 0);
+    }
+
+    function closeIssueDrawer() {
+        if (!issueDrawer) return;
+        issueDrawer.hidden = true;
+        if (issueDrawerReturnFocus && typeof issueDrawerReturnFocus.focus === "function") {
+            issueDrawerReturnFocus.focus({ preventScroll: true });
+        }
+    }
+
+    document.body.addEventListener("click", function (event) {
+        const openButton = event.target.closest && event.target.closest("[data-issue-drawer-open]");
+        if (openButton) {
+            openIssueDrawer(openButton);
+            return;
+        }
+        if (event.target.closest && event.target.closest("[data-issue-drawer-close]")) {
+            closeIssueDrawer();
+            return;
+        }
+        const issueButton = event.target.closest && event.target.closest("[data-issue-href]");
+        if (issueButton) {
+            window.location.href = issueButton.getAttribute("data-issue-href");
+            return;
+        }
+        if (issueDrawer && !issueDrawer.hidden && event.target === issueDrawer) {
+            closeIssueDrawer();
+        }
+    });
+
+    document.addEventListener("keydown", function (event) {
+        if (event.key === "Escape" && issueDrawer && !issueDrawer.hidden) {
+            event.preventDefault();
+            closeIssueDrawer();
         }
     });
 

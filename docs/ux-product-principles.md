@@ -36,10 +36,11 @@ This file captures the UI techniques being folded into Lab Builder so future cle
 - Added a global `Skip to content` link.
 - Added sidebar `Quick jump` with `Ctrl+K` command palette.
 - Added a browser-local `Compact view` density toggle.
+- Added an app-wide `Open issues` drawer so blockers and fixes stay findable from every page.
 - Kept all commands sourced from existing sidebar links so route names and module behavior stay unchanged.
 
 ## Next Candidates
 
-- Add command-palette actions for the safest read-only operations, such as opening current config or reading current versions.
 - Standardize empty-state copy across every module using one reusable component.
-- Add an app-wide issue drawer that summarizes blockers from the current page and links directly to the relevant field or module.
+- Add command-palette actions for the safest read-only operations, such as opening current config or reading current versions.
+- Link issue-drawer rows to exact fields once setup pages expose stable field anchors.

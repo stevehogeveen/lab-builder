@@ -43,6 +43,10 @@
             <span>Quick jump</span>
             <span class="kbd">Ctrl K</span>
         </button>
+        <button class="sidebar-tool-button" type="button" data-issue-drawer-open aria-haspopup="dialog" aria-controls="issue-drawer">
+            <span>Open issues</span>
+            <span class="status {{ setup_precheck_summary.tone if setup_precheck_summary else 'progress' }}">{{ setup_precheck_summary.total_blockers if setup_precheck_summary else 0 }}</span>
+        </button>
         <button class="sidebar-tool-button" type="button" data-density-toggle aria-pressed="false">
             <span data-density-label>Compact view</span>
             <span class="kbd">View</span>
