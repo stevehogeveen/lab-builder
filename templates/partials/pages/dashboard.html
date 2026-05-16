@@ -89,6 +89,80 @@
         </div>
     </section>
 
+    <section class="dashboard-guidance-grid">
+        <div class="dashboard-path-panel">
+            <div class="dashboard-panel-heading">
+                <div>
+                    <div class="dashboard-kicker">Build path</div>
+                    <div class="text-lg font-semibold">No hidden steps</div>
+                </div>
+                <span class="status {{ dashboard_overview.tone }}">{{ dashboard_overview.headline }}</span>
+            </div>
+            <div class="dashboard-path-list">
+                {% for item in dashboard_overview.module_rows %}
+                {% set is_next_step = item.href == recommended_next_step.href %}
+                <a class="dashboard-path-step dashboard-path-step-{{ item.tone }}{% if is_next_step %} dashboard-path-step-active{% endif %}" href="{{ item.href }}">
+                    <span class="dashboard-path-index">{{ loop.index }}</span>
+                    <span class="dashboard-path-copy">
+                        <span class="dashboard-path-title">{{ item.name }}</span>
+                        <span class="dashboard-path-summary truncate-single" title="{{ item.summary }}">{{ item.summary }}</span>
+                    </span>
+                    <span class="dashboard-path-meta">
+                        {% if is_next_step %}
+                        <span class="status progress">Next</span>
+                        {% endif %}
+                        <span class="status {{ item.tone }}">{{ item.label }}</span>
+                    </span>
+                </a>
+                {% endfor %}
+                <a class="dashboard-path-step dashboard-path-step-progress{% if recommended_next_step.href == '/execution' %} dashboard-path-step-active{% endif %}" href="/execution">
+                    <span class="dashboard-path-index">{{ dashboard_overview.module_rows | length + 1 }}</span>
+                    <span class="dashboard-path-copy">
+                        <span class="dashboard-path-title">Run Center</span>
+                        <span class="dashboard-path-summary">Review the approved plan, launch the run, and watch live proof.</span>
+                    </span>
+                    <span class="dashboard-path-meta">
+                        {% if recommended_next_step.href == '/execution' %}
+                        <span class="status progress">Next</span>
+                        {% endif %}
+                        <span class="status progress">Approve</span>
+                    </span>
+                </a>
+            </div>
+        </div>
+
+        <aside class="dashboard-operator-panel">
+            <div>
+                <div class="dashboard-kicker">Operator model</div>
+                <div class="text-lg font-semibold">Configure. Prove. Approve.</div>
+                <div class="text-sm text-slate-400 mt-1">Every module should show what it knows, what it will change, and what still needs a human decision.</div>
+            </div>
+            <div class="operator-principle-list">
+                <div class="operator-principle">
+                    <span class="operator-principle-mark">1</span>
+                    <span>
+                        <span class="operator-principle-title">Collect evidence</span>
+                        <span class="operator-principle-copy">Discovery and pre-checks stay visible before any apply action.</span>
+                    </span>
+                </div>
+                <div class="operator-principle">
+                    <span class="operator-principle-mark">2</span>
+                    <span>
+                        <span class="operator-principle-title">Plan safely</span>
+                        <span class="operator-principle-copy">Warnings explain risk, overrides, and why a step is blocked.</span>
+                    </span>
+                </div>
+                <div class="operator-principle">
+                    <span class="operator-principle-mark">3</span>
+                    <span>
+                        <span class="operator-principle-title">Run with receipts</span>
+                        <span class="operator-principle-copy">Run Center becomes the record of planned changes, results, and proof.</span>
+                    </span>
+                </div>
+            </div>
+        </aside>
+    </section>
+
     {% set precheck_summary = setup_precheck_summary %}
     {% include "partials/components/precheck_summary.html" %}
 

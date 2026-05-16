@@ -75,34 +75,18 @@ Copy this block and update it in place.
 
 ### Session: rest-of-app
 - Status: active
-- Branch: cleanup/project-structure
+- Branch: main
 - Scope owner: non-NetApp app work
-- Working on: Cisco console connection diagnostics and operator-facing failure clarity
+- Working on: Command-center dashboard/rail guidance polish
 - Blocked by: none
-- Ready to hand off: NetApp snapshot slice can hand off after page and discovery updates are recorded here
+- Ready to hand off: Dashboard/sidebar polish slice can hand off after tests and commit are complete
 - Files claimed:
   - SESSION_COORDINATION.md
-  - app/netapp.py
-  - app/main.py
   - templates/index.html
-  - templates/partials/pages/configuration.html
-  - templates/partials/pages/netapp.html
   - templates/partials/pages/dashboard.html
-  - templates/partials/pages/ilo.html
-  - templates/partials/pages/storage.html
-  - templates/partials/pages/execution.html
-  - templates/partials/pages/esxi.html
-  - templates/partials/pages/windows.html
-  - templates/partials/pages/qnap.html
-  - app/modules/cisco/service.py
-  - app/modules/cisco/routes.py
-  - templates/partials/pages/cisco.html
-  - tests/test_cisco_console_feedback.py
-  - templates/partials/components/setup_strip.html
   - templates/partials/components/precheck_summary.html
   - templates/partials/sidebar.html
   - tests/test_app.py
-  - tests/test_netapp_module.py
 - Shared files touched with caution:
   - app/main.py
   - app/core/config.py
@@ -135,8 +119,10 @@ Copy this block and update it in place.
   - 2026-05-15 America/Toronto - Tightened Cisco serial discovery to verify exec prompts with read-only show version output and downgrade generic non-Cisco prompts before auto-selection.
   - 2026-05-15 America/Toronto - Added Cisco operator findings for weak secrets, IP-plan overrides, missing management VLANs, unexpected connected-port VLANs, and bootstrap port selection choices.
   - 2026-05-15 America/Toronto - Added Cisco current-version button with console fallback and introduced local per-card HTMX action feedback so button results appear near the initiating workflow.
+  - 2026-05-15 America/Toronto - Claimed dashboard/sidebar command-center guidance polish slice.
+  - 2026-05-15 America/Toronto - Added guided dashboard build path, operator model card, and sidebar kit-state meter; full regression passed.
 - Next intended change:
-  - Finish app-wide wording/layout cleanup pass and rerun regression tests.
+  - Continue page-by-page simplification using the same proof-first UI pattern.
 
 ## Shared File Ledger
 

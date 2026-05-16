@@ -11179,6 +11179,11 @@ def test_dashboard_shows_recommended_next_step_and_workflow_cards(client):
     assert "Download current config" in response.text
     assert "Recommended next step" in response.text
     assert "Open next step" in response.text
+    assert "Build path" in response.text
+    assert "No hidden steps" in response.text
+    assert "Configure. Prove. Approve." in response.text
+    assert "Collect evidence" in response.text
+    assert "Kit state" in response.text
     assert "Continue setup" in response.text
     assert "Run Center" in response.text
     assert "Review ESXi setup" not in response.text
