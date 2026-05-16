@@ -77,7 +77,7 @@ Copy this block and update it in place.
 - Status: active
 - Branch: experience/operator-companion
 - Scope owner: non-NetApp app work
-- Working on: Experimental operator-companion experience branch
+- Working on: Psychedelic cosmic visual transformation layer
 - Blocked by: none
 - Ready to hand off: Experimental branch can hand off after tests, commit, and branch push are complete
 - Files claimed:
@@ -134,6 +134,9 @@ Copy this block and update it in place.
   - 2026-05-15 America/Toronto - Full regression passed for operator companion branch.
   - 2026-05-15 America/Toronto - Added experience lens and proof ledger experimental layer.
   - 2026-05-15 America/Toronto - Full regression passed after lens/proof layer wording fix.
+  - 2026-05-15 America/Toronto - Claimed opt-in cosmic/psychedelic visual transformation slice.
+  - 2026-05-15 America/Toronto - Added opt-in Cosmic mode visual atmosphere with local preference storage and reduced-motion-safe CSS.
+  - 2026-05-15 America/Toronto - Full regression passed for Cosmic mode slice.
 - Next intended change:
   - Review experimental branch and decide whether to merge all, refine, or cherry-pick pieces.
 

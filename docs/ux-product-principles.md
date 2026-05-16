@@ -46,3 +46,4 @@ This file captures the UI techniques being folded into Lab Builder so future cle
 - Link issue-drawer rows to exact fields once setup pages expose stable field anchors.
 - Evaluate the `experience/operator-companion` branch for a more spatial, human-readable operator guidance layer before merging it into `main`.
 - Evaluate the experimental `Experience lens` and `Proof ledger` patterns for broad adoption if they reduce operator confusion during live runs.
+- Keep psychedelic or theatrical visuals opt-in only; operational trust comes before spectacle during real infrastructure work.

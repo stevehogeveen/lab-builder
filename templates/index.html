@@ -58,6 +58,188 @@
             -moz-osx-font-smoothing: grayscale;
         }
 
+        body::before,
+        body::after {
+            content: "";
+            position: fixed;
+            inset: 0;
+            pointer-events: none;
+            opacity: 0;
+            transition: opacity 0.35s ease;
+        }
+
+        body::before {
+            z-index: 0;
+            background:
+                radial-gradient(circle at 14% 12%, rgba(0, 255, 209, 0.34), transparent 28%),
+                radial-gradient(circle at 86% 16%, rgba(255, 61, 242, 0.3), transparent 30%),
+                radial-gradient(circle at 52% 82%, rgba(255, 210, 63, 0.24), transparent 30%),
+                linear-gradient(135deg, #08111f, #121c4f 40%, #351647 68%, #071928);
+        }
+
+        body::after {
+            z-index: 0;
+            background-image:
+                linear-gradient(115deg, rgba(255,255,255,0.08) 0 1px, transparent 1px 16px),
+                radial-gradient(circle, rgba(255,255,255,0.22) 0 1px, transparent 1.5px);
+            background-size: 48px 48px, 31px 31px;
+            mix-blend-mode: screen;
+        }
+
+        body[data-visual="cosmic"] {
+            --bg: #08111f;
+            --bg-soft: #111b3f;
+            --panel: rgba(12, 20, 44, 0.84);
+            --panel2: rgba(18, 27, 61, 0.82);
+            --panel3: rgba(27, 38, 78, 0.82);
+            --border: rgba(144, 197, 255, 0.24);
+            --border-strong: rgba(174, 228, 255, 0.36);
+            --text: #f4f8ff;
+            --muted: #b8c6e2;
+            --muted-soft: #8ea1c5;
+            --accent: #55d6ff;
+            --accent-soft: rgba(61, 184, 255, 0.16);
+            --good: #6fffc9;
+            --good-soft: rgba(79, 255, 194, 0.14);
+            --action: #4ce4c2;
+            --action-soft: rgba(76, 228, 194, 0.14);
+            --info: #55d6ff;
+            --info-soft: rgba(85, 214, 255, 0.15);
+            --warn: #ffd36a;
+            --warn-soft: rgba(255, 211, 106, 0.16);
+            --bad: #ff8fbd;
+            --bad-soft: rgba(255, 143, 189, 0.16);
+            --sidebar: rgba(10, 17, 39, 0.82);
+            --hero-bg: rgba(11, 20, 48, 0.86);
+            --card-shadow: 0 20px 60px rgba(0, 0, 0, 0.28), 0 0 34px rgba(85, 214, 255, 0.08);
+            --card-shadow-hover: 0 28px 76px rgba(0, 0, 0, 0.34), 0 0 46px rgba(255, 61, 242, 0.12);
+            background:
+                radial-gradient(circle at 20% 10%, rgba(85, 214, 255, 0.18), transparent 32%),
+                radial-gradient(circle at 82% 18%, rgba(255, 61, 242, 0.14), transparent 34%),
+                linear-gradient(180deg, #080f23 0%, #111638 48%, #0b182c 100%);
+            color: var(--text);
+        }
+
+        body[data-visual="cosmic"]::before,
+        body[data-visual="cosmic"]::after {
+            opacity: 1;
+        }
+
+        body[data-visual="cosmic"]::before {
+            animation: cosmic-aurora 18s ease-in-out infinite alternate;
+        }
+
+        body[data-visual="cosmic"]::after {
+            animation: cosmic-grid 26s linear infinite;
+        }
+
+        body[data-visual="cosmic"] .app-shell {
+            position: relative;
+            z-index: 1;
+        }
+
+        body[data-visual="cosmic"] .sidebar,
+        body[data-visual="cosmic"] .hero,
+        body[data-visual="cosmic"] .panel,
+        body[data-visual="cosmic"] .card,
+        body[data-visual="cosmic"] .dashboard-command-center,
+        body[data-visual="cosmic"] .operator-companion,
+        body[data-visual="cosmic"] .dashboard-constellation,
+        body[data-visual="cosmic"] .dashboard-path-panel,
+        body[data-visual="cosmic"] .dashboard-operator-panel,
+        body[data-visual="cosmic"] .dashboard-side-panel,
+        body[data-visual="cosmic"] .dashboard-signal-card {
+            border-color: color-mix(in srgb, var(--accent) 28%, transparent);
+            background:
+                linear-gradient(135deg, rgba(12, 20, 44, 0.86), rgba(29, 20, 66, 0.72)),
+                color-mix(in srgb, var(--panel) 88%, transparent);
+            box-shadow: var(--card-shadow);
+            backdrop-filter: blur(18px) saturate(1.35);
+        }
+
+        body[data-visual="cosmic"] .hero,
+        body[data-visual="cosmic"] .dashboard-command-center,
+        body[data-visual="cosmic"] .operator-companion,
+        body[data-visual="cosmic"] .dashboard-constellation {
+            position: relative;
+            overflow: hidden;
+        }
+
+        body[data-visual="cosmic"] .hero::before,
+        body[data-visual="cosmic"] .dashboard-command-center::after,
+        body[data-visual="cosmic"] .operator-companion::after,
+        body[data-visual="cosmic"] .dashboard-constellation::after {
+            content: "";
+            display: block;
+            position: absolute;
+            inset: -40%;
+            pointer-events: none;
+            background:
+                conic-gradient(from 120deg, transparent, rgba(85, 214, 255, 0.2), rgba(255, 61, 242, 0.16), rgba(111, 255, 201, 0.18), transparent);
+            filter: blur(28px);
+            opacity: 0.5;
+            animation: cosmic-spin 22s linear infinite;
+        }
+
+        body[data-visual="cosmic"] .command-title,
+        body[data-visual="cosmic"] .brand,
+        body[data-visual="cosmic"] .companion-title,
+        body[data-visual="cosmic"] .constellation-score {
+            text-shadow: 0 0 22px rgba(85, 214, 255, 0.26);
+        }
+
+        body[data-visual="cosmic"] .btn,
+        body[data-visual="cosmic"] .sidebar-tool-button,
+        body[data-visual="cosmic"] .nav-link,
+        body[data-visual="cosmic"] input,
+        body[data-visual="cosmic"] select,
+        body[data-visual="cosmic"] textarea {
+            background: rgba(15, 25, 56, 0.72);
+            color: var(--text);
+            border-color: color-mix(in srgb, var(--accent) 26%, transparent);
+        }
+
+        body[data-visual="cosmic"] .btn-primary,
+        body[data-visual="cosmic"] .btn-action {
+            background: linear-gradient(135deg, #29d6ff, #5ef5cb 48%, #ff6bea);
+            color: #05111d;
+            border-color: rgba(255,255,255,0.42);
+            box-shadow: 0 18px 44px rgba(85, 214, 255, 0.18);
+        }
+
+        body[data-visual="cosmic"] .constellation-field {
+            background:
+                radial-gradient(circle at center, transparent 0 20%, rgba(85, 214, 255, 0.18) 20.5% 21%, transparent 21.5% 37%, rgba(255, 61, 242, 0.14) 37.5% 38%, transparent 38.5% 54%, rgba(111, 255, 201, 0.14) 54.5% 55%, transparent 55.5%),
+                radial-gradient(circle at 50% 50%, rgba(85, 214, 255, 0.16), rgba(255, 61, 242, 0.08) 45%, transparent 72%);
+        }
+
+        body[data-visual="cosmic"] .constellation-core,
+        body[data-visual="cosmic"] .constellation-node {
+            background: rgba(8, 16, 39, 0.76);
+            border-color: color-mix(in srgb, var(--accent) 32%, transparent);
+            box-shadow: 0 18px 44px rgba(0,0,0,0.28), 0 0 28px rgba(85, 214, 255, 0.14);
+        }
+
+        body[data-visual="cosmic"] .status {
+            box-shadow: inset 0 0 0 1px rgba(255,255,255,0.08), 0 0 16px rgba(85, 214, 255, 0.08);
+        }
+
+        @keyframes cosmic-aurora {
+            0% { filter: hue-rotate(0deg) saturate(1.1); transform: scale(1); }
+            50% { filter: hue-rotate(62deg) saturate(1.35); transform: scale(1.06); }
+            100% { filter: hue-rotate(128deg) saturate(1.18); transform: scale(1.02); }
+        }
+
+        @keyframes cosmic-grid {
+            from { transform: translate3d(0, 0, 0); }
+            to { transform: translate3d(-48px, -48px, 0); }
+        }
+
+        @keyframes cosmic-spin {
+            from { transform: rotate(0deg) scale(1); }
+            to { transform: rotate(360deg) scale(1.04); }
+        }
+
         .skip-link {
             position: fixed;
             top: 12px;
@@ -3714,6 +3896,44 @@
     if (densityToggle) {
         densityToggle.addEventListener("click", function () {
             applyDensity(document.body.getAttribute("data-density") === "compact" ? "comfortable" : "compact");
+        });
+    }
+
+    const visualToggle = document.querySelector("[data-visual-toggle]");
+    const visualLabel = document.querySelector("[data-visual-label]");
+
+    function readStoredVisualMode() {
+        try {
+            return window.localStorage.getItem("lab-builder-visual-mode") || "normal";
+        } catch (_) {
+            return "normal";
+        }
+    }
+
+    function storeVisualMode(mode) {
+        try {
+            window.localStorage.setItem("lab-builder-visual-mode", mode);
+        } catch (_) {
+            // Cosmetic preference only; blocked storage should not affect the app.
+        }
+    }
+
+    function applyVisualMode(mode) {
+        const nextMode = mode === "cosmic" ? "cosmic" : "normal";
+        document.body.setAttribute("data-visual", nextMode);
+        if (visualToggle) {
+            visualToggle.setAttribute("aria-pressed", nextMode === "cosmic" ? "true" : "false");
+        }
+        if (visualLabel) {
+            visualLabel.textContent = nextMode === "cosmic" ? "Normal mode" : "Cosmic mode";
+        }
+        storeVisualMode(nextMode);
+    }
+
+    applyVisualMode(readStoredVisualMode());
+    if (visualToggle) {
+        visualToggle.addEventListener("click", function () {
+            applyVisualMode(document.body.getAttribute("data-visual") === "cosmic" ? "normal" : "cosmic");
         });
     }
 

@@ -27,6 +27,7 @@ This branch explores a more distinctive experience layer for Lab Builder. The go
 - Dashboard `Living kit map`, a spatial representation of setup modules around the run path.
 - Session-local `Experience lens` with Calm, Explain, and Expert modes.
 - Global `Proof ledger` drawer that collects readiness, page signal, latest run signal, and module proof path.
+- Opt-in `Cosmic mode`, a psychedelic visual atmosphere that changes depth, glow, color, and motion without changing operational data or routes.
 - `data-navigate-href` button navigation so experimental UI can route without adding duplicate sidebar links.
 
 ## Design Rules
@@ -36,6 +37,7 @@ This branch explores a more distinctive experience layer for Lab Builder. The go
 3. Proof and safety must be visible before destructive or real apply actions.
 4. Spatial UI is allowed only when it clarifies workflow state; it must collapse back to a simple list on small screens.
 5. Experimental surfaces must be backed by existing data and routes, not new hidden state.
+6. Psychedelic visuals must be opt-in, reversible, readable, and respect reduced-motion preferences.
 
 ## Next Experiments
 
@@ -43,3 +45,4 @@ This branch explores a more distinctive experience layer for Lab Builder. The go
 - Let the command palette expose safe read-only actions, not only page jumps.
 - Feed the proof ledger with richer artifacts as more modules expose stable proof summaries.
 - Allow the experience lens to be set per kit when user preferences need to move between browsers.
+- Test whether Cosmic mode helps the app feel more alive without making real operational work less trustworthy.
