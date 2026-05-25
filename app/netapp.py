@@ -4,7 +4,7 @@ from dataclasses import dataclass
 import ipaddress
 from pathlib import Path
 import re
-from typing import Any
+from typing import Any, Callable
 
 import requests
 import urllib3
@@ -154,6 +154,64 @@ class NetAppClient:
             payload = {}
         payload.setdefault("status", "submitted")
         return payload
+
+    def private_cli_get(self, command_path: str, params: dict[str, Any] | None = None) -> dict[str, Any]:
+        clean = "/".join(part for part in str(command_path or "").strip().strip("/").split("/") if part)
+        if not clean:
+            raise NetAppError("Private CLI command path is required.")
+        return self._get(f"/api/private/cli/{clean}", params=params or {})
+
+    def get_cluster_image_update_progress(self) -> dict[str, Any]:
+        return self.private_cli_get("cluster/image/show-update-progress")
+
+    def get_in_progress_jobs(self, *, instance: bool = False) -> dict[str, Any]:
+        params = {"inprogress": "true"}
+        if instance:
+            params["instance"] = "true"
+        return self.private_cli_get("job/show", params=params)
+
+    def get_compact_jobs(self) -> dict[str, Any]:
+        return self.private_cli_get("job/show", params={"fields": "id,name,state,progress,description"})
+
+    def get_cluster_image_repository(self) -> dict[str, Any]:
+        return self.private_cli_get("cluster/image/package/show-repository")
+
+    def get_storage_failover_status(self) -> dict[str, Any]:
+        return self.private_cli_get("storage/failover/show")
+
+    def get_storage_failover_giveback_status(self) -> dict[str, Any]:
+        return self.private_cli_get("storage/failover/show-giveback")
+
+    def get_system_node_cli_status(self) -> dict[str, Any]:
+        return self.private_cli_get("system/node/show")
+
+    def get_error_events(self) -> dict[str, Any]:
+        return self.private_cli_get("event/log/show", params={"severity": "ERROR"})
+
+    def get_giveback_events(self) -> dict[str, Any]:
+        return self.private_cli_get("event/log/show", params={"message-name": "*giveback*"})
+
+    def get_ontap_upgrade_monitor_snapshot(self, *, include_instance_jobs: bool = False) -> dict[str, Any]:
+        checks: dict[str, Callable[[], dict[str, Any]]] = {
+            "cluster image show-update-progress": self.get_cluster_image_update_progress,
+            "job show -inprogress": self.get_in_progress_jobs,
+            "job show -fields id,name,state,progress,description": self.get_compact_jobs,
+            "cluster image package show-repository": self.get_cluster_image_repository,
+            "storage failover show": self.get_storage_failover_status,
+            "storage failover show-giveback": self.get_storage_failover_giveback_status,
+            "system node show": self.get_system_node_cli_status,
+            "event log show -severity ERROR": self.get_error_events,
+            "event log show -message-name *giveback*": self.get_giveback_events,
+        }
+        if include_instance_jobs:
+            checks["job show -inprogress -instance"] = lambda: self.get_in_progress_jobs(instance=True)
+        snapshot: dict[str, Any] = {}
+        for command, reader in checks.items():
+            try:
+                snapshot[command] = {"ok": True, "output": reader()}
+            except Exception as exc:
+                snapshot[command] = {"ok": False, "error": str(exc)}
+        return snapshot
 
     def control_cluster_software_update(self, action: str, version: str) -> dict[str, Any]:
         normalized = str(action or "").strip().lower()

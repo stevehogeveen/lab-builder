@@ -62,6 +62,21 @@ def default_nfs_lifs(kit_id: str, preferred_ips: list[str] | None = None) -> lis
     ]
 
 
+def normalize_lifs(items: Any) -> list[dict[str, str]]:
+    lifs: list[dict[str, str]] = []
+    for item in list(items or []):
+        if not isinstance(item, dict):
+            continue
+        name = str(item.get("name") or "").strip()
+        ip = str(item.get("ip") or item.get("address") or "").strip()
+        node = str(item.get("node") or item.get("home_node") or "").strip()
+        port = str(item.get("port") or item.get("home_port") or "").strip()
+        if not any([name, ip, node, port]):
+            continue
+        lifs.append({"name": name, "ip": ip, "node": node, "port": port})
+    return lifs
+
+
 def build_protocol_profile(cfg: dict[str, Any]) -> dict[str, Any]:
     kit_id = str(((cfg.get("site") or {}).get("name") or "Kit-01")).strip()
     names = build_naming(kit_id)
@@ -71,6 +86,8 @@ def build_protocol_profile(cfg: dict[str, Any]) -> dict[str, Any]:
     ip_plan = cfg.get("ip_plan") or {}
     management_cidr = str(((cfg.get("shared_network") or {}).get("subnet") or ip_plan.get("subnet") or "10.10.8.0/24")).strip()
     management = subnet_metadata(management_cidr)
+    nfs_lifs = normalize_lifs(((netapp_cfg.get("nfs") or {}).get("lifs")) or ((desired.get("nfs") or {}).get("lifs")))
+    iscsi_lifs = normalize_lifs(((netapp_cfg.get("iscsi") or {}).get("lifs")) or ((desired.get("iscsi") or {}).get("lifs")))
     profile = {
         "protocol": protocol,
         "base": {
@@ -89,13 +106,13 @@ def build_protocol_profile(cfg: dict[str, Any]) -> dict[str, Any]:
             "ip_range": str((((netapp_cfg.get("iscsi") or {}).get("ip_range")) or ((desired.get("iscsi") or {}).get("ip_range")) or "192.168.1.11-192.168.1.60")).strip(),
             "portset_name": str((((netapp_cfg.get("iscsi") or {}).get("portset_name")) or ((desired.get("iscsi") or {}).get("portset")) or names["iscsi_portset"])).strip(),
             "igroup_name": str((((netapp_cfg.get("iscsi") or {}).get("igroup_name")) or ((desired.get("iscsi") or {}).get("igroup")) or names["iscsi_igroup"])).strip(),
-            "lifs": list(((netapp_cfg.get("iscsi") or {}).get("lifs")) or ((desired.get("iscsi") or {}).get("lifs")) or default_iscsi_lifs(kit_id)),
+            "lifs": iscsi_lifs or default_iscsi_lifs(kit_id),
             "volumes": list(((netapp_cfg.get("iscsi") or {}).get("volumes")) or ((desired.get("iscsi") or {}).get("volumes")) or []),
         },
         "nfs": {
             "allowed_subnet": str((((netapp_cfg.get("nfs") or {}).get("allowed_subnet")) or ((desired.get("nfs") or {}).get("allowed_subnet")) or management["cidr"])).strip(),
             "export_policy": str((((netapp_cfg.get("nfs") or {}).get("export_policy")) or ((desired.get("nfs") or {}).get("export_policy")) or names["nfs_export_policy"])).strip(),
-            "lifs": list(((netapp_cfg.get("nfs") or {}).get("lifs")) or ((desired.get("nfs") or {}).get("lifs")) or default_nfs_lifs(kit_id, [ip_plan.get("cluster_mgmt_ip", ""), ip_plan.get("svm_mgmt_ip", "")])),
+            "lifs": nfs_lifs or default_nfs_lifs(kit_id),
             "volumes": list(((netapp_cfg.get("nfs") or {}).get("volumes")) or ((desired.get("nfs") or {}).get("volumes")) or []),
         },
         "vmware": {

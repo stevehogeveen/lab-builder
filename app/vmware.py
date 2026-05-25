@@ -5,6 +5,8 @@ import ipaddress
 import shlex
 from typing import Any
 
+from app.storage_profiles import normalize_lifs
+
 
 @dataclass
 class VMwareConfig:
@@ -44,10 +46,10 @@ def _discovered_netapp_nfs_context(cfg: dict[str, Any], discovery: dict[str, Any
     desired_nfs = (desired.get("nfs") or {}) if isinstance(desired.get("nfs"), dict) else {}
     discovery = discovery or {}
 
-    discovered_lifs = [item for item in list(discovery.get("discovered_nfs_lifs") or []) if isinstance(item, dict)]
-    config_lifs = [item for item in list(nfs_cfg.get("lifs") or desired_nfs.get("lifs") or []) if isinstance(item, dict)]
+    discovered_lifs = normalize_lifs(discovery.get("discovered_nfs_lifs") or [])
+    config_lifs = normalize_lifs(nfs_cfg.get("lifs") or desired_nfs.get("lifs") or [])
     lifs = discovered_lifs or config_lifs
-    lif_ips = [str((item.get("address") if discovered_lifs else item.get("ip")) or "").strip() for item in lifs]
+    lif_ips = [str(item.get("ip") or "").strip() for item in lifs]
     lif_ips = [item for item in lif_ips if item]
 
     discovered_svm_names = [str(item).strip() for item in list(discovery.get("svms") or []) if str(item).strip()]
@@ -55,8 +57,13 @@ def _discovered_netapp_nfs_context(cfg: dict[str, Any], discovery: dict[str, Any
     if not svm_name and len(discovered_svm_names) == 1:
         svm_name = discovered_svm_names[0]
 
-    volume_name = str(desired_nfs.get("volume") or nfs_cfg.get("datastore_name") or "esxi_datastore_01").strip()
-    datastore_name = str((((cfg.get("vmware") or {}).get("nfs") or {}).get("datastore_name") or volume_name)).strip()
+    volume_name = str(desired_nfs.get("volume") or nfs_cfg.get("volume") or "esxi_datastore_01").strip()
+    datastore_name = str(
+        (((cfg.get("vmware") or {}).get("nfs") or {}).get("datastore_name"))
+        or desired_nfs.get("datastore_name")
+        or nfs_cfg.get("datastore_name")
+        or volume_name
+    ).strip()
     export_path = str(desired_nfs.get("mount_path") or f"/{volume_name}").strip()
     export_policy = str(nfs_cfg.get("export_policy") or desired_nfs.get("export_policy") or "").strip()
     allowed_subnet = str(nfs_cfg.get("allowed_subnet") or desired_nfs.get("allowed_subnet") or "").strip()
@@ -66,6 +73,7 @@ def _discovered_netapp_nfs_context(cfg: dict[str, Any], discovery: dict[str, Any
         "svm_name": svm_name,
         "lif_ips": lif_ips,
         "volume_name": volume_name,
+        "volume_size": str(desired_nfs.get("size") or nfs_cfg.get("size") or "").strip(),
         "datastore_name": datastore_name,
         "export_path": export_path,
         "export_policy": export_policy,
@@ -170,10 +178,10 @@ def build_vmware_plan(cfg: dict[str, Any], *, storage_protocol: str, discovery: 
             ]
         )
     else:
-        mount_sources = list(nfs_context.get("mount_targets") or []) or list(nfs_context.get("lif_ips") or [])
+        server_ips = list(nfs_context.get("lif_ips") or [])
         mount_plan = _build_nfs_mount_plan(
             esxi_hosts,
-            mount_sources,
+            server_ips,
             export_path=str(nfs_context.get("export_path") or "").strip(),
             datastore_name=str(nfs_context.get("datastore_name") or "").strip(),
             nfs_version=nfs_version,

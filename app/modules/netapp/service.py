@@ -108,6 +108,161 @@ class NetAppModuleService:
             "adopted": adopted,
         }
 
+    def _nested_value(self, source: dict[str, Any], path: str) -> Any:
+        current: Any = source
+        for part in path.split("."):
+            if not isinstance(current, dict):
+                return None
+            current = current.get(part)
+        return current
+
+    def _parse_size_bytes(self, value: Any) -> int | None:
+        if value is None or value == "":
+            return None
+        if isinstance(value, bool):
+            return None
+        if isinstance(value, int):
+            return value if value >= 0 else None
+        if isinstance(value, float):
+            return int(value) if value >= 0 else None
+        text = str(value).strip()
+        if not text:
+            return None
+        match = re.fullmatch(r"([0-9]+(?:\.[0-9]+)?)\s*([kmgtp]?i?b?|bytes?)?", text, flags=re.IGNORECASE)
+        if not match:
+            return None
+        amount = float(match.group(1))
+        unit = (match.group(2) or "b").lower()
+        unit = {"byte": "b", "bytes": "b", "": "b"}.get(unit, unit)
+        multipliers = {
+            "b": 1,
+            "k": 1024,
+            "kb": 1024,
+            "kib": 1024,
+            "m": 1024**2,
+            "mb": 1024**2,
+            "mib": 1024**2,
+            "g": 1024**3,
+            "gb": 1024**3,
+            "gib": 1024**3,
+            "t": 1024**4,
+            "tb": 1024**4,
+            "tib": 1024**4,
+            "p": 1024**5,
+            "pb": 1024**5,
+            "pib": 1024**5,
+        }
+        multiplier = multipliers.get(unit)
+        if multiplier is None:
+            return None
+        return int(amount * multiplier)
+
+    def _format_capacity_label(self, bytes_value: int | None) -> str:
+        if bytes_value is None:
+            return ""
+        units = [("PiB", 1024**5), ("TiB", 1024**4), ("GiB", 1024**3), ("MiB", 1024**2)]
+        for label, divisor in units:
+            if bytes_value >= divisor:
+                amount = bytes_value / divisor
+                return f"{amount:.1f} {label}" if amount < 10 else f"{amount:.0f} {label}"
+        return f"{bytes_value} B"
+
+    def _format_ontap_size(self, bytes_value: int | None) -> str:
+        if bytes_value is None or bytes_value <= 0:
+            return ""
+        gib = max(1, int(bytes_value // (1024**3)))
+        return f"{gib}GB"
+
+    def _normal_size_for_api(self, size: Any) -> Any:
+        parsed = self._parse_size_bytes(size)
+        return parsed if parsed is not None else size
+
+    def _aggregate_capacity_value(self, aggregate: dict[str, Any], paths: list[str]) -> int | None:
+        for path in paths:
+            parsed = self._parse_size_bytes(self._nested_value(aggregate, path))
+            if parsed is not None:
+                return parsed
+        return None
+
+    def nfs_capacity_context(self, context: dict[str, Any], discovery: dict[str, Any] | None = None) -> dict[str, Any]:
+        discovery = discovery or {}
+        desired = self._profile_defaults(context)
+        desired_nfs = desired.get("nfs") or {}
+        aggregate_targets = self._resolved_aggregate_targets(context, discovery)
+        raw_aggregates = [item for item in list(((discovery.get("raw") or {}).get("aggregates") or [])) if isinstance(item, dict)]
+        raw_volumes = [item for item in list(((discovery.get("raw") or {}).get("volumes") or [])) if isinstance(item, dict)]
+        desired_volume_name = str(desired_nfs.get("volume") or "").strip()
+        matched_volume = next((item for item in raw_volumes if str(item.get("name") or "").strip() == desired_volume_name), {})
+        volume_aggregate = str(
+            ((matched_volume.get("aggregate") or {}).get("name") if isinstance(matched_volume.get("aggregate"), dict) else "")
+            or ((list(matched_volume.get("aggregates") or [{}])[0]).get("name") if list(matched_volume.get("aggregates") or []) else "")
+            or ""
+        ).strip()
+        requested_names = [
+            volume_aggregate,
+            str(aggregate_targets.get("resolved_01") or "").strip(),
+            str(desired.get("aggregate_node_01") or "").strip(),
+            str(aggregate_targets.get("resolved_02") or "").strip(),
+            str(desired.get("aggregate_node_02") or "").strip(),
+        ]
+        requested_names = [name for name in requested_names if name]
+        selected: dict[str, Any] = {}
+        for name in requested_names:
+            selected = next((item for item in raw_aggregates if str(item.get("name") or "").strip() == name), {})
+            if selected:
+                break
+        if not selected and raw_aggregates:
+            selected = next(
+                (item for item in raw_aggregates if str(item.get("state") or "").strip().lower() in {"", "online"}),
+                raw_aggregates[0],
+            )
+
+        available_bytes = self._aggregate_capacity_value(
+            selected,
+            [
+                "space.block_storage.available",
+                "space.available",
+                "space.available_size",
+                "available",
+                "available_size",
+                "available_bytes",
+            ],
+        )
+        total_bytes = self._aggregate_capacity_value(
+            selected,
+            [
+                "space.block_storage.size",
+                "space.size",
+                "space.total",
+                "size",
+                "total_size",
+                "total_bytes",
+            ],
+        )
+        recommended_bytes = int(available_bytes // 2) if available_bytes else None
+        selected_name = str((selected or {}).get("name") or (requested_names[0] if requested_names else "")).strip()
+        configured_size = str(desired_nfs.get("size") or "").strip()
+        return {
+            "aggregate": selected_name,
+            "available_bytes": available_bytes,
+            "available_label": self._format_capacity_label(available_bytes),
+            "total_bytes": total_bytes,
+            "total_label": self._format_capacity_label(total_bytes),
+            "recommended_bytes": recommended_bytes,
+            "recommended_size": self._format_ontap_size(recommended_bytes),
+            "configured_size": configured_size,
+            "configured_size_bytes": self._parse_size_bytes(configured_size),
+            "source": f"Aggregate {selected_name}" if selected_name and available_bytes is not None else "",
+        }
+
+    def _desired_nfs_volume_size(self, context: dict[str, Any], discovery: dict[str, Any] | None = None) -> str:
+        desired = self._profile_defaults(context)
+        requested_size = str(((desired.get("nfs") or {}).get("size") or "")).strip()
+        if requested_size:
+            return requested_size
+        recommended = str(self.nfs_capacity_context(context, discovery).get("recommended_size") or "").strip()
+        return recommended or "500GB"
+
     def _resolved_data_broadcast_domain(self, context: dict[str, Any], discovery: dict[str, Any]) -> dict[str, Any]:
         desired = self._profile_defaults(context)
         requested = str(desired.get("data_broadcast_domain") or "").strip()
@@ -150,7 +305,7 @@ class NetAppModuleService:
             "required_nodes": [f"{kit_name}-01", f"{kit_name}-02"],
             "expected_ports": ["a0a", "e0M"],
             "data_broadcast_domain": "Data",
-            "target_mtu": 9000,
+            "target_mtu": 1500,
             "baseline": {
                 "target_ontap_version": "9.12.1",
                 "minimum_ontap_version": "9.9.1",
@@ -187,6 +342,8 @@ class NetAppModuleService:
             "nfs": {
                 "lifs": [],
                 "volume": "esxi_datastore_01",
+                "size": "",
+                "datastore_name": "",
                 "export_policy": "esxi_nfs_policy",
                 "mount_path": "/esxi_datastore_01",
                 "esxi_mount_targets": [],
@@ -464,11 +621,16 @@ class NetAppModuleService:
         subnet_prefix = subnet.split("/")[0].rsplit(".", 1)[0] if "." in subnet else ""
         mask = str(desired.get("management_netmask") or "255.255.255.0").strip()
         svm_name = str(desired.get("svm_name") or f"{kit_name}-SVM").strip()
+        nfs_cfg = desired.get("nfs") or {}
+        nfs_volume = str(nfs_cfg.get("volume") or "esxi_datastore_01").strip()
+        nfs_volume_size = str(nfs_cfg.get("size") or self._desired_nfs_volume_size(context, None) or "500GB").strip()
         return {
             "KITID": kit_name,
             "SUBNET": subnet_prefix,
             "SUBNET_MASK": mask,
             "SVM_NAME": svm_name,
+            "NFS_VOLUME": nfs_volume,
+            "NFS_VOLUME_SIZE": nfs_volume_size,
             "DATA_BROADCAST_DOMAIN": str(desired.get("data_broadcast_domain") or "Data").strip(),
             "MGMT_GATEWAY": str(desired.get("management_gateway") or "").strip(),
             "MGMT_SUBNET": str(desired.get("management_subnet") or "").strip(),
@@ -499,7 +661,7 @@ class NetAppModuleService:
                 "storage aggregate create -aggregate aggr_01 -node <<KITID>>-01 -raidtype raid_dp -diskcount 11",
                 "storage aggregate create -aggregate aggr_02 -node <<KITID>>-02 -raidtype raid_dp -diskcount 11 -simulate true",
                 "storage aggregate create -aggregate aggr_02 -node <<KITID>>-02 -raidtype raid_dp -diskcount 11",
-                "broadcast-domain create -broadcast-domain Data -mtu 9000 -ports <<KITID>>-01:a0a,<<KITID>>-02:a0a -ipspace Default",
+                "broadcast-domain create -broadcast-domain Data -mtu 1500 -ports <<KITID>>-01:a0a,<<KITID>>-02:a0a -ipspace Default",
                 "subnet create -subnet-name Management -broadcast-domain Default -subnet <<MGMT_SUBNET>> -gateway <<MGMT_GATEWAY>>",
                 "subnet create -subnet-name iSCSI -broadcast-domain Data -subnet 192.168.1.0/24 -force-update-lif-associations true -gateway 192.168.1.1 -ip-ranges 192.168.1.11-192.168.1.60",
                 "vserver create -vserver <<SVM_NAME>> -subtype default -rootvolume <<KITID>>_SVM_root -rootvolume-security-style unix -aggregate aggr_01",
@@ -518,14 +680,14 @@ class NetAppModuleService:
     def _default_nfs_template(self) -> str:
         return "\n".join(
             [
-                "broadcast-domain create -broadcast-domain Data -mtu 9000 -ports <<KITID>>-01:a0a,<<KITID>>-02:a0a -ipspace Default",
+                "broadcast-domain create -broadcast-domain Data -mtu 1500 -ports <<KITID>>-01:a0a,<<KITID>>-02:a0a -ipspace Default",
                 "vserver create -vserver <<SVM_NAME>> -subtype default -rootvolume <<KITID>>_SVM_root -rootvolume-security-style unix -aggregate aggr_01",
                 "vserver modify -vserver <<SVM_NAME>> -allowed-protocols nfs",
                 "net int create -vserver <<SVM_NAME>> -lif <<KITID>>-01_nfs_lif_1 -service-policy default-data-files -data-protocol nfs -home-node <<KITID>>-01 -home-port a0a -status-admin up -broadcast-domain Data",
                 "net int create -vserver <<SVM_NAME>> -lif <<KITID>>-02_nfs_lif_1 -service-policy default-data-files -data-protocol nfs -home-node <<KITID>>-02 -home-port a0a -status-admin up -broadcast-domain Data",
                 "net int create -vserver <<SVM_NAME>> -lif <<KITID>>-SVM_admin1 -firewall-policy mgmt -data-protocol none -home-node <<KITID>>-01 -home-port e0M -address <<SVM_MGMT_IP>> -netmask <<SUBNET_MASK>>",
                 "nfs create -vserver <<SVM_NAME>>",
-                "volume create -vserver <<SVM_NAME>> -volume esxi_datastore_01 -aggregate aggr_01 -size 500GB",
+                "volume create -vserver <<SVM_NAME>> -volume <<NFS_VOLUME>> -aggregate aggr_01 -size <<NFS_VOLUME_SIZE>>",
                 "export-policy create -vserver <<SVM_NAME>> -policyname esxi_nfs_policy",
             ]
         )
@@ -535,9 +697,11 @@ class NetAppModuleService:
         netapp_cfg = self._netapp_cfg(context)
         templates = netapp_cfg.get("command_templates") or {}
         protocol_profile = build_protocol_profile(context.get("cfg") or {})
+        cached_capacity = netapp_cfg.get("nfs_capacity") if isinstance(netapp_cfg.get("nfs_capacity"), dict) else {}
         return {
             "desired": desired,
             "protocol_profile": protocol_profile,
+            "nfs_capacity": cached_capacity or self.nfs_capacity_context(context, {}),
             "bootstrap": self._bootstrap_context(context),
             "bootstrap_checklist": self._build_bootstrap_checklist(context),
             "bootstrap_warnings": self._bootstrap_validation(context),
@@ -621,6 +785,7 @@ class NetAppModuleService:
         payload["stages"] = [{"name": "NetApp Stage 1: Discover", "ok": True, "steps": stage_steps}]
         payload["warnings"] = list(discovery.get("warnings") or [])
         payload["discovery"] = discovery
+        payload["nfs_capacity"] = self.nfs_capacity_context(context, discovery)
         return payload
 
     def test_connection(self, context: dict[str, Any]) -> dict[str, Any]:
@@ -819,7 +984,7 @@ class NetAppModuleService:
         elif broadcast_domain_target.get("adopted"):
             suggestions.append(f"Using discovered broadcast domain {desired_domain} in place of legacy default {broadcast_domain_target.get('requested') or 'Data'}.")
 
-        target_mtu = int(desired.get("target_mtu") or 9000)
+        target_mtu = int(desired.get("target_mtu") or 1500)
         domain_ports = []
         for port in list(raw.get("ports") or []):
             domain = str(((port.get("broadcast_domain") or {}).get("name") or "")).strip()
@@ -828,10 +993,10 @@ class NetAppModuleService:
             domain_ports.append(port)
         mtu_values = {int(item.get("mtu") or 0) for item in domain_ports if item.get("mtu") is not None}
         mtu_ok = (not domain_ports) or all(value == target_mtu for value in mtu_values)
-        checks.append({"name": "mtu_can_be_set_to_9000", "ok": mtu_ok, "details": {"target_mtu": target_mtu, "detected_values": sorted(mtu_values)}})
+        checks.append({"name": "mtu_matches_target", "ok": mtu_ok, "details": {"target_mtu": target_mtu, "detected_values": sorted(mtu_values)}})
         if not mtu_ok:
             warnings.append(f"Detected MTU values do not match target MTU {target_mtu}.")
-            suggestions.append("Plan MTU alignment action and verify switch path supports jumbo frames.")
+            suggestions.append("Keep MTU at 1500 until the full data path can be benchmarked and validated for jumbo frames.")
 
         licenses = {str(item.get("name") or "").strip().lower() for item in list(raw.get("licenses") or []) if str(item.get("name") or "").strip()}
         enabled_protocols = {str(item).strip().lower() for item in list(discovery.get("enabled_protocols") or []) if str(item).strip()}
@@ -1125,6 +1290,50 @@ class NetAppModuleService:
                 suggestions.append("Plan NFS volume creation and junction path setup before mounting the datastore.")
             elif desired_nfs_volume and not volume_verifiable:
                 suggestions.append("NFS volume state could not be fully verified through REST on this ONTAP release.")
+
+            desired_nfs_size = self._desired_nfs_volume_size(context, discovery)
+            desired_nfs_size_bytes = self._parse_size_bytes(desired_nfs_size)
+            current_nfs_size_bytes = self._parse_size_bytes((matched_volume or {}).get("size")) if matched_volume else None
+            size_action = "unknown"
+            size_ok = True
+            if desired_nfs_size and desired_nfs_size_bytes is None:
+                size_action = "invalid"
+                size_ok = False
+                warnings.append(f"NFS datastore size '{desired_nfs_size}' is not a valid ONTAP size.")
+                suggestions.append("Use a size like 500GB, 1TB, or 1536GB for the NFS datastore volume.")
+            elif volume_verifiable and matched_volume and desired_nfs_size_bytes is not None and current_nfs_size_bytes is not None:
+                if current_nfs_size_bytes < desired_nfs_size_bytes:
+                    size_action = "grow"
+                    suggestions.append(f"Plan a safe NFS volume grow from {self._format_capacity_label(current_nfs_size_bytes)} to {desired_nfs_size}.")
+                elif current_nfs_size_bytes > desired_nfs_size_bytes:
+                    size_action = "shrink_blocked"
+                    size_ok = False
+                    warnings.append(
+                        f"NFS volume '{desired_nfs_volume}' is larger than the requested size. Automatic shrinking is blocked."
+                    )
+                    suggestions.append("Grow operations are safe to automate; shrinking requires manual ONTAP review.")
+                else:
+                    size_action = "match"
+            elif volume_verifiable and matched_volume and desired_nfs_size_bytes is not None:
+                size_action = "unverifiable"
+                suggestions.append("NFS volume size could not be fully compared through REST on this ONTAP release.")
+            elif desired_nfs_size_bytes is not None:
+                size_action = "create"
+            checks.append(
+                {
+                    "name": "nfs_volume_size_matches",
+                    "ok": size_ok,
+                    "details": {
+                        "volume": desired_nfs_volume,
+                        "desired_size": desired_nfs_size,
+                        "desired_size_bytes": desired_nfs_size_bytes,
+                        "current_size_bytes": current_nfs_size_bytes,
+                        "current_size_label": self._format_capacity_label(current_nfs_size_bytes),
+                        "action": size_action,
+                        "verifiable": volume_verifiable,
+                    },
+                }
+            )
         else:
             desired_igroup = str(((desired.get("iscsi") or {}).get("igroup") or "")).strip()
             desired_portset = str(((desired.get("iscsi") or {}).get("portset") or "")).strip()
@@ -1259,13 +1468,14 @@ class NetAppModuleService:
                 "Check if expected ports exist",
                 "Check if aggregates exist or can be created",
                 "Check if Data broadcast domain exists",
-                "Check if MTU can be set to 9000",
+                "Check if data-path MTU matches the current target",
                 "Check if selected protocol is licensed/supported",
                 "Check if selected IP ranges are free",
                 "Check if SVM already exists and whether its protocol matches",
                 "Check if SVM management LIF exists",
                 "Check AutoSupport, NTP servers, and required users",
                 "Check protocol-specific export policy or SAN object state",
+                "Check NFS datastore volume size",
                 "Check ONTAP version against baseline",
             ],
             "checks": checks,
@@ -1352,6 +1562,20 @@ class NetAppModuleService:
                 str(vmware_plan.get("connection_mode") or "") == "standalone_esxi"
                 and str(vmware_mount_validate.get("status") or "") == "ok"
             )
+            nfs_volume_exists = bool((checks.get("nfs_volume_exists") or {}).get("ok"))
+            nfs_size_action = str((((checks.get("nfs_volume_size_matches") or {}).get("details") or {}).get("action") or "")).strip()
+            if not nfs_volume_exists:
+                nfs_volume_status = "create" if resolved_svm_name and aggregates_ready else "manual"
+                nfs_volume_type = "create"
+            elif nfs_size_action == "grow":
+                nfs_volume_status = "update"
+                nfs_volume_type = "update"
+            elif nfs_size_action in {"invalid", "shrink_blocked"}:
+                nfs_volume_status = "manual"
+                nfs_volume_type = "update"
+            else:
+                nfs_volume_status = "skip"
+                nfs_volume_type = "create"
             actions.extend(
                 [
                     {
@@ -1364,7 +1588,7 @@ class NetAppModuleService:
                         ),
                     },
                     {"name": "ensure_nfs_service", "type": "update", "status": svm_followup_status},
-                    {"name": "ensure_nfs_volume", "type": "create", "status": "skip" if bool((checks.get("nfs_volume_exists") or {}).get("ok")) else ("create" if resolved_svm_name and aggregates_ready else "manual")},
+                    {"name": "ensure_nfs_volume", "type": nfs_volume_type, "status": nfs_volume_status},
                     {"name": "ensure_export_policy", "type": "create", "status": "skip" if bool((checks.get("nfs_export_policy_matches") or {}).get("ok")) else ("create" if resolved_svm_name else "manual")},
                     {
                         "name": "ensure_esxi_nfs_datastore_mount",
@@ -1525,14 +1749,54 @@ class NetAppModuleService:
             "svm": {"name": svm_name},
             "name": volume_name,
             "aggregates": [{"name": aggregate_name}],
-            "size": size,
+            "size": self._normal_size_for_api(size),
         }
         if nas_path:
             body["nas"] = {"path": nas_path}
         return client.post("/api/storage/volumes", body)
 
+    def _resize_volume(self, client: NetAppClient, *, volume_uuid: str, size: str) -> dict[str, Any]:
+        return client.patch(f"/api/storage/volumes/{volume_uuid}", {"size": self._normal_size_for_api(size)})
+
     def _assign_volume_export_policy(self, client: NetAppClient, *, volume_uuid: str, policy_name: str) -> dict[str, Any]:
         return client.patch(f"/api/storage/volumes/{volume_uuid}", {"nas": {"export_policy": {"name": policy_name}}})
+
+    def _parse_esxi_datastore_capacity(self, summary: str, datastore_name: str) -> dict[str, Any]:
+        if not datastore_name:
+            return {}
+        current_name = ""
+        for raw_line in str(summary or "").splitlines():
+            line = raw_line.strip()
+            if line.startswith("name = "):
+                current_name = line.split("=", 1)[1].strip().strip('",')
+                continue
+            if current_name != datastore_name:
+                continue
+            if line.startswith("capacity = "):
+                try:
+                    return {"capacity_bytes": int(line.split("=", 1)[1].strip().strip(","))}
+                except ValueError:
+                    return {}
+        return {}
+
+    def _refresh_standalone_esxi_datastore_summary(self, context: dict[str, Any], datastore_name: str) -> dict[str, Any]:
+        if not datastore_name:
+            return {}
+        result: dict[str, Any] = {}
+        refresh_code, refresh_out, refresh_err = self._esxi_ssh_command(
+            context,
+            f"vim-cmd hostsvc/datastore/refresh {datastore_name}",
+        )
+        result["refreshed"] = refresh_code == 0
+        if refresh_code != 0:
+            result["refresh_warning"] = (refresh_err or refresh_out or "ESXi datastore refresh failed.").splitlines()[0]
+        summary_code, summary_out, summary_err = self._esxi_ssh_command(context, "vim-cmd hostsvc/datastore/listsummary")
+        if summary_code == 0:
+            result["summary_stdout"] = summary_out
+            result.update(self._parse_esxi_datastore_capacity(summary_out, datastore_name))
+        else:
+            result["summary_warning"] = (summary_err or summary_out or "ESXi datastore summary read failed.").splitlines()[0]
+        return result
 
     def _esxi_ssh_command(self, context: dict[str, Any], remote_command: str) -> tuple[int, str, str]:
         cfg = context.get("cfg") or {}
@@ -1591,14 +1855,22 @@ class NetAppModuleService:
         datastore_name = str(target.get("datastore_name") or "").strip()
         nfs_version = str(target.get("nfs_version") or "4.1").strip()
         list_cmd = "esxcli storage nfs41 list" if nfs_version == "4.1" else "esxcli storage nfs list"
-        code, out, err = self._esxi_ssh_command(context, list_cmd)
+        try:
+            code, out, err = self._esxi_ssh_command(context, list_cmd)
+        except NetAppError as exc:
+            return {"status": "skipped", "reason": f"mount_deferred_to_esxi_post_config: {exc}"}
         if code != 0:
-            raise NetAppError((err or out or "Failed to read existing ESXi NFS mounts.").splitlines()[0])
+            return {"status": "skipped", "reason": f"mount_deferred_to_esxi_post_config: {(err or out or 'Failed to read existing ESXi NFS mounts.').splitlines()[0]}"}
         existing_line = next((line for line in out.splitlines() if datastore_name and datastore_name in line), "")
         if existing_line:
             lowered = existing_line.lower()
             if "true" in lowered:
-                return {"status": "skipped", "reason": "datastore_already_mounted", "stdout": out}
+                return {
+                    "status": "skipped",
+                    "reason": "datastore_already_mounted",
+                    "stdout": out,
+                    "datastore_summary": self._refresh_standalone_esxi_datastore_summary(context, datastore_name),
+                }
             raise NetAppError(
                 f"Datastore '{datastore_name}' already exists on ESXi but is not accessible or mounted. "
                 "Manual cleanup or remount review is required before retrying automation."
@@ -1642,6 +1914,7 @@ class NetAppModuleService:
             raise NetAppError((verify_err or verify_out or "Failed to verify ESXi NFS mounts after apply.").splitlines()[0])
         if datastore_name and datastore_name not in verify_out:
             raise NetAppError(f"Datastore '{datastore_name}' was not present in ESXi NFS mounts after apply.")
+        datastore_summary = self._refresh_standalone_esxi_datastore_summary(context, datastore_name)
         return {
             "status": "applied",
             "command": fallback_cmd if fallback_used else add_cmd,
@@ -1649,6 +1922,7 @@ class NetAppModuleService:
             "fallback_used": fallback_used,
             "requested_nfs_version": nfs_version,
             "effective_nfs_version": "3" if fallback_used else nfs_version,
+            "datastore_summary": datastore_summary,
         }
 
     def _standalone_esxi_nfs_mount_state(self, context: dict[str, Any], vmware_plan: dict[str, Any]) -> dict[str, Any]:
@@ -1684,6 +1958,7 @@ class NetAppModuleService:
             or ("failed (404)" in message)
             or ("code\": \"3\"" in message)
             or ("resource not found" in message and "/api/" in message)
+            or ("unexpected argument" in message and "/api/network/ip/subnets" in message)
         )
 
     def _dependency_missing(self, exc: Exception) -> bool:
@@ -1899,15 +2174,36 @@ class NetAppModuleService:
             if name == "ensure_nfs_volume":
                 nfs_cfg = desired.get("nfs") or {}
                 volume_name = str(nfs_cfg.get("volume") or "esxi_datastore_01").strip()
+                desired_size = self._desired_nfs_volume_size(context, discovery)
+                desired_size_bytes = self._parse_size_bytes(desired_size)
+                if desired_size_bytes is None:
+                    raise NetAppError(f"NFS datastore size '{desired_size}' is not a valid ONTAP size.")
+                current_volume = self._find_volume_record(discovery, volume_name)
+                if current_volume:
+                    current_size_bytes = self._parse_size_bytes(current_volume.get("size"))
+                    if current_size_bytes is not None and current_size_bytes > desired_size_bytes:
+                        raise NetAppError(
+                            f"NFS volume '{volume_name}' is larger than requested; automatic shrinking is blocked."
+                        )
+                    if current_size_bytes is not None and current_size_bytes >= desired_size_bytes:
+                        logs.append(f"[SKIP] NFS volume {volume_name} already has the requested size.")
+                        skipped.append(name)
+                        return False
+                    volume_uuid = str(current_volume.get("uuid") or "").strip()
+                    if not volume_uuid:
+                        raise NetAppError(f"NFS volume '{volume_name}' cannot be resized because ONTAP did not return a volume UUID.")
+                    self._resize_volume(client, volume_uuid=volume_uuid, size=desired_size)
+                    logs.append(f"[APPLY] Grew NFS volume {volume_name} to {desired_size}.")
+                    return True
                 self._ensure_volume(
                     client,
                     svm_name=str(desired.get("svm_name") or naming["svm_name"]).strip(),
                     volume_name=volume_name,
                     aggregate_name=str(desired.get("aggregate_node_01") or "aggr_01").strip(),
-                    size="500GB",
+                    size=desired_size,
                     nas_path=str(nfs_cfg.get("mount_path") or f"/{volume_name}").strip(),
                 )
-                logs.append(f"[APPLY] Created NFS volume {volume_name}.")
+                logs.append(f"[APPLY] Created NFS volume {volume_name} at {desired_size}.")
                 return True
             if name == "ensure_esxi_nfs_datastore_mount":
                 result = self._ensure_standalone_esxi_nfs_datastore(context, vmware_plan)
@@ -2040,6 +2336,7 @@ class NetAppModuleService:
             payload["ok"] = bool(result["stage"].get("ok"))
         if discover_payload.get("error"):
             payload["error"] = discover_payload.get("error")
+        payload["nfs_capacity"] = self.nfs_capacity_context(context, payload.get("discovery") or {})
         payload["warnings"] = list(dict.fromkeys(warnings))
         payload["suggestions"] = list(dict.fromkeys(suggestions))
         return payload
@@ -2054,6 +2351,7 @@ class NetAppModuleService:
         payload["warnings"] = list(validate_payload.get("warnings") or [])
         payload["suggestions"] = list(validate_payload.get("suggestions") or [])
         payload["stages"] = list(validate_payload.get("stages") or [])
+        payload["nfs_capacity"] = dict(validate_payload.get("nfs_capacity") or self.nfs_capacity_context(context, payload["discovery"]))
         validate_stage = next((item for item in payload["stages"] if str(item.get("name")) == "NetApp Stage 2: Validate"), {})
         action_plan = self._build_action_plan(context, payload["discovery"], validate_stage)
         vmware_plan = build_vmware_plan(
@@ -2096,6 +2394,53 @@ class NetAppModuleService:
             "proposed_writes": [],
         }
         payload["validation_checks"] = list(validate_payload.get("validation_checks") or [])
+        return payload
+
+    def page_overview(self, context: dict[str, Any]) -> dict[str, Any]:
+        payload = self._response(context, "overview")
+        desired = self._profile_defaults(context)
+        protocol = str(desired.get("storage_protocol") or "nfs")
+        payload["ok"] = True
+        payload["discovery"] = {}
+        payload["warnings"] = []
+        payload["suggestions"] = ["Live ONTAP discovery is loaded only when you click Read current NetApp or run a NetApp action."]
+        payload["stages"] = []
+        cached_capacity = self._netapp_cfg(context).get("nfs_capacity")
+        payload["nfs_capacity"] = dict(cached_capacity if isinstance(cached_capacity, dict) else self.nfs_capacity_context(context, {}))
+        payload["plan"] = {
+            "mode": "cached_overview",
+            "storage_protocol": protocol,
+            "base_workflow": [],
+            "adaptive_discovery": {
+                "cluster_name": "",
+                "ontap_version": "",
+                "node_models": [],
+                "nodes": [],
+                "physical_ports": [],
+                "interface_groups": [],
+                "broadcast_domains": [],
+                "aggregates": [],
+                "svm_protocols": [],
+                "export_policies": [],
+                "igroups": [],
+                "portsets": [],
+                "luns": [],
+                "lun_maps": [],
+                "capabilities": {},
+                "capability_status": {},
+                "upgrade_posture": self._build_upgrade_posture(desired, {}),
+                "capability_matrix": [],
+            },
+            "protocol_profile": {
+                "selected_protocol": protocol,
+                "actions": [],
+                "command_preview": [],
+                "profile": build_protocol_profile(context.get("cfg") or {}),
+            },
+            "vmware_plan": {},
+            "proposed_writes": [],
+        }
+        payload["validation_checks"] = []
         return payload
 
     def preview(self, context: dict[str, Any]) -> dict[str, Any]:

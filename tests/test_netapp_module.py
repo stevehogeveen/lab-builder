@@ -6,10 +6,11 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 import app.main as main
+import app.modules.netapp.routes as netapp_routes
 from app.core.registry import load_modules
 from app.netapp import NetAppClient, NetAppConfig, NetAppError
 from app.core.config import calc_ip_plan
-from app.storage_profiles import build_protocol_profile
+from app.storage_profiles import build_protocol_profile, normalize_lifs
 from app.vmware import build_vmware_plan
 
 
@@ -94,6 +95,360 @@ def test_netapp_module_route_returns_200_with_bootstrap_and_connection_state(cli
     assert "Bootstrap Plan" in response.text
     assert "ONTAP API / Cluster Management IP" in response.text
     assert "Test ONTAP API connection" in response.text
+    assert "NetApp console access" in response.text
+    assert "Detect NetApp console USB" in response.text
+    assert "Factory reset NetApp" in response.text
+    assert "Build factory reset runbook" in response.text
+    assert "FACTORY RESET NETAPP" in response.text
+    assert "FACTORY RESET NETAPP CONSOLE" in response.text
+
+
+def test_netapp_console_discovery_selects_single_candidate(client, monkeypatch):
+    cfg = main.default_config()
+    cfg["site"]["name"] = "NetApp Console Kit"
+    cfg["included"]["netapp"] = True
+    main.save_kit_config(cfg)
+
+    def fake_discover(_cfg):
+        return {
+            "ok": True,
+            "error": "",
+            "warnings": [],
+            "suggestions": [],
+            "candidates": [
+                {
+                    "port": "/dev/ttyUSB0",
+                    "baud": 115200,
+                    "prompt_type": "cluster_cli",
+                    "score": 170,
+                    "raw_output": "X20::>",
+                    "error": "",
+                }
+            ],
+            "probe_results": [],
+            "diagnostics": {"serial_imported": True, "ordered_ports": ["/dev/ttyUSB0"]},
+        }
+
+    monkeypatch.setattr(netapp_routes, "_discover_netapp_console", fake_discover)
+
+    response = client.post(
+        "/modules/netapp/console-discover",
+        data={
+            "netapp_console_username": "admin",
+            "netapp_console_password": "secret",
+        },
+    )
+
+    assert response.status_code == 200
+    assert "NetApp console found" in response.text
+    saved = main.load_kit_config("NetApp-Console-Kit")
+    assert saved["netapp"]["console"]["port"] == "/dev/ttyUSB0"
+    assert saved["netapp"]["console"]["baud"] == 115200
+    assert saved["netapp"]["console"]["username"] == "admin"
+    assert saved["netapp"]["console"]["password"] == "secret"
+    assert saved["netapp"]["console"]["last_candidates"][0]["prompt_type"] == "cluster_cli"
+
+
+def test_netapp_console_probe_uses_selected_console_credentials(client, monkeypatch):
+    cfg = main.default_config()
+    cfg["site"]["name"] = "NetApp Console Probe Kit"
+    cfg["included"]["netapp"] = True
+    main.save_kit_config(cfg)
+
+    def fake_probe(_cfg):
+        return {
+            "ok": True,
+            "port": "/dev/ttyUSB0",
+            "baud": 115200,
+            "prompt_type": "cluster_cli",
+            "raw_output": "X20::> system node show",
+        }
+
+    monkeypatch.setattr(netapp_routes, "_probe_selected_netapp_console", fake_probe)
+
+    response = client.post(
+        "/modules/netapp/console-probe",
+        data={
+            "netapp_console_port": "/dev/ttyUSB0",
+            "netapp_console_baud": "115200",
+            "netapp_console_username": "admin",
+            "netapp_console_password": "secret",
+        },
+    )
+
+    assert response.status_code == 200
+    assert "NetApp console login verified" in response.text
+    saved = main.load_kit_config("NetApp-Console-Probe-Kit")
+    assert saved["netapp"]["console"]["last_probe"]["prompt_type"] == "cluster_cli"
+    assert "system node show" in saved["netapp"]["console"]["last_raw_output"]
+
+
+def test_netapp_console_factory_reset_blocks_without_console_confirmation(client, monkeypatch):
+    cfg = main.default_config()
+    cfg["site"]["name"] = "NetApp Console Reset Block Kit"
+    cfg["included"]["netapp"] = True
+    main.save_kit_config(cfg)
+
+    def fail_start(_cfg, _options):
+        raise AssertionError("reset worker should not start")
+
+    monkeypatch.setattr(netapp_routes, "_start_netapp_console_factory_reset_worker", fail_start)
+
+    response = client.post(
+        "/modules/netapp/console-factory-reset",
+        data={
+            "netapp_console_port": "/dev/ttyUSB0",
+            "netapp_console_baud": "115200",
+            "netapp_console_factory_reset_ack": "on",
+            "netapp_console_factory_reset_confirm": "wrong",
+        },
+    )
+
+    assert response.status_code == 200
+    assert "NetApp console factory reset blocked" in response.text
+    saved = main.load_kit_config("NetApp-Console-Reset-Block-Kit")
+    assert saved["netapp"]["console"]["last_reset"]["status"] == "blocked"
+    assert "FACTORY RESET NETAPP CONSOLE" in saved["netapp"]["console"]["last_reset"]["error"]
+
+
+def test_netapp_console_factory_reset_starts_worker_with_exact_confirmation(client, monkeypatch):
+    cfg = main.default_config()
+    cfg["site"]["name"] = "NetApp Console Reset Start Kit"
+    cfg["included"]["netapp"] = True
+    main.save_kit_config(cfg)
+    captured = {}
+
+    def fake_start(_cfg, options):
+        captured.update(options)
+        return {
+            "operation_id": "netapp-console-reset-test",
+            "status": "running",
+            "ok": False,
+            "port": options["port"],
+            "baud": options["baud"],
+            "message": "NetApp console factory reset sequence started.",
+        }
+
+    monkeypatch.setattr(netapp_routes, "_start_netapp_console_factory_reset_worker", fake_start)
+
+    response = client.post(
+        "/modules/netapp/console-factory-reset",
+        data={
+            "netapp_console_port": "/dev/ttyUSB0",
+            "netapp_console_baud": "115200",
+            "netapp_console_username": "admin",
+            "netapp_console_password": "secret",
+            "netapp_console_reboot_command": "system node reboot -node X20-01 -ignore-quorum-warnings true",
+            "netapp_console_factory_reset_ack": "on",
+            "netapp_console_reset_send_boot_menu_wipe": "on",
+            "netapp_console_factory_reset_confirm": "FACTORY RESET NETAPP CONSOLE",
+        },
+    )
+
+    assert response.status_code == 200
+    assert "NetApp console factory reset started" in response.text
+    assert captured["port"] == "/dev/ttyUSB0"
+    assert captured["username"] == "admin"
+    assert captured["password"] == "secret"
+    assert captured["reboot_command"].startswith("system node reboot")
+    saved = main.load_kit_config("NetApp-Console-Reset-Start-Kit")
+    assert saved["netapp"]["console"]["last_reset"]["status"] == "running"
+
+
+def test_netapp_factory_reset_helper_blocks_without_exact_confirmation(client):
+    cfg = main.default_config()
+    cfg["site"]["name"] = "NetApp Reset Kit"
+    cfg["included"]["netapp"] = True
+    cfg["netapp"].update(
+        {
+            "host": "10.10.8.45",
+            "username": "admin",
+            "password": "secret",
+            "bootstrap_complete": True,
+        }
+    )
+    main.save_kit_config(cfg)
+
+    response = client.post(
+        "/modules/netapp/factory-reset-record",
+        data={
+            "netapp_factory_reset_ack": "on",
+            "netapp_factory_reset_confirm": "wrong",
+        },
+    )
+
+    assert response.status_code == 200
+    assert "NetApp factory reset blocked" in response.text
+    saved = main.load_kit_config("NetApp-Reset-Kit")
+    assert saved["netapp"]["bootstrap_complete"] is True
+    assert saved["netapp"]["last_factory_reset"]["status"] == "blocked"
+    assert "FACTORY RESET NETAPP" in saved["netapp"]["last_factory_reset"]["error"]
+
+
+def test_netapp_factory_reset_record_can_clear_cached_state(client):
+    cfg = main.default_config()
+    cfg["site"]["name"] = "NetApp Reset Clear Kit"
+    cfg["included"]["netapp"] = True
+    cfg["netapp"].update(
+        {
+            "host": "10.10.8.45",
+            "username": "admin",
+            "password": "secret",
+            "bootstrap_complete": True,
+            "bootstrap_checks": {"api_readiness": {"reachable": True}},
+            "discovery": {"node_names": ["X20-01", "X20-02"]},
+            "last_discovered_ontap_version": "9.17.1",
+            "nfs_capacity": {"recommended_size": "500GB"},
+            "upgrade": {"activity": {"status": "completed"}},
+            "validation": {"ok": True},
+            "vmware_checks": {"nfs_mount": {"ready": True}},
+        }
+    )
+    cfg["upgrade_inventory"]["netapp"] = {"current_version": "9.17.1", "source": "test", "last_checked_at": "now"}
+    main.save_kit_config(cfg)
+
+    response = client.post(
+        "/modules/netapp/factory-reset-record",
+        data={
+            "netapp_factory_reset_ack": "on",
+            "netapp_factory_reset_confirm": "FACTORY RESET NETAPP",
+            "netapp_factory_reset_clear_saved_state": "on",
+        },
+    )
+
+    assert response.status_code == 200
+    assert "NetApp manual factory reset approval recorded" in response.text
+    saved = main.load_kit_config("NetApp-Reset-Clear-Kit")
+    assert saved["netapp"]["bootstrap_complete"] is False
+    assert saved["netapp"]["last_factory_reset"]["status"] == "manual_approved"
+    assert saved["netapp"]["last_factory_reset"]["clear_saved_state"] is True
+    assert saved["netapp"]["discovery"] == {}
+    assert "nfs_capacity" not in saved["netapp"]
+    assert saved["netapp"]["last_discovered_ontap_version"] == ""
+    assert saved["upgrade_inventory"]["netapp"]["current_version"] == ""
+
+
+def test_netapp_activity_reconciles_completed_live_update(client, monkeypatch):
+    cfg = main.default_config()
+    cfg["site"]["name"] = "NetApp-Reconcile-Kit"
+    cfg["netapp"]["host"] = "10.10.8.45"
+    cfg["netapp"]["username"] = "admin"
+    cfg["netapp"]["password"] = "secret"
+    cfg["netapp"]["upgrade"] = {
+        "last_plan": {"current_version": "9.13.1P17", "media_version": "9.17.1"},
+        "last_result": {
+            "status": "running",
+            "target_version": "9.17.1",
+            "current_version": "9.17.1",
+            "message": "ONTAP software state: in_progress; current 9.17.1; pending 9.17.1.",
+        },
+        "activity": {
+            "status": "running",
+            "phase": "upgrade",
+            "message": "ONTAP software state: in_progress; current 9.17.1; pending 9.17.1.",
+            "progress_percent": 95,
+            "events": [
+                {
+                    "phase": "upgrade",
+                    "message": "ONTAP software state: in_progress; current 9.17.1; pending 9.17.1.",
+                    "timestamp": "2026-05-19T14:38:40+00:00",
+                    "progress_percent": 95,
+                    "software_state": "in_progress",
+                    "current_version": "9.17.1",
+                    "pending_version": "9.17.1",
+                }
+            ],
+        },
+    }
+    cfg["upgrade_inventory"] = {"netapp": {"current_version": "9.17.1", "source": "Post-upgrade ONTAP verification"}}
+    main.save_kit_config(cfg)
+
+    class FakeNetAppClient:
+        def __init__(self, _config):
+            pass
+
+        def get_cluster_software(self):
+            return {
+                "version": "9.17.1",
+                "pending_version": "9.17.1",
+                "state": "completed",
+                "nodes": [{"name": "X20-01", "version": "9.17.1"}, {"name": "X20-02", "version": "9.17.1"}],
+                "update_details": [
+                    {"phase": "ONTAP updates", "state": "completed", "node": {"name": "X20-01"}},
+                    {"phase": "ONTAP updates", "state": "completed", "node": {"name": "X20-02"}},
+                ],
+            }
+
+    monkeypatch.setattr(netapp_routes, "NetAppClient", FakeNetAppClient)
+
+    response = client.get("/modules/netapp/upgrade-activity")
+
+    assert response.status_code == 200
+    assert "Completed" in response.text
+    assert "100%" in response.text
+    assert "ONTAP upgrade completed to 9.17.1." in response.text
+    saved = main.load_kit_config("NetApp-Reconcile-Kit")
+    assert saved["netapp"]["upgrade"]["activity"]["status"] == "completed"
+    assert saved["netapp"]["upgrade"]["last_result"]["status"] == "completed"
+    assert saved["upgrade_inventory"]["netapp"]["source"] == "Live ONTAP activity reconciliation"
+
+
+def test_netapp_activity_running_poll_is_silent_and_panel_scoped(client, monkeypatch):
+    cfg = main.default_config()
+    cfg["site"]["name"] = "NetApp-Silent-Poll-Kit"
+    cfg["netapp"]["host"] = "10.10.8.45"
+    cfg["netapp"]["username"] = "admin"
+    cfg["netapp"]["password"] = "secret"
+    cfg["netapp"]["upgrade"] = {
+        "last_plan": {"current_version": "9.13.1P17", "media_version": "9.17.1"},
+        "last_result": {"status": "running", "target_version": "9.17.1"},
+        "activity": {
+            "status": "running",
+            "phase": "upgrade",
+            "message": "ONTAP software state: in_progress; current 9.13.1P17; pending 9.17.1.",
+            "progress_percent": 80,
+            "events": [
+                {
+                    "phase": "upgrade",
+                    "message": "ONTAP software state: in_progress; current 9.13.1P17; pending 9.17.1.",
+                    "timestamp": "2026-05-19T14:38:40+00:00",
+                    "progress_percent": 80,
+                    "software_state": "in_progress",
+                    "current_version": "9.13.1P17",
+                    "pending_version": "9.17.1",
+                }
+            ],
+        },
+    }
+    cfg["upgrade_inventory"] = {"netapp": {"current_version": "9.13.1P17", "source": "Live ONTAP upgrade readiness check"}}
+    main.save_kit_config(cfg)
+
+    class FakeNetAppClient:
+        def __init__(self, _config):
+            pass
+
+        def get_cluster_software(self):
+            return {
+                "version": "9.13.1P17",
+                "pending_version": "9.17.1",
+                "state": "in_progress",
+                "update_details": [{"phase": "ONTAP updates", "state": "in_progress", "node": {"name": "X20-01"}}],
+            }
+
+    monkeypatch.setattr(netapp_routes, "NetAppClient", FakeNetAppClient)
+
+    response = client.get("/modules/netapp/upgrade-activity")
+
+    assert response.status_code == 200
+    assert "upgrade-panel upgrade-panel--ontap silent-poll" in response.text
+    assert "status-badge status-badge--running" in response.text
+    assert "metric-card" in response.text
+    assert "event-log" in response.text
+    assert 'data-silent-poll="true"' in response.text
+    assert 'hx-target="#netapp-upgrade-activity"' in response.text
+    assert 'hx-target="#main-content"' not in response.text
+    assert "Raw ONTAP output" in response.text
+    assert "raw-output" in response.text
 
 
 def test_netapp_action_endpoints_return_planning_data(client):
@@ -233,6 +588,85 @@ def test_storage_profile_uses_desired_values_and_preserves_subnet_truth():
     assert profile["nfs"]["export_policy"] == "KIT100_ESXi_NFS"
 
 
+def test_protocol_profile_normalizes_discovered_nfs_lifs():
+    cfg = {
+        "site": {"name": "KIT100"},
+        "shared_network": {"subnet": "10.44.12.0/24"},
+        "netapp": {
+            "storage_protocol": "nfs",
+            "nfs": {
+                "lifs": [
+                    {"name": "nfs_lif_01", "address": "10.44.12.48", "home_node": "X20-01", "home_port": "e0b"},
+                    {"name": "nfs_lif_02", "ip": "10.44.12.49", "node": "X20-02", "port": "e0b"},
+                ]
+            },
+        },
+    }
+
+    assert normalize_lifs(cfg["netapp"]["nfs"]["lifs"])[0] == {"name": "nfs_lif_01", "ip": "10.44.12.48", "node": "X20-01", "port": "e0b"}
+    profile = build_protocol_profile(cfg)
+
+    assert profile["nfs"]["lifs"] == [
+        {"name": "nfs_lif_01", "ip": "10.44.12.48", "node": "X20-01", "port": "e0b"},
+        {"name": "nfs_lif_02", "ip": "10.44.12.49", "node": "X20-02", "port": "e0b"},
+    ]
+
+
+def test_netapp_prepare_nfs_storage_defaults_normalizes_and_shows_quick_start(client):
+    cfg = main.load_kit_config()
+    cfg["site"]["name"] = "NFS-Kit"
+    cfg["included"]["netapp"] = True
+    cfg["shared_network"]["subnet"] = "10.10.8.0/24"
+    cfg.setdefault("ip_plan", {})["esxi"] = "10.10.8.111"
+    cfg["esxi"] = {"management_ip": "10.10.8.111", "root_password": "Secret123!"}
+    cfg["netapp"] = {
+        "host": "10.10.8.45",
+        "username": "admin",
+        "password": "secret",
+        "storage_protocol": "nfs",
+        "bootstrap_complete": True,
+        "nfs": {
+            "lifs": [
+                {"name": "nfs_lif_01", "svm": "stage_nfs", "address": "10.10.8.48", "home_node": "X20-01", "home_port": "e0b"},
+                {"name": "nfs_lif_02", "svm": "stage_nfs", "address": "10.10.8.49", "home_node": "X20-02", "home_port": "e0b"},
+            ]
+        },
+        "desired": {
+            "nfs": {
+                "volume": "esxi_datastore_01",
+                "export_policy": "esxi_nfs_policy",
+                "mount_path": "/esxi_datastore_01",
+                "esxi_mount_targets": [],
+                "lifs": [
+                    {"name": "nfs_lif_01", "svm": "stage_nfs", "address": "10.10.8.48", "home_node": "X20-01", "home_port": "e0b"},
+                ],
+            }
+        },
+    }
+    main.save_kit_config(cfg)
+
+    response = client.post("/modules/netapp/prepare-nfs-storage")
+
+    assert response.status_code == 200
+    assert "NFS storage defaults prepared" in response.text
+    assert "NFS storage quick start" in response.text
+    assert "stage_nfs" in response.text
+    assert "esxi_nfs_policy" in response.text
+    saved = main.load_kit_config()
+    assert saved["netapp"]["storage_protocol"] == "nfs"
+    assert saved["netapp"]["desired"]["svm_name"] == "stage_nfs"
+    assert saved["netapp"]["desired"]["nfs"]["export_policy"] == "esxi_nfs_policy"
+    assert saved["netapp"]["desired"]["nfs"]["esxi_mount_targets"] == ["10.10.8.111"]
+    assert saved["netapp"]["desired"]["nfs"]["lifs"][0] == {"name": "nfs_lif_01", "ip": "10.10.8.48", "node": "X20-01", "port": "e0b"}
+    vmware_plan = build_vmware_plan(saved, storage_protocol="nfs")
+    mount_step = next(step for step in vmware_plan["steps"] if step["name"] == "plan_nfs_datastore_mounts")
+    mount_plan = mount_step["details"]["mount_plan"]
+    assert mount_plan[0]["host"] == "10.10.8.111"
+    assert mount_plan[0]["server"] == "10.10.8.48"
+    assert mount_plan[0]["alternate_servers"] == ["10.10.8.49"]
+    assert "esxcli storage nfs41 add -H '10.10.8.48,10.10.8.49'" in mount_plan[0]["esxcli_command"]
+
+
 def test_vmware_plan_uses_offset_range_for_esxi_hosts():
     cfg = {
         "site": {"name": "KIT100"},
@@ -292,6 +726,69 @@ def test_vmware_nfs_plan_uses_discovered_lifs_and_volume_context():
     assert mount_step["details"]["mount_plan"][0]["export_path"] == "/esxi_datastore_01"
     assert "esxcli storage nfs41 add -H '10.44.12.48,10.44.12.49'" in mount_step["details"]["mount_plan"][0]["esxcli_command"]
     assert "New-Datastore -Nfs -VMHost 10.44.12.31" in mount_step["details"]["mount_plan"][0]["powercli_command"]
+
+
+def test_vmware_nfs_plan_uses_desired_datastore_label():
+    cfg = {
+        "site": {"name": "KIT100"},
+        "shared_network": {"subnet": "10.44.12.0/24"},
+        "esxi": {"management_ip": "10.44.12.31", "root_password": "Secret123!"},
+        "netapp": {
+            "storage_protocol": "nfs",
+            "desired": {
+                "nfs": {
+                    "volume": "esxi_datastore_01",
+                    "datastore_name": "NETAPP-NFS-01",
+                    "mount_path": "/esxi_datastore_01",
+                    "size": "1536GB",
+                    "lifs": [{"name": "nfs_lif_01", "ip": "10.44.12.48"}],
+                }
+            },
+        },
+        "vmware": {"nfs": {"nfs_version": "3"}},
+    }
+
+    plan = build_vmware_plan(cfg, storage_protocol="nfs")
+    mount_step = next(step for step in plan["steps"] if step["name"] == "plan_nfs_datastore_mounts")
+
+    assert plan["nfs_context"]["datastore_name"] == "NETAPP-NFS-01"
+    assert plan["nfs_context"]["volume_size"] == "1536GB"
+    assert mount_step["details"]["mount_plan"][0]["datastore_name"] == "NETAPP-NFS-01"
+
+
+def test_netapp_nfs_capacity_recommends_half_available_aggregate_space():
+    from app.modules.netapp.service import NetAppModuleService
+
+    service = NetAppModuleService()
+    context = {
+        "cfg": {
+            "site": {"name": "KIT100"},
+            "netapp": {
+                "storage_protocol": "nfs",
+                "desired": {
+                    "aggregate_node_01": "aggr_01",
+                    "nfs": {"volume": "esxi_datastore_01"},
+                },
+            },
+        }
+    }
+    discovery = {
+        "raw": {
+            "aggregates": [
+                {
+                    "name": "aggr_01",
+                    "state": "online",
+                    "space": {"block_storage": {"available": 4 * 1024**4, "size": 8 * 1024**4}},
+                }
+            ]
+        }
+    }
+
+    capacity = service.nfs_capacity_context(context, discovery)
+
+    assert capacity["aggregate"] == "aggr_01"
+    assert capacity["available_label"] == "4.0 TiB"
+    assert capacity["recommended_size"] == "2048GB"
 
 
 def test_netapp_plan_includes_standalone_esxi_nfs_mount_action():
@@ -679,8 +1176,8 @@ def test_use_discovered_values_updates_connection_and_management_fields(client, 
                 "discovered_node_mgmt_ips": {"X20-01": "10.10.8.41", "X20-02": "10.10.8.42"},
                 "discovered_node_mgmt_ip_list": ["10.10.8.41", "10.10.8.42"],
                 "discovered_nfs_lifs": [
-                    {"name": "stage_nfs_lif1", "address": "10.10.8.51", "home_node": "X20-01", "home_port": "a0a"},
-                    {"name": "stage_nfs_lif2", "address": "10.10.8.52", "home_node": "X20-02", "home_port": "a0a"},
+                    {"name": "stage_nfs_lif1", "svm": "stage_nfs", "address": "10.10.8.51", "home_node": "X20-01", "home_port": "a0a"},
+                    {"name": "stage_nfs_lif2", "svm": "stage_nfs", "address": "10.10.8.52", "home_node": "X20-02", "home_port": "a0a"},
                 ],
                 "warnings": [],
                 "raw": {
@@ -707,7 +1204,8 @@ def test_use_discovered_values_updates_connection_and_management_fields(client, 
     assert cfg["netapp"]["management"]["node_01_mgmt_ip"] == "10.10.8.41"
     assert cfg["netapp"]["management"]["node_02_mgmt_ip"] == "10.10.8.42"
     assert cfg["netapp"]["cluster_name"] == "X20"
-    assert cfg["netapp"]["nfs"]["lifs"][0]["address"] == "10.10.8.51"
+    assert cfg["netapp"]["desired"]["svm_name"] == "stage_nfs"
+    assert cfg["netapp"]["nfs"]["lifs"][0] == {"name": "stage_nfs_lif1", "ip": "10.10.8.51", "node": "X20-01", "port": "a0a"}
 
 
 def test_netapp_upgrade_plan_reads_live_version_from_current_page_fields(client, monkeypatch):
@@ -764,6 +1262,89 @@ def test_netapp_upgrade_plan_reads_live_version_from_current_page_fields(client,
     assert cfg["upgrade_inventory"]["netapp"]["source"] == "Live ONTAP upgrade readiness check"
 
 
+def test_netapp_upgrade_plan_refreshes_stale_cached_version(client, monkeypatch):
+    import app.modules.netapp.routes as netapp_routes
+
+    cfg = main.default_config()
+    cfg["included"]["netapp"] = True
+    cfg["netapp"]["host"] = "10.10.8.45"
+    cfg["netapp"]["username"] = "admin"
+    cfg["netapp"]["password"] = "secret"
+    cfg["upgrade_inventory"] = {
+        "netapp": {
+            "current_version": "9.9.1P2",
+            "source": "Old readiness check",
+            "raw_version": "NetApp Release 9.9.1P2",
+        }
+    }
+    main.save_kit_config(cfg)
+
+    class FakeNetAppClient:
+        def __init__(self, config):
+            assert config.host == "10.10.8.45"
+            assert config.password == "secret"
+
+        def get_cluster(self):
+            return {"name": "X20", "version": {"full": "NetApp Release 9.13.1P17"}}
+
+    monkeypatch.setattr(netapp_routes, "NetAppClient", FakeNetAppClient)
+    monkeypatch.setattr(
+        main,
+        "scan_upgrade_media",
+        lambda: {
+            "root": "/repo/media",
+            "latest": {"netapp": {"version": "9.17.1", "filename": "9171_q_image.tgz", "path": "/repo/media/9171_q_image.tgz"}},
+            "counts": {"netapp": 2},
+            "candidates": [
+                {"device": "netapp", "version": "9.13.1P17", "filename": "9131P17_q_image.tgz", "path": "/repo/media/9131P17_q_image.tgz"},
+                {"device": "netapp", "version": "9.17.1", "filename": "9171_q_image.tgz", "path": "/repo/media/9171_q_image.tgz"},
+            ],
+        },
+    )
+
+    response = client.post("/modules/netapp/plan-upgrade?upgrade_tab=ontap", data={"return_page": "upgrade_helper"})
+
+    assert response.status_code == 200
+    assert "Current release" in response.text
+    assert "9.13.1P17" in response.text
+    assert "Read current ONTAP release" in response.text
+    cfg = main.load_kit_config()
+    assert cfg["netapp"]["last_discovered_ontap_version"] == "NetApp Release 9.13.1P17"
+    assert cfg["upgrade_inventory"]["netapp"]["current_version"] == "9.13.1P17"
+    assert cfg["upgrade_inventory"]["netapp"]["raw_version"] == "NetApp Release 9.13.1P17"
+    assert cfg["upgrade_inventory"]["netapp"]["source"] == "Live ONTAP upgrade readiness check"
+
+
+def test_netapp_page_uses_cached_state_without_live_discovery(client, monkeypatch):
+    import app.modules.netapp.routes as netapp_routes
+
+    cfg = main.default_config()
+    cfg["included"]["netapp"] = True
+    cfg["netapp"]["host"] = "10.10.8.45"
+    cfg["netapp"]["username"] = "admin"
+    cfg["netapp"]["password"] = "secret"
+    cfg["netapp"]["bootstrap_complete"] = True
+    cfg["upgrade_inventory"] = {"netapp": {"current_version": "9.13.1P17", "source": "Live ONTAP upgrade readiness check"}}
+    main.save_kit_config(cfg)
+
+    monkeypatch.setattr(
+        netapp_routes.service,
+        "_build_client",
+        lambda context: (_ for _ in ()).throw(AssertionError("GET /modules/netapp should not call live ONTAP discovery")),
+    )
+
+    response = client.get("/modules/netapp")
+
+    assert response.status_code == 200
+    assert "Current" in response.text
+    assert "Current release" in response.text
+    assert "9.13.1P17" in response.text
+    assert "Read current NetApp" in response.text
+    cfg = main.load_kit_config()
+    assert cfg["upgrade_inventory"]["netapp"]["current_version"] == "9.13.1P17"
+    assert cfg["upgrade_inventory"]["netapp"]["source"] == "Live ONTAP upgrade readiness check"
+
+
 def test_validate_stage_checks_nfs_export_policy_and_volume():
     from app.modules.netapp.service import NetAppModuleService
 
@@ -807,6 +1388,43 @@ def test_validate_stage_checks_nfs_export_policy_and_volume():
 
     assert check_map["nfs_export_policy_matches"]["ok"] is True
     assert check_map["nfs_volume_exists"]["ok"] is True
+
+
+def test_validate_stage_defaults_mtu_target_to_1500():
+    from app.modules.netapp.service import NetAppModuleService
+
+    service = NetAppModuleService()
+    context = {
+        "cfg": {
+            "site": {"name": "Kit-01"},
+            "shared_network": {"subnet": "10.10.10.0/24"},
+            "ip_plan": {"gateway": "10.10.10.1"},
+            "netapp": {"storage_protocol": "nfs"},
+        }
+    }
+    discovery = {
+        "nodes": ["Kit-01-01", "Kit-01-02"],
+        "available_ports": ["Kit-01-01:e0b", "Kit-01-02:e0b"],
+        "existing_broadcast_domains": ["Data"],
+        "enabled_protocols": ["nfs"],
+        "capabilities": {"licenses": True},
+        "raw": {
+            "aggregates": [],
+            "svms": [],
+            "interfaces": [],
+            "licenses": [{"name": "nfs"}],
+            "ports": [{"name": "e0b", "broadcast_domain": {"name": "Data"}, "mtu": 1500}],
+            "export_policies": [],
+            "volumes": [],
+        },
+    }
+
+    result = service._validate_stage(context, discovery)
+    check_map = {item["name"]: item for item in result["stage"]["checks"]}
+
+    assert check_map["mtu_matches_target"]["ok"] is True
+    assert check_map["mtu_matches_target"]["details"]["target_mtu"] == 1500
+    assert not any("target MTU 9000" in item for item in result["warnings"])
 
 
 def test_plan_marks_iscsi_objects_skip_when_discovered():
@@ -1072,6 +1690,50 @@ def test_safe_apply_blocks_missing_subnet_api_surface_instead_of_failing():
     assert any("not supported through the current ONTAP API surface" in line for line in result["logs"])
 
 
+def test_safe_apply_blocks_subnet_schema_mismatch_instead_of_failing():
+    from app.modules.netapp.service import NetAppModuleService
+
+    service = NetAppModuleService()
+    service._build_client = lambda context: object()
+
+    def fail_subnet(*args, **kwargs):
+        raise NetAppError('POST /api/network/ip/subnets failed (400): {"error":{"message":"Unexpected argument \\"subnet\\".","code":"262179","target":"subnet"}}')
+
+    service._ensure_subnet = fail_subnet
+    context = {
+        "cfg": {
+            "site": {"name": "Kit-01"},
+            "shared_network": {"subnet": "10.10.10.0/24"},
+            "ip_plan": {"gateway": "10.10.10.1"},
+            "netapp": {
+                "host": "10.10.10.45",
+                "username": "admin",
+                "password": "secret",
+                "storage_protocol": "nfs",
+                "bootstrap_complete": True,
+            },
+        }
+    }
+    payload = {
+        "discovery": {"subnets": []},
+        "plan": {
+            "protocol_profile": {
+                "actions": [
+                    {"name": "ensure_management_subnet", "status": "create"},
+                    {"name": "ensure_nfs_service", "status": "skip"},
+                ]
+            }
+        },
+    }
+
+    result = service._execute_safe_apply(context, payload)
+
+    assert result["ok"] is True
+    assert "ensure_management_subnet" in result["blocked_actions"]
+    assert "ensure_nfs_service" in result["skipped_actions"]
+    assert any("not supported through the current ONTAP API surface" in line for line in result["logs"])
+
+
 def test_action_plan_adopts_single_discovered_svm_when_config_is_blank():
     from app.modules.netapp.service import NetAppModuleService
 
@@ -1117,6 +1779,93 @@ def test_action_plan_adopts_single_discovered_svm_when_config_is_blank():
     assert statuses["ensure_nfs_service"] == "update"
     assert statuses["ensure_nfs_volume"] == "create"
     assert statuses["ensure_export_policy"] == "create"
+
+
+def test_action_plan_marks_existing_nfs_volume_for_safe_growth():
+    from app.modules.netapp.service import NetAppModuleService
+
+    service = NetAppModuleService()
+    context = {
+        "cfg": {
+            "site": {"name": "Kit-01"},
+            "shared_network": {"subnet": "10.10.10.0/24"},
+            "ip_plan": {"gateway": "10.10.10.1"},
+            "netapp": {
+                "host": "10.10.10.45",
+                "username": "admin",
+                "password": "secret",
+                "storage_protocol": "nfs",
+                "desired": {"svm_name": "stage_nfs", "nfs": {"volume": "esxi_datastore_01", "size": "1TB"}},
+            },
+        }
+    }
+    discovery = {"raw": {"svms": [{"name": "stage_nfs"}]}, "svms": ["stage_nfs"], "capability_status": {}}
+    validate_stage = {
+        "checks": [
+            {"name": "ontap_meets_baseline", "ok": True, "details": {}},
+            {"name": "svm_exists_and_protocol_matches", "ok": True, "details": {"exists": True}},
+            {"name": "svm_management_lif_exists", "ok": True, "details": {}},
+            {"name": "nfs_volume_exists", "ok": True, "details": {}},
+            {"name": "nfs_volume_size_matches", "ok": False, "details": {"action": "grow"}},
+            {"name": "nfs_export_policy_matches", "ok": True, "details": {}},
+            {"name": "expected_ports_exist", "ok": True, "details": {}},
+            {"name": "protocol_lifs_match", "ok": True, "details": {}},
+            {"name": "data_broadcast_domain_exists", "ok": True, "details": {}},
+            {"name": "aggregates_exist_or_can_be_created", "ok": True, "details": {"missing": []}},
+        ]
+    }
+
+    plan = service._build_action_plan(context, discovery, validate_stage)
+    actions = {item["name"]: item for item in plan["actions"]}
+
+    assert actions["ensure_nfs_volume"]["status"] == "update"
+    assert actions["ensure_nfs_volume"]["type"] == "update"
+
+
+def test_safe_apply_grows_existing_nfs_volume(monkeypatch):
+    from app.modules.netapp.service import NetAppModuleService
+
+    class FakeClient:
+        def __init__(self):
+            self.patch_calls = []
+
+        def patch(self, path, body):
+            self.patch_calls.append((path, body))
+            return {"ok": True}
+
+    service = NetAppModuleService()
+    fake_client = FakeClient()
+    monkeypatch.setattr(service, "_build_client", lambda context: fake_client)
+    context = {
+        "cfg": {
+            "site": {"name": "Kit-01"},
+            "shared_network": {"subnet": "10.10.10.0/24"},
+            "netapp": {
+                "storage_protocol": "nfs",
+                "desired": {
+                    "svm_name": "stage_nfs",
+                    "nfs": {"volume": "esxi_datastore_01", "size": "1TB", "mount_path": "/esxi_datastore_01"},
+                },
+            },
+        }
+    }
+    discovery = {
+        "raw": {
+            "svms": [{"name": "stage_nfs"}],
+            "volumes": [{"name": "esxi_datastore_01", "uuid": "vol-123", "size": 500 * 1024**3}],
+        },
+        "svms": ["stage_nfs"],
+    }
+    plan_payload = {
+        "discovery": discovery,
+        "plan": {"protocol_profile": {"actions": [{"name": "ensure_nfs_volume", "status": "update"}]}, "vmware_plan": {}},
+    }
+
+    result = service._execute_safe_apply(context, plan_payload)
+
+    assert result["ok"] is True
+    assert result["executed_actions"] == ["ensure_nfs_volume"]
+    assert fake_client.patch_calls == [("/api/storage/volumes/vol-123", {"size": 1024**4})]
 
 
 def test_action_plan_blocks_nfs_volume_when_aggregate_is_missing():

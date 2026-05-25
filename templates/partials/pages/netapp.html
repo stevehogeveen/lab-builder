@@ -26,6 +26,12 @@
     {% set vmware_plan = plan.get('vmware_plan', {}) %}
     {% set vmware_checks = settings.get('vmware_checks', {}) %}
     {% set vmware_probe = payload.get('vmware_probe', vmware_checks.get('nfs_mount', {})) %}
+    {% set factory_reset = payload.get('factory_reset') or cfg.get('netapp', {}).get('last_factory_reset', {}) %}
+    {% set console = cfg.get('netapp', {}).get('console', {}) %}
+    {% set console_candidates = console.get('last_candidates', []) %}
+    {% set console_probe = console.get('last_probe', {}) %}
+    {% set console_reset = console.get('last_reset', {}) %}
+    {% set console_diag = console.get('last_diagnostics', {}) %}
     {% set upgrade = adaptive.get('upgrade_posture', {}) %}
     {% set capability_matrix = adaptive.get('capability_matrix', []) %}
     {% set capability_status = adaptive.get('capability_status', {}) %}
@@ -35,6 +41,22 @@
     {% set bootstrap_complete = bootstrap.get('bootstrap_complete') %}
     {% set nfs = desired.get('nfs', {}) %}
     {% set iscsi = desired.get('iscsi', {}) %}
+    {% set normalized_profile = settings.get('protocol_profile', {}) %}
+    {% set profile_base = normalized_profile.get('base', {}) %}
+    {% set profile_nfs = normalized_profile.get('nfs', {}) %}
+    {% set nfs_lifs_for_ui = nfs.get('lifs') or profile_nfs.get('lifs', []) %}
+    {% set nfs_quick_lif_svm = nfs_lifs_for_ui[0].get('svm') if nfs_lifs_for_ui else '' %}
+    {% set nfs_quick_svm = desired.get('svm_name') or nfs_quick_lif_svm or profile_base.get('svm_name') or 'Auto-detect' %}
+    {% set nfs_quick_volume = nfs.get('volume') or 'esxi_datastore_01' %}
+    {% set nfs_quick_mount_path = nfs.get('mount_path') or '/' ~ nfs_quick_volume %}
+    {% set nfs_capacity = payload.get('nfs_capacity') or settings.get('nfs_capacity') or cfg.get('netapp', {}).get('nfs_capacity', {}) %}
+    {% set vmware_nfs_cfg = (cfg.get('vmware', {}) or {}).get('nfs', {}) or {} %}
+    {% set nfs_quick_size = nfs.get('size') or nfs_capacity.get('recommended_size') or '500GB' %}
+    {% set nfs_quick_datastore_name = nfs.get('datastore_name') or vmware_nfs_cfg.get('datastore_name') or nfs_quick_volume %}
+    {% set nfs_quick_export_policy = nfs.get('export_policy') or profile_nfs.get('export_policy') or 'esxi_nfs_policy' %}
+    {% set nfs_quick_allowed_subnet = profile_nfs.get('allowed_subnet') or nfs.get('allowed_subnet') or ((cfg.get('shared_network', {}) or {}).get('subnet')) or 'Not set' %}
+    {% set nfs_quick_esxi_targets = nfs.get('esxi_mount_targets') or [] %}
+    {% set nfs_quick_esxi_target = (nfs_quick_esxi_targets | join(', ')) if nfs_quick_esxi_targets else (((cfg.get('esxi', {}) or {}).get('management_ip')) or ((cfg.get('ip_plan', {}) or {}).get('esxi')) or 'Not set') %}
     {% set planned_cluster_name = bootstrap.get('cluster_name') or desired.get('cluster_name') or '' %}
     {% set planned_cluster_mgmt_ip = bootstrap.get('cluster_mgmt_ip') or '' %}
     {% set planned_node_01_mgmt_ip = bootstrap.get('node_01_mgmt_ip') or '' %}
@@ -51,7 +73,8 @@
     {% set node_mgmt_mismatch = (planned_node_01_mgmt_ip and discovered_node_mgmt_map and discovered_node_mgmt_ips and planned_node_01_mgmt_ip not in discovered_node_mgmt_ips) or (planned_node_02_mgmt_ip and discovered_node_mgmt_map and discovered_node_mgmt_ips and planned_node_02_mgmt_ip not in discovered_node_mgmt_ips) %}
     {% set active_protocols = discovery.get('enabled_protocols', []) %}
     {% set legacy_warning_ns = namespace(value='') %}
-    {% set shared_upgrade_entry = (upgrade_helper_summary.get('planner', {}).get('entries', []) | selectattr('key', 'equalto', 'netapp') | list | first) if upgrade_helper_summary else {} %}
+    {% set shared_upgrade_entry = ((upgrade_helper_summary.get('planner', {}).get('entries', []) | selectattr('key', 'equalto', 'netapp') | list | first) | default({}, true)) if upgrade_helper_summary else {} %}
+    {% set current_ontap_release = shared_upgrade_entry.get('current_version') or cfg.get('upgrade_inventory', {}).get('netapp', {}).get('current_version') or discovery.get('ontap_version') or cfg.get('netapp', {}).get('last_discovered_ontap_version') %}
     {% for warning in bootstrap_warnings %}
         {% if '.40/.41/.42/.43' in warning %}
             {% set legacy_warning_ns.value = warning %}
@@ -97,6 +120,13 @@
             <div class="font-semibold">{{ selected_protocol | upper }}{% if active_protocols %} / {{ active_protocols | join(', ') | upper }}{% endif %}</div>
         </div>
         <div class="ops-metric-card">
+            <div class="dashboard-kicker">ONTAP</div>
+            <div class="font-semibold">{{ current_ontap_release or 'Unknown' }}</div>
+            <div class="mt-2">
+                <span class="status {{ 'ready' if current_ontap_release else 'progress' }}">{{ 'Current release' if current_ontap_release else 'Read needed' }}</span>
+            </div>
+        </div>
+        <div class="ops-metric-card">
             <div class="dashboard-kicker">Nodes</div>
             <div class="font-semibold">{{ discovery.get('node_count') or 0 }}</div>
         </div>
@@ -117,6 +147,7 @@
     {% set upgrade_device_label = 'ONTAP' %}
     {% set upgrade_return_page = 'netapp' %}
     {% include "partials/components/upgrade_gate_panel.html" %}
+    {% include "partials/components/netapp_upgrade_activity.html" %}
 
     <div class="{% if netapp_upgrade_blocked and not netapp_upgrade_override %}upgrade-gated-content{% endif %}">
     <form hx-post="/modules/netapp/save-settings" hx-target="#main-content" hx-swap="outerHTML" class="space-y-4">
@@ -145,6 +176,55 @@
                     </select>
                 </div>
             </div>
+            <div class="compact-panel mt-4">
+                <div class="flex items-start justify-between gap-4 mb-3">
+                    <div>
+                        <div class="compact-title">NetApp console access</div>
+                        <div class="text-sm text-slate-500">Use this when the management IP is on the wrong subnet and the app must recover access through a USB serial console.</div>
+                    </div>
+                    <span class="status-badge status-badge--{{ 'completed' if console.get('port') else 'waiting' }}">{{ 'Selected' if console.get('port') else 'USB needed' }}</span>
+                </div>
+                <div class="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-3">
+                    <div>
+                        <label class="block text-sm font-bold text-slate-300 mb-2">Console USB port</label>
+                        <select class="input" name="netapp_console_port">
+                            {% if not console.get('port') %}<option value="">Select after detect</option>{% endif %}
+                            {% for item in console_candidates %}
+                            <option value="{{ item.port }}" {% if item.port == console.get('port') %}selected{% endif %}>{{ item.port }} @ {{ item.baud }}{% if item.prompt_type %} - {{ item.prompt_type | replace('_', ' ') }}{% endif %}</option>
+                            {% endfor %}
+                            {% if console.get('port') and not console_candidates %}<option value="{{ console.get('port') }}" selected>{{ console.get('port') }}</option>{% endif %}
+                        </select>
+                    </div>
+                    <div>
+                        <label class="block text-sm font-bold text-slate-300 mb-2">Console baud</label>
+                        {% set console_baud = console.get('baud', 115200) | int %}
+                        <select class="input" name="netapp_console_baud">
+                            <option value="115200" {% if console_baud == 115200 %}selected{% endif %}>115200</option>
+                            <option value="9600" {% if console_baud == 9600 %}selected{% endif %}>9600</option>
+                        </select>
+                    </div>
+                    <div>
+                        <label class="block text-sm font-bold text-slate-300 mb-2">Console username</label>
+                        <input class="input" name="netapp_console_username" value="{{ console.get('username') or cfg.get('netapp', {}).get('username', 'admin') }}" placeholder="admin">
+                    </div>
+                    <div>
+                        <label class="block text-sm font-bold text-slate-300 mb-2">Console password</label>
+                        <input class="input" type="password" name="netapp_console_password" value="" placeholder="{{ 'Saved' if console.get('password') else 'Enter password' }}" autocomplete="current-password">
+                    </div>
+                </div>
+                <div class="actions mt-4">
+                    <button class="btn" formaction="/modules/netapp/console-discover" formmethod="post" type="submit">Detect NetApp console USB</button>
+                    <button class="btn" formaction="/modules/netapp/console-probe" formmethod="post" type="submit">Probe console login</button>
+                </div>
+                {% if console_probe or console_diag.get('ordered_ports') %}
+                <details class="raw-output-wrap mt-4">
+                    <summary>Console probes and diagnostics</summary>
+                    {% if console_probe %}<pre class="raw-output">{{ console_probe | tojson(indent=2) }}</pre>{% endif %}
+                    {% if console_diag %}<pre class="raw-output">{{ console_diag | tojson(indent=2) }}</pre>{% endif %}
+                    {% if console.get('last_raw_output') %}<pre class="raw-output">{{ console.get('last_raw_output') }}</pre>{% endif %}
+                </details>
+                {% endif %}
+            </div>
             <div class="actions mt-4">
                 <button class="btn" formaction="/modules/netapp/test-connection" formmethod="post" type="submit">Test ONTAP API connection</button>
                 {% if bootstrap_complete %}
@@ -160,6 +240,75 @@
                 <div class="text-sm text-slate-400 mt-1">Target {{ connection_test.get('target_host') or 'not set' }} | Auth {{ 'ok' if connection_test.get('api_auth_ok') else 'failed' }}{% if connection_test.get('cluster_name') %} | Cluster {{ connection_test.get('cluster_name') }}{% endif %}</div>
             </div>
             {% endif %}
+        </section>
+
+        <section class="compact-panel">
+            <div class="flex items-start justify-between gap-4 mb-3">
+                <div>
+                    <div class="compact-title">NFS storage quick start</div>
+                    <div class="text-sm text-slate-500">Prepare ONTAP as an NFS datastore target, then read, validate, safely apply, and probe ESXi reachability.</div>
+                </div>
+                <span class="status-badge status-badge--{{ 'completed' if selected_protocol == 'nfs' else 'waiting' }}">{{ 'NFS selected' if selected_protocol == 'nfs' else 'Select NFS' }}</span>
+            </div>
+            <div class="kv-grid">
+                <div class="kv-item">
+                    <div class="kv-label">API target</div>
+                    <div class="kv-value">{{ connection_target_ip or 'Not set' }}</div>
+                </div>
+                <div class="kv-item">
+                    <div class="kv-label">SVM</div>
+                    <div class="kv-value">{{ nfs_quick_svm }}</div>
+                </div>
+                <div class="kv-item">
+                    <div class="kv-label">Datastore volume</div>
+                    <div class="kv-value">{{ nfs_quick_volume }}</div>
+                </div>
+                <div class="kv-item">
+                    <div class="kv-label">ESXi datastore label</div>
+                    <div class="kv-value">{{ nfs_quick_datastore_name }}</div>
+                </div>
+                <div class="kv-item">
+                    <div class="kv-label">Volume size</div>
+                    <div class="kv-value">{{ nfs_quick_size }}</div>
+                </div>
+                <div class="kv-item">
+                    <div class="kv-label">Aggregate free</div>
+                    <div class="kv-value">{{ nfs_capacity.get('available_label') or 'Read current NetApp' }}</div>
+                </div>
+                <div class="kv-item">
+                    <div class="kv-label">Default recommendation</div>
+                    <div class="kv-value">{{ nfs_capacity.get('recommended_size') or 'Read current NetApp' }}</div>
+                </div>
+                <div class="kv-item">
+                    <div class="kv-label">Export path</div>
+                    <div class="kv-value">{{ nfs_quick_mount_path }}</div>
+                </div>
+                <div class="kv-item">
+                    <div class="kv-label">Export policy</div>
+                    <div class="kv-value">{{ nfs_quick_export_policy }}</div>
+                </div>
+                <div class="kv-item">
+                    <div class="kv-label">Allowed clients</div>
+                    <div class="kv-value">{{ nfs_quick_allowed_subnet }}</div>
+                </div>
+                <div class="kv-item">
+                    <div class="kv-label">ESXi target</div>
+                    <div class="kv-value">{{ nfs_quick_esxi_target }}</div>
+                </div>
+                <div class="kv-item">
+                    <div class="kv-label">NFS LIFs</div>
+                    <div class="kv-value">{{ nfs_lifs_for_ui | length }}</div>
+                </div>
+            </div>
+            <div class="actions mt-4">
+                <button class="btn action-button" formaction="/modules/netapp/prepare-nfs-storage" formmethod="post" type="submit">Prepare NFS defaults</button>
+                {% if bootstrap_complete %}
+                <button class="btn action-button" formaction="/modules/netapp/discover-page" formmethod="post" type="submit">Read current NetApp</button>
+                <button class="btn" formaction="/modules/netapp/validate-page" formmethod="post" type="submit">Validate NFS plan</button>
+                <button class="btn" formaction="/modules/netapp/apply-page" formmethod="post" type="submit">Apply safe NFS changes</button>
+                <button class="btn" formaction="/modules/netapp/probe-vmware-nfs" formmethod="post" type="submit">Probe ESXi and NFS targets</button>
+                {% endif %}
+            </div>
         </section>
 
         {% if cfg.get('included', {}).get('netapp') %}
@@ -244,6 +393,109 @@
             </details>
         </section>
         {% endif %}
+
+        <details class="card identity-soft-card" style="border-color: color-mix(in srgb, var(--bad) 50%, var(--border));">
+            <summary class="summary-row"><span class="font-semibold">Factory reset NetApp</span><span class="status danger">destructive</span></summary>
+            <div class="text-sm text-slate-300 mt-3">This is a manual ONTAP boot-menu wipe workflow. It erases configuration and data on the selected node disks and should only be used for a lab rebuild.</div>
+            <div class="ops-detail-grid mt-4">
+                <div class="card card-compact">
+                    <div class="font-semibold">What the app will do</div>
+                    <div class="text-sm text-slate-400 mt-2">Build a reset runbook, discover/probe USB console access, and only start a serial reset sequence after the console-specific destructive confirmation is entered.</div>
+                </div>
+                <div class="card card-compact">
+                    <div class="font-semibold">What stays manual</div>
+                    <div class="text-sm text-slate-400 mt-2">Do not automate force giveback or HA takeover/giveback decisions. Reset one controller only when the serial console and HA state are understood.</div>
+                </div>
+            </div>
+            <div class="actions mt-4">
+                <button class="btn" formaction="/modules/netapp/factory-reset-plan" formmethod="post" type="submit">Build factory reset runbook</button>
+            </div>
+            <div class="grid grid-cols-1 md:grid-cols-[minmax(0,1fr)_auto] gap-3 mt-4 items-end">
+                <div>
+                    <label class="check card card-compact"><input type="checkbox" name="netapp_factory_reset_ack"> I understand this is destructive and the console wipe is manual.</label>
+                    <label class="check card card-compact mt-2"><input type="checkbox" name="netapp_factory_reset_clear_saved_state"> Clear cached NetApp discovery, validation, upgrade, and bootstrap-complete state after approval.</label>
+                    <label class="block text-sm font-bold text-slate-300 mt-3 mb-2">Type FACTORY RESET NETAPP to record approval</label>
+                    <input class="input" name="netapp_factory_reset_confirm" value="" autocomplete="off">
+                </div>
+                <button class="btn btn-danger" formaction="/modules/netapp/factory-reset-record" formmethod="post" type="submit" data-action-title="Recording NetApp factory reset approval" data-action-start="Recording destructive manual reset approval. No ONTAP wipe command is selected automatically.">Record reset approval</button>
+            </div>
+            <div class="compact-panel mt-4" style="border-color: color-mix(in srgb, var(--bad) 45%, var(--border));">
+                <div class="compact-title">Console factory reset execution</div>
+                <div class="text-sm text-slate-300">This starts a background serial worker that logs in, optionally sends the node reboot command below, waits for the ONTAP boot menu, and sends boot-menu option 4. Use it only with the console connected to the controller you intend to wipe.</div>
+                <div class="grid grid-cols-1 md:grid-cols-2 gap-3 mt-4">
+                    <div>
+                        <label class="block text-sm font-bold text-slate-300 mb-2">Node to reset</label>
+                        <input class="input" name="netapp_console_reset_node_name" value="{{ console.get('reset_node_name', '') }}" placeholder="X20-01">
+                        <div class="text-xs text-slate-400 mt-2">Used for HA disable and default reboot command when the console is at ONTAP CLI.</div>
+                    </div>
+                    <div>
+                        <label class="block text-sm font-bold text-slate-300 mb-2">Node reboot command</label>
+                        <input class="input" name="netapp_console_reboot_command" value="{{ console.get('node_reboot_command', '') }}" placeholder="system node reboot -node X20-01 -ignore-quorum-warnings true">
+                        <div class="text-xs text-slate-400 mt-2">Leave blank if the controller is already rebooting or already at the ONTAP boot menu.</div>
+                    </div>
+                    <div>
+                        <label class="block text-sm font-bold text-slate-300 mb-2">Boot menu wipe option</label>
+                        <input class="input" name="netapp_console_boot_menu_option" value="{{ console.get('boot_menu_option', '4') }}" readonly>
+                        <div class="text-xs text-slate-400 mt-2">Only option 4 is supported by this helper.</div>
+                    </div>
+                    <div>
+                        <label class="block text-sm font-bold text-slate-300 mb-2">HA partner node name</label>
+                        <input class="input" name="netapp_console_partner_node_name" value="{{ console.get('partner_node_name', '') }}" placeholder="X20-02">
+                        <div class="text-xs text-slate-400 mt-2">Optional. Some ADP/shared-disk reset flows ask for the partner name.</div>
+                    </div>
+                    <div>
+                        <input type="hidden" name="netapp_console_disable_storage_failover" value="false">
+                        <label class="check card card-compact"><input type="checkbox" name="netapp_console_disable_storage_failover" value="true" {% if console.get('disable_storage_failover', true) %}checked{% endif %}> Disable storage failover for the node before reboot.</label>
+                    </div>
+                    <div>
+                        <input type="hidden" name="netapp_console_disable_partner_storage_failover" value="false">
+                        <label class="check card card-compact"><input type="checkbox" name="netapp_console_disable_partner_storage_failover" value="true" {% if console.get('disable_partner_storage_failover', false) %}checked{% endif %}> Also disable storage failover for the partner.</label>
+                    </div>
+                    <div>
+                        <input type="hidden" name="netapp_console_halt_partner_before_reset" value="false">
+                        <label class="check card card-compact"><input type="checkbox" name="netapp_console_halt_partner_before_reset" value="true" {% if console.get('halt_partner_before_reset', false) %}checked{% endif %}> Lab wipe: halt the HA partner before wiping this node.</label>
+                    </div>
+                    <div>
+                        <input type="hidden" name="netapp_console_normal_boot_after_wipe" value="false">
+                        <label class="check card card-compact"><input type="checkbox" name="netapp_console_normal_boot_after_wipe" value="true" {% if console.get('normal_boot_after_wipe', true) %}checked{% endif %}> Normal boot after wipe returns to the boot menu.</label>
+                    </div>
+                </div>
+                <div class="grid grid-cols-1 md:grid-cols-[minmax(0,1fr)_auto] gap-3 mt-4 items-end">
+                    <div>
+                        <label class="check card card-compact"><input type="checkbox" name="netapp_console_factory_reset_ack"> I understand this will send a destructive ONTAP boot-menu wipe selection over the selected console.</label>
+                        <label class="check card card-compact mt-2"><input type="checkbox" name="netapp_console_reset_send_boot_menu_wipe"> Send ONTAP boot-menu option 4 over the console.</label>
+                        <label class="check card card-compact mt-2"><input type="checkbox" name="netapp_console_factory_reset_clear_saved_state"> Clear cached NetApp state if the serial reset is submitted.</label>
+                        <label class="block text-sm font-bold text-slate-300 mt-3 mb-2">Type FACTORY RESET NETAPP CONSOLE to start console reset</label>
+                        <input class="input" name="netapp_console_factory_reset_confirm" value="" autocomplete="off">
+                    </div>
+                    <button class="btn btn-danger" formaction="/modules/netapp/console-factory-reset" formmethod="post" type="submit" data-action-title="Starting NetApp console factory reset" data-action-start="Starting the serial console reset worker.">Start console factory reset</button>
+                </div>
+                {% if console_reset %}
+                <div class="result mt-4" style="border-color: color-mix(in srgb, var(--bad) 35%, var(--border));">
+                    <div class="font-semibold">Last console reset state: {{ console_reset.get('status', 'unknown') | replace('_', ' ') | title }}</div>
+                    <div class="text-sm text-slate-400 mt-1">Console {{ console_reset.get('port') or console.get('port') or 'Not selected' }} @ {{ console_reset.get('baud') or console.get('baud') or 115200 }}</div>
+                    {% if console_reset.get('message') %}<div class="text-sm text-slate-300 mt-2">{{ console_reset.get('message') }}</div>{% endif %}
+                    {% if console_reset.get('error') %}<div class="text-sm text-slate-300 mt-2">{{ console_reset.get('error') }}</div>{% endif %}
+                </div>
+                {% endif %}
+            </div>
+            {% if factory_reset %}
+            <div class="result mt-4" style="border-color: color-mix(in srgb, var(--bad) 35%, var(--border));">
+                <div class="font-semibold">Last factory reset helper state: {{ factory_reset.get('status', 'planned') | replace('_', ' ') | title }}</div>
+                <div class="text-sm text-slate-400 mt-1">Target {{ factory_reset.get('target_host') or 'Not set' }}{% if factory_reset.get('cluster_name') %} | Cluster {{ factory_reset.get('cluster_name') }}{% endif %}</div>
+                {% if factory_reset.get('error') %}
+                <div class="text-sm text-slate-300 mt-2">{{ factory_reset.get('error') }}</div>
+                {% endif %}
+                {% if factory_reset.get('manual_steps') %}
+                <div class="ops-list mt-3">
+                    {% for step in factory_reset.get('manual_steps', []) %}
+                    <div class="text-sm text-slate-300">{{ loop.index }}. {{ step }}</div>
+                    {% endfor %}
+                </div>
+                {% endif %}
+            </div>
+            {% endif %}
+        </details>
 
         {% if bootstrap_complete and has_snapshot %}
         <section class="card identity-soft-card ops-card-tight">
@@ -340,9 +592,13 @@
                     <div><label class="block text-sm font-bold text-slate-300 mb-2">SVM name</label><input class="input" name="svm_name" value="{{ desired.get('svm_name', '') }}"></div>
                     <div><label class="block text-sm font-bold text-slate-300 mb-2">SVM mgmt IP</label><input class="input" name="svm_mgmt_ip" value="{{ desired.get('svm_mgmt_ip', '') }}"></div>
                     <div><label class="block text-sm font-bold text-slate-300 mb-2">Export policy</label><input class="input" name="nfs_export_policy" value="{{ nfs.get('export_policy', 'esxi_nfs_policy') }}"></div>
+                    <div><label class="block text-sm font-bold text-slate-300 mb-2">NFS volume</label><input class="input" name="nfs_volume" value="{{ nfs_quick_volume }}"></div>
+                    <div><label class="block text-sm font-bold text-slate-300 mb-2">NFS export path</label><input class="input" name="nfs_mount_path" value="{{ nfs_quick_mount_path }}"></div>
+                    <div><label class="block text-sm font-bold text-slate-300 mb-2">NFS volume size</label><input class="input" name="nfs_size" value="{{ nfs_quick_size }}" placeholder="Example: 1536GB"><div class="text-xs text-slate-500 mt-1">Defaults to half of discovered free aggregate space. Safe apply can grow an existing volume; shrinking stays manual.</div></div>
+                    <div><label class="block text-sm font-bold text-slate-300 mb-2">ESXi datastore label</label><input class="input" name="nfs_datastore_name" value="{{ nfs_quick_datastore_name }}" placeholder="NETAPP-NFS-01"><div class="text-xs text-slate-500 mt-1">Display name ESXi uses when mounting this NFS export.</div></div>
                 </div>
                 <div class="grid grid-cols-1 md:grid-cols-2 gap-3">
-                    <div><label class="block text-sm font-bold text-slate-300 mb-2">NFS LIFs</label><textarea class="input" name="nfs_lifs" rows="5" placeholder="name,ip,node,port">{% for lif in nfs.get('lifs', []) %}{{ lif.get('name', '') }},{{ lif.get('ip', '') }},{{ lif.get('node', '') }},{{ lif.get('port', '') }}{% if not loop.last %}
+                    <div><label class="block text-sm font-bold text-slate-300 mb-2">NFS LIFs</label><textarea class="input" name="nfs_lifs" rows="5" placeholder="name,ip,node,port">{% for lif in nfs_lifs_for_ui %}{{ lif.get('name', '') }},{{ lif.get('ip', '') or lif.get('address', '') }},{{ lif.get('node', '') or lif.get('home_node', '') }},{{ lif.get('port', '') or lif.get('home_port', '') }}{% if not loop.last %}
 {% endif %}{% endfor %}</textarea></div>
                     <div><label class="block text-sm font-bold text-slate-300 mb-2">iSCSI LIFs</label><textarea class="input" name="iscsi_lifs" rows="5" placeholder="name,ip,node,port">{% for lif in iscsi.get('lifs', []) %}{{ lif.get('name', '') }},{{ lif.get('ip', '') }},{{ lif.get('node', '') }},{{ lif.get('port', '') }}{% if not loop.last %}
 {% endif %}{% endfor %}</textarea></div>
@@ -419,6 +675,7 @@
                         <div class="font-semibold mb-2">Datastore target</div>
                         <div class="text-sm text-slate-300">Datastore {{ ((vmware_plan.get('nfs_context') or {}).get('datastore_name')) or 'Not set' }}</div>
                         <div class="text-sm text-slate-400 mt-1">SVM {{ ((vmware_plan.get('nfs_context') or {}).get('svm_name')) or 'Not set' }} | Export {{ ((vmware_plan.get('nfs_context') or {}).get('export_path')) or 'Not set' }}</div>
+                        <div class="text-sm text-slate-400 mt-1">Volume size {{ ((vmware_plan.get('nfs_context') or {}).get('volume_size')) or nfs_quick_size or 'Not set' }}</div>
                         <div class="text-sm text-slate-400 mt-1">NFS servers {{ (((vmware_plan.get('nfs_context') or {}).get('lif_ips')) or []) | join(', ') or 'None' }}</div>
                     </div>
                     <div class="card card-compact">

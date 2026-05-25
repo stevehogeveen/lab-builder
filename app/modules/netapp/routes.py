@@ -12,10 +12,24 @@ from jinja2 import Environment, FileSystemLoader, select_autoescape
 from app.modules.netapp.schemas import NetAppModuleContext
 from app.modules.netapp.service import NetAppModuleService
 from app.netapp import NetAppClient, NetAppConfig
-from app.netapp_upgrade import build_netapp_upgrade_plan, execute_netapp_upgrade
+from app.netapp_console import (
+    NetAppConsoleDiscovery,
+    discovery_candidates_payload,
+    execute_netapp_console_factory_reset,
+    probe_netapp_console_login,
+    serial_runtime_diagnostics as netapp_serial_runtime_diagnostics,
+)
+from app.netapp_upgrade import (
+    _software_update_is_running,
+    _software_update_reached_target,
+    build_ontap_upgrade_status,
+    build_netapp_upgrade_plan,
+    execute_netapp_upgrade,
+)
 from app.plan_renderer import build_token_map, render_command_preview, write_plan_artifacts
-from app.storage_profiles import build_protocol_profile
+from app.storage_profiles import build_naming, build_protocol_profile, normalize_lifs
 from app.upgrade_helper import record_upgrade_inventory
+from app.upgrade_panels import build_netapp_upgrade_panel
 from app.vmware import build_vmware_plan
 
 router = APIRouter()
@@ -28,6 +42,9 @@ template_env = Environment(
 )
 
 service = NetAppModuleService()
+NETAPP_FACTORY_RESET_CONFIRM = "FACTORY RESET NETAPP"
+NETAPP_CONSOLE_FACTORY_RESET_CONFIRM = "FACTORY RESET NETAPP CONSOLE"
+NETAPP_FACTORY_RESET_DOC_URL = "https://docs.netapp.com/us-en/ontap/system-admin/manage-node-boot-menu-task.html"
 
 
 def _lines(value: str) -> list[str]:
@@ -77,25 +94,27 @@ def _render_netapp_page(
 ):
     from app import main
 
+    if _cache_payload_discovery(context, payload):
+        main.save_kit_config(context["cfg"])
     plan = payload.get("plan") or {}
     profile = plan.get("protocol_profile") or {}
     settings = service.settings_context(context)
+    default_feedback = main.build_action_feedback(
+        "NetApp page loaded" if payload.get("action") == "overview" else ("NetApp settings saved" if saved else "NetApp dry-run review"),
+        "Showing saved NetApp settings and cached upgrade state. Click Read current NetApp when you want a live ONTAP refresh." if payload.get("action") == "overview" else ("Saved NetApp desired settings and rebuilt the dry-run plan." if saved else "Read-only discovery and validation are loaded for NetApp base workflow and selected storage profile."),
+        tone="ready" if payload.get("ok") or saved else "pending",
+        status_label="Ready" if payload.get("ok") else "Needs attention",
+        outcomes=[
+            f"Protocol profile: {str(profile.get('selected_protocol') or 'nfs').upper()}",
+            f"Cluster: {str((plan.get('adaptive_discovery') or {}).get('cluster_name') or (payload.get('discovery') or {}).get('cluster_name') or '(unknown)')}",
+        ],
+        details=([str(payload.get("error"))] if payload.get("error") else []) + list(payload.get("warnings") or []),
+    )
     return main.render_page(
         request,
         context["cfg"],
         active_page="netapp",
-        action_feedback=action_feedback
-        or main.build_action_feedback(
-            "NetApp settings saved" if saved else "NetApp dry-run review",
-            "Saved NetApp desired settings and rebuilt the dry-run plan." if saved else "Read-only discovery and validation are loaded for NetApp base workflow and selected storage profile.",
-            tone="ready" if payload.get("ok") or saved else "pending",
-            status_label="Ready" if payload.get("ok") else "Needs attention",
-            outcomes=[
-                f"Protocol profile: {str(profile.get('selected_protocol') or 'nfs').upper()}",
-                f"Cluster: {str((plan.get('adaptive_discovery') or {}).get('cluster_name') or (payload.get('discovery') or {}).get('cluster_name') or '(unknown)')}",
-            ],
-            details=([str(payload.get("error"))] if payload.get("error") else []) + list(payload.get("warnings") or []),
-        ),
+        action_feedback=action_feedback or default_feedback,
         extra_context={"netapp_payload": payload, "netapp_settings": settings, "netapp_export_paths": payload.get("export_paths") or {}},
     )
 
@@ -115,10 +134,21 @@ def _set_vmware_check(cfg: dict[str, Any], key: str, result: dict[str, Any]) -> 
 def _cache_discovery_summary(cfg: dict[str, Any], discovery: dict[str, Any]) -> None:
     cfg.setdefault("netapp", {})
     version = str(discovery.get("ontap_version") or "").strip()
-    cfg["netapp"]["last_discovered_ontap_version"] = version
-    cfg["netapp"]["last_discovered_cluster_name"] = str(discovery.get("cluster_name") or "").strip()
     if version:
+        cfg["netapp"]["last_discovered_ontap_version"] = version
         record_upgrade_inventory(cfg, "netapp", current_version=version, source="Last NetApp discovery", raw_version=version)
+    cluster_name = str(discovery.get("cluster_name") or "").strip()
+    if cluster_name:
+        cfg["netapp"]["last_discovered_cluster_name"] = cluster_name
+
+
+def _cache_payload_discovery(context: dict[str, Any], payload: dict[str, Any]) -> bool:
+    discovery = payload.get("discovery") or {}
+    if not payload.get("ok") or not discovery or not discovery.get("ontap_version"):
+        return False
+    _cache_discovery_summary(context["cfg"], discovery)
+    context["cfg"].setdefault("netapp", {})["nfs_capacity"] = service.nfs_capacity_context(context, discovery)
+    return True
 
 
 def _sync_discovered_values(cfg: dict[str, Any], discovery: dict[str, Any]) -> list[str]:
@@ -160,13 +190,360 @@ def _sync_discovered_values(cfg: dict[str, Any], discovery: dict[str, Any]) -> l
 
     discovered_nfs_lifs = [dict(item) for item in list(discovery.get("discovered_nfs_lifs") or []) if isinstance(item, dict)]
     if discovered_nfs_lifs:
+        discovered_nfs_svms = sorted({str(item.get("svm") or "").strip() for item in discovered_nfs_lifs if str(item.get("svm") or "").strip()})
+        if len(discovered_nfs_svms) == 1 and not str(desired.get("svm_name") or netapp_cfg.get("svm_name") or "").strip():
+            desired["svm_name"] = discovered_nfs_svms[0]
+            notes.append(f"SVM name set to {discovered_nfs_svms[0]} from discovered NFS LIFs.")
+        normalized_nfs_lifs = normalize_lifs(discovered_nfs_lifs)
         netapp_cfg.setdefault("nfs", {})
-        netapp_cfg["nfs"]["lifs"] = discovered_nfs_lifs
+        netapp_cfg["nfs"]["lifs"] = normalized_nfs_lifs
         desired.setdefault("nfs", {})
-        desired["nfs"]["lifs"] = discovered_nfs_lifs
-        notes.append(f"Captured {len(discovered_nfs_lifs)} discovered NFS LIFs.")
+        desired["nfs"]["lifs"] = normalized_nfs_lifs
+        notes.append(f"Captured {len(normalized_nfs_lifs)} discovered NFS LIFs.")
 
     return notes
+
+
+def _prepare_nfs_storage_defaults(cfg: dict[str, Any]) -> list[str]:
+    notes: list[str] = []
+    site_name = str(((cfg.get("site") or {}).get("name") or "Kit-01")).strip()
+    names = build_naming(site_name)
+    shared_subnet = str(((cfg.get("shared_network") or {}).get("subnet") or (cfg.get("ip_plan") or {}).get("subnet") or "10.10.8.0/24")).strip()
+    esxi_ip = str(((cfg.get("esxi") or {}).get("management_ip") or (cfg.get("ip_plan") or {}).get("esxi") or "")).strip()
+    cfg.setdefault("netapp", {})
+    netapp_cfg = cfg["netapp"]
+    if str(netapp_cfg.get("storage_protocol") or "").strip().lower() != "nfs":
+        notes.append("Selected NFS as the NetApp storage protocol.")
+    netapp_cfg["storage_protocol"] = "nfs"
+
+    desired = netapp_cfg.setdefault("desired", {})
+    existing_nfs = dict(netapp_cfg.get("nfs") or {})
+    desired_nfs = dict(desired.get("nfs") or {})
+    saved_lif_items = list(existing_nfs.get("lifs") or desired_nfs.get("lifs") or [])
+    discovered_svm = next((str((item or {}).get("svm") or "").strip() for item in saved_lif_items if isinstance(item, dict) and str((item or {}).get("svm") or "").strip()), "")
+    if not str(desired.get("svm_name") or netapp_cfg.get("svm_name") or "").strip():
+        desired["svm_name"] = discovered_svm or names["svm_name"]
+        notes.append(f"Set SVM name to {desired['svm_name']}.")
+
+    normalized_lifs = normalize_lifs(saved_lif_items)
+    current_export_policy = str(desired_nfs.get("export_policy") or existing_nfs.get("export_policy") or "").strip()
+    if not current_export_policy:
+        current_export_policy = names["nfs_export_policy"]
+        notes.append(f"Set NFS export policy to {current_export_policy}.")
+    cached_capacity = netapp_cfg.get("nfs_capacity") if isinstance(netapp_cfg.get("nfs_capacity"), dict) else {}
+    recommended_size = str((cached_capacity or {}).get("recommended_size") or "").strip()
+    current_size = str(desired_nfs.get("size") or existing_nfs.get("size") or "").strip()
+    if not current_size and recommended_size:
+        current_size = recommended_size
+        notes.append(f"Defaulted NFS datastore size to half of discovered free aggregate space: {current_size}.")
+    current_volume = str(desired_nfs.get("volume") or existing_nfs.get("volume") or "esxi_datastore_01").strip()
+    current_datastore_name = str(
+        desired_nfs.get("datastore_name")
+        or existing_nfs.get("datastore_name")
+        or (((cfg.get("vmware") or {}).get("nfs") or {}).get("datastore_name"))
+        or current_volume
+    ).strip()
+    nfs_defaults = {
+        "volume": current_volume,
+        "size": current_size,
+        "datastore_name": current_datastore_name,
+        "export_policy": current_export_policy,
+        "mount_path": str(desired_nfs.get("mount_path") or existing_nfs.get("mount_path") or f"/{current_volume}").strip(),
+        "allowed_subnet": str(desired_nfs.get("allowed_subnet") or existing_nfs.get("allowed_subnet") or shared_subnet).strip(),
+        "esxi_mount_targets": list(desired_nfs.get("esxi_mount_targets") or existing_nfs.get("esxi_mount_targets") or ([esxi_ip] if esxi_ip else [])),
+        "lifs": [dict(item) for item in normalized_lifs],
+    }
+    if esxi_ip and esxi_ip not in nfs_defaults["esxi_mount_targets"]:
+        nfs_defaults["esxi_mount_targets"].append(esxi_ip)
+        notes.append(f"Added ESXi {esxi_ip} as an NFS mount target.")
+    desired["nfs"] = nfs_defaults
+    netapp_cfg["nfs"] = {
+        **existing_nfs,
+        "export_policy": nfs_defaults["export_policy"],
+        "allowed_subnet": nfs_defaults["allowed_subnet"],
+        "size": nfs_defaults["size"],
+        "datastore_name": nfs_defaults["datastore_name"],
+        "lifs": [dict(item) for item in normalized_lifs],
+    }
+    cfg.setdefault("vmware", {})
+    if not isinstance(cfg["vmware"].get("nfs"), dict):
+        cfg["vmware"]["nfs"] = {}
+    cfg["vmware"]["nfs"]["datastore_name"] = current_datastore_name
+    if normalized_lifs:
+        notes.append(f"Prepared {len(normalized_lifs)} NFS data LIFs for planning.")
+    else:
+        notes.append("No NFS data LIFs are saved yet. Use Read current NetApp or edit desired NFS LIFs before applying.")
+    return notes
+
+
+def _build_netapp_factory_reset_plan(cfg: dict[str, Any]) -> dict[str, Any]:
+    netapp_cfg = cfg.get("netapp") or {}
+    management = netapp_cfg.get("management") or {}
+    bootstrap = netapp_cfg.get("bootstrap_overrides") or {}
+    node_names = list(((netapp_cfg.get("discovery") or {}).get("node_names")) or [])
+    if not node_names:
+        node_names = ["node-1", "node-2"]
+    node_01_ip = str(management.get("node_01_mgmt_ip") or bootstrap.get("netapp_node_01_mgmt") or "").strip()
+    node_02_ip = str(management.get("node_02_mgmt_ip") or bootstrap.get("netapp_node_02_mgmt") or "").strip()
+    sp_a = str(bootstrap.get("netapp_sp_a") or "").strip()
+    sp_b = str(bootstrap.get("netapp_sp_b") or "").strip()
+    cluster_name = str(netapp_cfg.get("last_discovered_cluster_name") or netapp_cfg.get("cluster_name") or ((netapp_cfg.get("desired") or {}).get("cluster_name")) or "").strip()
+    steps = [
+        "Disconnect or unmount ESXi/vCenter datastores that use this NetApp before wiping.",
+        "Use the SP/BMC or serial console for each controller. Do not rely on the cluster API for the wipe itself.",
+        "Reboot one node to the ONTAP boot menu, press Ctrl-C when prompted, then select option 4 to clean configuration and initialize all disks.",
+        "Repeat the boot-menu wipe on the partner node only when it is safe and not taken over.",
+        "If the system uses root-data partitioning or encrypted drives, follow NetApp boot-menu guidance before selecting the wipe option.",
+        "After both nodes are initialized, return to this page and rerun the NetApp bootstrap plan.",
+    ]
+    return {
+        "status": "planned",
+        "mode": "manual_console_required",
+        "target_host": str(netapp_cfg.get("host") or "").strip(),
+        "cluster_name": cluster_name,
+        "nodes": node_names,
+        "node_management_ips": [item for item in [node_01_ip, node_02_ip] if item],
+        "sp_targets": [item for item in [sp_a, sp_b] if item],
+        "confirmation_phrase": NETAPP_FACTORY_RESET_CONFIRM,
+        "warnings": [
+            "This is destructive and erases ONTAP configuration and data on the selected node disks.",
+            "The app does not automatically select ONTAP boot-menu wipe options; a human must perform the console step.",
+            "Do not run a boot-menu wipe on an HA node that has been taken over.",
+            "SED/NSE/FIPS drives need the NetApp protected-drive procedure before initialization.",
+        ],
+        "manual_steps": steps,
+        "reference_url": NETAPP_FACTORY_RESET_DOC_URL,
+        "created_at": datetime.now(timezone.utc).isoformat(),
+    }
+
+
+def _clear_netapp_runtime_state_after_factory_reset(cfg: dict[str, Any]) -> list[str]:
+    netapp_cfg = cfg.setdefault("netapp", {})
+    cleared: list[str] = []
+    for key in (
+        "bootstrap_checks",
+        "discovery",
+        "last_factory_reset",
+        "nfs_capacity",
+        "upgrade",
+        "validation",
+        "vmware_checks",
+    ):
+        if key in netapp_cfg:
+            netapp_cfg.pop(key, None)
+            cleared.append(key)
+    for key in ("last_discovered_ontap_version", "last_discovered_cluster_name"):
+        if netapp_cfg.get(key):
+            netapp_cfg[key] = ""
+            cleared.append(key)
+    netapp_cfg["bootstrap_complete"] = False
+    if "upgrade_inventory" in cfg and isinstance(cfg["upgrade_inventory"], dict):
+        cfg["upgrade_inventory"]["netapp"] = {"current_version": "", "source": "", "last_checked_at": ""}
+        cleared.append("upgrade_inventory.netapp")
+    return cleared
+
+
+def _netapp_console_cfg(cfg: dict[str, Any]) -> dict[str, Any]:
+    netapp_cfg = cfg.setdefault("netapp", {})
+    console = netapp_cfg.setdefault("console", {})
+    console.setdefault("port", "")
+    console.setdefault("baud", 115200)
+    console.setdefault("username", str(netapp_cfg.get("username") or "admin").strip() or "admin")
+    console.setdefault("password", "")
+    console.setdefault("node_reboot_command", "")
+    console.setdefault("boot_menu_option", "4")
+    console.setdefault("last_candidates", [])
+    console.setdefault("last_probe", {})
+    console.setdefault("last_diagnostics", {})
+    console.setdefault("last_raw_output", "")
+    console.setdefault("last_reset", {})
+    return console
+
+
+def _apply_netapp_console_form_state(cfg: dict[str, Any], form: dict[str, Any]) -> None:
+    console = _netapp_console_cfg(cfg)
+    netapp_cfg = cfg.setdefault("netapp", {})
+    if "netapp_console_port" in form:
+        console["port"] = str(form.get("netapp_console_port") or "").strip()
+    if "netapp_console_baud" in form:
+        try:
+            console["baud"] = int(str(form.get("netapp_console_baud") or console.get("baud") or 115200).strip())
+        except ValueError:
+            console["baud"] = 115200
+    if "netapp_console_username" in form:
+        console["username"] = str(form.get("netapp_console_username") or console.get("username") or netapp_cfg.get("username") or "admin").strip()
+    console_password = str(form.get("netapp_console_password") or "")
+    if console_password:
+        console["password"] = console_password
+    if "netapp_console_reboot_command" in form:
+        console["node_reboot_command"] = str(form.get("netapp_console_reboot_command") or "").strip()
+    if "netapp_console_boot_menu_option" in form:
+        console["boot_menu_option"] = str(form.get("netapp_console_boot_menu_option") or console.get("boot_menu_option") or "4").strip()
+    if "netapp_console_reset_node_name" in form:
+        console["reset_node_name"] = str(form.get("netapp_console_reset_node_name") or "").strip()
+    if "netapp_console_partner_node_name" in form:
+        console["partner_node_name"] = str(form.get("netapp_console_partner_node_name") or "").strip()
+    if "netapp_console_disable_storage_failover" in form:
+        console["disable_storage_failover"] = str(form.get("netapp_console_disable_storage_failover") or "").strip().lower() in {"1", "true", "yes", "on"}
+    if "netapp_console_disable_partner_storage_failover" in form:
+        console["disable_partner_storage_failover"] = str(form.get("netapp_console_disable_partner_storage_failover") or "").strip().lower() in {"1", "true", "yes", "on"}
+    if "netapp_console_halt_partner_before_reset" in form:
+        console["halt_partner_before_reset"] = str(form.get("netapp_console_halt_partner_before_reset") or "").strip().lower() in {"1", "true", "yes", "on"}
+    if "netapp_console_normal_boot_after_wipe" in form:
+        console["normal_boot_after_wipe"] = str(form.get("netapp_console_normal_boot_after_wipe") or "").strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _netapp_console_failure_summary(diagnostics: dict[str, Any], probe_results: list[dict[str, Any]], *, exception: str = "") -> tuple[str, list[str]]:
+    suggestions: list[str] = []
+    ordered_ports = [str(item).strip() for item in list(diagnostics.get("ordered_ports") or []) if str(item).strip()]
+    device_access = list(diagnostics.get("device_access") or [])
+    probe_errors = [str(item.get("error") or "").strip() for item in probe_results if str(item.get("error") or "").strip()]
+    permission_denied = any("permission denied" in error.lower() for error in probe_errors)
+    permission_denied = permission_denied or any(
+        item.get("path") and (item.get("readable") is False or item.get("writable") is False)
+        for item in device_access
+    )
+
+    if exception and "pyserial" in exception.lower():
+        summary = "NetApp console access cannot start because pyserial is not installed in the app environment."
+        suggestions.append("Install the Python dependency set, then restart Lab Builder so serial support loads.")
+    elif not diagnostics.get("serial_imported"):
+        summary = "NetApp console access cannot start because pyserial is not installed in the app environment."
+        suggestions.append("Install pyserial from the project requirements and restart Lab Builder.")
+    elif not ordered_ports:
+        summary = "No USB serial console adapter was detected by the Lab Builder server."
+        suggestions.extend(
+            [
+                "Connect the NetApp console adapter and confirm the host sees /dev/ttyUSB* or /dev/ttyACM*.",
+                "If the adapter was just connected, wait a few seconds and detect the console again.",
+            ]
+        )
+    elif permission_denied:
+        diagnostics["permission_denied"] = True
+        user = str(diagnostics.get("user") or "the Lab Builder service user")
+        summary = f"The server can see the serial adapter, but {user} cannot open it."
+        suggestions.append("Grant the Lab Builder server user read/write access to the serial device, usually through the dialout group.")
+    elif probe_errors and len(probe_errors) >= max(1, len(probe_results)):
+        summary = "Every detected serial adapter probe failed before Lab Builder could read a NetApp prompt."
+        suggestions.append("Review the probe errors below; the first failure usually identifies the bad device path, lock, or driver issue.")
+    elif probe_results:
+        saw_output = any(str(item.get("raw_output") or "").strip() for item in probe_results)
+        summary = "A serial adapter responded, but the output did not look like a NetApp console prompt." if saw_output else "The serial adapter opened successfully, but no NetApp console output was received."
+        suggestions.extend(
+            [
+                "Press Enter on the console or power-cycle the controller, then detect again.",
+                "Try both 115200 and 9600 baud if the output looks blank or garbled.",
+                "Confirm the selected adapter is connected to the NetApp serial console port.",
+            ]
+        )
+    else:
+        summary = str(exception or "No NetApp console prompt was detected.").strip()
+        suggestions.append("Check the console cable, controller power state, and serial adapter mapping, then detect again.")
+
+    diagnostics["error_summary"] = summary
+    diagnostics["suggestions"] = suggestions
+    return summary, suggestions
+
+
+def _discover_netapp_console(cfg: dict[str, Any]) -> dict[str, Any]:
+    diagnostics = netapp_serial_runtime_diagnostics()
+    try:
+        candidates = NetAppConsoleDiscovery().scan()
+    except Exception as exc:
+        summary, suggestions = _netapp_console_failure_summary(diagnostics, [], exception=str(exc))
+        return {
+            "ok": False,
+            "error": summary,
+            "warnings": [],
+            "suggestions": suggestions,
+            "candidates": [],
+            "probe_results": [],
+            "diagnostics": diagnostics,
+        }
+    matches = [item for item in candidates if item.score >= 50]
+    probe_results = discovery_candidates_payload(candidates, include_raw=True)
+    diagnostics["probe_results"] = [{key: value for key, value in item.items() if key != "raw_output"} for item in probe_results]
+    summary = ""
+    suggestions: list[str] = []
+    if not matches:
+        summary, suggestions = _netapp_console_failure_summary(diagnostics, probe_results)
+    return {
+        "ok": bool(matches),
+        "error": "" if matches else summary,
+        "warnings": ["Multiple NetApp console candidates were detected. Select the intended console port before running a reset."] if len(matches) > 1 else [],
+        "suggestions": suggestions,
+        "candidates": discovery_candidates_payload(matches, include_raw=True),
+        "probe_results": probe_results,
+        "diagnostics": diagnostics,
+    }
+
+
+def _probe_selected_netapp_console(cfg: dict[str, Any]) -> dict[str, Any]:
+    console = _netapp_console_cfg(cfg)
+    return probe_netapp_console_login(
+        port=str(console.get("port") or "").strip(),
+        baud=int(console.get("baud") or 115200),
+        username=str(console.get("username") or cfg.get("netapp", {}).get("username") or "admin").strip(),
+        password=str(console.get("password") or cfg.get("netapp", {}).get("password") or ""),
+    )
+
+
+def _start_netapp_console_factory_reset_worker(cfg: dict[str, Any], options: dict[str, Any]) -> dict[str, Any]:
+    from app import main
+
+    kit_name = str((cfg.get("site") or {}).get("name") or main.get_current_kit_name())
+    operation_id = f"netapp-console-reset-{datetime.now(timezone.utc).strftime('%Y%m%d%H%M%S')}"
+    started_at = datetime.now(timezone.utc).isoformat()
+    console = _netapp_console_cfg(cfg)
+    running = {
+        "operation_id": operation_id,
+        "status": "running",
+        "ok": False,
+        "started_at": started_at,
+        "port": str(options.get("port") or console.get("port") or ""),
+        "baud": int(options.get("baud") or console.get("baud") or 115200),
+        "message": "NetApp console factory reset sequence started.",
+    }
+    console["last_reset"] = running
+    main.save_kit_config(cfg)
+
+    def worker() -> None:
+        worker_cfg = main.load_kit_config(kit_name)
+        worker_console = _netapp_console_cfg(worker_cfg)
+        try:
+            result = execute_netapp_console_factory_reset(
+                port=str(options.get("port") or ""),
+                baud=int(options.get("baud") or 115200),
+                username=str(options.get("username") or ""),
+                password=str(options.get("password") or ""),
+                reboot_command=str(options.get("reboot_command") or ""),
+                boot_menu_option=str(options.get("boot_menu_option") or "4"),
+                boot_wait_seconds=int(options.get("boot_wait_seconds") or 240),
+                wipe_wait_seconds=int(options.get("wipe_wait_seconds") or 1800),
+                reset_node_name=str(options.get("reset_node_name") or ""),
+                partner_node_name=str(options.get("partner_node_name") or ""),
+                disable_storage_failover=bool(options.get("disable_storage_failover", False)),
+                disable_partner_storage_failover=bool(options.get("disable_partner_storage_failover", False)),
+                halt_partner_before_reset=bool(options.get("halt_partner_before_reset", False)),
+                normal_boot_after_wipe=bool(options.get("normal_boot_after_wipe", True)),
+            )
+        except Exception as exc:
+            result = {"ok": False, "status": "failed", "error": str(exc).splitlines()[0], "raw_output": ""}
+        finished = {
+            **{key: value for key, value in result.items() if key != "raw_output"},
+            "operation_id": operation_id,
+            "finished_at": datetime.now(timezone.utc).isoformat(),
+        }
+        if result.get("raw_output"):
+            worker_console["last_raw_output"] = str(result.get("raw_output") or "")
+        if result.get("ok") and options.get("clear_saved_state"):
+            finished["cleared_local_state"] = _clear_netapp_runtime_state_after_factory_reset(worker_cfg)
+        worker_console["last_reset"] = finished
+        main.save_kit_config(worker_cfg)
+
+    thread = threading.Thread(target=worker, name=operation_id, daemon=True)
+    thread.start()
+    return running
 
 
 def _store_netapp_upgrade_plan(cfg: dict[str, Any], plan: dict) -> None:
@@ -293,6 +670,162 @@ def _read_current_ontap_version_for_upgrade(cfg: dict[str, Any]) -> tuple[str, l
     return version, notes
 
 
+def _netapp_upgrade_target_version(cfg: dict[str, Any]) -> str:
+    upgrade = ((cfg.get("netapp") or {}).get("upgrade") or {})
+    for source in (upgrade.get("last_plan") or {}, upgrade.get("last_result") or {}, upgrade.get("activity") or {}):
+        for key in ("media_version", "target_version", "pending_version"):
+            value = str((source or {}).get(key) or "").strip()
+            if value:
+                return value
+    return ""
+
+
+def _software_update_progress_percent(payload: dict[str, Any]) -> int:
+    try:
+        elapsed = int(str(payload.get("elapsed_duration") or ""))
+        estimated = int(str(payload.get("estimated_duration") or ""))
+    except (TypeError, ValueError):
+        return 85
+    if estimated <= 0:
+        return 85
+    return min(99, max(70, 70 + int((elapsed / estimated) * 29)))
+
+
+def _reconcile_running_netapp_upgrade(cfg: dict[str, Any]) -> bool:
+    upgrade = cfg.setdefault("netapp", {}).setdefault("upgrade", {})
+    activity = dict(upgrade.get("activity") or {})
+    if str(activity.get("status") or "").lower() != "running":
+        return False
+
+    target_version = _netapp_upgrade_target_version(cfg)
+    netapp_cfg = cfg.setdefault("netapp", {})
+    host = str(netapp_cfg.get("host") or "").strip()
+    username = str(netapp_cfg.get("username") or "admin").strip()
+    password = str(netapp_cfg.get("password") or "")
+    if not target_version or not host or not username or not password:
+        return False
+
+    try:
+        client = NetAppClient(NetAppConfig(host=host, username=username, password=password, verify_tls=False, timeout=5))
+        software = client.get_cluster_software()
+    except Exception:
+        return False
+
+    current_version = str(software.get("version") or "").strip()
+    pending_version = str(software.get("pending_version") or "").strip()
+    software_state = str(software.get("state") or "").strip().lower()
+    now = datetime.now(timezone.utc).isoformat()
+
+    if _software_update_reached_target(software, target_version):
+        result = {
+            "status": "completed",
+            "host": host,
+            "previous_version": str((upgrade.get("last_plan") or {}).get("current_version") or ""),
+            "target_version": target_version,
+            "current_version": current_version or target_version,
+            "raw": software,
+            "completed_at": now,
+            "source": "Live ONTAP activity reconciliation",
+        }
+        upgrade["last_result"] = result
+        record_upgrade_inventory(
+            cfg,
+            "netapp",
+            current_version=current_version or target_version,
+            raw_version=current_version or target_version,
+            source="Live ONTAP activity reconciliation",
+        )
+        _record_netapp_upgrade_activity(
+            cfg,
+            {
+                "phase": "complete",
+                "message": f"ONTAP upgrade completed to {current_version or target_version}.",
+                "timestamp": now,
+                "progress_percent": 100,
+                "software_state": software_state or "completed",
+                "pending_version": pending_version,
+                "current_version": current_version,
+                "status_details": software.get("status_details") or [],
+                "update_details": software.get("update_details") or [],
+                "result": result,
+            },
+            status="completed",
+        )
+        return True
+
+    if software_state in {"failed", "failure", "canceled", "cancelled"}:
+        message = f"ONTAP software update state is {software_state or 'failed'} while targeting {target_version}."
+        upgrade["last_result"] = {"status": "failed", "error": message, "raw": software}
+        _record_netapp_upgrade_activity(
+            cfg,
+            {
+                "phase": "failed",
+                "message": message,
+                "timestamp": now,
+                "progress_percent": 100,
+                "software_state": software_state,
+                "pending_version": pending_version,
+                "current_version": current_version,
+                "status_details": software.get("status_details") or [],
+                "update_details": software.get("update_details") or [],
+            },
+            status="failed",
+        )
+        return True
+
+    if software_state in {"paused", "pause"}:
+        message = f"ONTAP software update is paused while targeting {target_version}."
+        upgrade["last_result"] = {"status": "blocked", "error": message, "raw": software}
+        _record_netapp_upgrade_activity(
+            cfg,
+            {
+                "phase": "blocked",
+                "message": message,
+                "timestamp": now,
+                "progress_percent": 100,
+                "software_state": software_state,
+                "pending_version": pending_version,
+                "current_version": current_version,
+                "status_details": software.get("status_details") or [],
+                "update_details": software.get("update_details") or [],
+            },
+            status="blocked",
+        )
+        return True
+
+    if _software_update_is_running(software):
+        message = f"ONTAP software state: {software_state or 'unknown'}; current {current_version or 'unknown'}; pending {pending_version or target_version}."
+        if str(activity.get("message") or "") == message:
+            return False
+        upgrade["last_result"] = {
+            "status": "running",
+            "message": message,
+            "target_version": target_version,
+            "current_version": current_version,
+            "raw": software,
+        }
+        _record_netapp_upgrade_activity(
+            cfg,
+            {
+                "phase": "upgrade",
+                "message": message,
+                "timestamp": now,
+                "progress_percent": _software_update_progress_percent(software),
+                "software_state": software_state,
+                "pending_version": pending_version,
+                "current_version": current_version,
+                "elapsed_duration": software.get("elapsed_duration"),
+                "estimated_duration": software.get("estimated_duration"),
+                "status_details": software.get("status_details") or [],
+                "update_details": software.get("update_details") or [],
+            },
+            status="running",
+        )
+        return True
+
+    return False
+
+
 def _apply_current_netapp_convention(cfg: dict[str, Any]) -> list[str]:
     from app.core.config import ip_at_offset
 
@@ -348,6 +881,7 @@ def _apply_live_netapp_form_state(cfg: dict[str, Any], form: dict[str, Any]) -> 
     password = str(form.get("netapp_password") or "")
     if password:
         cfg["netapp"]["password"] = password
+    _apply_netapp_console_form_state(cfg, form)
     protocol = str(form.get("netapp_storage_protocol") or cfg["netapp"].get("storage_protocol") or "nfs").strip().lower()
     cfg["netapp"]["storage_protocol"] = protocol if protocol in {"iscsi", "nfs"} else "nfs"
     cfg["netapp"]["bootstrap_overrides"] = {
@@ -358,6 +892,25 @@ def _apply_live_netapp_form_state(cfg: dict[str, Any], form: dict[str, Any]) -> 
         "netapp_node_02_mgmt": str(form.get("netapp_node_02_mgmt_ip") or ((cfg["netapp"].get("bootstrap_overrides") or {}).get("netapp_node_02_mgmt")) or "").strip(),
         "netapp_svm_mgmt": str(form.get("netapp_svm_mgmt_ip") or ((cfg["netapp"].get("bootstrap_overrides") or {}).get("netapp_svm_mgmt")) or "").strip(),
     }
+    if any(key in form for key in {"nfs_volume", "nfs_size", "nfs_datastore_name", "nfs_export_policy", "nfs_mount_path", "nfs_esxi_mount_targets", "nfs_lifs"}):
+        desired = cfg["netapp"].setdefault("desired", {})
+        existing_nfs = dict(desired.get("nfs") or {})
+        nfs_volume = str(form.get("nfs_volume") or existing_nfs.get("volume") or "esxi_datastore_01").strip()
+        datastore_name = str(form.get("nfs_datastore_name") or existing_nfs.get("datastore_name") or nfs_volume).strip()
+        desired["nfs"] = {
+            **existing_nfs,
+            "volume": nfs_volume,
+            "size": str(form.get("nfs_size") or existing_nfs.get("size") or "").strip(),
+            "datastore_name": datastore_name,
+            "export_policy": str(form.get("nfs_export_policy") or existing_nfs.get("export_policy") or "").strip(),
+            "mount_path": str(form.get("nfs_mount_path") or existing_nfs.get("mount_path") or f"/{nfs_volume}").strip(),
+            "esxi_mount_targets": _lines(str(form.get("nfs_esxi_mount_targets") or "")) or list(existing_nfs.get("esxi_mount_targets") or []),
+            "lifs": _parse_lifs(str(form.get("nfs_lifs") or "")) or list(existing_nfs.get("lifs") or []),
+        }
+        cfg.setdefault("vmware", {})
+        if not isinstance(cfg["vmware"].get("nfs"), dict):
+            cfg["vmware"]["nfs"] = {}
+        cfg["vmware"]["nfs"]["datastore_name"] = datastore_name
 
 
 def _apply_settings_to_cfg(
@@ -407,6 +960,8 @@ def _apply_settings_to_cfg(
     iscsi_lun: str,
     iscsi_vmfs_datastore: str,
     nfs_volume: str,
+    nfs_size: str,
+    nfs_datastore_name: str,
     nfs_export_policy: str,
     nfs_mount_path: str,
     nfs_esxi_mount_targets: str,
@@ -419,9 +974,9 @@ def _apply_settings_to_cfg(
     existing_iscsi = dict((existing_desired.get("iscsi") or {}))
     existing_nfs = dict((existing_desired.get("nfs") or {}))
     try:
-        mtu_value = int(str(target_mtu or "9000").strip())
+        mtu_value = int(str(target_mtu or "1500").strip())
     except ValueError:
-        mtu_value = 9000
+        mtu_value = 1500
     try:
         diskcount_value = int(str(aggregate_diskcount or "11").strip())
     except ValueError:
@@ -429,7 +984,13 @@ def _apply_settings_to_cfg(
     protocol = str(netapp_storage_protocol or "nfs").strip().lower()
     if protocol not in {"iscsi", "nfs"}:
         protocol = "nfs"
+    nfs_datastore_label = nfs_datastore_name.strip() or str(existing_nfs.get("datastore_name") or nfs_volume.strip() or "esxi_datastore_01")
     cfg.setdefault("netapp", {})
+    cfg.setdefault("vmware", {})
+    if not isinstance(cfg["vmware"].get("nfs"), dict):
+        cfg["vmware"]["nfs"] = {}
+    if nfs_datastore_label:
+        cfg["vmware"]["nfs"]["datastore_name"] = nfs_datastore_label
     cfg["netapp"]["bootstrap_overrides"] = {
         "netapp_sp_a": netapp_sp_a_ip.strip(),
         "netapp_sp_b": netapp_sp_b_ip.strip(),
@@ -445,6 +1006,7 @@ def _apply_settings_to_cfg(
             "password": netapp_password if netapp_password else existing_password,
             "storage_protocol": protocol,
             "bootstrap_complete": bool(bootstrap_complete),
+            "mtu": mtu_value,
             "command_templates": {
                 "iscsi": netapp_iscsi_commands if netapp_iscsi_commands else str((((cfg.get("netapp") or {}).get("command_templates") or {}).get("iscsi")) or ""),
                 "nfs": netapp_nfs_commands if netapp_nfs_commands else str((((cfg.get("netapp") or {}).get("command_templates") or {}).get("nfs")) or ""),
@@ -486,6 +1048,8 @@ def _apply_settings_to_cfg(
                 },
                 "nfs": {
                     "volume": nfs_volume.strip() or str(existing_nfs.get("volume") or ""),
+                    "size": nfs_size.strip() or str(existing_nfs.get("size") or ""),
+                    "datastore_name": nfs_datastore_label,
                     "export_policy": nfs_export_policy.strip() or str(existing_nfs.get("export_policy") or ""),
                     "mount_path": nfs_mount_path.strip() or str(existing_nfs.get("mount_path") or ""),
                     "esxi_mount_targets": _lines(nfs_esxi_mount_targets) or list(existing_nfs.get("esxi_mount_targets") or []),
@@ -524,7 +1088,7 @@ def _render_template(template_name: str, context: dict[str, Any]) -> str:
 @router.get("/modules/netapp", response_class=HTMLResponse)
 async def netapp_module_page(request: Request):
     context = _module_context(request)
-    payload = service.plan(context)
+    payload = service.page_overview(context)
     return _render_netapp_page(request, context, payload)
 
 
@@ -547,7 +1111,7 @@ async def netapp_save_settings(
     required_nodes: str = Form(""),
     expected_ports: str = Form(""),
     data_broadcast_domain: str = Form("Data"),
-    target_mtu: str = Form("9000"),
+    target_mtu: str = Form("1500"),
     aggregate_node_01: str = Form("aggr_01"),
     aggregate_node_02: str = Form("aggr_02"),
     aggregate_diskcount: str = Form("11"),
@@ -575,6 +1139,8 @@ async def netapp_save_settings(
     iscsi_lun: str = Form("esxi_lun01"),
     iscsi_vmfs_datastore: str = Form("vmfs_ds01"),
     nfs_volume: str = Form("esxi_datastore_01"),
+    nfs_size: str = Form(""),
+    nfs_datastore_name: str = Form(""),
     nfs_export_policy: str = Form("esxi_nfs_policy"),
     nfs_mount_path: str = Form("/esxi_datastore_01"),
     nfs_esxi_mount_targets: str = Form(""),
@@ -632,6 +1198,8 @@ async def netapp_save_settings(
         iscsi_lun=iscsi_lun,
         iscsi_vmfs_datastore=iscsi_vmfs_datastore,
         nfs_volume=nfs_volume,
+        nfs_size=nfs_size,
+        nfs_datastore_name=nfs_datastore_name,
         nfs_export_policy=nfs_export_policy,
         nfs_mount_path=nfs_mount_path,
         nfs_esxi_mount_targets=nfs_esxi_mount_targets,
@@ -639,10 +1207,34 @@ async def netapp_save_settings(
         netapp_iscsi_commands=netapp_iscsi_commands,
         netapp_nfs_commands=netapp_nfs_commands,
     )
+    _apply_netapp_console_form_state(cfg, {key: value for key, value in dict(await request.form()).items()})
     main.save_kit_config(cfg)
     context = _module_context(request)
     payload = service.plan(context)
     return _render_netapp_page(request, context, payload, saved=True)
+
+
+@router.post("/modules/netapp/prepare-nfs-storage", response_class=HTMLResponse)
+async def netapp_prepare_nfs_storage(request: Request):
+    from app import main
+
+    context = _module_context(request)
+    cfg = context["cfg"]
+    form = {key: value for key, value in dict(await request.form()).items()}
+    _apply_live_netapp_form_state(cfg, form)
+    notes = _prepare_nfs_storage_defaults(cfg)
+    main.save_kit_config(cfg)
+    context = _module_context(request)
+    payload = service.page_overview(context)
+    payload.setdefault("suggestions", [])
+    payload["suggestions"] = notes + list(payload.get("suggestions") or [])
+    feedback = main.build_action_feedback(
+        "NFS storage defaults prepared",
+        "NetApp is set to NFS and the datastore, export policy, ESXi target, and saved NFS LIF values are ready for discovery and validation.",
+        tone="ready",
+        outcomes=notes,
+    )
+    return _render_netapp_page(request, context, payload, saved=True, action_feedback=feedback)
 
 
 @router.post("/modules/netapp/test-connection", response_class=HTMLResponse)
@@ -664,7 +1256,7 @@ async def netapp_test_connection(
     required_nodes: str = Form(""),
     expected_ports: str = Form(""),
     data_broadcast_domain: str = Form("Data"),
-    target_mtu: str = Form("9000"),
+    target_mtu: str = Form("1500"),
     aggregate_node_01: str = Form("aggr_01"),
     aggregate_node_02: str = Form("aggr_02"),
     aggregate_diskcount: str = Form("11"),
@@ -692,6 +1284,8 @@ async def netapp_test_connection(
     iscsi_lun: str = Form("esxi_lun01"),
     iscsi_vmfs_datastore: str = Form("vmfs_ds01"),
     nfs_volume: str = Form("esxi_datastore_01"),
+    nfs_size: str = Form(""),
+    nfs_datastore_name: str = Form(""),
     nfs_export_policy: str = Form("esxi_nfs_policy"),
     nfs_mount_path: str = Form("/esxi_datastore_01"),
     nfs_esxi_mount_targets: str = Form(""),
@@ -749,6 +1343,8 @@ async def netapp_test_connection(
         iscsi_lun=iscsi_lun,
         iscsi_vmfs_datastore=iscsi_vmfs_datastore,
         nfs_volume=nfs_volume,
+        nfs_size=nfs_size,
+        nfs_datastore_name=nfs_datastore_name,
         nfs_export_policy=nfs_export_policy,
         nfs_mount_path=nfs_mount_path,
         nfs_esxi_mount_targets=nfs_esxi_mount_targets,
@@ -756,6 +1352,7 @@ async def netapp_test_connection(
         netapp_iscsi_commands=netapp_iscsi_commands,
         netapp_nfs_commands=netapp_nfs_commands,
     )
+    _apply_netapp_console_form_state(cfg, {key: value for key, value in dict(await request.form()).items()})
     main.save_kit_config(cfg)
     context = _module_context(request)
     payload = service.test_connection(context)
@@ -793,7 +1390,7 @@ async def netapp_discover_page(
         required_nodes="",
         expected_ports="",
         data_broadcast_domain=str((cfg.get("netapp") or {}).get("data_broadcast_domain") or "Data"),
-        target_mtu=str((cfg.get("netapp") or {}).get("mtu") or 9000),
+        target_mtu=str((cfg.get("netapp") or {}).get("mtu") or 1500),
         aggregate_node_01=str((cfg.get("netapp") or {}).get("aggregate_node_01") or "aggr_01"),
         aggregate_node_02=str((cfg.get("netapp") or {}).get("aggregate_node_02") or "aggr_02"),
         aggregate_diskcount="11",
@@ -820,19 +1417,23 @@ async def netapp_discover_page(
         iscsi_igroup="",
         iscsi_lun="esxi_lun01",
         iscsi_vmfs_datastore="vmfs_ds01",
-        nfs_volume="esxi_datastore_01",
-        nfs_export_policy="",
-        nfs_mount_path="/esxi_datastore_01",
+        nfs_volume=str(((((cfg.get("netapp") or {}).get("desired") or {}).get("nfs") or {}).get("volume")) or "esxi_datastore_01"),
+        nfs_size=str(((((cfg.get("netapp") or {}).get("desired") or {}).get("nfs") or {}).get("size")) or ""),
+        nfs_datastore_name=str(((((cfg.get("netapp") or {}).get("desired") or {}).get("nfs") or {}).get("datastore_name")) or ((((cfg.get("vmware") or {}).get("nfs") or {}).get("datastore_name")) or "")),
+        nfs_export_policy=str(((((cfg.get("netapp") or {}).get("desired") or {}).get("nfs") or {}).get("export_policy")) or ""),
+        nfs_mount_path=str(((((cfg.get("netapp") or {}).get("desired") or {}).get("nfs") or {}).get("mount_path")) or "/esxi_datastore_01"),
         nfs_esxi_mount_targets="",
         nfs_lifs="",
         netapp_iscsi_commands=str((((cfg.get("netapp") or {}).get("command_templates") or {}).get("iscsi")) or ""),
         netapp_nfs_commands=str((((cfg.get("netapp") or {}).get("command_templates") or {}).get("nfs")) or ""),
     )
+    _apply_netapp_console_form_state(cfg, {key: value for key, value in dict(await request.form()).items()})
     main.save_kit_config(cfg)
     context = _module_context(request)
     payload = service.discover(context)
     if payload.get("ok") and payload.get("discovery"):
         _cache_discovery_summary(cfg, payload["discovery"])
+        cfg.setdefault("netapp", {})["nfs_capacity"] = service.nfs_capacity_context(context, payload["discovery"])
         main.save_kit_config(cfg)
         context = _module_context(request)
     return _render_netapp_page(request, context, payload)
@@ -896,6 +1497,7 @@ async def netapp_use_discovered_values(request: Request):
         return _render_netapp_page(request, context, discover_payload, action_feedback=feedback)
 
     _cache_discovery_summary(cfg, discover_payload["discovery"])
+    cfg.setdefault("netapp", {})["nfs_capacity"] = service.nfs_capacity_context(context, discover_payload["discovery"])
     sync_notes = _sync_discovered_values(cfg, discover_payload["discovery"])
     main.save_kit_config(cfg)
     context = _module_context(request)
@@ -954,6 +1556,282 @@ async def netapp_update_convention(request: Request):
     return _render_netapp_page(request, context, payload, saved=True, action_feedback=feedback)
 
 
+@router.post("/modules/netapp/console-discover", response_class=HTMLResponse)
+async def netapp_console_discover(request: Request):
+    from app import main
+
+    context = _module_context(request)
+    cfg = context["cfg"]
+    form = {key: value for key, value in dict(await request.form()).items()}
+    _apply_live_netapp_form_state(cfg, form)
+    result = _discover_netapp_console(cfg)
+    console = _netapp_console_cfg(cfg)
+    candidates = list(result.get("candidates") or [])
+    probe_results = list(result.get("probe_results") or [])
+    diagnostics = dict(result.get("diagnostics") or {})
+    suggestions = list(result.get("suggestions") or diagnostics.get("suggestions") or [])
+    console["last_candidates"] = [{key: value for key, value in item.items() if key != "raw_output"} for item in candidates]
+    console["last_probe_results"] = [{key: value for key, value in item.items() if key != "raw_output"} for item in probe_results]
+    console["last_diagnostics"] = diagnostics
+    console["last_raw_output"] = "\n\n".join(str(item.get("raw_output") or "") for item in candidates if item.get("raw_output"))
+    if len(candidates) == 1:
+        console["port"] = str(candidates[0].get("port") or "")
+        console["baud"] = int(candidates[0].get("baud") or 115200)
+    main.save_kit_config(cfg)
+
+    details = list(result.get("warnings") or []) + suggestions
+    if diagnostics:
+        details.extend(
+            [
+                f"pyserial import status: {'ready' if diagnostics.get('serial_imported') else 'missing'}",
+                f"Visible serial ports: {', '.join(list(diagnostics.get('ordered_ports') or [])) or 'none'}",
+            ]
+        )
+    port_errors = [str(item.get("error") or "").strip() for item in probe_results if str(item.get("error") or "").strip()]
+    if port_errors:
+        details.append(f"Probe error: {port_errors[0]}")
+    if result.get("ok"):
+        if len(candidates) == 1:
+            title = "NetApp console found"
+            message = "Serial discovery found one NetApp console candidate and selected it."
+            outcomes = [f"Console: {console.get('port')} @ {console.get('baud')}"]
+        else:
+            title = "Choose NetApp console"
+            message = "Multiple NetApp console candidates matched. Select the intended USB port before running a reset."
+            outcomes = [f"{len(candidates)} console candidates found"]
+        feedback = main.build_action_feedback(title, message, tone="ready", outcomes=outcomes, details=details)
+    else:
+        feedback = main.build_action_feedback(
+            "NetApp console not found",
+            str(result.get("error") or "No NetApp console prompt was detected."),
+            tone="pending",
+            details=details,
+        )
+    context = _module_context(request)
+    payload = service.page_overview(context)
+    return _render_netapp_page(request, context, payload, saved=True, action_feedback=feedback)
+
+
+@router.post("/modules/netapp/console-probe", response_class=HTMLResponse)
+async def netapp_console_probe(request: Request):
+    from app import main
+
+    context = _module_context(request)
+    cfg = context["cfg"]
+    form = {key: value for key, value in dict(await request.form()).items()}
+    _apply_live_netapp_form_state(cfg, form)
+    result = _probe_selected_netapp_console(cfg)
+    console = _netapp_console_cfg(cfg)
+    console["last_probe"] = {key: value for key, value in result.items() if key != "raw_output"}
+    if result.get("raw_output"):
+        console["last_raw_output"] = str(result.get("raw_output") or "")
+    main.save_kit_config(cfg)
+    feedback = main.build_action_feedback(
+        "NetApp console login verified" if result.get("ok") else "NetApp console probe failed",
+        "The selected USB console reached an ONTAP CLI or boot menu prompt." if result.get("ok") else str(result.get("error") or "The selected console did not reach an ONTAP prompt."),
+        tone="ready" if result.get("ok") else "danger",
+        outcomes=[
+            f"Console: {console.get('port') or 'Not selected'} @ {console.get('baud') or 115200}",
+            f"Prompt: {result.get('prompt_type') or 'unknown'}",
+        ],
+    )
+    context = _module_context(request)
+    payload = service.page_overview(context)
+    return _render_netapp_page(request, context, payload, saved=True, action_feedback=feedback)
+
+
+@router.post("/modules/netapp/console-factory-reset", response_class=HTMLResponse)
+async def netapp_console_factory_reset(request: Request):
+    from app import main
+
+    context = _module_context(request)
+    cfg = context["cfg"]
+    form = {key: value for key, value in dict(await request.form()).items()}
+    _apply_live_netapp_form_state(cfg, form)
+    console = _netapp_console_cfg(cfg)
+    phrase = str(form.get("netapp_console_factory_reset_confirm") or "").strip().upper()
+    acknowledged = str(form.get("netapp_console_factory_reset_ack") or "").strip().lower() in {"1", "true", "yes", "on"}
+    send_wipe = str(form.get("netapp_console_reset_send_boot_menu_wipe") or "").strip().lower() in {"1", "true", "yes", "on"}
+    clear_saved_state = str(form.get("netapp_console_factory_reset_clear_saved_state") or "").strip().lower() in {"1", "true", "yes", "on"}
+
+    if phrase != NETAPP_CONSOLE_FACTORY_RESET_CONFIRM or not acknowledged or not send_wipe:
+        result = {
+            "status": "blocked",
+            "ok": False,
+            "error": f"Check both confirmation boxes and type {NETAPP_CONSOLE_FACTORY_RESET_CONFIRM} before the app sends ONTAP boot-menu option 4 over the console.",
+            "recorded_at": datetime.now(timezone.utc).isoformat(),
+            "port": str(console.get("port") or ""),
+            "baud": int(console.get("baud") or 115200),
+        }
+        console["last_reset"] = result
+        main.save_kit_config(cfg)
+        feedback = main.build_action_feedback("NetApp console factory reset blocked", result["error"], tone="danger", status_label="Blocked")
+        context = _module_context(request)
+        payload = service.page_overview(context)
+        return _render_netapp_page(request, context, payload, saved=True, action_feedback=feedback)
+
+    port = str(console.get("port") or "").strip()
+    username = str(console.get("username") or cfg.get("netapp", {}).get("username") or "admin").strip()
+    boot_menu_option = str(console.get("boot_menu_option") or "4").strip()
+    if not port or not username or boot_menu_option != "4":
+        missing = []
+        if not port:
+            missing.append("select a NetApp console USB port")
+        if not username:
+            missing.append("enter a NetApp console username")
+        if boot_menu_option != "4":
+            missing.append("use ONTAP boot-menu option 4")
+        result = {
+            "status": "blocked",
+            "ok": False,
+            "error": "Before starting console reset, " + ", ".join(missing) + ".",
+            "recorded_at": datetime.now(timezone.utc).isoformat(),
+            "port": port,
+            "baud": int(console.get("baud") or 115200),
+        }
+        console["last_reset"] = result
+        main.save_kit_config(cfg)
+        feedback = main.build_action_feedback("NetApp console factory reset blocked", result["error"], tone="danger", status_label="Blocked")
+        context = _module_context(request)
+        payload = service.page_overview(context)
+        return _render_netapp_page(request, context, payload, saved=True, action_feedback=feedback)
+
+    options = {
+        "port": port,
+        "baud": int(console.get("baud") or 115200),
+        "username": username,
+        "password": str(console.get("password") or cfg.get("netapp", {}).get("password") or ""),
+        "reboot_command": str(console.get("node_reboot_command") or "").strip(),
+        "boot_menu_option": boot_menu_option,
+        "boot_wait_seconds": 240,
+        "wipe_wait_seconds": 1800,
+        "reset_node_name": str(console.get("reset_node_name") or "").strip(),
+        "partner_node_name": str(console.get("partner_node_name") or "").strip(),
+        "disable_storage_failover": bool(console.get("disable_storage_failover", True)),
+        "disable_partner_storage_failover": bool(console.get("disable_partner_storage_failover", False)),
+        "halt_partner_before_reset": bool(console.get("halt_partner_before_reset", False)),
+        "normal_boot_after_wipe": bool(console.get("normal_boot_after_wipe", True)),
+        "clear_saved_state": clear_saved_state,
+    }
+    result = _start_netapp_console_factory_reset_worker(cfg, options)
+    console = _netapp_console_cfg(cfg)
+    console["last_reset"] = result
+    main.save_kit_config(cfg)
+    feedback = main.build_action_feedback(
+        "NetApp console factory reset started",
+        "The app started the serial reset worker. Monitor the raw console output and do not touch the partner node until this controller is stable.",
+        tone="danger",
+        status_label="Running",
+        outcomes=[
+            f"Console: {result.get('port') or 'Not selected'} @ {result.get('baud') or 115200}",
+            "Boot-menu option: 4",
+        ],
+        details=[
+            "This sends a destructive ONTAP boot-menu wipe selection only because the console-specific confirmation was provided.",
+            "Leave force giveback/manual HA operations outside automation.",
+        ],
+        links=[{"label": "NetApp boot menu docs", "href": NETAPP_FACTORY_RESET_DOC_URL}],
+    )
+    context = _module_context(request)
+    payload = service.page_overview(context)
+    return _render_netapp_page(request, context, payload, saved=True, action_feedback=feedback)
+
+
+@router.post("/modules/netapp/factory-reset-plan", response_class=HTMLResponse)
+async def netapp_factory_reset_plan(request: Request):
+    from app import main
+
+    context = _module_context(request)
+    cfg = context["cfg"]
+    form = {key: value for key, value in dict(await request.form()).items()}
+    _apply_live_netapp_form_state(cfg, form)
+    plan = _build_netapp_factory_reset_plan(cfg)
+    cfg.setdefault("netapp", {})["last_factory_reset"] = plan
+    main.save_kit_config(cfg)
+    context = _module_context(request)
+    payload = service.page_overview(context)
+    payload["factory_reset"] = plan
+    feedback = main.build_action_feedback(
+        "NetApp factory reset runbook prepared",
+        "Review the manual console wipe steps. No ONTAP wipe command was executed by the app.",
+        tone="pending",
+        status_label="Manual action",
+        outcomes=[
+            f"Target: {plan.get('target_host') or 'Not set'}",
+            f"Cluster: {plan.get('cluster_name') or 'Unknown'}",
+            f"Nodes: {', '.join(plan.get('nodes') or [])}",
+        ],
+        details=list(plan.get("warnings") or []) + list(plan.get("manual_steps") or []),
+        links=[{"label": "NetApp boot menu docs", "href": NETAPP_FACTORY_RESET_DOC_URL}],
+    )
+    return _render_netapp_page(request, context, payload, saved=True, action_feedback=feedback)
+
+
+@router.post("/modules/netapp/factory-reset-record", response_class=HTMLResponse)
+async def netapp_factory_reset_record(request: Request):
+    from app import main
+
+    context = _module_context(request)
+    cfg = context["cfg"]
+    form = {key: value for key, value in dict(await request.form()).items()}
+    _apply_live_netapp_form_state(cfg, form)
+    phrase = str(form.get("netapp_factory_reset_confirm") or "").strip().upper()
+    acknowledged = str(form.get("netapp_factory_reset_ack") or "").strip().lower() in {"1", "true", "yes", "on"}
+    clear_saved_state = str(form.get("netapp_factory_reset_clear_saved_state") or "").strip().lower() in {"1", "true", "yes", "on"}
+    plan = _build_netapp_factory_reset_plan(cfg)
+
+    if phrase != NETAPP_FACTORY_RESET_CONFIRM or not acknowledged:
+        result = {
+            **plan,
+            "status": "blocked",
+            "error": f"Check the acknowledgement box and type {NETAPP_FACTORY_RESET_CONFIRM} to record manual wipe approval.",
+            "recorded_at": datetime.now(timezone.utc).isoformat(),
+        }
+        cfg.setdefault("netapp", {})["last_factory_reset"] = result
+        main.save_kit_config(cfg)
+        context = _module_context(request)
+        payload = service.page_overview(context)
+        payload["factory_reset"] = result
+        feedback = main.build_action_feedback(
+            "NetApp factory reset blocked",
+            result["error"],
+            tone="danger",
+            status_label="Blocked",
+            details=list(plan.get("warnings") or []),
+        )
+        return _render_netapp_page(request, context, payload, saved=True, action_feedback=feedback)
+
+    cleared: list[str] = []
+    if clear_saved_state:
+        cleared = _clear_netapp_runtime_state_after_factory_reset(cfg)
+    result = {
+        **plan,
+        "status": "manual_approved",
+        "approved_at": datetime.now(timezone.utc).isoformat(),
+        "clear_saved_state": clear_saved_state,
+        "cleared_local_state": cleared,
+        "note": "Manual console reset approval was recorded. The app did not choose the ONTAP boot-menu wipe option automatically.",
+    }
+    cfg.setdefault("netapp", {})["last_factory_reset"] = result
+    main.save_kit_config(cfg)
+    context = _module_context(request)
+    payload = service.page_overview(context)
+    payload["factory_reset"] = result
+    feedback = main.build_action_feedback(
+        "NetApp manual factory reset approval recorded",
+        "Use the SP/BMC or serial console to perform the ONTAP boot-menu wipe on each controller.",
+        tone="danger",
+        status_label="Manual destructive action",
+        outcomes=[
+            "No automated ONTAP wipe was executed.",
+            f"Local cached NetApp state cleared: {'yes' if clear_saved_state else 'no'}",
+        ],
+        details=list(plan.get("manual_steps") or []) + ([f"Cleared local state: {', '.join(cleared)}"] if cleared else []),
+        links=[{"label": "NetApp boot menu docs", "href": NETAPP_FACTORY_RESET_DOC_URL}],
+    )
+    return _render_netapp_page(request, context, payload, saved=True, action_feedback=feedback)
+
+
 @router.post("/modules/netapp/api-readiness", response_class=HTMLResponse)
 async def netapp_api_readiness(request: Request):
     from app import main
@@ -969,6 +1847,13 @@ async def netapp_api_readiness(request: Request):
 
 @router.post("/modules/netapp/validate-page", response_class=HTMLResponse)
 async def netapp_validate_page(request: Request):
+    from app import main
+
+    context = _module_context(request)
+    cfg = context["cfg"]
+    form = {key: value for key, value in dict(await request.form()).items()}
+    _apply_live_netapp_form_state(cfg, form)
+    main.save_kit_config(cfg)
     context = _module_context(request)
     return _render_netapp_page(request, context, service.validate(context))
 
@@ -977,6 +1862,11 @@ async def netapp_validate_page(request: Request):
 async def netapp_export_plan(request: Request):
     from app import main
 
+    context = _module_context(request)
+    cfg = context["cfg"]
+    form = {key: value for key, value in dict(await request.form()).items()}
+    _apply_live_netapp_form_state(cfg, form)
+    main.save_kit_config(cfg)
     context = _module_context(request)
     payload = service.plan(context)
     cfg = context["cfg"]
@@ -1021,10 +1911,7 @@ async def netapp_plan_upgrade(request: Request, return_page: str = Form("netapp"
     cfg = context["cfg"]
     form = {key: value for key, value in dict(await request.form()).items()}
     _apply_live_netapp_form_state(cfg, form)
-    live_version_notes: list[str] = []
-    current_inventory = (((cfg.get("upgrade_inventory") or {}).get("netapp")) or {})
-    if not str(current_inventory.get("current_version") or "").strip():
-        _, live_version_notes = _read_current_ontap_version_for_upgrade(cfg)
+    _, live_version_notes = _read_current_ontap_version_for_upgrade(cfg)
     plan = build_netapp_upgrade_plan(cfg, main.scan_upgrade_media())
     _store_netapp_upgrade_plan(cfg, plan)
     main.save_kit_config(cfg)
@@ -1058,11 +1945,12 @@ async def netapp_run_upgrade(request: Request, return_page: str = Form("netapp")
     cfg = context["cfg"]
     form = {key: value for key, value in dict(await request.form()).items()}
     _apply_live_netapp_form_state(cfg, form)
-    if not str((((cfg.get("upgrade_inventory") or {}).get("netapp") or {}).get("current_version")) or "").strip():
-        _read_current_ontap_version_for_upgrade(cfg)
+    _read_current_ontap_version_for_upgrade(cfg)
     plan = build_netapp_upgrade_plan(cfg, main.scan_upgrade_media())
     _store_netapp_upgrade_plan(cfg, plan)
     activity = (((cfg.get("netapp") or {}).get("upgrade") or {}).get("activity") or {})
+    if str(activity.get("status") or "").lower() == "running" and _reconcile_running_netapp_upgrade(cfg):
+        activity = (((cfg.get("netapp") or {}).get("upgrade") or {}).get("activity") or {})
     if str(activity.get("status") or "").lower() == "running":
         feedback = main.build_action_feedback(
             "ONTAP upgrade already running",
@@ -1128,10 +2016,12 @@ async def netapp_upgrade_activity(request: Request):
     from app import main
 
     cfg = main.load_kit_config()
+    _reconcile_running_netapp_upgrade(cfg)
+    ontap_upgrade_status = build_ontap_upgrade_status(cfg)
     return main.templates.TemplateResponse(
         request,
         "partials/components/netapp_upgrade_activity.html",
-        {"cfg": cfg},
+        {"cfg": cfg, "ontap_upgrade_status": ontap_upgrade_status, "netapp_upgrade_panel": build_netapp_upgrade_panel(cfg, ontap_upgrade_status)},
     )
 
 

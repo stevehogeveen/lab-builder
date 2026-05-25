@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+import json
 from pathlib import Path
 import time
 from typing import Any, Callable
@@ -10,6 +11,21 @@ from app.upgrade_helper import build_upgrade_inventory, compare_versions, record
 
 
 ONTAP_UPGRADE_PATH_SOURCE = "https://docs.netapp.com/us-en/ontap/upgrade/concept_upgrade_paths.html"
+ONTAP_HA_MISMATCH_WARNING = (
+    "Version mismatch detected between HA partners. This can be expected during a rolling ONTAP upgrade while one controller "
+    "has upgraded and the partner has not yet completed. Check update progress and giveback status."
+)
+ONTAP_GIVEBACK_WARNING = (
+    "Waiting for giveback. Do not force giveback automatically. Review storage failover status and giveback status."
+)
+ONTAP_EXPECTED_MISMATCH_PATTERNS = (
+    "kernel mismatch",
+    "nvram version mismatch",
+    "wafl fsinfo version mismatch",
+    "nvram nvlog version mismatch",
+    "raid version mismatch",
+    "raid nvram version mismatch",
+)
 ONTAP_SUPPORTED_UPGRADE_PATHS: dict[tuple[str, str], list[str]] = {
     ("9.9.1", "9.17.1"): ["9.9.1", "9.13.1", "9.17.1"],
     ("9.9.1", "9.18.1"): ["9.9.1", "9.13.1", "9.17.1", "9.18.1"],
@@ -30,6 +46,219 @@ ONTAP_SUPPORTED_UPGRADE_PATHS: dict[tuple[str, str], list[str]] = {
     ("9.14.1", "9.18.1"): ["9.14.1", "9.18.1"],
     ("9.14.1", "9.19.1"): ["9.14.1", "9.18.1", "9.19.1"],
 }
+
+
+def build_ontap_upgrade_status(cfg: dict[str, Any]) -> dict[str, Any]:
+    netapp_cfg = dict(cfg.get("netapp") or {})
+    upgrade = dict(netapp_cfg.get("upgrade") or {})
+    activity = dict(upgrade.get("activity") or {})
+    result = dict(upgrade.get("last_result") or {})
+    plan = dict(upgrade.get("last_plan") or {})
+    inventory = dict((cfg.get("upgrade_inventory") or {}).get("netapp") or {})
+    events = [event for event in list(activity.get("events") or []) if isinstance(event, dict)]
+    latest_event = dict(events[-1]) if events else {}
+    raw_payload = _latest_software_payload(result, latest_event)
+    raw_output = _build_ontap_raw_output(events, raw_payload, result)
+    current_release = (
+        str(inventory.get("current_version") or "").strip()
+        or str(latest_event.get("current_version") or "").strip()
+        or str(result.get("current_version") or "").strip()
+        or str(raw_payload.get("version") or "").strip()
+        or str(plan.get("current_version") or "").strip()
+        or str(netapp_cfg.get("last_discovered_ontap_version") or "").strip()
+    )
+    target_release = (
+        str(plan.get("media_version") or "").strip()
+        or str(result.get("target_version") or "").strip()
+        or str(latest_event.get("pending_version") or "").strip()
+        or str(raw_payload.get("pending_version") or "").strip()
+    )
+    activity_status = str(activity.get("status") or result.get("status") or "not_started").strip().lower()
+    phase = str(activity.get("phase") or latest_event.get("phase") or "").strip().lower()
+    software_state = str(latest_event.get("software_state") or raw_payload.get("state") or "").strip().lower()
+    progress = _clamped_int(activity.get("progress_percent"), 0)
+    if activity_status == "completed":
+        progress = 100
+    elif activity_status in {"failed", "blocked"} and not progress:
+        progress = 100
+
+    waiting_for_giveback = _detect_waiting_for_giveback(raw_payload, latest_event, raw_output)
+    ha_version_mismatch = _detect_ha_version_mismatch(raw_payload, raw_output)
+    warnings: list[str] = []
+    if ha_version_mismatch:
+        warnings.append(ONTAP_HA_MISMATCH_WARNING)
+    if waiting_for_giveback:
+        warnings.append(ONTAP_GIVEBACK_WARNING)
+
+    status_label = _ontap_status_label(activity_status, phase, software_state, waiting_for_giveback)
+    current_step = _ontap_current_step(phase, software_state, waiting_for_giveback)
+
+    return {
+        "status": status_label,
+        "mode": "ONTAP upgrade",
+        "current_release": current_release or "Unknown",
+        "target_release": target_release or "",
+        "current_step": current_step,
+        "progress": progress,
+        "completed_events": len(events),
+        "waiting_for_giveback": waiting_for_giveback,
+        "ha_version_mismatch": ha_version_mismatch,
+        "warnings": warnings,
+        "raw_output": raw_output,
+        "events": _structured_ontap_events(events),
+        "activity_status": activity_status or "not_started",
+        "phase": phase,
+        "software_state": software_state,
+        "latest_event": latest_event,
+        "update_details": list(latest_event.get("update_details") or raw_payload.get("update_details") or []),
+        "status_details": list(latest_event.get("status_details") or raw_payload.get("status_details") or []),
+        "job_uuid": str(activity.get("job_uuid") or "").strip(),
+        "source": str(inventory.get("source") or "").strip(),
+    }
+
+
+def _latest_software_payload(result: dict[str, Any], latest_event: dict[str, Any]) -> dict[str, Any]:
+    raw = result.get("raw")
+    if isinstance(raw, dict):
+        return raw
+    start = result.get("start")
+    if isinstance(start, dict) and isinstance(start.get("raw"), dict):
+        return dict(start.get("raw") or {})
+    payload = {
+        "version": latest_event.get("current_version"),
+        "pending_version": latest_event.get("pending_version"),
+        "state": latest_event.get("software_state"),
+        "elapsed_duration": latest_event.get("elapsed_duration"),
+        "estimated_duration": latest_event.get("estimated_duration"),
+        "status_details": latest_event.get("status_details") or [],
+        "update_details": latest_event.get("update_details") or [],
+    }
+    return {key: value for key, value in payload.items() if value not in (None, "", [])}
+
+
+def _build_ontap_raw_output(events: list[dict[str, Any]], raw_payload: dict[str, Any], result: dict[str, Any]) -> str:
+    chunks: list[str] = []
+    raw_output = str(result.get("raw_output") or "").strip()
+    if raw_output:
+        chunks.append(raw_output)
+    if raw_payload:
+        try:
+            chunks.append("Latest cluster software payload:\n" + json.dumps(raw_payload, indent=2, default=str))
+        except TypeError:
+            chunks.append("Latest cluster software payload:\n" + str(raw_payload))
+    if events:
+        lines = []
+        for event in events[-80:]:
+            line = f"{event.get('timestamp', '')} [{event.get('phase', 'event')}] {event.get('message', '')}"
+            if event.get("job_uuid"):
+                line += f" | job={event.get('job_uuid')}"
+            if event.get("job_state"):
+                line += f" | state={event.get('job_state')}"
+            lines.append(line)
+        chunks.append("Activity events:\n" + "\n".join(lines))
+    return "\n\n".join(chunk for chunk in chunks if chunk).strip()
+
+
+def _structured_ontap_events(events: list[dict[str, Any]]) -> list[dict[str, str]]:
+    rows: list[dict[str, str]] = []
+    for event in events[-24:]:
+        phase = str(event.get("phase") or "event").strip()
+        message = str(event.get("message") or "").strip()
+        severity = "info"
+        if phase in {"failed", "blocked"} or "error" in message.lower() or "failed" in message.lower():
+            severity = "error"
+        elif phase in {"complete", "completed"}:
+            severity = "ready"
+        elif "warning" in message.lower() or "waiting" in message.lower():
+            severity = "warning"
+        rows.append(
+            {
+                "time": str(event.get("timestamp") or "").strip(),
+                "stage": phase,
+                "severity": severity,
+                "message": message,
+            }
+        )
+    return rows
+
+
+def _detect_waiting_for_giveback(raw_payload: dict[str, Any], latest_event: dict[str, Any], raw_output: str) -> bool:
+    haystack = " ".join(
+        [
+            str(raw_output or ""),
+            str(latest_event.get("message") or ""),
+            json.dumps(raw_payload.get("status_details") or [], default=str),
+            json.dumps(raw_payload.get("update_details") or [], default=str),
+        ]
+    ).lower()
+    if "waiting for giveback" in haystack:
+        return True
+    for detail in list(raw_payload.get("status_details") or []) + list(latest_event.get("status_details") or []):
+        if not isinstance(detail, dict):
+            continue
+        name = str(detail.get("name") or "").lower()
+        state = str(detail.get("state") or "").lower()
+        message = str(((detail.get("issue") or {}).get("message")) or "").lower()
+        if "giveback" in f"{name} {message}" and state in {"waiting", "in_progress", "running"}:
+            return True
+    return False
+
+
+def _detect_ha_version_mismatch(raw_payload: dict[str, Any], raw_output: str) -> bool:
+    lowered = str(raw_output or "").lower()
+    if any(pattern in lowered for pattern in ONTAP_EXPECTED_MISMATCH_PATTERNS):
+        return True
+    node_versions = {
+        normalize_ontap_feature_release(str(node.get("version") or ""))
+        for node in raw_payload.get("nodes") or []
+        if isinstance(node, dict) and str(node.get("version") or "").strip()
+    }
+    node_versions.discard("")
+    return len(node_versions) > 1
+
+
+def _ontap_status_label(activity_status: str, phase: str, software_state: str, waiting_for_giveback: bool) -> str:
+    if waiting_for_giveback:
+        return "Waiting for giveback"
+    if activity_status == "completed" or software_state == "completed":
+        return "Completed"
+    if activity_status in {"failed", "blocked"} or software_state in {"failed", "failure", "canceled", "cancelled", "paused", "pause"}:
+        return "Paused/failed"
+    if phase in {"upload", "validate", "start"}:
+        return "Uploading/staging"
+    if activity_status == "running" or software_state in {"running", "in_progress", "updating"}:
+        return "Running"
+    return "No upgrade currently running"
+
+
+def _ontap_current_step(phase: str, software_state: str, waiting_for_giveback: bool) -> str:
+    if waiting_for_giveback:
+        return "Waiting for giveback"
+    phase_map = {
+        "queued": "Queued",
+        "precheck": "Upgrade readiness check",
+        "connect": "Connecting to ONTAP",
+        "upload": "Uploading/staging image package",
+        "validate": "Pre-update checks",
+        "start": "Starting ONTAP update",
+        "upgrade": "ONTAP upgrade running",
+        "blocked": "Blocked",
+        "failed": "Paused/failed",
+        "complete": "Complete",
+    }
+    if phase in phase_map:
+        return phase_map[phase]
+    if software_state:
+        return software_state.replace("_", " ").title()
+    return "Idle"
+
+
+def _clamped_int(value: Any, default: int = 0) -> int:
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError):
+        parsed = default
+    return max(0, min(100, parsed))
 
 
 def build_netapp_upgrade_plan(cfg: dict[str, Any], media_scan: dict[str, Any]) -> dict[str, Any]:
@@ -246,82 +475,79 @@ def execute_netapp_upgrade(
         raise NetAppError("ONTAP validation reported blocking errors. " + " ".join(validation_errors))
 
     start: dict[str, Any] = {}
-    if _software_update_matches_target(software_status, target_version) and _software_update_is_running(software_status):
-        emit("upgrade", f"ONTAP software update to {target_version} is already running; monitoring existing update.")
-        start_status = wait_for_netapp_software_update(
-            client,
-            target_version,
-            timeout=wait_timeout,
-            poll_interval=poll_interval,
-            progress=progress,
-        )
-    else:
-        if skip_warnings:
-            emit("start", "ONTAP validation has no blocking errors; proceeding with skip_warnings=true for acknowledged warnings.")
-        emit("start", f"Starting ONTAP software update to {target_version}.")
+    if skip_warnings:
+        emit("start", "ONTAP validation has no blocking errors; proceeding with skip_warnings=true for acknowledged warnings.")
+    emit("start", f"Starting ONTAP software update to {target_version}.")
+    try:
+        start = client.start_cluster_software_update(target_version, skip_warnings=skip_warnings)
+        start_job = _extract_job_uuid(start)
+        if start_job:
+            emit("start", f"Upgrade job started: {start_job}.", job_uuid=start_job)
+            wait_for_netapp_job(
+                client,
+                start_job,
+                timeout=wait_timeout,
+                poll_interval=poll_interval,
+                progress=progress,
+                phase="upgrade",
+            )
+            start_status = wait_for_netapp_software_update(
+                client,
+                target_version,
+                timeout=wait_timeout,
+                poll_interval=poll_interval,
+                progress=progress,
+            )
+        else:
+            start_status = wait_for_netapp_software_update(
+                client,
+                target_version,
+                timeout=wait_timeout,
+                poll_interval=poll_interval,
+                progress=progress,
+            )
+    except NetAppError as exc:
+        latest_status: dict[str, Any] = {}
         try:
-            start = client.start_cluster_software_update(target_version, skip_warnings=skip_warnings)
-            start_job = _extract_job_uuid(start)
-            if start_job:
-                emit("start", f"Upgrade job started: {start_job}.", job_uuid=start_job)
-                start_status = wait_for_netapp_job(
-                    client,
-                    start_job,
-                    timeout=wait_timeout,
-                    poll_interval=poll_interval,
-                    progress=progress,
-                    phase="upgrade",
-                )
-            else:
-                start_status = wait_for_netapp_software_update(
-                    client,
-                    target_version,
-                    timeout=wait_timeout,
-                    poll_interval=poll_interval,
-                    progress=progress,
-                )
-        except NetAppError as exc:
-            latest_status: dict[str, Any] = {}
-            try:
-                latest_status = client.get_cluster_software()
-            except Exception:
-                latest_status = {}
-            if _software_update_matches_target(latest_status, target_version) and _software_update_is_running(latest_status):
-                emit(
-                    "upgrade",
-                    "REST start returned an error, but ONTAP reports the upgrade is running; monitoring cluster software state.",
-                    rest_error=str(exc),
-                )
-                start = {"status": "rest_error_but_running", "error": str(exc)}
-                start_status = wait_for_netapp_software_update(
-                    client,
-                    target_version,
-                    timeout=wait_timeout,
-                    poll_interval=poll_interval,
-                    progress=progress,
-                )
-            elif hasattr(client, "private_cli_cluster_image_update"):
-                emit(
-                    "start",
-                    "REST start did not accept acknowledged validation warnings; using ONTAP private CLI fallback.",
-                    rest_error=str(exc),
-                )
-                start = client.private_cli_cluster_image_update(
-                    target_version,
-                    ignore_validation_warning=True,
-                    skip_confirmation=True,
-                    stabilize_minutes=8,
-                )
-                emit("upgrade", "Private CLI update request submitted; polling cluster software state.", response=start)
-                start_status = wait_for_netapp_software_update(
-                    client,
-                    target_version,
-                    timeout=wait_timeout,
-                    poll_interval=poll_interval,
-                    progress=progress,
-                )
-            else:
-                raise
+            latest_status = client.get_cluster_software()
+        except Exception:
+            latest_status = {}
+        if _software_update_matches_target(latest_status, target_version) and _software_update_is_running(latest_status):
+            emit(
+                "upgrade",
+                "REST start returned an error, but ONTAP reports the upgrade is running; monitoring cluster software state.",
+                rest_error=str(exc),
+            )
+            start = {"status": "rest_error_but_running", "error": str(exc)}
+            start_status = wait_for_netapp_software_update(
+                client,
+                target_version,
+                timeout=wait_timeout,
+                poll_interval=poll_interval,
+                progress=progress,
+            )
+        elif hasattr(client, "private_cli_cluster_image_update"):
+            emit(
+                "start",
+                "REST start did not accept acknowledged validation warnings; using ONTAP private CLI fallback.",
+                rest_error=str(exc),
+            )
+            start = client.private_cli_cluster_image_update(
+                target_version,
+                ignore_validation_warning=True,
+                skip_confirmation=True,
+                stabilize_minutes=8,
+            )
+            emit("upgrade", "Private CLI update request submitted; polling cluster software state.", response=start)
+            start_status = wait_for_netapp_software_update(
+                client,
+                target_version,
+                timeout=wait_timeout,
+                poll_interval=poll_interval,
+                progress=progress,
+            )
+        else:
+            raise
 
     result = {
         "status": "completed",
@@ -510,6 +736,8 @@ def _software_update_matches_target(payload: dict[str, Any], target_version: str
 
 
 def _software_update_reached_target(payload: dict[str, Any], target_version: str) -> bool:
+    if _software_update_is_running(payload):
+        return False
     current = str(payload.get("version") or "").strip()
     if _version_matches(current, target_version):
         return True
