@@ -111,7 +111,7 @@
                     {% if snmp_field_errors.auth_password %}
                     <div class="field-error">{{ snmp_field_errors.auth_password|join(' ') }}</div>
                     {% endif %}
-                    <input type="password" name="snmp_v3_auth_password" value="{{ cfg.get('shared_snmp', {}).get('v3_auth_password', '') }}" class="input{% if snmp_field_errors.auth_password %} input-invalid{% endif %}">
+                    <input type="password" name="snmp_v3_auth_password" value="" placeholder="Saved - leave blank to keep" class="input{% if snmp_field_errors.auth_password %} input-invalid{% endif %}">
                     <div class="text-xs text-slate-400 mt-1">SNMPv3 auth passwords are usually at least 8 printable characters.</div>
                 </div>
                 <div>
@@ -126,7 +126,7 @@
                     {% if snmp_field_errors.priv_password %}
                     <div class="field-error">{{ snmp_field_errors.priv_password|join(' ') }}</div>
                     {% endif %}
-                    <input type="password" name="snmp_v3_priv_password" value="{{ cfg.get('shared_snmp', {}).get('v3_priv_password', '') }}" class="input{% if snmp_field_errors.priv_password %} input-invalid{% endif %}">
+                    <input type="password" name="snmp_v3_priv_password" value="" placeholder="Saved - leave blank to keep" class="input{% if snmp_field_errors.priv_password %} input-invalid{% endif %}">
                     <div class="text-xs text-slate-400 mt-1">SNMPv3 privacy passwords are usually at least 8 printable characters.</div>
                 </div>
             </div>

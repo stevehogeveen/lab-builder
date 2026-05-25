@@ -197,7 +197,7 @@
                 {% if esxi_field_errors.root_password %}
                 <div class="field-error">{{ esxi_field_errors.root_password|join(' ') }}</div>
                 {% endif %}
-                <input type="password" name="esxi_root_password" value="{{ cfg.get('esxi', {}).get('root_password', '') }}" class="input{% if esxi_field_errors.root_password %} input-invalid{% endif %}">
+                <input type="password" name="esxi_root_password" value="" placeholder="Saved - leave blank to keep" class="input{% if esxi_field_errors.root_password %} input-invalid{% endif %}">
             </div>
 
             {% if esxi_page_review.validation_errors or esxi_page_review.validation_notes %}

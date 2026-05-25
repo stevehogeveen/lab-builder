@@ -4,6 +4,8 @@ from typing import Any, Callable
 
 from fastapi import FastAPI, Form, Request
 
+from app.core.forms import preserve_secret
+
 
 QnapRuntime = dict[str, Callable[..., Any]]
 
@@ -20,7 +22,7 @@ async def save_qnap_settings_handler(
     cfg = runtime["load_kit_config"]()
     cfg["qnap"]["hostname"] = qnap_hostname
     cfg["qnap"]["username"] = qnap_username
-    cfg["qnap"]["password"] = qnap_password
+    cfg["qnap"]["password"] = preserve_secret(qnap_password, cfg["qnap"].get("password"))
     cfg["included"]["qnap"] = included_qnap == "on"
     cfg = runtime["apply_ip_plan"](cfg)
     runtime["save_kit_config"](cfg)

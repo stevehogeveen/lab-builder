@@ -4,6 +4,8 @@ from typing import Any, Callable
 
 from fastapi import FastAPI, Form, Request
 
+from app.core.forms import preserve_secret
+
 
 EsxiConfigRuntime = dict[str, Callable[..., Any]]
 
@@ -44,7 +46,7 @@ async def save_esxi_settings_handler(
     cfg["esxi"]["version"] = runtime["normalize_esxi_version"](esxi_version)
     cfg["esxi"]["base_iso_path"] = esxi_base_iso_path.strip()
     cfg["esxi"]["hostname"] = esxi_hostname
-    cfg["esxi"]["root_password"] = esxi_root_password
+    cfg["esxi"]["root_password"] = preserve_secret(esxi_root_password, cfg["esxi"].get("root_password"))
     cfg["esxi"]["debug_no_reboot"] = esxi_debug_no_reboot == "on"
     try:
         policy["discovery_start_octet"] = max(1, min(int(esxi_post_discovery_start_octet or "31"), 254))

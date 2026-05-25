@@ -6,6 +6,7 @@ from typing import Any, Callable
 from fastapi import APIRouter, FastAPI, Form, Request, UploadFile
 from fastapi.responses import HTMLResponse
 
+from app.core.forms import preserve_secret
 from app.modules.ovf_templates.service import OvfTemplateService
 from app.windows import inspect_ovf_source
 
@@ -59,7 +60,7 @@ async def save_windows_settings_handler(
 ):
     cfg = runtime["load_kit_config"]()
     cfg["windows"]["vm_name"] = windows_vm_name
-    cfg["windows"]["admin_password"] = windows_admin_password
+    cfg["windows"]["admin_password"] = preserve_secret(windows_admin_password, cfg["windows"].get("admin_password"))
     cfg["windows"]["vsphere_host"] = windows_vsphere_host.strip()
     cfg["windows"]["vsphere_username"] = windows_vsphere_username.strip()
     if windows_vsphere_password:

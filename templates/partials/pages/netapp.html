@@ -93,6 +93,14 @@
     {% set precheck_summary = page_precheck_summary %}
     {% include "partials/components/precheck_summary.html" %}
 
+    {% set setup_strip = [
+        {"label": "Cluster", "value": discovered_cluster_name or planned_cluster_name or 'Not set', "note": "Discovered or bootstrap plan"},
+        {"label": "API target", "value": connection_target_ip or planned_cluster_mgmt_ip or discovered_cluster_mgmt_ip or 'Not set', "note": "ONTAP cluster management"},
+        {"label": "Protocol", "value": selected_protocol|upper, "note": "Storage workflow mode"},
+        {"label": "Next", "value": 'Run safe apply' if bootstrap_complete else 'Finish bootstrap', "note": "Discovery, plan, approval, evidence"},
+    ] %}
+    {% include "partials/components/setup_strip.html" %}
+
     <div class="ops-metric-grid">
         <div class="ops-metric-card">
             <div class="dashboard-kicker">Cluster</div>

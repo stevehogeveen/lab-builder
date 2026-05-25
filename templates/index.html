@@ -3692,35 +3692,11 @@
     const ws = new WebSocket(wsUrl);
 
     ws.onmessage = function (event) {
-        const text = event.data;
-        const lines = text.split("\n");
         let data = {};
-        let currentKey = null;
-
-        for (const rawLine of lines) {
-            const line = rawLine.replace(/\r$/, "");
-            if (!line.trim()) continue;
-
-            if (line.startsWith("  - ")) {
-                if (currentKey && Array.isArray(data[currentKey])) {
-                    data[currentKey].push(line.replace(/^  - /, ""));
-                }
-                continue;
-            }
-
-            const idx = line.indexOf(":");
-            if (idx > -1) {
-                const key = line.slice(0, idx).trim();
-                let value = line.slice(idx + 1).trim();
-                if (value === "") {
-                    data[key] = [];
-                } else {
-                    value = value.replace(/^["']|["']$/g, "");
-                    if (/^\d+$/.test(value)) value = parseInt(value, 10);
-                    data[key] = value;
-                }
-                currentKey = key;
-            }
+        try {
+            data = JSON.parse(event.data || "{}") || {};
+        } catch (error) {
+            data = {};
         }
 
         const status = document.getElementById("job-status");

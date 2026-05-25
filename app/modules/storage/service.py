@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from typing import Any
 
+from app.core.forms import preserve_secret
+
 
 class StorageModuleService:
     def discover(self, context: dict[str, Any]) -> dict[str, Any]:
@@ -36,7 +38,7 @@ class StorageModuleService:
         else:
             storage_cfg["target_host_override"] = str(payload.get("storage_target_host") or "").strip()
             storage_cfg["username"] = str(payload.get("storage_username") or "").strip()
-            storage_cfg["password"] = str(payload.get("storage_password") or "")
+            storage_cfg["password"] = preserve_secret(payload.get("storage_password"), storage_cfg.get("password"))
         return {"cfg": cfg, "using_defaults": storage_target_mode == "defaults"}
 
     def resolve_storage_access(self, cfg: dict[str, Any], payload: dict[str, Any]) -> dict[str, Any]:

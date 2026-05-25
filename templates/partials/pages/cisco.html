@@ -364,6 +364,17 @@
     </style>
 
     <form class="space-y-5" hx-target="#main-content" hx-swap="outerHTML">
+        {% set precheck_summary = page_precheck_summary %}
+        {% include "partials/components/precheck_summary.html" %}
+
+        {% set setup_strip = [
+            {"label": "Management IP", "value": has_management_ip or cfg.get('ip_plan', {}).get('switch', '') or 'Not set', "note": "SSH and Run Center target"},
+            {"label": "Console", "value": has_console or 'Not selected', "note": "Serial bootstrap path"},
+            {"label": "SSH", "value": 'Test passed' if has_ssh else 'Needs test', "note": "Required before config apply"},
+            {"label": "Approval", "value": approval.get('state') or 'Not approved', "note": "Saved config plan state"},
+        ] %}
+        {% include "partials/components/setup_strip.html" %}
+
         <section class="card identity-soft-card" data-action-panel>
             <div class="cisco-hero">
                 <div>
@@ -445,15 +456,15 @@
                 </div>
                 <div class="cisco-field">
                     <label>Password</label>
-                    <input type="password" name="cisco_switch_password" value="{{ cisco_cfg.get('password', '') }}" class="input" autocomplete="current-password">
+                    <input type="password" name="cisco_switch_password" value="" placeholder="Saved - leave blank to keep" class="input" autocomplete="current-password">
                 </div>
                 <div class="cisco-field">
                     <label>Console password</label>
-                    <input type="password" name="cisco_console_password" value="{{ cisco_cfg.get('console_password', '') }}" class="input" autocomplete="current-password">
+                    <input type="password" name="cisco_console_password" value="" placeholder="Saved - leave blank to keep" class="input" autocomplete="current-password">
                 </div>
                 <div class="cisco-field">
                     <label>Enable secret</label>
-                    <input type="password" name="cisco_enable_secret" value="{{ cisco_cfg.get('enable_secret') or cisco_cfg.get('enable_password', '') }}" class="input" autocomplete="current-password">
+                    <input type="password" name="cisco_enable_secret" value="" placeholder="Saved - leave blank to keep" class="input" autocomplete="current-password">
                 </div>
                 <div class="cisco-field">
                     <label>VLAN</label>
@@ -596,7 +607,7 @@
                 </div>
                 <div class="cisco-field">
                     <label>SNMP auth password</label>
-                    <input type="password" name="cisco_snmp_v3_auth_password" value="{{ cisco_snmp.get('v3_auth_password') or shared_snmp.get('v3_auth_password', '') }}" class="input" autocomplete="current-password">
+                    <input type="password" name="cisco_snmp_v3_auth_password" value="" placeholder="Saved - leave blank to keep" class="input" autocomplete="current-password">
                 </div>
                 <div class="cisco-field">
                     <label>SNMP privacy type</label>
@@ -608,7 +619,7 @@
                 </div>
                 <div class="cisco-field">
                     <label>SNMP privacy password</label>
-                    <input type="password" name="cisco_snmp_v3_priv_password" value="{{ cisco_snmp.get('v3_priv_password') or shared_snmp.get('v3_priv_password', '') }}" class="input" autocomplete="current-password">
+                    <input type="password" name="cisco_snmp_v3_priv_password" value="" placeholder="Saved - leave blank to keep" class="input" autocomplete="current-password">
                 </div>
             </div>
 

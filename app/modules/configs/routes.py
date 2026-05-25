@@ -442,22 +442,25 @@ async def save_global_settings_handler(
         submitted_value = str(submitted or "")
         return submitted_value if submitted_value else str(existing or "")
     previous_subnet = str((cfg.get("shared_network") or {}).get("subnet") or "")
+    existing_shared_snmp = cfg.get("shared_snmp") or {}
+    shared_snmp_auth_password = preserve_existing_secret(snmp_v3_auth_password, existing_shared_snmp.get("v3_auth_password"))
+    shared_snmp_priv_password = preserve_existing_secret(snmp_v3_priv_password, existing_shared_snmp.get("v3_priv_password"))
     cfg["site"]["name"] = runtime["sanitize_kit_name"](site_name)
     cfg["shared_network"]["subnet"] = shared_subnet
     cfg["shared_network"]["dns_servers"] = [dns1, dns2, dns3, dns4]
     cfg["shared_snmp"] = {
         "v3_username": snmp_v3_username,
         "v3_auth_protocol": snmp_v3_auth_protocol,
-        "v3_auth_password": snmp_v3_auth_password,
+        "v3_auth_password": shared_snmp_auth_password,
         "v3_priv_protocol": snmp_v3_priv_protocol,
-        "v3_priv_password": snmp_v3_priv_password,
+        "v3_priv_password": shared_snmp_priv_password,
         "users": runtime["extract_snmp_users_from_form"](
             form,
             primary_username=snmp_v3_username,
             primary_auth_protocol=snmp_v3_auth_protocol,
-            primary_auth_password=snmp_v3_auth_password,
+            primary_auth_password=shared_snmp_auth_password,
             primary_priv_protocol=snmp_v3_priv_protocol,
-            primary_priv_password=snmp_v3_priv_password,
+            primary_priv_password=shared_snmp_priv_password,
         ),
     }
     included_fields = {

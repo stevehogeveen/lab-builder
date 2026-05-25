@@ -6,6 +6,7 @@ from typing import Any, Callable
 from fastapi import APIRouter, FastAPI, Form, Request
 from fastapi.responses import HTMLResponse
 
+from app.core.forms import preserve_secret
 from app.modules.ilo.service import default_ilo_module_service
 
 
@@ -65,6 +66,8 @@ async def save_ilo_settings_handler(
     cfg = runtime["load_kit_config"]()
     form = await request.form()
     service = _ilo_service(runtime)
+    existing_ilo = cfg.get("ilo", {}) or {}
+    existing_policy = runtime["normalize_ilo_policy"](existing_ilo.get("policy"))
     policy_updates = {
             "discover_start_octet": ilo_discover_start_octet,
             "discover_end_octet": ilo_discover_end_octet,
@@ -76,16 +79,16 @@ async def save_ilo_settings_handler(
             "enable_ipv6_disable": ilo_policy_enable_ipv6_disable == "on",
             "enable_time_policy": ilo_policy_enable_time_policy == "on",
             "enable_auto_reset": ilo_policy_enable_auto_reset == "on",
-            "kit_admin_password": ilo_policy_kit_admin_password,
-            "kit_operator_password": ilo_policy_kit_operator_password,
+            "kit_admin_password": preserve_secret(ilo_policy_kit_admin_password, existing_policy.get("kit_admin_password")),
+            "kit_operator_password": preserve_secret(ilo_policy_kit_operator_password, existing_policy.get("kit_operator_password")),
             "shared_admin_username": ilo_policy_shared_admin_username.strip() or "765CS",
-            "shared_admin_password": ilo_policy_shared_admin_password,
-            "snmp_read_community": ilo_policy_snmp_read_community,
+            "shared_admin_password": preserve_secret(ilo_policy_shared_admin_password, existing_policy.get("shared_admin_password")),
+            "snmp_read_community": preserve_secret(ilo_policy_snmp_read_community, existing_policy.get("snmp_read_community")),
             "snmpv3_username": ilo_policy_snmpv3_username.strip() or "765CS",
             "snmpv3_auth_protocol": ilo_policy_snmpv3_auth_protocol.strip() or "SHA",
-            "snmpv3_auth_password": ilo_policy_snmpv3_auth_password,
+            "snmpv3_auth_password": preserve_secret(ilo_policy_snmpv3_auth_password, existing_policy.get("snmpv3_auth_password")),
             "snmpv3_priv_protocol": ilo_policy_snmpv3_priv_protocol.strip() or "AES",
-            "snmpv3_priv_password": ilo_policy_snmpv3_priv_password,
+            "snmpv3_priv_password": preserve_secret(ilo_policy_snmpv3_priv_password, existing_policy.get("snmpv3_priv_password")),
             "alert_destinations": [
                 item.strip()
                 for item in re.split(r"[\s,]+", str(ilo_policy_alert_destinations or "").strip())
@@ -101,9 +104,9 @@ async def save_ilo_settings_handler(
             "ilo_gateway": ilo_gateway,
             "ilo_hostname": ilo_hostname,
             "ilo_username": ilo_username,
-            "ilo_password": ilo_password,
+            "ilo_password": preserve_secret(ilo_password, existing_ilo.get("password")),
             "policy_updates": policy_updates,
-            "ilo_policy_snmp_read_community": ilo_policy_snmp_read_community,
+            "ilo_policy_snmp_read_community": policy_updates["snmp_read_community"],
         },
     )
     cfg = updated["cfg"]

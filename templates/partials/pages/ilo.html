@@ -73,7 +73,7 @@
                     {% if ilo_field_errors.password %}
                     <div class="field-error">{{ ilo_field_errors.password|join(' ') }}</div>
                     {% endif %}
-                    <input type="password" name="ilo_password" value="{{ cfg.get('ilo', {}).get('password', '') }}" class="input{% if ilo_field_errors.password %} input-invalid{% endif %}">
+                    <input type="password" name="ilo_password" value="" placeholder="Saved - leave blank to keep" class="input{% if ilo_field_errors.password %} input-invalid{% endif %}">
                     <div class="text-xs text-slate-400 mt-1">Keep it printable and under 40 characters. Many iLO policies use at least 8 characters and 3 character types.</div>
                 </div>
             </div>
@@ -113,19 +113,19 @@
                         </div>
                         <div>
                             <label class="block text-sm font-bold text-slate-300 mb-2">{{ cfg.get('site', {}).get('name', 'KIT')|upper }}_Admin password</label>
-                            <input type="password" name="ilo_policy_kit_admin_password" value="{{ ilo_policy.get('kit_admin_password', '') }}" class="input">
+                            <input type="password" name="ilo_policy_kit_admin_password" value="" placeholder="Saved - leave blank to keep" class="input">
                         </div>
                         <div>
                             <label class="block text-sm font-bold text-slate-300 mb-2">{{ cfg.get('site', {}).get('name', 'KIT')|upper }}_OA password</label>
-                            <input type="password" name="ilo_policy_kit_operator_password" value="{{ ilo_policy.get('kit_operator_password', '') }}" class="input">
+                            <input type="password" name="ilo_policy_kit_operator_password" value="" placeholder="Saved - leave blank to keep" class="input">
                         </div>
                         <div>
                             <label class="block text-sm font-bold text-slate-300 mb-2">765CS admin password</label>
-                            <input type="password" name="ilo_policy_shared_admin_password" value="{{ ilo_policy.get('shared_admin_password', '') }}" class="input">
+                            <input type="password" name="ilo_policy_shared_admin_password" value="" placeholder="Saved - leave blank to keep" class="input">
                         </div>
                         <div>
                             <label class="block text-sm font-bold text-slate-300 mb-2">SNMP read community</label>
-                            <input type="password" name="ilo_policy_snmp_read_community" value="{{ ilo_policy.get('snmp_read_community', '') }}" class="input">
+                            <input type="password" name="ilo_policy_snmp_read_community" value="" placeholder="Saved - leave blank to keep" class="input">
                         </div>
                         <div>
                             <label class="block text-sm font-bold text-slate-300 mb-2">SNMPv3 auth protocol</label>
@@ -136,7 +136,7 @@
                         </div>
                         <div>
                             <label class="block text-sm font-bold text-slate-300 mb-2">SNMPv3 auth passphrase</label>
-                            <input type="password" name="ilo_policy_snmpv3_auth_password" value="{{ ilo_policy.get('snmpv3_auth_password', '') }}" class="input">
+                            <input type="password" name="ilo_policy_snmpv3_auth_password" value="" placeholder="Saved - leave blank to keep" class="input">
                         </div>
                         <div>
                             <label class="block text-sm font-bold text-slate-300 mb-2">SNMPv3 privacy protocol</label>
@@ -147,7 +147,7 @@
                         </div>
                         <div>
                             <label class="block text-sm font-bold text-slate-300 mb-2">SNMPv3 privacy passphrase</label>
-                            <input type="password" name="ilo_policy_snmpv3_priv_password" value="{{ ilo_policy.get('snmpv3_priv_password', '') }}" class="input">
+                            <input type="password" name="ilo_policy_snmpv3_priv_password" value="" placeholder="Saved - leave blank to keep" class="input">
                         </div>
                     </div>
                     <div>

@@ -90,8 +90,18 @@ from app.core.config import (
 )
 from app.core.jobs import JobStepRunner
 from app.core.database import DatabaseStore, SQLiteRuntime
+from app.core.artifacts import ArtifactRoot, collect_artifact_entries
 from app.core.registry import load_modules
 from app.core.stage_registry import StageRegistry
+from app.core.workflows import (
+    canonical_workflow_key,
+    set_workflow_included,
+    workflow_definitions,
+    workflow_history_scopes,
+    workflow_included,
+    workflow_run_center_stage_keys,
+)
+from app.operator_flow import operator_page_workflow_key, operator_recommended_order, operator_setup_workflow_keys
 from app.stages.ilo.adapter import HpeIloRedfishAdapter
 from app.modules.ilo.routes import (
     ilo_page_handler,
@@ -605,7 +615,7 @@ PAGE_META = {
 }
 
 STORAGE_APPROVAL_CONFIRM = "APPROVE STORAGE"
-RUN_CENTER_STAGE_KEYS = ["ilo", "storage", "netapp", "esxi", "windows", "qnap", "iosafe", "cisco_switch"]
+RUN_CENTER_STAGE_KEYS = workflow_run_center_stage_keys()
 DEFAULT_KIT_NAME = "Kit-01"
 
 
@@ -708,8 +718,7 @@ def normalize_run_center_scope(scope: str | None, selected_scopes: list[str] | N
 def run_center_scope_keys(scope: str, cfg: dict | None = None) -> list[str]:
     normalized = str(scope or "included").strip().lower()
     if normalized == "included":
-        included = (cfg or {}).get("included", {}) or {}
-        return [key for key in RUN_CENTER_STAGE_KEYS if included.get(key)]
+        return [key for key in RUN_CENTER_STAGE_KEYS if workflow_included(cfg or {}, key)]
     if normalized.startswith("multi__"):
         return [item for item in normalized.split("__")[1:] if item in RUN_CENTER_STAGE_KEYS]
     if normalized in RUN_CENTER_STAGE_KEYS:
@@ -765,6 +774,19 @@ def set_current_kit_name(name: str):
     atomic_write_text(CURRENT_KIT_FILE, sanitize_kit_name(name))
 
 
+_STATE_LOCKS_GUARD = threading.Lock()
+_STATE_LOCKS: dict[str, threading.RLock] = {}
+
+
+def state_lock(name: str) -> threading.RLock:
+    with _STATE_LOCKS_GUARD:
+        lock = _STATE_LOCKS.get(name)
+        if lock is None:
+            lock = threading.RLock()
+            _STATE_LOCKS[name] = lock
+        return lock
+
+
 def atomic_write_text(path: Path, content: str) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp_path = path.with_name(f".{path.name}.{os.getpid()}.{threading.get_ident()}.tmp")
@@ -818,13 +840,14 @@ def load_kit_config(kit_name: str | None = None):
 
 def save_kit_config(cfg: dict):
     kit_name = sanitize_kit_name(cfg.get("site", {}).get("name", "Kit-01"))
-    cfg["site"]["name"] = kit_name
-    atomic_write_text(kit_path(kit_name), yaml.safe_dump(cfg, sort_keys=False))
-    set_current_kit_name(kit_name)
-    try:
-        db_upsert_kit(cfg)
-    except Exception:
-        pass
+    with state_lock(f"kit:{kit_name}"):
+        cfg["site"]["name"] = kit_name
+        atomic_write_text(kit_path(kit_name), yaml.safe_dump(cfg, sort_keys=False))
+        set_current_kit_name(kit_name)
+        try:
+            db_upsert_kit(cfg)
+        except Exception:
+            pass
 
 
 def job_path(kit_name: str) -> Path:
@@ -847,128 +870,129 @@ def write_run_bundle_files(kit_name: str, job: dict[str, Any]) -> None:
     if not run_bundle_dir:
         return
 
-    bundle_dir = Path(run_bundle_dir)
-    bundle_dir.mkdir(parents=True, exist_ok=True)
-    live_log_path = Path(str(job.get("run_live_log_path") or bundle_dir / "live-job.log"))
-    trace_path = Path(str(job.get("run_trace_path") or bundle_dir / "trace.yml"))
-    summary_path = Path(str(job.get("run_summary_path") or bundle_dir / "summary.yml"))
+    with state_lock(f"run-bundle:{sanitize_kit_name(kit_name)}"):
+        bundle_dir = Path(run_bundle_dir)
+        bundle_dir.mkdir(parents=True, exist_ok=True)
+        live_log_path = Path(str(job.get("run_live_log_path") or bundle_dir / "live-job.log"))
+        trace_path = Path(str(job.get("run_trace_path") or bundle_dir / "trace.yml"))
+        summary_path = Path(str(job.get("run_summary_path") or bundle_dir / "summary.yml"))
 
-    logs = list(job.get("logs") or [])
-    live_log_text = "\n".join(str(line) for line in logs)
-    if live_log_text:
-        live_log_text += "\n"
-    live_log_path.write_text(live_log_text, encoding="utf-8")
+        logs = list(job.get("logs") or [])
+        live_log_text = "\n".join(str(line) for line in logs)
+        if live_log_text:
+            live_log_text += "\n"
+        atomic_write_text(live_log_path, live_log_text)
 
-    trace_payload = {
-        "kit_name": sanitize_kit_name(kit_name),
-        "run_id": str(job.get("run_id") or ""),
-        "scope": str(job.get("scope") or ""),
-        "execution_mode": str(job.get("execution_mode") or ""),
-        "execution_mode_label": str(job.get("execution_mode_label") or ""),
-        "status": str(job.get("status") or ""),
-        "current_stage": str(job.get("current_stage") or ""),
-        "progress_percent": int(job.get("progress_percent") or 0),
-        "completed_steps": int(job.get("completed_steps") or 0),
-        "total_steps": int(job.get("total_steps") or 0),
-        "started_at": str(job.get("started_at") or ""),
-        "updated_at": str(job.get("updated_at") or ""),
-        "paths": {
-            "job_yaml": str(job_path(kit_name)),
-            "live_log": str(live_log_path),
-            "config_snapshot": str(job.get("run_config_snapshot_path") or ""),
-            "summary": str(summary_path),
-        },
-        "job_fields": {
-            key: value
-            for key, value in job.items()
-            if key
-            not in {
-                "logs",
-                "trace_events",
-            }
-        },
-        "events": list(job.get("trace_events") or []),
-    }
-    trace_path.write_text(yaml.safe_dump(trace_payload, sort_keys=False), encoding="utf-8")
-
-    summary_payload = {
-        "kit_name": sanitize_kit_name(kit_name),
-        "run_id": str(job.get("run_id") or ""),
-        "scope": str(job.get("scope") or ""),
-        "mode": str(job.get("execution_mode_label") or job.get("execution_mode") or ""),
-        "status": str(job.get("status") or ""),
-        "current_stage": str(job.get("current_stage") or ""),
-        "progress_percent": int(job.get("progress_percent") or 0),
-        "completed_steps": int(job.get("completed_steps") or 0),
-        "total_steps": int(job.get("total_steps") or 0),
-        "started_at": str(job.get("started_at") or ""),
-        "updated_at": str(job.get("updated_at") or ""),
-        "latest_log": str(logs[-1] if logs else ""),
-        "artifacts": {
-            "job_yaml": str(job_path(kit_name)),
-            "live_log": str(live_log_path),
-            "trace": str(trace_path),
-            "config_snapshot": str(job.get("run_config_snapshot_path") or ""),
-            "run_summary": str(job.get("run_summary_artifact") or ""),
-            "esxi_iso_path": str(job.get("esxi_iso_path") or ""),
-            "esxi_iso_url": str(job.get("esxi_iso_url") or ""),
-            "esxi_trace_path": str(job.get("esxi_trace_path") or ""),
-            "storage_run_directory": str(job.get("storage_run_directory") or ""),
-        },
-    }
-    if job.get("ilo_change_summary"):
-        summary_payload["ilo_change_summary"] = dict(job.get("ilo_change_summary") or {})
-    if "ilo_reset_required" in job or job.get("ilo_reset_reason"):
-        summary_payload["ilo_reset_decision"] = {
-            "required": bool(job.get("ilo_reset_required")),
-            "status": str(job.get("ilo_reset_status") or ""),
-            "reason": str(job.get("ilo_reset_reason") or ""),
+        trace_payload = {
+            "kit_name": sanitize_kit_name(kit_name),
+            "run_id": str(job.get("run_id") or ""),
+            "scope": str(job.get("scope") or ""),
+            "execution_mode": str(job.get("execution_mode") or ""),
+            "execution_mode_label": str(job.get("execution_mode_label") or ""),
+            "status": str(job.get("status") or ""),
+            "current_stage": str(job.get("current_stage") or ""),
+            "progress_percent": int(job.get("progress_percent") or 0),
+            "completed_steps": int(job.get("completed_steps") or 0),
+            "total_steps": int(job.get("total_steps") or 0),
+            "started_at": str(job.get("started_at") or ""),
+            "updated_at": str(job.get("updated_at") or ""),
+            "paths": {
+                "job_yaml": str(job_path(kit_name)),
+                "live_log": str(live_log_path),
+                "config_snapshot": str(job.get("run_config_snapshot_path") or ""),
+                "summary": str(summary_path),
+            },
+            "job_fields": {
+                key: value
+                for key, value in job.items()
+                if key
+                not in {
+                    "logs",
+                    "trace_events",
+                }
+            },
+            "events": list(job.get("trace_events") or []),
         }
-    if "ilo_stage_finished" in job or "ilo_final_ip_verified" in job:
-        summary_payload["ilo_final_state"] = {
-            "stage_finished": bool(job.get("ilo_stage_finished")),
-            "final_ip_verified": bool(job.get("ilo_final_ip_verified")),
-            "dns_apply_status": str(job.get("dns_apply_status") or ""),
-            "snmp_apply_status": str(job.get("snmp_apply_status") or ""),
-            "local_account_status": str(job.get("local_account_status") or ""),
-        }
-    if (
-        job.get("esxi_install_values")
-        or job.get("esxi_iso_path")
-        or job.get("esxi_boot_override")
-        or job.get("esxi_post_config_execution")
-    ):
-        summary_payload["esxi_run_summary"] = {
-            "install_values": dict(job.get("esxi_install_values") or {}),
+        atomic_write_text(trace_path, yaml.safe_dump(trace_payload, sort_keys=False))
+
+        summary_payload = {
+            "kit_name": sanitize_kit_name(kit_name),
+            "run_id": str(job.get("run_id") or ""),
+            "scope": str(job.get("scope") or ""),
+            "mode": str(job.get("execution_mode_label") or job.get("execution_mode") or ""),
+            "status": str(job.get("status") or ""),
+            "current_stage": str(job.get("current_stage") or ""),
+            "progress_percent": int(job.get("progress_percent") or 0),
+            "completed_steps": int(job.get("completed_steps") or 0),
+            "total_steps": int(job.get("total_steps") or 0),
+            "started_at": str(job.get("started_at") or ""),
+            "updated_at": str(job.get("updated_at") or ""),
+            "latest_log": str(logs[-1] if logs else ""),
             "artifacts": {
-                "selected_esxi_version": str((job.get("esxi_install_values") or {}).get("esxi_version") or ""),
-                "base_iso_path": str(job.get("esxi_base_iso_path") or ""),
-                "built_iso_path": str(job.get("esxi_iso_path") or ""),
-                "virtual_media_url": str(job.get("esxi_iso_url") or ""),
-                "trace_path": str(job.get("esxi_trace_path") or ""),
-                "builder_summary_path": str(job.get("esxi_builder_summary_path") or ""),
-            },
-            "builder_generation": dict(job.get("esxi_builder_generation") or {}),
-            "builder_self_check": dict(job.get("esxi_builder_self_check") or {}),
-            "ks_cfg": dict(job.get("esxi_ks_cfg") or {}),
-            "install_target": dict(job.get("esxi_install_target") or {}),
-            "virtual_media": dict(job.get("esxi_virtual_media") or {}),
-            "boot_override": dict(job.get("esxi_boot_override") or {}),
-            "boot_evidence": dict(job.get("esxi_boot_evidence") or {}),
-            "boot_evidence_samples": list(job.get("esxi_boot_evidence_samples") or []),
-            "installer_boot_observed": bool(job.get("esxi_installer_boot_observed")),
-            "installer_reboot_detected": bool(job.get("esxi_installer_reboot_detected")),
-            "post_install_boot_guard": dict(job.get("esxi_post_install_boot_guard") or {}),
-            "power_transitions": dict(job.get("esxi_power_transitions") or {}),
-            "management_network": dict(job.get("esxi_management_network") or {}),
-            "post_config": {
-                "preview": dict(job.get("esxi_post_config_preview") or {}),
-                "validation": dict(job.get("esxi_post_config_validation") or {}),
-                "actions": list(job.get("esxi_post_config_actions") or []),
-                "execution": dict(job.get("esxi_post_config_execution") or {}),
+                "job_yaml": str(job_path(kit_name)),
+                "live_log": str(live_log_path),
+                "trace": str(trace_path),
+                "config_snapshot": str(job.get("run_config_snapshot_path") or ""),
+                "run_summary": str(job.get("run_summary_artifact") or ""),
+                "esxi_iso_path": str(job.get("esxi_iso_path") or ""),
+                "esxi_iso_url": str(job.get("esxi_iso_url") or ""),
+                "esxi_trace_path": str(job.get("esxi_trace_path") or ""),
+                "storage_run_directory": str(job.get("storage_run_directory") or ""),
             },
         }
-    summary_path.write_text(yaml.safe_dump(summary_payload, sort_keys=False), encoding="utf-8")
+        if job.get("ilo_change_summary"):
+            summary_payload["ilo_change_summary"] = dict(job.get("ilo_change_summary") or {})
+        if "ilo_reset_required" in job or job.get("ilo_reset_reason"):
+            summary_payload["ilo_reset_decision"] = {
+                "required": bool(job.get("ilo_reset_required")),
+                "status": str(job.get("ilo_reset_status") or ""),
+                "reason": str(job.get("ilo_reset_reason") or ""),
+            }
+        if "ilo_stage_finished" in job or "ilo_final_ip_verified" in job:
+            summary_payload["ilo_final_state"] = {
+                "stage_finished": bool(job.get("ilo_stage_finished")),
+                "final_ip_verified": bool(job.get("ilo_final_ip_verified")),
+                "dns_apply_status": str(job.get("dns_apply_status") or ""),
+                "snmp_apply_status": str(job.get("snmp_apply_status") or ""),
+                "local_account_status": str(job.get("local_account_status") or ""),
+            }
+        if (
+            job.get("esxi_install_values")
+            or job.get("esxi_iso_path")
+            or job.get("esxi_boot_override")
+            or job.get("esxi_post_config_execution")
+        ):
+            summary_payload["esxi_run_summary"] = {
+                "install_values": dict(job.get("esxi_install_values") or {}),
+                "artifacts": {
+                    "selected_esxi_version": str((job.get("esxi_install_values") or {}).get("esxi_version") or ""),
+                    "base_iso_path": str(job.get("esxi_base_iso_path") or ""),
+                    "built_iso_path": str(job.get("esxi_iso_path") or ""),
+                    "virtual_media_url": str(job.get("esxi_iso_url") or ""),
+                    "trace_path": str(job.get("esxi_trace_path") or ""),
+                    "builder_summary_path": str(job.get("esxi_builder_summary_path") or ""),
+                },
+                "builder_generation": dict(job.get("esxi_builder_generation") or {}),
+                "builder_self_check": dict(job.get("esxi_builder_self_check") or {}),
+                "ks_cfg": dict(job.get("esxi_ks_cfg") or {}),
+                "install_target": dict(job.get("esxi_install_target") or {}),
+                "virtual_media": dict(job.get("esxi_virtual_media") or {}),
+                "boot_override": dict(job.get("esxi_boot_override") or {}),
+                "boot_evidence": dict(job.get("esxi_boot_evidence") or {}),
+                "boot_evidence_samples": list(job.get("esxi_boot_evidence_samples") or []),
+                "installer_boot_observed": bool(job.get("esxi_installer_boot_observed")),
+                "installer_reboot_detected": bool(job.get("esxi_installer_reboot_detected")),
+                "post_install_boot_guard": dict(job.get("esxi_post_install_boot_guard") or {}),
+                "power_transitions": dict(job.get("esxi_power_transitions") or {}),
+                "management_network": dict(job.get("esxi_management_network") or {}),
+                "post_config": {
+                    "preview": dict(job.get("esxi_post_config_preview") or {}),
+                    "validation": dict(job.get("esxi_post_config_validation") or {}),
+                    "actions": list(job.get("esxi_post_config_actions") or []),
+                    "execution": dict(job.get("esxi_post_config_execution") or {}),
+                },
+            }
+        atomic_write_text(summary_path, yaml.safe_dump(summary_payload, sort_keys=False))
 
 
 def ensure_run_bundle_for_job(kit_name: str, job: dict[str, Any]) -> dict[str, Any]:
@@ -985,7 +1009,7 @@ def ensure_run_bundle_for_job(kit_name: str, job: dict[str, Any]) -> dict[str, A
     if runtime:
         cfg_snapshot["_runtime"] = runtime
     config_snapshot_path = bundle_dir / "config-snapshot.yml"
-    config_snapshot_path.write_text(yaml.safe_dump(cfg_snapshot, sort_keys=False), encoding="utf-8")
+    atomic_write_text(config_snapshot_path, yaml.safe_dump(cfg_snapshot, sort_keys=False))
 
     job["run_id"] = run_id
     job["run_bundle_dir"] = str(bundle_dir)
@@ -1059,15 +1083,12 @@ def normalize_loaded_job_state(job: dict[str, Any]) -> dict[str, Any]:
 
 
 def save_job(kit_name: str, job: dict):
-    ensure_run_bundle_for_job(kit_name, job)
-    job["updated_at"] = time.strftime("%Y-%m-%d %H:%M:%S")
-    path = job_path(kit_name)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    tmp_path = path.with_suffix(path.suffix + ".tmp")
-    with open(tmp_path, "w", encoding="utf-8") as f:
-        yaml.safe_dump(job, f, sort_keys=False)
-    os.replace(tmp_path, path)
-    write_run_bundle_files(kit_name, job)
+    safe_kit_name = sanitize_kit_name(kit_name)
+    with state_lock(f"job:{safe_kit_name}"):
+        ensure_run_bundle_for_job(safe_kit_name, job)
+        job["updated_at"] = time.strftime("%Y-%m-%d %H:%M:%S")
+        atomic_write_text(job_path(safe_kit_name), yaml.safe_dump(job, sort_keys=False))
+        write_run_bundle_files(safe_kit_name, job)
     if str(job.get("status") or "").strip() == "Failed" and str(job.get("execution_mode") or "").strip() == "real":
         try:
             logs = list(job.get("logs") or [])
@@ -1079,7 +1100,7 @@ def save_job(kit_name: str, job: dict):
                 runs_dir=RUNS_DIR,
                 generated_dir=GENERATED_DIR,
                 exports_dir=EXPORTS_DIR,
-                kit_name=sanitize_kit_name(kit_name),
+                kit_name=safe_kit_name,
                 failure_context={
                     "job_status": job.get("status"),
                     "job_scope": job.get("scope"),
@@ -1087,7 +1108,7 @@ def save_job(kit_name: str, job: dict):
                     "job_logs": logs,
                     "error_message": str(logs[-1] if logs else ""),
                     "diagnosis": job.get("diagnosis") or job.get("storage_preflight") or {},
-                    "kit_config": load_kit_config(kit_name),
+                    "kit_config": load_kit_config(safe_kit_name),
                 },
             )
         except Exception:
@@ -1107,10 +1128,9 @@ def load_history(kit_name: str):
 
 
 def save_history(kit_name: str, entries: list[dict]):
-    path = history_path(kit_name)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    with open(path, "w", encoding="utf-8") as f:
-        yaml.safe_dump(entries, f, sort_keys=False)
+    safe_kit_name = sanitize_kit_name(kit_name)
+    with state_lock(f"history:{safe_kit_name}"):
+        atomic_write_text(history_path(safe_kit_name), yaml.safe_dump(entries, sort_keys=False))
 
 
 def format_storage_bytes(size: int | float | None) -> str:
@@ -2168,13 +2188,8 @@ def build_history_display_entries(history: list[dict[str, Any]]) -> list[dict[st
 
 def build_dashboard_job_status(history: list[dict[str, Any]]) -> dict[str, Any]:
     workflow_defs = [
-        ("ilo", "iLO", ["ilo"]),
-        ("storage", "Storage", ["storage-apply", "storage-reboot"]),
-        ("esxi", "ESXi", ["esxi"]),
-        ("vmware", "vCenter", ["vcenter", "vmware"]),
-        ("windows", "Windows", ["windows"]),
-        ("qnap", "QNAP", ["qnap"]),
-        ("netapp", "NetApp", ["netapp"]),
+        (definition.key, "Storage" if definition.key == "storage" else definition.title, list(definition.history_scopes))
+        for definition in workflow_definitions(dashboard_only=True)
     ]
     passed: list[dict[str, str]] = []
     failed: list[dict[str, str]] = []
@@ -3118,6 +3133,7 @@ def validate_netapp_nfs_dependency_for_esxi(cfg: dict[str, Any]) -> None:
 
 
 def build_validation_checks(cfg: dict[str, Any], workflow: str) -> list[dict[str, Any]]:
+    workflow = canonical_workflow_key(workflow)
     checks: list[dict[str, Any]] = []
     shared_subnet = (cfg.get("shared_network", {}).get("subnet") or "").strip()
     shared_gateway = (cfg.get("ip_plan", {}).get("gateway") or "").strip()
@@ -3146,7 +3162,7 @@ def build_validation_checks(cfg: dict[str, Any], workflow: str) -> list[dict[str
                 href="/ilo",
             )
         )
-    if workflow in {"ilo", "esxi", "windows", "qnap", "netapp", "vmware", "cisco_switch"}:
+    if workflow in {"ilo", "esxi", "windows", "qnap", "netapp", "vcenter", "cisco_switch"}:
         checks.append(
             validation_check(
                 "Shared defaults",
@@ -3170,7 +3186,7 @@ def build_validation_checks(cfg: dict[str, Any], workflow: str) -> list[dict[str
                     bool(target),
                     target or "Cisco management IP is missing.",
                     why="Run Center applies Cisco config over SSH after console bootstrap.",
-                    fix="Open Cisco and use Apply Access Configs.",
+                    fix="Open Cisco and save/apply the management access settings.",
                     href="/cisco",
                 ),
                 validation_check(
@@ -3249,13 +3265,13 @@ def build_validation_checks(cfg: dict[str, Any], workflow: str) -> list[dict[str
                     href="/storage#storage-review-start",
                 )
             )
-    if workflow in {"esxi", "windows", "qnap", "netapp", "vmware"}:
+    if workflow in {"esxi", "windows", "qnap", "netapp", "vcenter"}:
         target_map = {
             "esxi": cfg.get("esxi", {}).get("management_ip") or cfg.get("ip_plan", {}).get("esxi", ""),
             "windows": cfg.get("windows", {}).get("ip_address") or cfg.get("ip_plan", {}).get("windows", ""),
             "qnap": cfg.get("qnap", {}).get("ip") or cfg.get("ip_plan", {}).get("qnap", ""),
             "netapp": cfg.get("netapp", {}).get("host") or cfg.get("ip_plan", {}).get("netapp", ""),
-            "vmware": ((cfg.get("vmware") or {}).get("vcenter_install") or {}).get("target_ip") or (cfg.get("vmware") or {}).get("vcenter_ip", ""),
+            "vcenter": ((cfg.get("vmware") or {}).get("vcenter_install") or {}).get("target_ip") or (cfg.get("vmware") or {}).get("vcenter_ip", ""),
         }
         checks.append(
             validation_check(
@@ -3263,8 +3279,8 @@ def build_validation_checks(cfg: dict[str, Any], workflow: str) -> list[dict[str
                 bool(target_map.get(workflow)),
                 target_map.get(workflow) or "Target address is missing.",
                 why="This stage needs a target address before it can be reviewed or run safely.",
-                fix=f"Open the {'vCenter' if workflow == 'vmware' else (workflow.upper() if workflow == 'esxi' else workflow.title())} page and save the target settings.",
-                href="/vcenter" if workflow == "vmware" else f"/{workflow}",
+                fix=f"Open the {'vCenter' if workflow == 'vcenter' else (workflow.upper() if workflow == 'esxi' else workflow.title())} page and save the target settings.",
+                href="/vcenter" if workflow == "vcenter" else f"/{workflow}",
             )
         )
         if workflow == "esxi":
@@ -3379,7 +3395,7 @@ def build_validation_checks(cfg: dict[str, Any], workflow: str) -> list[dict[str
                     href="/qnap",
                 )
             )
-        if workflow == "vmware":
+        if workflow == "vcenter":
             vcenter_context = build_vcenter_context(cfg)
             blockers = list(vcenter_context.get("blockers") or [])
             checks.append(
@@ -3504,13 +3520,7 @@ def build_setup_precheck_summary(
     workflow_contexts: dict[str, dict[str, Any]],
     recommended_next_step: dict[str, str],
 ) -> dict[str, Any]:
-    included = cfg.get("included", {}) or {}
-    workflow_keys = ["ilo"]
-    if included.get("storage"):
-        workflow_keys.append("storage")
-    for key in ["esxi", "vmware", "windows", "qnap", "netapp", "cisco_switch"]:
-        if included.get(key):
-            workflow_keys.append(key)
+    workflow_keys = operator_setup_workflow_keys(cfg)
     cards = [build_workflow_precheck_card(key, cfg, workflow_contexts) for key in workflow_keys]
     upgrade_card = build_scoped_upgrade_helper_card(cfg, "included")
     if upgrade_card.get("total_checks"):
@@ -3637,17 +3647,7 @@ def build_page_precheck_summary(
         card["title"] = "Upgrade pre-check"
         card["subtitle"] = "Keep upgrade readiness visible before you proceed with the rest of the build."
         return card
-    workflow_map = {
-        "ilo": "ilo",
-        "storage": "storage",
-        "esxi": "esxi",
-        "windows": "windows",
-        "qnap": "qnap",
-        "netapp": "netapp",
-        "vcenter": "vmware",
-        "cisco": "cisco_switch",
-    }
-    workflow_key = workflow_map.get(active_page)
+    workflow_key = operator_page_workflow_key(active_page)
     if not workflow_key:
         return None
     card = build_workflow_precheck_card(workflow_key, cfg, workflow_contexts)
@@ -3930,7 +3930,7 @@ def build_workflow_contexts(cfg: dict[str, Any], job: dict[str, Any], history: l
     for key, name, target, config_summary in [
         ("ilo", "iLO", (cfg.get("ilo", {}).get("current_ip") or cfg.get("ilo", {}).get("host") or "").strip(), (cfg.get("ilo", {}).get("hostname") or "").strip()),
         ("esxi", "ESXi", (cfg.get("esxi", {}).get("management_ip") or cfg.get("ip_plan", {}).get("esxi") or "").strip(), (cfg.get("esxi", {}).get("hostname") or "").strip()),
-        ("vmware", "vCenter", vcenter_target, vcenter_plan_summary),
+        ("vcenter", "vCenter", vcenter_target, vcenter_plan_summary),
         ("windows", "Windows", (cfg.get("windows", {}).get("ip_address") or cfg.get("ip_plan", {}).get("windows") or "").strip(), (cfg.get("windows", {}).get("vm_name") or "").strip()),
         ("qnap", "QNAP", (cfg.get("qnap", {}).get("ip") or cfg.get("ip_plan", {}).get("qnap") or "").strip(), (cfg.get("qnap", {}).get("hostname") or "").strip()),
         ("netapp", "NetApp", (cfg.get("netapp", {}).get("host") or cfg.get("ip_plan", {}).get("netapp") or "").strip(), (cfg.get("netapp", {}).get("storage_protocol") or "nfs").strip().upper()),
@@ -3938,7 +3938,7 @@ def build_workflow_contexts(cfg: dict[str, Any], job: dict[str, Any], history: l
     ]:
         checks = build_validation_checks(cfg, key)
         state, label, tone = checks_status(checks)
-        if key == "vmware":
+        if key == "vcenter":
             activity_status = str(vcenter_activity.get("status") or "").strip().lower()
             if activity_status in {"running", "waiting"}:
                 state, label, tone = "running", workflow_state_ui("running")["label"], workflow_state_ui("running")["tone"]
@@ -3948,10 +3948,10 @@ def build_workflow_contexts(cfg: dict[str, Any], job: dict[str, Any], history: l
                 state, label, tone = "failed", workflow_state_ui("failed")["label"], workflow_state_ui("failed")["tone"]
             elif not any(not item.get("ok") for item in checks) and vcenter_install.get("last_plan"):
                 state, label, tone = "planned", workflow_state_ui("planned")["label"], workflow_state_ui("planned")["tone"]
-        running_scopes = {key, "vcenter"} if key == "vmware" else {key}
+        running_scopes = {key, "vmware"} if key == "vcenter" else {key}
         if current_scope in running_scopes and current_status == "Running":
             state, label, tone = "running", workflow_state_ui("running")["label"], workflow_state_ui("running")["tone"]
-        latest = latest_history_entry_for_scope(history, ["vcenter", "vmware"] if key == "vmware" else [key])
+        latest = latest_history_entry_for_scope(history, list(workflow_history_scopes(key)))
         contexts[key] = {
             "key": key,
             "name": name,
@@ -3961,11 +3961,14 @@ def build_workflow_contexts(cfg: dict[str, Any], job: dict[str, Any], history: l
             "target": target or "Not set",
             "current_summary": f"Current target is {target or 'not set'}.",
             "planned_summary": config_summary or "Finish the saved setup on this page.",
-            "approved_summary": "This workflow uses saved settings directly." if cfg.get("included", {}).get(key) else "This workflow is currently not included in the kit.",
+            "approved_summary": "This workflow uses saved settings directly." if workflow_included(cfg, key) else "This workflow is currently not included in the kit.",
             "result_summary": (latest.get("status") or "No run has been recorded yet.") if latest else "No run has been recorded yet.",
             "checks": checks,
-            "review_href": "/cisco" if key == "cisco_switch" else ("/vcenter" if key == "vmware" else f"/{key}"),
+            "review_href": "/cisco" if key == "cisco_switch" else ("/vcenter" if key == "vcenter" else f"/{key}"),
         }
+
+    if "vcenter" in contexts:
+        contexts["vmware"] = {**contexts["vcenter"], "key": "vmware"}
 
     return contexts
 
@@ -3981,49 +3984,27 @@ def build_recommended_next_step(cfg: dict[str, Any], workflow_contexts: dict[str
     ilo_host = (cfg.get("ilo", {}).get("current_ip") or cfg.get("ilo", {}).get("host") or "").strip()
     if not ilo_host:
         return {"title": "Set the iLO target", "summary": "Start on the iLO page and save the current iLO address and credentials first.", "href": "/ilo"}
-    if cfg.get("included", {}).get("storage") and workflow_contexts["storage"]["state"] in {"not_started", "discovered", "planned", "stale"}:
+    if workflow_included(cfg, "storage") and workflow_contexts["storage"]["state"] in {"not_started", "discovered", "planned", "stale"}:
         return {"title": "Finish storage review", "summary": "Go to Storage / RAID, confirm the current server, and approve the exact storage plan before the final run.", "href": "/storage"}
-    for key in ["esxi", "vmware", "windows", "qnap", "netapp", "cisco_switch"]:
-        if cfg.get("included", {}).get(key) and workflow_contexts[key]["state"] in {"not_started", "failed"}:
+    for key in operator_recommended_order():
+        if workflow_included(cfg, key) and workflow_contexts[key]["state"] in {"not_started", "failed"}:
             return {"title": f"Open {workflow_contexts[key]['name']} page", "summary": f"Open the {workflow_contexts[key]['name']} page and finish the saved setup values.", "href": workflow_contexts[key]["review_href"]}
     return {"title": "Review the run", "summary": "Open Run Center to review the included stages, checks, and warnings before starting.", "href": "/execution"}
 
 
 def collect_report_entries(cfg: dict[str, Any], query: str = "", report_type: str = "all", limit: int = 120) -> list[dict[str, str]]:
     kit_name = sanitize_kit_name(cfg.get("site", {}).get("name", "Kit-01"))
-    entries: list[dict[str, str]] = []
     roots = [
-        ("ilo-live", ILO_LIVE_EXPORT_DIR),
-        ("storage", STORAGE_RAID_EXPORT_DIR),
-        ("config", CONFIG_EXPORT_DIR),
-        ("ilo-config", ILO_CONFIG_EXPORT_DIR),
+        ArtifactRoot("ilo-live", ILO_LIVE_EXPORT_DIR),
+        ArtifactRoot("storage", STORAGE_RAID_EXPORT_DIR),
+        ArtifactRoot("config", CONFIG_EXPORT_DIR),
+        ArtifactRoot("ilo-config", ILO_CONFIG_EXPORT_DIR),
+        ArtifactRoot("runs", RUNS_DIR),
+        ArtifactRoot("generated", GENERATED_DIR),
+        ArtifactRoot("builds", BUILD_OUTPUT_DIR),
+        ArtifactRoot("debug-bundles", DEBUG_BUNDLES_DIR),
     ]
-    needle = query.strip().lower()
-    for kind, root in roots:
-        if report_type != "all" and report_type != kind:
-            continue
-        if not root.exists():
-            continue
-        for path in root.rglob("*"):
-            if not path.is_file():
-                continue
-            text = f"{kind} {path.name} {path.parent.name} {path.parent.parent.name if path.parent.parent else ''}".lower()
-            if needle and needle not in text:
-                continue
-            modified = datetime.fromtimestamp(path.stat().st_mtime)
-            entries.append(
-                {
-                    "kind": kind,
-                    "label": path.name,
-                    "path": str(path),
-                    "parent": str(path.parent),
-                    "server": path.parent.parent.name if path.parent.parent != path.parent else "",
-                    "mtime": f"{modified.year:04d}-{modified.month:02d}-{modified.day:02d} {modified.hour:02d}:{modified.minute:02d}:{modified.second:02d}",
-                    "kit_match": "Yes" if kit_name in str(path) else "",
-                }
-            )
-    entries.sort(key=lambda item: item["mtime"], reverse=True)
-    return entries[:limit]
+    return collect_artifact_entries(roots, kit_name=kit_name, query=query, report_type=report_type, limit=limit)
 
 
 def history_scope_bundle_name(scope: str) -> str:
@@ -4510,7 +4491,6 @@ def build_execution_launch_options(cfg: dict[str, Any], scope: str) -> dict[str,
 
 
 def build_run_center_readiness_matrix(cfg: dict[str, Any], scope: str) -> list[dict[str, Any]]:
-    included_cfg = cfg.get("included", {}) or {}
     storage_review = build_storage_review_context(cfg)
     selected_keys = run_center_scope_keys(scope, cfg)
     upgrade_entries = upgrade_gate_entries_for_scope(cfg, scope)
@@ -4519,9 +4499,7 @@ def build_run_center_readiness_matrix(cfg: dict[str, Any], scope: str) -> list[d
 
     def stage_in_scope(key: str) -> bool:
         if scope == "included":
-            if key == "storage":
-                return bool(included_cfg.get("storage"))
-            return bool(included_cfg.get(key))
+            return workflow_included(cfg, key)
         if scope == "ilo":
             return key in {"ilo", "storage"}
         if scope.startswith("multi__"):
@@ -10345,10 +10323,9 @@ def build_execution_review(cfg: dict, scope: str):
 
     included_stages = []
     if scope == "included":
-        included = cfg.get("included", {})
         lines.append("Will act on all included components in this kit:")
         for key in RUN_CENTER_STAGE_KEYS:
-            if included.get(key):
+            if workflow_included(cfg, key):
                 lines.append(f"- {components[key]['name']} -> {components[key]['target']}")
                 included_stages.append(stage_entry(key, True))
     elif scope.startswith("multi__"):
@@ -10407,9 +10384,8 @@ def build_execution_review(cfg: dict, scope: str):
     will_run = [stage["name"] for stage in included_stages if stage["included"]]
     will_not_run: list[str] = []
     if scope == "included":
-        included_cfg = cfg.get("included", {})
         for key in RUN_CENTER_STAGE_KEYS:
-            if not included_cfg.get(key):
+            if not workflow_included(cfg, key):
                 will_not_run.append(components[key]["name"])
     elif scope == "ilo" and not storage_review.get("include_in_ilo_run"):
         will_not_run.append("Storage / RAID")
@@ -10426,7 +10402,7 @@ def build_execution_review(cfg: dict, scope: str):
         {"label": "Execution mode", "value": execution_mode["label"]},
         {"label": "Run type", "value": run_type_label},
         {"label": "Selected kit", "value": cfg.get("site", {}).get("name", "") or "Unknown"},
-        {"label": "Storage in run", "value": "Yes" if (scope == "included" and cfg.get("included", {}).get("storage")) or (scope == "ilo" and storage_review.get("include_in_ilo_run")) else "No"},
+        {"label": "Storage in run", "value": "Yes" if (scope == "included" and workflow_included(cfg, "storage")) or (scope == "ilo" and storage_review.get("include_in_ilo_run")) else "No"},
         {"label": "Restart expected", "value": "Yes" if storage_review.get("approval", {}).get("reboot_expected") and any(stage["key"] == "storage" and stage["included"] for stage in included_stages) else "No"},
     ]
     warning_points = [
@@ -15080,7 +15056,7 @@ async def websocket_job_stream(websocket: WebSocket, kit_name: str):
     try:
         while True:
             job = load_job(kit_name)
-            payload = yaml.safe_dump(job, sort_keys=False)
+            payload = json.dumps(job, default=str, sort_keys=True)
             if payload != last_payload:
                 await websocket.send_text(payload)
                 last_payload = payload
@@ -15919,7 +15895,7 @@ async def save_vcenter_settings_route(
     vcenter_ssh_enable: str | None = Form(None),
 ):
     cfg = load_kit_config()
-    cfg.setdefault("included", {})["vmware"] = True
+    set_workflow_included(cfg, "vcenter", True)
     cfg.setdefault("vmware", {})
     cfg["vmware"]["vcenter_ip"] = str(vcenter_target_ip or cfg["vmware"].get("vcenter_ip") or "").strip()
     install = cfg["vmware"].setdefault("vcenter_install", {})

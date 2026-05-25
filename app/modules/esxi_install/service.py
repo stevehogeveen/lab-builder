@@ -4,24 +4,34 @@ from typing import Any
 
 
 class EsxiInstallModuleService:
+    def _manual(self, action: str, extra: dict[str, Any] | None = None) -> dict[str, Any]:
+        return {
+            "module": "esxi_install",
+            "action": action,
+            "ok": False,
+            "implemented": False,
+            "state": "not_implemented",
+            "message": "ESXi install execution is handled by the shared stage registry; this module service endpoint is not wired directly.",
+            **(extra or {}),
+        }
+
     def discover(self, context: dict[str, Any]) -> dict[str, Any]:
-        return {"module": "esxi_install", "action": "discover", "ok": True}
+        return self._manual("discover")
 
     def plan(self, context: dict[str, Any]) -> dict[str, Any]:
-        return {"module": "esxi_install", "action": "plan", "ok": True}
+        return self._manual("plan")
 
     def validate(self, context: dict[str, Any]) -> dict[str, Any]:
-        return {"module": "esxi_install", "action": "validate", "ok": True}
+        return self._manual("validate")
 
     def preview(self, context: dict[str, Any]) -> dict[str, Any]:
-        return {"module": "esxi_install", "action": "preview", "ok": True}
+        return self._manual("preview")
 
     def apply(self, context: dict[str, Any], job: dict[str, Any]) -> dict[str, Any]:
-        return {"module": "esxi_install", "action": "apply", "ok": True}
+        return self._manual("apply")
 
     def status(self, context: dict[str, Any]) -> dict[str, Any]:
-        return {"module": "esxi_install", "action": "status", "ok": True}
+        return self._manual("status")
 
     def repair(self, context: dict[str, Any], issue_id: str) -> dict[str, Any]:
-        return {"module": "esxi_install", "action": "repair", "issue_id": issue_id, "ok": True}
-
+        return self._manual("repair", {"issue_id": issue_id})

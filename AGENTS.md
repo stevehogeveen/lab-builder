@@ -7,6 +7,7 @@ Before editing code, every session must read:
 3. `docs/operator-flow-contract.md`
 4. `docs/automation-principles.md`
 5. `docs/ux-product-principles.md`
+6. `docs/validation.md`
 
 ## Quick Start Trigger
 
@@ -25,3 +26,5 @@ Every setup workflow must follow the shared operator flow:
 Do not invent a new way to collect IPs, show logs, show readiness, show run status, or present evidence. If a workflow needs a new pattern, update `docs/operator-flow-contract.md` first and explain why the shared pattern is insufficient.
 
 Before editing shared files, claim the exact files in `SESSION_COORDINATION.md`. Keep ownership narrow, leave the app testable after each commit, and do not edit unrelated workflow modules.
+
+Before committing shared operator-flow changes, run the focused validation commands in `docs/validation.md`; broaden to the full pytest suite when shared routing, state writes, or workflow contracts changed.

@@ -54,7 +54,7 @@
                 </div>
                 <div>
                     <label class="block text-sm font-bold text-slate-300 mb-2">Password</label>
-                    <input type="password" name="qnap_password" value="{{ cfg.get('qnap', {}).get('password', '') }}" class="input">
+                    <input type="password" name="qnap_password" value="" placeholder="Saved - leave blank to keep" class="input">
                 </div>
                 <label class="check"><input type="checkbox" name="included_qnap" {% if cfg.get('included', {}).get('qnap') %}checked{% endif %}> Include QNAP in this kit</label>
                 <div class="actions">

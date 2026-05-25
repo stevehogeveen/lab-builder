@@ -1,0 +1,12 @@
+[tool.ruff]
+line-length = 160
+target-version = "py312"
+extend-exclude = [
+    "artifacts",
+    "config",
+    "dist",
+    "media",
+]
+
+[tool.ruff.lint]
+select = ["E", "F"]

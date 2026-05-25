@@ -9,6 +9,7 @@
 - Offline ONTAP REST compatibility catalog: [ontap-api-catalog.md](ontap-api-catalog.md)
 - Workflow session scopes for parallel Codex work: [workflow-session-scopes.md](workflow-session-scopes.md)
 - Operator flow contract for all setup workflows: [operator-flow-contract.md](operator-flow-contract.md)
+- Validation commands: [validation.md](validation.md)
 
 ## UI Sections
 

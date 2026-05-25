@@ -1,77 +1,10 @@
 (function () {
     function parseJobPayload(text) {
-        const lines = String(text || "").split("\n");
-        const data = {};
-        let currentKey = null;
-        let currentMapKey = null;
-
-        function parseScalar(value) {
-            let parsed = String(value == null ? "" : value).trim();
-            parsed = parsed.replace(/^["']|["']$/g, "");
-            if (/^\d+$/.test(parsed)) return parseInt(parsed, 10);
-            if (parsed === "true") return true;
-            if (parsed === "false") return false;
-            return parsed;
+        try {
+            return JSON.parse(String(text || "{}")) || {};
+        } catch (error) {
+            return {};
         }
-
-        for (const rawLine of lines) {
-            const line = rawLine.replace(/\r$/, "");
-            if (!line.trim()) continue;
-
-            if (/^\s+/.test(line) && currentMapKey && data[currentMapKey] && typeof data[currentMapKey] === "object" && !Array.isArray(data[currentMapKey])) {
-                const nestedMatch = line.match(/^\s+([^:\s][^:]*):\s*(.*)$/);
-                if (nestedMatch) {
-                    const nestedKey = nestedMatch[1].trim();
-                    const nestedValue = parseScalar(nestedMatch[2]);
-                    data[currentMapKey][nestedKey] = nestedValue;
-                    continue;
-                }
-            }
-
-            if (/^\s+/.test(line) && currentKey && Array.isArray(data[currentKey]) && data[currentKey].length === 0) {
-                const nestedMatch = line.match(/^\s+([^:\s][^:]*):\s*(.*)$/);
-                if (nestedMatch) {
-                    data[currentKey] = {};
-                    currentMapKey = currentKey;
-                    data[currentMapKey][nestedMatch[1].trim()] = parseScalar(nestedMatch[2]);
-                    continue;
-                }
-            }
-
-            if (/^\s*-\s/.test(line)) {
-                if (currentKey && Array.isArray(data[currentKey])) {
-                    let item = line.replace(/^\s*-\s/, "").trim();
-                    item = parseScalar(item);
-                    data[currentKey].push(item);
-                }
-                continue;
-            }
-
-            // YAML list items can wrap onto indented continuation lines.
-            // Keep appending those lines to the most recent list entry.
-            if (/^\s+/.test(line) && currentKey && Array.isArray(data[currentKey]) && data[currentKey].length) {
-                const idx = data[currentKey].length - 1;
-                const prev = String(data[currentKey][idx] == null ? "" : data[currentKey][idx]);
-                data[currentKey][idx] = `${prev} ${line.trim()}`.trim();
-                continue;
-            }
-
-            // Only parse top-level keys to avoid misreading wrapped values.
-            const keyMatch = line.match(/^([^:\s][^:]*):\s*(.*)$/);
-            if (keyMatch) {
-                const key = keyMatch[1].trim();
-                let value = keyMatch[2].trim();
-                if (value === "") {
-                    data[key] = [];
-                    currentMapKey = null;
-                } else {
-                    data[key] = parseScalar(value);
-                    currentMapKey = null;
-                }
-                currentKey = key;
-            }
-        }
-        return data;
     }
 
     function workflowSummary(data) {

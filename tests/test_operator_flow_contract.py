@@ -1,6 +1,10 @@
 from pathlib import Path
 
 import app.main as main
+from app.modules.esxi_config.service import EsxiConfigModuleService
+from app.modules.esxi_install.service import EsxiInstallModuleService
+from app.modules.qnap.service import QnapModuleService
+from app.modules.windows.service import WindowsModuleService
 
 
 def test_session_docs_define_operator_flow_contract():
@@ -23,6 +27,7 @@ def test_session_docs_define_operator_flow_contract():
         "docs/operator-flow-contract.md",
         "docs/automation-principles.md",
         "docs/ux-product-principles.md",
+        "docs/validation.md",
     ]:
         assert required in agents_text
 
@@ -37,6 +42,7 @@ def test_session_docs_define_operator_flow_contract():
     assert "app/modules/cisco/**" in scopes_text
     assert "### vCenter" in scopes_text
     assert "create one from the template" in scopes_text
+    assert (root / "docs" / "validation.md").exists()
 
 
 def test_vcenter_participates_in_shared_workflow_context(monkeypatch, tmp_path):
@@ -70,7 +76,12 @@ def test_vcenter_participates_in_shared_workflow_context(monkeypatch, tmp_path):
 
     contexts = main.build_workflow_contexts(cfg, {}, [])
 
+    assert "vcenter" in contexts
     assert "vmware" in contexts
+    assert contexts["vcenter"]["name"] == "vCenter"
+    assert contexts["vcenter"]["target"] == "10.10.8.50"
+    assert contexts["vcenter"]["review_href"] == "/vcenter"
+    assert any(check["label"] == "Install context" for check in contexts["vcenter"]["checks"])
     assert contexts["vmware"]["name"] == "vCenter"
     assert contexts["vmware"]["target"] == "10.10.8.50"
     assert contexts["vmware"]["review_href"] == "/vcenter"
@@ -78,8 +89,51 @@ def test_vcenter_participates_in_shared_workflow_context(monkeypatch, tmp_path):
 
     recommended = main.build_recommended_next_step(cfg, contexts)
     summary = main.build_setup_precheck_summary(cfg, contexts, recommended)
-    assert any(item["key"] == "vmware" for item in summary["items"])
+    assert any(item["key"] == "vcenter" for item in summary["items"])
 
     page_summary = main.build_page_precheck_summary("vcenter", cfg, contexts)
     assert page_summary is not None
-    assert page_summary["key"] == "vmware"
+    assert page_summary["key"] == "vcenter"
+
+
+def test_setup_pages_render_shared_flow_components():
+    root = Path(__file__).resolve().parents[1]
+    page_names = ["ilo", "storage", "esxi", "vcenter", "windows", "qnap", "netapp", "cisco"]
+
+    for page_name in page_names:
+        text = (root / "templates" / "partials" / "pages" / f"{page_name}.html").read_text(encoding="utf-8")
+        assert 'partials/components/precheck_summary.html' in text, page_name
+        assert 'partials/components/setup_strip.html' in text, page_name
+
+
+def test_setup_pages_do_not_render_saved_secret_values():
+    root = Path(__file__).resolve().parents[1]
+    page_names = ["configuration", "ilo", "storage", "esxi", "vcenter", "windows", "qnap", "netapp", "cisco"]
+
+    for page_name in page_names:
+        text = (root / "templates" / "partials" / "pages" / f"{page_name}.html").read_text(encoding="utf-8")
+        assert 'type="password"' in text, page_name
+        assert 'type="password"' not in text or 'value="{{' not in "\n".join(
+            line for line in text.splitlines() if 'type="password"' in line
+        ), page_name
+
+
+def test_placeholder_module_services_report_manual_state():
+    for service in [QnapModuleService(), EsxiInstallModuleService(), EsxiConfigModuleService(), WindowsModuleService()]:
+        result = service.apply({}, {})
+        assert result["ok"] is False
+        assert result["implemented"] is False
+        assert result["state"] in {"manual_only", "not_implemented"}
+
+
+def test_live_job_websocket_uses_json_payloads():
+    root = Path(__file__).resolve().parents[1]
+    main_text = (root / "app" / "main.py").read_text(encoding="utf-8")
+    live_job_text = (root / "static" / "js" / "live-job.js").read_text(encoding="utf-8")
+    index_text = (root / "templates" / "index.html").read_text(encoding="utf-8")
+    websocket_section = main_text.split("async def websocket_job_stream", 1)[1].split("@app.get", 1)[0]
+
+    assert "json.dumps(job" in websocket_section
+    assert "yaml.safe_dump(job" not in websocket_section
+    assert "JSON.parse" in live_job_text
+    assert "JSON.parse" in index_text

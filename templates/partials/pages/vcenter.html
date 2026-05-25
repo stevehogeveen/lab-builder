@@ -8,6 +8,9 @@
         <span class="status {{ 'ready' if vcenter_install.ready else 'pending' }}">{{ 'Ready' if vcenter_install.ready else 'Needs input' }}</span>
     </div>
 
+    {% set precheck_summary = page_precheck_summary %}
+    {% include "partials/components/precheck_summary.html" %}
+
     {% set setup_strip = [
         {"label": "Appliance IP", "value": vcenter_install.target_ip or 'Not set', "note": "Defaults to .50 on the lab subnet"},
         {"label": "ESXi target", "value": vcenter_install.esxi_host or 'Not set', "note": "VCSA deploy destination"},
