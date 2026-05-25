@@ -1,0 +1,56 @@
+**Scope Note**
+No files were edited. Local shell commands could not run in this sandbox, so I could not run `git status`, `rg`, or tests. This audit is read-only against `stevehogeveen/lab-builder` `main` through the GitHub connector, so uncommitted local changes may be missing.
+
+**Page And Control Inventory**
+- Shell/sidebar: links to Dashboard, Global, Upgrade Helper, iLO, Storage, ESXi, Windows, Cisco, NetApp, OVF Templates, Run Center, Reports, QNAP; frontend-only Quick jump, Open issues, Compact view.
+- Dashboard: `/load-kit`, `/new-kit`, `/view-current-kit-config`, `/download-current-kit-config`, `/view-run-summary`, links to next step and `/execution`.
+- Global Settings: `/save-global-settings`, Alpine add/remove SNMP users.
+- Upgrade Helper: `/upload-upgrade-media`, `/save-upgrade-policies`, `/save-upgrade-override`, `/plan-ilo-upgrade`, `/run-ilo-upgrade`, `/modules/cisco/*upgrade*`, `/modules/netapp/*upgrade*`, `/modules/cisco/discover-version`.
+- OVF Templates: `/modules/ovf-templates/register-directory`.
+- iLO: tabs, `/save-ilo-settings`, `/export-ilo-inventory`, `/view-run-summary`, upgrade gate override.
+- Storage: `/save-storage-target`, `/repair-storage-selection`, `/read-current-storage`, `/plan-raid-layout`, `/approve-storage-plan`, `/clear-storage-approval`, `/reboot-storage-now`, `/view-storage-artifact`.
+- ESXi: tabs, `/save-esxi-settings`.
+- Windows: `/save-windows-settings`, `/probe-windows-vsphere`, `/probe-windows-winrm`, `/select-windows-ovf-template`, `/plan-windows-install`.
+- QNAP: `/save-qnap-settings`.
+- NetApp: `/modules/netapp/save-settings`, `test-connection`, `discover-page`, `validate-page`, `export-plan`, `apply-page`, `bootstrap-test/*`, `bootstrap-complete`, `use-discovered-values`, `update-convention`, `probe-vmware-nfs`.
+- Cisco: `/modules/cisco/discover-console`, `verify-console-bootstrap`, `test-ssh`, `bootstrap-management`, `discover-version`, `fix-serial-permissions`, `save-port-map`, `approve-config-plan`, `factory-reset`.
+- Run Center: `/prepare-execute`, `/execute`, `/execute-preview`, `/retry-storage-stage`, `/view-run-summary`, `/download-run-summary`, WebSocket `/ws/job/{kit_name}`.
+- Reports/History: `/configs` query filter, `/history`, `/view-report`, `/download-report`, `/view-run-summary`.
+
+**Prioritized Findings**
+1. `[mock/dry-run only]` Windows has a visible form posting to `/select-windows-ovf-template`, but I did not find a matching confirmed handler in the route inventory. This is the first route to verify/fix because it is user-facing and low hardware risk.
+2. `[mock/dry-run only, can test with available switch]` Run Center exposes `cisco_switch` and `iosafe` scopes, but Cisco appears omitted from several readiness/status summaries, and `iosafe` has no visible setup page in the inspected templates. This can make a selectable stage look valid while missing setup/status coverage.
+3. `[code inspection only]` Secrets are rendered back into HTML `value=` attributes on several pages: Global SNMP, iLO, QNAP, Cisco, Storage, and Windows admin password. This is a high-risk UI/security issue and can also mask accidental resets.
+4. `[can test with available server, can test with available switch, mock/dry-run only]` Hardware actions are not uniformly dry-run/mockable at the button level. Storage reboot/apply, iLO read/upgrade, ESXi real run, Cisco bootstrap/factory reset/upgrade, NetApp upgrade/apply, Windows probes, and QNAP all need explicit live/mock boundaries.
+5. `[mock/dry-run only]` Logs/status are inconsistent: Run Center has live logs, Storage has a separate live progress card, Cisco suppresses the global banner and uses inline feedback, NetApp puts results near the bottom, while other pages use the global receipt.
+6. `[mock/dry-run only]` Buttons can change saved choices unexpectedly: Storage controller filter JS unchecks hidden drives, “Use iLO defaults” can replace storage target inputs, NetApp “Use discovered values” and “Update convention” rewrite IPs, upgrade override toggles alter gates immediately.
+7. `[code inspection only]` Several routes look orphaned or not visibly reachable: `/upload-windows-image`, Cisco `discover-state`, `discover-ports`, `backup-config`, `preview-config`, `apply-config`, and NetApp generic JSON endpoints. They need classification as API-only, legacy, or removed.
+8. `[code inspection only]` Module/page aliases are uneven: OVF lives at `/modules/ovf-templates` with no obvious `/ovf-templates` alias; Cisco has both `/cisco` and `/modules/cisco`; NetApp only uses `/modules/netapp`.
+9. `[code inspection only]` Storage, Cisco, NetApp, Reports, and History are cluttered. They contain useful details, but the first screen mixes operator tasks, raw diagnostics, artifacts, and destructive actions.
+10. `[mock/dry-run only]` Test coverage should be broadened around route/template consistency, blank secret preservation, dry-run adapters, Run Center stage coverage, and UI result placement.
+
+**High-Risk Areas**
+- Destructive controls: Storage apply/reboot, Cisco factory reset, Cisco upgrade, iLO upgrade, ESXi real run, NetApp upgrade/apply.
+- Secret handling in templates and save handlers.
+- Run Center scope selection versus actual readiness/handler coverage.
+- Any workflow assuming unavailable hardware: NetApp, QNAP, Windows vSphere/WinRM, multi-node ESXi/NetApp checks.
+
+**Low-Risk Quick Wins**
+- Add a route/template consistency test for all `hx-post`, `formaction`, `action`, and sidebar links.
+- Fix or remove `/select-windows-ovf-template`.
+- Label orphan routes as API-only/legacy in tests.
+- Add `/ovf-templates` alias or explicitly keep only `/modules/ovf-templates`.
+- Remove duplicate Storage links where both “Open reports” and “Open build files” point to `/configs`.
+
+**Safest 14-Hour Fix Order**
+1. Build the route/control inventory test and confirm every visible action resolves.
+2. Fix the Windows OVF selection route or change the form to an existing handler.
+3. Lock Run Center scope coverage, especially Cisco and `iosafe`.
+4. Add secret-preservation and “no secret value rendered” tests, then update templates.
+5. Add explicit mock/dry-run gates and injectable clients for hardware-touching handlers.
+6. Standardize action feedback/log placement per page.
+7. Simplify Storage/Cisco/NetApp first screens, leaving technical details collapsed.
+8. Run focused validation, then the broader pytest suite.
+
+**Recommended First Task**
+Start with the route/control consistency test and the `/select-windows-ovf-template` fix. It is low hardware risk, will catch more broken controls immediately, and gives the rest of the 14-hour run a safer regression net.
