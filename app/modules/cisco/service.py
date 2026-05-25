@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import datetime, timezone
 import ipaddress
 import json
 import platform
@@ -1075,6 +1076,58 @@ class CiscoModuleService:
             }
         except Exception as exc:
             return {"module": "cisco", "action": "test_ssh", "ok": False, "host": self._management_ip(context), "error": str(exc), "status": status}
+
+    def factory_reset_console(self, context: dict[str, Any]) -> dict[str, Any]:
+        cfg = dict(context.get("cfg") or {})
+        cisco_cfg = dict(cfg.get("cisco_switch") or {})
+        port = str(cisco_cfg.get("console_port") or "").strip()
+        baud = int(cisco_cfg.get("console_baud") or 9600)
+        if not port:
+            return {
+                "module": "cisco",
+                "action": "factory_reset",
+                "ok": False,
+                "status": "blocked",
+                "source": "console",
+                "error": "Cisco console port is not selected.",
+            }
+        reset_config = {
+            "username": self._username(context),
+            "password": self._password(context),
+            "console_password": str(cisco_cfg.get("console_password") or ""),
+            "enable_secret": self._enable_secret(cisco_cfg),
+            "enable_password": self._enable_secret(cisco_cfg),
+        }
+        try:
+            with CiscoSerialClient(port, baud) as client:
+                result = client.factory_reset(reset_config)
+            payload = result.as_dict(include_raw=True)
+            return {
+                "module": "cisco",
+                "action": "factory_reset",
+                "ok": bool(result.ok),
+                "status": "reload_issued" if result.ok else "failed",
+                "source": "console",
+                "port": port,
+                "baud": baud,
+                "commands": list(payload.get("commands") or []),
+                "output": str(payload.get("output") or ""),
+                "output_excerpt": "\n".join(str(payload.get("output") or "").splitlines()[-80:]),
+                "error": str(payload.get("error") or ""),
+                "completed_at": datetime.now(timezone.utc).isoformat(),
+            }
+        except Exception as exc:
+            return {
+                "module": "cisco",
+                "action": "factory_reset",
+                "ok": False,
+                "status": "failed",
+                "source": "console",
+                "port": port,
+                "baud": baud,
+                "error": str(exc).splitlines()[0],
+                "completed_at": datetime.now(timezone.utc).isoformat(),
+            }
 
     def discover_ports(self, context: dict[str, Any]) -> dict[str, Any]:
         host = self._management_ip(context)

@@ -391,6 +391,29 @@ def _update_cisco_access_from_form(cisco_cfg: dict, form: dict[str, Any]) -> Non
     )
 
 
+def _clear_cisco_live_state_after_factory_reset(cisco_cfg: dict[str, Any]) -> None:
+    for key, value in {
+        "last_bootstrap": {},
+        "last_console_bootstrap_check": {},
+        "last_raw_console_bootstrap_check": "",
+        "last_console_management_state": "",
+        "last_ssh_test": {},
+        "last_port_discovery": {},
+        "last_raw_port_discovery": "",
+        "last_running_config_backup": "",
+        "last_config_preview": "",
+        "last_config_validation": {},
+    }.items():
+        cisco_cfg[key] = value
+    cisco_cfg["connection_method"] = "console"
+    cisco_cfg["config_approval"] = {
+        "state": "blocked",
+        "mode": "full",
+        "checked_at": datetime.now(timezone.utc).isoformat(),
+        "blockers": ["Factory reset was issued. Run Setup Console and re-approve the Cisco config before Run Center."],
+    }
+
+
 @router.post("/modules/cisco/discover-console", response_class=HTMLResponse)
 @router.post("/modules/cisco/test-console-access", response_class=HTMLResponse)
 async def cisco_discover_console(request: Request, return_page: str = Form("cisco")):
@@ -951,34 +974,39 @@ async def cisco_factory_reset(request: Request):
     cisco_cfg = cfg.setdefault("cisco_switch", {})
     form = dict(await request.form())
     confirm = str(form.get("cisco_factory_reset_confirm") or "").strip().upper()
-    _update_cisco_access(
-        cisco_cfg,
-        hostname=str(form.get("cisco_switch_hostname") or ""),
-        username=str(form.get("cisco_switch_username") or ""),
-        password=str(form.get("cisco_switch_password") or ""),
-        management_ip=str(form.get("cisco_management_ip") or ""),
-    )
+    _update_cisco_access_from_form(cisco_cfg, form)
     if confirm != "FACTORY RESET":
         result = {"status": "blocked", "error": "Type FACTORY RESET to confirm deleting startup-config, vlan.dat, and reloading the switch."}
         tone = "danger"
     else:
-        try:
-            result = execute_cisco_factory_reset(
-                str(cisco_cfg.get("ip") or cisco_cfg.get("management_ip") or ""),
-                str(cisco_cfg.get("username") or ""),
-                str(cisco_cfg.get("password") or ""),
-            )
-            tone = "pending"
-        except Exception as exc:
-            result = {"status": "failed", "error": str(exc).strip() or "Cisco factory reset failed."}
-            tone = "danger"
-    cisco_cfg["last_factory_reset"] = result
+        if str(cisco_cfg.get("console_port") or "").strip():
+            result = service.factory_reset_console({"cfg": cfg})
+            tone = "pending" if result.get("status") == "reload_issued" else "danger"
+        else:
+            try:
+                result = execute_cisco_factory_reset(
+                    str(cisco_cfg.get("ip") or cisco_cfg.get("management_ip") or ""),
+                    str(cisco_cfg.get("username") or ""),
+                    str(cisco_cfg.get("password") or ""),
+                )
+                result["source"] = "ssh"
+                tone = "pending"
+            except Exception as exc:
+                result = {"status": "failed", "source": "ssh", "error": str(exc).strip() or "Cisco factory reset failed."}
+                tone = "danger"
+    if result.get("status") == "reload_issued":
+        _clear_cisco_live_state_after_factory_reset(cisco_cfg)
+    if result.get("output"):
+        cisco_cfg["last_serial_output"] = str(result.get("output") or "")
+    cisco_cfg["last_factory_reset"] = {key: value for key, value in result.items() if key != "output"}
     cisco_cfg["last_cisco_action"] = {"mode": "factory_reset", "ok": result.get("status") == "reload_issued", "error": str(result.get("error") or ""), "completed_at": datetime.now(timezone.utc).isoformat()}
     main.save_kit_config(cfg)
+    source = str(result.get("source") or ("console" if cisco_cfg.get("console_port") else "ssh"))
     feedback = main.build_action_feedback(
         "Cisco factory reset issued" if result.get("status") == "reload_issued" else "Cisco factory reset blocked",
         "Startup config and vlan.dat deletion were issued and the switch is reloading." if result.get("status") == "reload_issued" else str(result.get("error") or "Factory reset was not started."),
         tone=tone,
+        outcomes=[f"Source: {source}", f"Console: {cisco_cfg.get('console_port') or 'not selected'}"],
     )
     return _render_cisco_page(request, cfg, action_feedback=feedback)
 

@@ -632,13 +632,11 @@ class CiscoSerialClient:
         self._write("\r\n")
         return self._read_for(1.5)
 
-    def apply_management_config(self, config: dict[str, Any]) -> CiscoBootstrapResult:
-        append_cisco_log("serial.bootstrap.start", port=self.port, baud=self.baud, management_ip=str(config.get("management_ip") or ""))
+    def _reach_privileged_exec(self, config: dict[str, Any]) -> tuple[str, str]:
         output = self.read_prompt()
         prompt_type, _score = detect_cisco_prompt(output)
         if prompt_type not in {"privileged", "user_exec", "username", "password", "initial_dialog"}:
-            append_cisco_log("serial.bootstrap.no_prompt", port=self.port, baud=self.baud, output=output)
-            return CiscoBootstrapResult(ok=False, port=self.port, baud=self.baud, error="No Cisco console prompt is available.", output=output)
+            return prompt_type, output
 
         username = str(config.get("username") or "admin").strip()
         password = str(config.get("password") or "")
@@ -661,6 +659,17 @@ class CiscoSerialClient:
             if re.search(r"(?im)Password:\s*$", output) and enable_password:
                 output += self.run_command(enable_password, redact=True)
             prompt_type, _score = detect_cisco_prompt(output)
+        return prompt_type, output
+
+    def apply_management_config(self, config: dict[str, Any]) -> CiscoBootstrapResult:
+        append_cisco_log("serial.bootstrap.start", port=self.port, baud=self.baud, management_ip=str(config.get("management_ip") or ""))
+        prompt_type, output = self._reach_privileged_exec(config)
+        password = str(config.get("password") or "")
+        console_password = str(config.get("console_password") or password)
+        enable_password = str(config.get("enable_secret") or config.get("enable_password") or "")
+        if prompt_type not in {"privileged", "user_exec", "username", "password", "initial_dialog"}:
+            append_cisco_log("serial.bootstrap.no_prompt", port=self.port, baud=self.baud, output=output)
+            return CiscoBootstrapResult(ok=False, port=self.port, baud=self.baud, error="No Cisco console prompt is available.", output=output)
 
         if prompt_type != "privileged":
             append_cisco_log("serial.bootstrap.not_privileged", port=self.port, baud=self.baud, prompt_type=prompt_type, output=output)
@@ -687,6 +696,58 @@ class CiscoSerialClient:
             management_ip=str(config.get("management_ip") or ""),
             commands=commands,
             error="" if ok else command_error or "Cisco management bootstrap did not complete cleanly. Review raw serial output in technical details.",
+            output=mask_secrets(output, [password, console_password, enable_password]),
+        )
+
+    def factory_reset(self, config: dict[str, Any]) -> CiscoBootstrapResult:
+        append_cisco_log("serial.factory_reset.start", port=self.port, baud=self.baud)
+        prompt_type, output = self._reach_privileged_exec(config)
+        password = str(config.get("password") or "")
+        console_password = str(config.get("console_password") or password)
+        enable_password = str(config.get("enable_secret") or config.get("enable_password") or "")
+        if prompt_type not in {"privileged", "user_exec", "username", "password", "initial_dialog"}:
+            append_cisco_log("serial.factory_reset.no_prompt", port=self.port, baud=self.baud, output=output)
+            return CiscoBootstrapResult(ok=False, port=self.port, baud=self.baud, error="No Cisco console prompt is available.", output=output)
+        if prompt_type != "privileged":
+            append_cisco_log("serial.factory_reset.not_privileged", port=self.port, baud=self.baud, prompt_type=prompt_type, output=output)
+            return CiscoBootstrapResult(ok=False, port=self.port, baud=self.baud, error="Cisco console did not reach privileged EXEC mode. Check enable secret or console login state.", output=output)
+
+        commands = ["terminal length 0", "write erase", "delete /force flash:vlan.dat", "reload"]
+        output += self.run_command("terminal length 0", wait_seconds=1.0)
+        erase_output = self.run_command("write erase", wait_seconds=5.0)
+        output += erase_output
+        if re.search(r"(?i)\[confirm\]|confirm", erase_output):
+            output += self.run_command("", wait_seconds=5.0)
+        output += self.run_command("delete /force flash:vlan.dat", wait_seconds=4.0)
+        reload_output = self.run_command("reload", wait_seconds=5.0)
+        output += reload_output
+        followup_output = ""
+        if re.search(r"(?is)\bsave\b.*?\b(?:yes/no|y/n)\b", reload_output):
+            followup_output = self.run_command("no", wait_seconds=3.0)
+            output += followup_output
+        elif re.search(r"(?i)\byes/no\b", reload_output):
+            followup_output = self.run_command("yes", wait_seconds=3.0)
+            output += followup_output
+        if re.search(r"(?i)\[confirm\]|confirm", reload_output + followup_output):
+            output += self.run_command("", wait_seconds=8.0)
+
+        fatal_output = "\n".join(
+            line
+            for line in output.splitlines()
+            if not re.search(r"(?i)(no such file|not found|unable to delete.*vlan\.dat)", line)
+        )
+        command_error = ""
+        ok = True
+        if re.search(r"(?im)^% ?(?:Invalid|Incomplete|Ambiguous|Error)", fatal_output):
+            ok = False
+            command_error = "Cisco rejected one or more factory reset commands. Review raw serial output in technical details."
+        append_cisco_log("serial.factory_reset.complete", port=self.port, baud=self.baud, ok=ok, output=output)
+        return CiscoBootstrapResult(
+            ok=ok,
+            port=self.port,
+            baud=self.baud,
+            commands=commands,
+            error="" if ok else command_error or "Cisco factory reset did not complete cleanly. Review raw serial output in technical details.",
             output=mask_secrets(output, [password, console_password, enable_password]),
         )
 

@@ -745,7 +745,13 @@
 
         <details class="card identity-soft-card cisco-advanced" style="border-color: color-mix(in srgb, var(--bad) 45%, var(--border));">
             <summary class="summary-row"><span class="font-semibold">Factory reset switch</span><span class="status danger">destructive</span></summary>
-            <div class="text-sm text-slate-400 mt-3">Deletes startup-config and vlan.dat, then reloads the switch.</div>
+            <div class="text-sm text-slate-400 mt-3">Deletes startup-config and vlan.dat, then reloads the switch. Uses the selected console adapter first; SSH is only used when no console port is selected.</div>
+            {% if cisco_cfg.get('last_factory_reset') %}
+            <div class="cisco-facts mt-4">
+                <div class="cisco-fact"><span>Last reset</span><strong>{{ cisco_cfg.get('last_factory_reset', {}).get('status', 'unknown') | replace('_', ' ') }}</strong></div>
+                <div class="cisco-fact"><span>Source</span><strong>{{ cisco_cfg.get('last_factory_reset', {}).get('source', 'not run') }}</strong></div>
+            </div>
+            {% endif %}
             <div class="grid grid-cols-1 md:grid-cols-[minmax(0,1fr)_auto] gap-3 mt-4 items-end">
                 <div class="cisco-field">
                     <label>Type FACTORY RESET to confirm</label>

@@ -377,6 +377,36 @@ def test_management_bootstrap_requires_trunk_review_ack_for_trunk_port():
     assert "switchport trunk allowed vlan add 10" in reviewed
 
 
+def test_console_factory_reset_declines_save_prompt(monkeypatch):
+    outputs = [
+        b"\r\nSwitch#",
+        b"\r\nSwitch#",
+        b"Erasing the nvram filesystem will remove all configuration files! Continue? [confirm]",
+        b"\r\nErase of nvram: complete\r\nSwitch#",
+        b"\r\nSwitch#",
+        b"System configuration has been modified. Save? [yes/no]: ",
+        b"\r\nProceed with reload? [confirm]",
+        b"\r\nReloading\r\n",
+    ]
+    connection = SequencedSerialConnection(outputs)
+    monkeypatch.setattr(cisco, "serial", SequencedSerialModule(connection))
+    monkeypatch.setattr(cisco, "list_ports", _ports("/dev/ttyUSB0"))
+    monkeypatch.setattr(cisco, "append_cisco_log", lambda *args, **kwargs: None)
+
+    with cisco.CiscoSerialClient("/dev/ttyUSB0", 9600, timeout=0.01) as client:
+        result = client.factory_reset({"username": "admin", "password": "Secret123", "enable_password": "Enable123!"})
+
+    writes = [item.decode("utf-8").strip() for item in connection.writes]
+
+    assert result.ok is True
+    assert "write erase" in writes
+    assert "delete /force flash:vlan.dat" in writes
+    assert "reload" in writes
+    assert "no" in writes
+    assert "yes" not in writes
+    assert "Secret123" not in result.output
+
+
 def test_append_cisco_log_creates_log_and_masks_secrets(tmp_path, monkeypatch):
     log_path = tmp_path / "artifacts" / "logs" / "cisco.log"
     monkeypatch.setattr(cisco, "CISCO_LOG_PATH", log_path)

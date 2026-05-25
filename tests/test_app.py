@@ -471,6 +471,70 @@ def test_cisco_fix_serial_permissions_renders_password_prompt_and_result(client,
     assert cfg["cisco_switch"]["last_host_fix"]["ok"] is True
 
 
+def test_cisco_factory_reset_prefers_console_and_marks_live_state_stale(client, monkeypatch):
+    cfg = main.default_config()
+    cfg["site"]["name"] = "Cisco Factory Reset Kit"
+    cfg["cisco_switch"].update(
+        {
+            "console_port": "/dev/ttyUSB0",
+            "console_baud": 9600,
+            "management_ip": "10.10.8.2",
+            "username": "admin",
+            "password": "Secret123!",
+            "enable_password": "Enable123!",
+            "last_ssh_test": {"ok": True},
+            "last_console_bootstrap_check": {"ok": True},
+            "config_approval": {"state": "approved", "mode": "full"},
+        }
+    )
+    main.save_kit_config(cfg)
+
+    def fake_console_reset(context):
+        cisco_cfg = (context.get("cfg") or {}).get("cisco_switch") or {}
+        assert cisco_cfg["console_port"] == "/dev/ttyUSB0"
+        assert cisco_cfg["management_ip"] == "10.10.8.2"
+        return {
+            "status": "reload_issued",
+            "source": "console",
+            "port": "/dev/ttyUSB0",
+            "baud": 9600,
+            "commands": ["write erase", "delete /force flash:vlan.dat", "reload"],
+            "output": "write erase\nReloading",
+            "output_excerpt": "Reloading",
+            "completed_at": "2026-05-25T00:00:00+00:00",
+        }
+
+    monkeypatch.setattr(cisco_module_routes.service, "factory_reset_console", fake_console_reset)
+    monkeypatch.setattr(
+        cisco_module_routes,
+        "execute_cisco_factory_reset",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("SSH reset should not run when console is selected")),
+    )
+
+    response = client.post(
+        "/modules/cisco/factory-reset",
+        data={
+            "cisco_factory_reset_confirm": "FACTORY RESET",
+            "cisco_console_port": "/dev/ttyUSB0",
+            "cisco_console_baud": "9600",
+            "cisco_management_ip": "10.10.8.2",
+            "cisco_switch_username": "admin",
+            "cisco_switch_password": "Secret123!",
+            "cisco_enable_secret": "Enable123!",
+        },
+    )
+
+    assert response.status_code == 200
+    assert "Cisco factory reset issued" in response.text
+    saved = main.load_kit_config()
+    assert saved["cisco_switch"]["last_factory_reset"]["source"] == "console"
+    assert saved["cisco_switch"]["last_serial_output"] == "write erase\nReloading"
+    assert saved["cisco_switch"]["last_ssh_test"] == {}
+    assert saved["cisco_switch"]["last_console_bootstrap_check"] == {}
+    assert saved["cisco_switch"]["config_approval"]["state"] == "blocked"
+    assert saved["cisco_switch"]["console_port"] == "/dev/ttyUSB0"
+
+
 def test_upgrade_helper_preserves_post_upgrade_ilo_version_over_stale_live_snapshot(monkeypatch):
     cfg = main.default_config()
     cfg["upgrade_inventory"] = {

@@ -410,7 +410,10 @@ def execute_cisco_factory_reset(host: str, username: str, password: str) -> dict
         shell.send("reload\n")
         reload_output = _read_shell_until_patterns(shell, patterns=(r"\[confirm\]", r"\byes/no\b"), timeout=30)
         output_chunks.append(reload_output)
-        if re.search(r"(?i)\byes/no\b", reload_output):
+        if re.search(r"(?is)\bsave\b.*?\b(?:yes/no|y/n)\b", reload_output):
+            shell.send("no\n")
+            output_chunks.append(_read_shell_until_patterns(shell, patterns=(r"\[confirm\]",), timeout=15))
+        elif re.search(r"(?i)\byes/no\b", reload_output):
             shell.send("yes\n")
             output_chunks.append(_read_shell_until_patterns(shell, patterns=(r"\[confirm\]",), timeout=15))
         if re.search(r"(?i)\[confirm\]|confirm", "\n".join(output_chunks)):
