@@ -195,7 +195,7 @@ def default_config() -> dict[str, Any]:
             "svm_name": "",
             "data_broadcast_domain": "Data",
             "management_broadcast_domain": "Default",
-            "mtu": 9000,
+            "mtu": 1500,
             "aggregate_node_01": "aggr_01",
             "aggregate_node_02": "aggr_02",
             "svm_root_aggregate": "aggr_01",
@@ -215,6 +215,25 @@ def default_config() -> dict[str, Any]:
                 "node_02_mgmt_ip": "",
                 "svm_mgmt_ip": "",
             },
+            "console": {
+                "port": "",
+                "baud": 115200,
+                "username": "admin",
+                "password": "",
+                "node_reboot_command": "",
+                "boot_menu_option": "4",
+                "reset_node_name": "",
+                "partner_node_name": "",
+                "disable_storage_failover": True,
+                "disable_partner_storage_failover": False,
+                "halt_partner_before_reset": False,
+                "normal_boot_after_wipe": True,
+                "last_candidates": [],
+                "last_probe": {},
+                "last_diagnostics": {},
+                "last_raw_output": "",
+                "last_reset": {},
+            },
             "bootstrap_complete": False,
             "bootstrap_checks": {},
             "iscsi": {
@@ -229,6 +248,8 @@ def default_config() -> dict[str, Any]:
             "nfs": {
                 "export_policy": "",
                 "allowed_subnet": "",
+                "size": "",
+                "datastore_name": "",
                 "lifs": [],
                 "volumes": [],
             },
@@ -263,6 +284,26 @@ def default_config() -> dict[str, Any]:
             "nfs": {
                 "datastore_name": "",
                 "nfs_version": "4.1",
+            },
+            "vcenter_install": {
+                "target_ip": "",
+                "system_name": "",
+                "vm_name": "",
+                "iso_path": "",
+                "esxi_host": "",
+                "esxi_username": "root",
+                "esxi_password": "",
+                "datastore": "",
+                "deployment_network": "VM Network",
+                "deployment_option": "tiny",
+                "thin_disk_mode": True,
+                "root_password": "",
+                "sso_domain": "vsphere.local",
+                "sso_password": "",
+                "ntp_servers": "",
+                "ssh_enable": True,
+                "activity": {},
+                "last_plan": {},
             },
         },
         iosafe={"hostname": "iosafe01", "ip": "", "username": "admin", "password": ""},
@@ -777,6 +818,9 @@ def apply_ip_plan(cfg: dict[str, Any]) -> dict[str, Any]:
     cfg["qnap"]["ip"] = plan["qnap"]
     cfg["iosafe"]["ip"] = plan["iosafe"]
     cfg["cisco_switch"]["ip"] = plan["switch"]
+    cfg["cisco_switch"]["management_ip"] = str(cfg["cisco_switch"].get("management_ip") or plan["switch"]).strip()
+    cfg["cisco_switch"]["gateway"] = str(cfg["cisco_switch"].get("gateway") or plan["gateway"]).strip()
+    cfg["cisco_switch"]["subnet_mask"] = str(cfg["cisco_switch"].get("subnet_mask") or plan["netmask"]).strip()
     cfg.setdefault("netapp", {})
     cfg["netapp"]["host"] = str(cfg["netapp"].get("host") or plan["cluster_mgmt_ip"]).strip()
     cfg["netapp"].setdefault("management", {})
@@ -799,7 +843,117 @@ def apply_ip_plan(cfg: dict[str, Any]) -> dict[str, Any]:
     cfg["vmware"]["discovered_host_ips"] = [ip_at_offset(plan["subnet"], offset) for offset in range(start_offset, end_offset + 1)]
     cfg["vmware"]["datacenter_name"] = str(cfg["vmware"].get("datacenter_name") or cfg.get("site", {}).get("name") or "").strip()
     cfg["vmware"]["cluster_name"] = str(cfg["vmware"].get("cluster_name") or f"{cfg.get('site', {}).get('name', DEFAULT_KIT_NAME)}-Cluster").strip()
+    cfg["vmware"].setdefault("vcenter_install", {})
+    if not isinstance(cfg["vmware"]["vcenter_install"], dict):
+        cfg["vmware"]["vcenter_install"] = {}
+    cfg["vmware"]["vcenter_install"]["target_ip"] = str(
+        cfg["vmware"]["vcenter_install"].get("target_ip")
+        or cfg["vmware"].get("vcenter_ip")
+        or ip_at_offset(plan["subnet"], 50)
+    ).strip()
     return cfg
+
+
+def _value_at_path(data: dict[str, Any], path: tuple[str, ...]) -> Any:
+    current: Any = data
+    for key in path:
+        if not isinstance(current, dict):
+            return None
+        current = current.get(key)
+    return current
+
+
+def _set_value_at_path(data: dict[str, Any], path: tuple[str, ...], value: Any) -> None:
+    current = data
+    for key in path[:-1]:
+        child = current.setdefault(key, {})
+        if not isinstance(child, dict):
+            child = {}
+            current[key] = child
+        current = child
+    current[path[-1]] = value
+
+
+def populate_setup_sections_from_ip_plan(cfg: dict[str, Any]) -> tuple[dict[str, Any], list[str]]:
+    original = copy.deepcopy(merge_defaults(cfg))
+    cfg = copy.deepcopy(original)
+    cfg.setdefault("netapp", {})["bootstrap_overrides"] = {}
+    cfg = apply_ip_plan(cfg)
+    plan = cfg.get("ip_plan", {}) or {}
+    shared_dns = [str(item or "").strip() for item in cfg.get("shared_network", {}).get("dns_servers", []) if str(item or "").strip()]
+    dns_servers = shared_dns if shared_dns else [str(plan.get("gateway") or "").strip()]
+    dns_servers = [item for item in dns_servers if item]
+    dns_servers_four = (dns_servers + ["", "", "", ""])[:4]
+    vcenter_ip = ""
+    try:
+        vcenter_ip = ip_at_offset(str(plan.get("subnet") or ""), 50)
+    except Exception:
+        vcenter_ip = str(((cfg.get("vmware") or {}).get("vcenter_install") or {}).get("target_ip") or cfg.get("vmware", {}).get("vcenter_ip") or "").strip()
+
+    changes: list[str] = []
+
+    def assign(label: str, path: tuple[str, ...], value: Any) -> None:
+        _set_value_at_path(cfg, path, value)
+        if _value_at_path(original, path) != value:
+            changes.append(label)
+
+    current_ilo_ip = str(_value_at_path(original, ("ilo", "current_ip")) or _value_at_path(original, ("ilo", "host")) or plan["ilo"]).strip()
+    assign("iLO current IP", ("ilo", "current_ip"), current_ilo_ip)
+    assign("iLO host", ("ilo", "host"), current_ilo_ip)
+    assign("iLO target IP", ("ilo", "target_ip"), plan["ilo"])
+    assign("iLO subnet mask", ("ilo", "subnet_mask"), plan["netmask"])
+    assign("iLO gateway", ("ilo", "gateway"), plan["gateway"])
+    assign("iLO DNS servers", ("ilo", "dns_servers"), dns_servers_four)
+
+    assign("ESXi management IP", ("esxi", "management_ip"), plan["esxi"])
+    assign("ESXi subnet mask", ("esxi", "subnet_mask"), plan["netmask"])
+    assign("ESXi gateway", ("esxi", "gateway"), plan["gateway"])
+    assign("ESXi DNS servers", ("esxi", "dns_servers"), dns_servers)
+
+    assign("Windows guest IP", ("windows", "ip_address"), plan["windows"])
+    assign("Windows subnet mask", ("windows", "subnet_mask"), plan["netmask"])
+    assign("Windows gateway", ("windows", "gateway"), plan["gateway"])
+    assign("Windows DNS servers", ("windows", "dns_servers"), dns_servers)
+    if vcenter_ip:
+        assign("Windows vSphere host", ("windows", "vsphere_host"), vcenter_ip)
+
+    assign("QNAP IP", ("qnap", "ip"), plan["qnap"])
+    assign("ioSafe IP", ("iosafe", "ip"), plan["iosafe"])
+
+    assign("Cisco switch IP", ("cisco_switch", "ip"), plan["switch"])
+    assign("Cisco management IP", ("cisco_switch", "management_ip"), plan["switch"])
+    assign("Cisco subnet mask", ("cisco_switch", "subnet_mask"), plan["netmask"])
+    assign("Cisco gateway", ("cisco_switch", "gateway"), plan["gateway"])
+    assign("Cisco DNS servers", ("cisco_switch", "dns_servers"), dns_servers)
+    assign("Cisco NTP servers", ("cisco_switch", "ntp_servers"), dns_servers or [plan["gateway"]])
+
+    assign("NetApp API host", ("netapp", "host"), plan["cluster_mgmt_ip"])
+    assign("NetApp cluster management IP", ("netapp", "management", "cluster_mgmt_ip"), plan["netapp_cluster_mgmt"])
+    assign("NetApp node 1 management IP", ("netapp", "management", "node_01_mgmt_ip"), plan["netapp_node_01_mgmt"])
+    assign("NetApp node 2 management IP", ("netapp", "management", "node_02_mgmt_ip"), plan["netapp_node_02_mgmt"])
+    assign("NetApp SVM management IP", ("netapp", "management", "svm_mgmt_ip"), plan["netapp_svm_mgmt"])
+    assign(
+        "NetApp bootstrap IPs",
+        ("netapp", "bootstrap_overrides"),
+        {
+            "netapp_sp_a": plan["netapp_sp_a"],
+            "netapp_sp_b": plan["netapp_sp_b"],
+            "netapp_cluster_mgmt": plan["netapp_cluster_mgmt"],
+            "netapp_node_01_mgmt": plan["netapp_node_01_mgmt"],
+            "netapp_node_02_mgmt": plan["netapp_node_02_mgmt"],
+            "netapp_svm_mgmt": plan["netapp_svm_mgmt"],
+        },
+    )
+
+    if vcenter_ip:
+        assign("vCenter appliance IP", ("vmware", "vcenter_ip"), vcenter_ip)
+        assign("vCenter install target IP", ("vmware", "vcenter_install", "target_ip"), vcenter_ip)
+        assign("vCenter system name", ("vmware", "vcenter_install", "system_name"), vcenter_ip)
+    assign("vCenter target ESXi host", ("vmware", "vcenter_install", "esxi_host"), plan["esxi"])
+    assign("vCenter DNS servers", ("vmware", "vcenter_install", "dns_servers"), dns_servers)
+    assign("vCenter NTP servers", ("vmware", "vcenter_install", "ntp_servers"), plan["gateway"])
+
+    return cfg, changes
 
 
 def build_ilo_input_review(cfg: dict[str, Any], *, include_policy_validation: bool = False) -> dict[str, Any]:

@@ -276,7 +276,7 @@
                         <span class="text-sm font-bold text-slate-300">View live step log</span>
                         <span class="status progress">details</span>
                     </summary>
-                    <div id="storage-progress-logs" class="codeblock max-h-80 overflow-y-auto mt-3">{% for line in job.get('logs', []) %}{{ line }}
+                    <div id="storage-progress-logs" class="codeblock raw-output mt-3">{% for line in job.get('logs', []) %}{{ line }}
 {% endfor %}</div>
                 </details>
                 <div class="actions mt-4" id="storage-reboot-actions" style="{% if not (apply_state.get('status') in ['Completed', 'Staged'] and apply_state.get('reboot_required') and reboot_state.get('status') != 'Running' and reboot_state.get('status') != 'Completed') %}display: none;{% endif %}">

@@ -28,6 +28,39 @@
     ] %}
     {% include "partials/components/setup_strip.html" %}
 
+    {% set netapp_dep = esxi_page_review.netapp_dependency or {} %}
+    {% if netapp_dep.get('required') %}
+    <section class="card card-compact">
+        <div class="summary-row">
+            <div>
+                <div class="font-semibold">NetApp datastore dependency</div>
+                <div class="text-sm text-slate-400 mt-1">ESXi post-config will mount the saved NetApp NFS datastore after the host is installed.</div>
+            </div>
+            <span class="status {{ netapp_dep.get('status_tone', 'pending') }}">{{ netapp_dep.get('status_label', 'Needs review') }}</span>
+        </div>
+        <div class="ops-detail-grid mt-4">
+            <div class="card card-compact">
+                <div class="dashboard-kicker">Datastore</div>
+                <div class="font-semibold">{{ netapp_dep.get('datastore_name') or 'Not set' }}</div>
+                <div class="text-sm text-slate-400 mt-1">{{ netapp_dep.get('export_path') or 'Export path not set' }}</div>
+            </div>
+            <div class="card card-compact">
+                <div class="dashboard-kicker">NFS servers</div>
+                <div class="font-semibold">{{ (netapp_dep.get('server_ips') or [])|join(', ') or 'Not set' }}</div>
+                <div class="text-sm text-slate-400 mt-1">ONTAP must be prepared before ESXi post-config runs.</div>
+            </div>
+            <div class="card card-compact">
+                <div class="dashboard-kicker">Last NFS probe</div>
+                <div class="font-semibold">{{ 'Reachable' if netapp_dep.get('nfs_probe_reachable') else 'Not confirmed' }}</div>
+                <div class="text-sm text-slate-400 mt-1">This checks NetApp NFS ports only; ESXi can still be installed later.</div>
+            </div>
+        </div>
+        {% if not netapp_dep.get('ready') %}
+        <div class="result mt-4">{{ netapp_dep.get('blocking_reason') or 'NetApp NFS mount inputs are missing.' }}</div>
+        {% endif %}
+    </section>
+    {% endif %}
+
     <section class="card workflow-hero-card" x-show="tab === 'basic'">
         <div class="text-lg font-semibold mb-3">Save ESXi setup</div>
         <form hx-post="/save-esxi-settings" hx-target="#main-content" hx-swap="outerHTML" class="space-y-4" data-action-title="Saving ESXi setup" data-action-start="Saving the ESXi installer and post-config settings.">

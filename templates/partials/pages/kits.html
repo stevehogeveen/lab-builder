@@ -1,0 +1,134 @@
+{% set inventory = kit_storage_inventory or {} %}
+<section class="panel space-y-6">
+    <div class="flex items-center justify-between gap-4 flex-wrap">
+        <div>
+            <h2 class="text-2xl font-bold title-with-icon"><span class="page-icon icon-tone-progress" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 5h16v14H4z"/><path d="M8 9h8"/><path d="M8 13h5"/><path d="M15 17h1"/></svg></span><span>Kits</span></h2>
+            <div class="text-sm text-slate-400">Create kits, switch the active kit, and remove old generated files that are taking space.</div>
+        </div>
+        <span class="status progress">{{ inventory.kit_count or 0 }} kit{% if (inventory.kit_count or 0) != 1 %}s{% endif %}</span>
+    </div>
+
+    <div class="grid grid-cols-1 xl:grid-cols-3 gap-4">
+        <section class="card identity-soft-card">
+            <div class="dashboard-kicker">Active kit</div>
+            <div class="text-xl font-bold truncate-wrap" title="{{ current_kit }}">{{ current_kit }}</div>
+            <div class="text-sm text-slate-400 mt-2">New workflows and saved settings apply to this kit.</div>
+        </section>
+        <section class="card identity-soft-card">
+            <div class="dashboard-kicker">Tracked kit storage</div>
+            <div class="text-xl font-bold">{{ inventory.total_size or '0 B' }}</div>
+            <div class="text-sm text-slate-400 mt-2">Config, job state, history, runs, generated reports, and exports.</div>
+        </section>
+        <section class="card identity-soft-card">
+            <div class="dashboard-kicker">Non-active kit storage</div>
+            <div class="text-xl font-bold">{{ inventory.removable_size or '0 B' }}</div>
+            <div class="text-sm text-slate-400 mt-2">Space that can usually be cleaned without touching the active kit.</div>
+        </section>
+    </div>
+
+    <section class="card">
+        <div class="flex items-center justify-between gap-3 flex-wrap mb-4">
+            <div>
+                <div class="text-lg font-semibold">Create or switch kit</div>
+                <div class="text-sm text-slate-400">Creating a kit makes it active immediately and starts with a clean default config.</div>
+            </div>
+            <span class="status ready">Available</span>
+        </div>
+        <div class="grid grid-cols-1 xl:grid-cols-2 gap-4">
+            <form hx-post="/new-kit" hx-target="#main-content" hx-swap="outerHTML" class="space-y-3" data-action-title="Creating kit" data-action-start="Creating a clean kit workspace.">
+                <input type="hidden" name="return_page" value="kits">
+                <label>
+                    <div class="dashboard-kicker">New kit name</div>
+                    <input class="input" type="text" name="new_kit_name" placeholder="Example: Lab-Uplands-G11" required>
+                </label>
+                <button class="btn btn-primary action-button" type="submit">Create new kit</button>
+            </form>
+            <form hx-post="/load-kit" hx-target="#main-content" hx-swap="outerHTML" class="space-y-3" data-action-title="Loading kit" data-action-start="Switching the active kit.">
+                <input type="hidden" name="return_page" value="kits">
+                <label>
+                    <div class="dashboard-kicker">Existing kit</div>
+                    <select class="input" name="selected_kit" required>
+                        {% for kit in inventory.kits or [] %}
+                        <option value="{{ kit.name }}" {% if kit.current %}selected{% endif %}>{{ kit.name }}{% if kit.current %} (active){% endif %}</option>
+                        {% endfor %}
+                    </select>
+                </label>
+                <button class="btn" type="submit">Load selected kit</button>
+            </form>
+        </div>
+    </section>
+
+    <section class="card">
+        <div class="flex items-center justify-between gap-3 flex-wrap mb-4">
+            <div>
+                <div class="text-lg font-semibold">Kit storage usage</div>
+                <div class="text-sm text-slate-400">Clean artifacts keeps the kit YAML but removes logs, job files, generated reports, and exports. Delete kit removes both config and generated files.</div>
+            </div>
+            <span class="status progress">{{ inventory.total_size or '0 B' }}</span>
+        </div>
+
+        <div class="ops-row-list">
+            {% for kit in inventory.kits or [] %}
+            <article class="ops-row-item" style="grid-template-columns: minmax(0, 1fr);">
+                <div class="flex items-start justify-between gap-3 flex-wrap">
+                    <div class="ops-row-copy">
+                        <div class="flex items-center gap-2 flex-wrap">
+                            <div class="font-semibold truncate-wrap" title="{{ kit.name }}">{{ kit.name }}</div>
+                            {% if kit.current %}<span class="status ready">Active</span>{% endif %}
+                            {% if not kit.config_exists %}<span class="status pending">Artifacts only</span>{% endif %}
+                        </div>
+                        <div class="text-sm text-slate-400 mt-1">{{ kit.total_size }} across {{ kit.total_files }} file{% if kit.total_files != 1 %}s{% endif %}</div>
+                    </div>
+                    <div class="actions" style="margin-top: 0;">
+                        {% if not kit.current %}
+                        <form hx-post="/load-kit" hx-target="#main-content" hx-swap="outerHTML" data-action-title="Loading kit" data-action-start="Switching the active kit.">
+                            <input type="hidden" name="return_page" value="kits">
+                            <input type="hidden" name="selected_kit" value="{{ kit.name }}">
+                            <button class="btn" type="submit">Load</button>
+                        </form>
+                        {% endif %}
+                    </div>
+                </div>
+
+                <div class="ops-strip-grid text-sm mt-3">
+                    {% for category in kit.categories %}
+                    <div class="ops-strip-card">
+                        <div class="dashboard-kicker">{{ category.label }}</div>
+                        <div class="font-semibold">{{ category.size }}</div>
+                        <div class="text-slate-400 mt-1">{{ category.files }} file{% if category.files != 1 %}s{% endif %}</div>
+                    </div>
+                    {% endfor %}
+                </div>
+
+                <div class="grid grid-cols-1 xl:grid-cols-2 gap-3 mt-3">
+                    <details class="raw-output-wrap">
+                        <summary>Clean generated artifacts</summary>
+                        <form hx-post="/clean-kit-artifacts" hx-target="#main-content" hx-swap="outerHTML" class="space-y-3 p-3" data-action-title="Cleaning kit artifacts" data-action-start="Removing generated files for this kit.">
+                            <input type="hidden" name="kit_name" value="{{ kit.name }}">
+                            <div class="text-sm text-slate-400">Keeps the kit config. Type <strong>{{ kit.cleanup_confirm }}</strong> to remove job state, run logs, generated reports, and exports.</div>
+                            <input class="input" type="text" name="confirm_text" placeholder="{{ kit.cleanup_confirm }}" required>
+                            <button class="btn" type="submit">Clean artifacts</button>
+                        </form>
+                    </details>
+
+                    <details class="raw-output-wrap">
+                        <summary>Delete kit</summary>
+                        {% if kit.current %}
+                        <div class="p-3 text-sm text-slate-400">Load a different kit before deleting this active kit.</div>
+                        {% else %}
+                        <form hx-post="/delete-kit" hx-target="#main-content" hx-swap="outerHTML" class="space-y-3 p-3" data-action-title="Deleting kit" data-action-start="Deleting this kit and its generated files.">
+                            <input type="hidden" name="kit_name" value="{{ kit.name }}">
+                            <div class="text-sm text-slate-400">Deletes the kit YAML and generated files. Type <strong>{{ kit.delete_confirm }}</strong> to continue.</div>
+                            <input class="input" type="text" name="confirm_text" placeholder="{{ kit.delete_confirm }}" required>
+                            <button class="btn" type="submit">Delete kit</button>
+                        </form>
+                        {% endif %}
+                    </details>
+                </div>
+            </article>
+            {% else %}
+            <div class="result">No kits found. Create a new kit to start.</div>
+            {% endfor %}
+        </div>
+    </section>
+</section>

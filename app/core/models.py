@@ -118,7 +118,9 @@ class KitConfigModel(BaseModel):
     cisco_switch: dict[str, Any] = Field(default_factory=dict)
     storage: StoragePlanModel = Field(default_factory=StoragePlanModel)
     netapp: dict[str, Any] = Field(default_factory=dict)
+    vmware: dict[str, Any] = Field(default_factory=dict)
     upgrade_inventory: dict[str, Any] = Field(default_factory=dict)
+    upgrade_helper: dict[str, Any] = Field(default_factory=dict)
 
 
 class JobStatusModel(BaseModel):

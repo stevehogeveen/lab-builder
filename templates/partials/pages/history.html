@@ -203,7 +203,7 @@
                             <span class="text-sm font-bold text-slate-300">Warnings</span>
                             <span class="status pending">details</span>
                         </summary>
-                        <div class="codeblock mt-3">{% for line in item.get('issues', []) %}{{ line }}
+                        <div class="codeblock raw-output mt-3">{% for line in item.get('issues', []) %}{{ line }}
 {% endfor %}</div>
                     </details>
                     {% endif %}
@@ -213,7 +213,7 @@
                             <span class="text-sm font-bold text-slate-300">Execution log</span>
                             <span class="status progress">details</span>
                         </summary>
-                        <div class="codeblock mt-3">{% for line in item.get('logs', item.get('log_tail', [])) %}{{ line }}
+                        <div class="codeblock raw-output mt-3">{% for line in item.get('logs', item.get('log_tail', [])) %}{{ line }}
 {% endfor %}</div>
                     </details>
                     {% endif %}

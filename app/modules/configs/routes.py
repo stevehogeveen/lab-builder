@@ -64,8 +64,6 @@ async def load_kit_handler(
 ):
     runtime["set_current_kit_name"](selected_kit)
     cfg = runtime["load_kit_config"](selected_kit)
-    if str(return_page).strip().lower() == "kits":
-        return_page = "dashboard"
     return runtime["render_page"](request, cfg, active_page=return_page, message=f"Loaded kit: {selected_kit}")
 
 
@@ -75,7 +73,25 @@ async def new_kit_handler(
     new_kit_name: str = Form(...),
     return_page: str = Form("dashboard"),
 ):
+    raw_name = str(new_kit_name or "").strip()
+    if not raw_name:
+        cfg = runtime["load_kit_config"]() if "load_kit_config" in runtime else runtime["default_config"]()
+        return runtime["render_page"](
+            request,
+            cfg,
+            active_page=return_page,
+            error_message="Enter a kit name before creating a new kit.",
+        )
     name = runtime["sanitize_kit_name"](new_kit_name)
+    kit_path = runtime.get("kit_path")
+    if kit_path and kit_path(name).exists():
+        cfg = runtime["load_kit_config"]() if "load_kit_config" in runtime else runtime["default_config"]()
+        return runtime["render_page"](
+            request,
+            cfg,
+            active_page=return_page,
+            error_message=f"Kit already exists: {name}. Load it or choose a different name.",
+        )
     cfg = runtime["default_config"]()
     cfg["site"]["name"] = name
     runtime["save_kit_config"](cfg)
@@ -92,8 +108,6 @@ async def new_kit_handler(
         },
     )
     runtime["save_history"](name, [])
-    if str(return_page).strip().lower() == "kits":
-        return_page = "dashboard"
     return runtime["render_page"](request, cfg, active_page=return_page, message=f"Created new kit: {name}")
 
 
@@ -364,6 +378,9 @@ async def save_global_settings_handler(
     switch_ip: str | None = Form(None),
     esxi_ip: str | None = Form(None),
     ilo_target_ip: str | None = Form(None),
+    ilo_current_ip: str | None = Form(None),
+    ilo_username: str | None = Form(None),
+    ilo_password: str | None = Form(None),
     windows_ip: str | None = Form(None),
     qnap_ip: str | None = Form(None),
     iosafe_ip: str | None = Form(None),
@@ -478,6 +495,19 @@ async def save_global_settings_handler(
             cfg["ip_plan"][key] = str(value or "")
     if "ilo_target_ip" in form:
         cfg["ilo"]["target_ip"] = str(ilo_target_ip or "")
+
+    ilo_access_fields = {"ilo_current_ip", "ilo_username", "ilo_password"}
+    if any(field in form for field in ilo_access_fields):
+        existing_ilo = cfg.get("ilo") or {}
+        current_ip = str(
+            ilo_current_ip
+            if ilo_current_ip is not None
+            else existing_ilo.get("current_ip") or existing_ilo.get("host") or ""
+        ).strip()
+        cfg["ilo"]["current_ip"] = current_ip
+        cfg["ilo"]["host"] = current_ip
+        cfg["ilo"]["username"] = str(ilo_username if ilo_username is not None else existing_ilo.get("username", ""))
+        cfg["ilo"]["password"] = preserve_existing_secret(ilo_password or "", existing_ilo.get("password"))
 
     netapp_fields = {
         "netapp_host",

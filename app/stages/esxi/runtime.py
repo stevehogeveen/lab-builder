@@ -12,6 +12,8 @@ from urllib.parse import quote, urlparse
 
 import requests
 
+from app.vmware import build_vmware_plan
+
 
 def normalize_esxi_version(value: Any) -> str:
     text = str(value or "7").strip()
@@ -546,6 +548,81 @@ def ensure_esxi_post_config_secrets(cfg: dict[str, Any]) -> dict[str, Any]:
     return secrets
 
 
+def build_netapp_nfs_post_config_plan(cfg: dict[str, Any]) -> dict[str, Any]:
+    netapp_cfg = cfg.get("netapp", {}) or {}
+    protocol = str(netapp_cfg.get("storage_protocol") or "").strip().lower()
+    required = bool((cfg.get("included", {}) or {}).get("netapp")) and protocol == "nfs"
+    result: dict[str, Any] = {
+        "required": required,
+        "ready": True,
+        "status_label": "Not required",
+        "status_tone": "progress",
+        "blocking_reason": "",
+        "datastore_name": "",
+        "export_path": "",
+        "svm_name": "",
+        "server_ips": [],
+        "esxi_hosts": [],
+        "nfs_version": "4.1",
+        "mount_plan": [],
+        "nfs_probe_reachable": False,
+        "probe_ready": False,
+    }
+    if not required:
+        return result
+
+    vmware_plan = build_vmware_plan(cfg, storage_protocol="nfs")
+    nfs_context = dict(vmware_plan.get("nfs_context") or {})
+    mount_step = next(
+        (step for step in list(vmware_plan.get("steps") or []) if str(step.get("name") or "") == "plan_nfs_datastore_mounts"),
+        {},
+    )
+    mount_details = dict(mount_step.get("details") or {})
+    mount_plan = [dict(item or {}) for item in list(mount_details.get("mount_plan") or [])]
+    server_ips = [str(item).strip() for item in list(nfs_context.get("lif_ips") or []) if str(item).strip()]
+    esxi_hosts = [str(item).strip() for item in list(vmware_plan.get("esxi_hosts") or []) if str(item).strip()]
+    datastore_name = str(nfs_context.get("datastore_name") or "").strip()
+    export_path = str(nfs_context.get("export_path") or "").strip()
+    svm_name = str(nfs_context.get("svm_name") or "").strip()
+    nfs_version = str(mount_details.get("nfs_version") or "4.1").strip() or "4.1"
+
+    probe = dict(((netapp_cfg.get("vmware_checks") or {}).get("nfs_mount")) or {})
+    nfs_probe_checks = [dict(item or {}) for item in list(probe.get("checks") or []) if str((item or {}).get("kind") or "") == "nfs_server"]
+    nfs_probe_reachable = bool(nfs_probe_checks) and all(bool(item.get("reachable")) for item in nfs_probe_checks)
+
+    missing: list[str] = []
+    if not datastore_name:
+        missing.append("datastore name")
+    if not export_path:
+        missing.append("NFS export path")
+    if not server_ips:
+        missing.append("NFS LIF/server IPs")
+    if not esxi_hosts:
+        missing.append("ESXi target host")
+    if not mount_plan or not str((mount_plan[0] or {}).get("esxcli_command") or "").strip():
+        missing.append("ESXi NFS mount command")
+
+    ready = not missing
+    result.update(
+        {
+            "ready": ready,
+            "status_label": "Ready" if ready else "Blocked",
+            "status_tone": "ready" if ready else "pending",
+            "blocking_reason": "" if ready else f"Missing {', '.join(missing)}.",
+            "datastore_name": datastore_name,
+            "export_path": export_path,
+            "svm_name": svm_name,
+            "server_ips": server_ips,
+            "esxi_hosts": esxi_hosts,
+            "nfs_version": nfs_version,
+            "mount_plan": mount_plan,
+            "nfs_probe_reachable": nfs_probe_reachable,
+            "probe_ready": bool(probe.get("ready")),
+        }
+    )
+    return result
+
+
 def _subnet_host_from_offset(subnet_cidr: str, offset: int) -> str:
     network = ipaddress.ip_network(str(subnet_cidr), strict=False)
     host_int = int(network.network_address) + int(offset)
@@ -605,6 +682,7 @@ def build_esxi_post_config_preview(cfg: dict[str, Any]) -> dict[str, Any]:
     )
     rename_target = f"LOCAL-S{host_bay}"
     create_local_s2_allowed = bool(policy.get("allow_datastore_create")) and len(datastores) <= 1 and bool(large_unused_disks)
+    netapp_nfs = build_netapp_nfs_post_config_plan(cfg)
 
     plan = {
         "connection_targets": target_hosts,
@@ -622,6 +700,7 @@ def build_esxi_post_config_preview(cfg: dict[str, Any]) -> dict[str, Any]:
             ),
             "create_local_s2_disk": (large_unused_disks[0] if large_unused_disks else {}),
         },
+        "netapp_nfs": netapp_nfs,
         "network_plan": {
             "detected_nics": nics,
             "preferred_mgmt_uplinks": nic_uplinks,
@@ -687,6 +766,8 @@ def build_esxi_post_config_preview(cfg: dict[str, Any]) -> dict[str, Any]:
         warnings.append("Multiple datastores already exist; automatic LOCAL-S2 creation remains blocked.")
     if not mgmt_ip:
         warnings.append("Management IP is not saved yet; discovery range fallback will be used.")
+    if netapp_nfs.get("required") and netapp_nfs.get("ready") and not netapp_nfs.get("nfs_probe_reachable"):
+        warnings.append("NetApp NFS datastore plan is saved, but the latest NFS reachability probe has not confirmed all NFS server IPs.")
     return {
         "enabled": bool(policy.get("enabled")),
         "policy": dict(policy),
@@ -714,8 +795,11 @@ def validate_esxi_post_config_preview(preview: dict[str, Any]) -> dict[str, Any]
     if len(uplinks) < 2 and not bool(network_plan.get("single_uplink_override_enabled")):
         errors.append("At least two management uplinks are required unless the single-uplink override is enabled.")
     ds_plan = dict(plan.get("datastore_plan") or {})
+    netapp_nfs = dict(plan.get("netapp_nfs") or {})
     if bool(ds_plan.get("create_local_s2_allowed")) and not ds_plan.get("create_local_s2_disk"):
         errors.append("LOCAL-S2 creation is enabled but no eligible >1500GB unused disk was found.")
+    if bool(netapp_nfs.get("required")) and not bool(netapp_nfs.get("ready")):
+        errors.append(f"NetApp NFS datastore setup is not ready for ESXi post-config: {netapp_nfs.get('blocking_reason') or 'missing mount inputs'}")
     snmp_wug = dict(plan.get("snmp_wug") or {})
     snmpv3 = dict(snmp_wug.get("snmpv3") or {})
     if not bool(snmp_wug.get("account_password_present")):
@@ -741,14 +825,21 @@ def build_esxi_post_config_actions(preview: dict[str, Any]) -> list[dict[str, An
         {"id": "ceip", "label": "Disable CEIP", "desired": {"UserVars.HostClientCEIPOptIn": 2}, "destructive": False},
         {"id": "datastore_rename", "label": "Rename local datastore", "desired": {"from": ds_plan.get("rename_local_datastore_from"), "to": ds_plan.get("rename_local_datastore_to")}, "destructive": False},
         {"id": "datastore_create_local_s2", "label": "Create LOCAL-S2 datastore", "desired": {"allowed": bool(ds_plan.get("create_local_s2_allowed")), "disk": dict(ds_plan.get("create_local_s2_disk") or {})}, "destructive": True},
-        {"id": "vswitch0_uplinks", "label": "Attach management uplinks to vSwitch0", "desired": {"uplinks": list(network_plan.get("preferred_mgmt_uplinks") or [])}, "destructive": False},
-        {"id": "vm_network_pg", "label": "Ensure VM Network port group", "desired": {"recreate_allowed": bool(network_plan.get("vm_network_recreate_enabled"))}, "destructive": False},
-        {"id": "identity_dns", "label": "Apply hostname/domain/DNS", "desired": {"hostname": identity.get("hostname"), "domain": identity.get("domain"), "dns_servers": list(identity.get("dns_servers") or [])}, "destructive": False},
-        {"id": "ntp", "label": "Apply NTP and start ntpd", "desired": {"server": ntp.get("server"), "service": "ntpd"}, "destructive": False},
-        {"id": "advanced_settings", "label": "Apply advanced settings", "desired": dict(advanced), "destructive": False},
-        {"id": "snmp_wug", "label": "Apply WUG/SNMP policy", "desired": dict(snmp), "destructive": False},
-        {"id": "roles_accounts", "label": "Apply roles/accounts policy", "desired": dict(roles_accounts), "destructive": False},
     ]
+    netapp_nfs = dict(plan.get("netapp_nfs") or {})
+    if bool(netapp_nfs.get("required")):
+        actions.append({"id": "netapp_nfs_datastore_mount", "label": "Mount NetApp NFS datastore", "desired": netapp_nfs, "destructive": False})
+    actions.extend(
+        [
+            {"id": "vswitch0_uplinks", "label": "Attach management uplinks to vSwitch0", "desired": {"uplinks": list(network_plan.get("preferred_mgmt_uplinks") or [])}, "destructive": False},
+            {"id": "vm_network_pg", "label": "Ensure VM Network port group", "desired": {"recreate_allowed": bool(network_plan.get("vm_network_recreate_enabled"))}, "destructive": False},
+            {"id": "identity_dns", "label": "Apply hostname/domain/DNS", "desired": {"hostname": identity.get("hostname"), "domain": identity.get("domain"), "dns_servers": list(identity.get("dns_servers") or [])}, "destructive": False},
+            {"id": "ntp", "label": "Apply NTP and start ntpd", "desired": {"server": ntp.get("server"), "service": "ntpd"}, "destructive": False},
+            {"id": "advanced_settings", "label": "Apply advanced settings", "desired": dict(advanced), "destructive": False},
+            {"id": "snmp_wug", "label": "Apply WUG/SNMP policy", "desired": dict(snmp), "destructive": False},
+            {"id": "roles_accounts", "label": "Apply roles/accounts policy", "desired": dict(roles_accounts), "destructive": False},
+        ]
+    )
     return actions
 
 
@@ -815,6 +906,42 @@ def _shell_quote(value: str) -> str:
     return "'" + str(value).replace("'", "'\"'\"'") + "'"
 
 
+def _ssh_failure_summary(code: int, out: str, err: str) -> str:
+    ignored_prefixes = (
+        "Warning: Permanently added ",
+        "Warning: ",
+    )
+    for text in (err, out):
+        for line in str(text or "").splitlines():
+            cleaned = line.strip()
+            if not cleaned:
+                continue
+            if any(cleaned.startswith(prefix) for prefix in ignored_prefixes):
+                continue
+            return cleaned
+    return f"ssh command failed ({code})"
+
+
+def _parse_datastore_summary_capacity(summary: str, datastore_name: str) -> dict[str, Any]:
+    if not datastore_name:
+        return {}
+    current_name = ""
+    for raw_line in str(summary or "").splitlines():
+        line = raw_line.strip()
+        if line.startswith("name = "):
+            current_name = line.split("=", 1)[1].strip().strip('",')
+            continue
+        if current_name != datastore_name:
+            continue
+        if line.startswith("capacity = "):
+            try:
+                capacity = int(line.split("=", 1)[1].strip().strip(","))
+            except ValueError:
+                capacity = 0
+            return {"capacity_bytes": capacity}
+    return {}
+
+
 def build_esxi_post_config_ssh_run_action(
     cfg: dict[str, Any],
     preview: dict[str, Any],
@@ -854,7 +981,7 @@ def build_esxi_post_config_ssh_run_action(
     snmpv3 = dict(snmp_wug.get("snmpv3") or {})
     roles_accounts = dict(plan.get("roles_accounts") or {})
 
-    def run_ssh(remote_command: str) -> dict[str, Any]:
+    def run_ssh_raw(remote_command: str) -> tuple[str, str]:
         cmd = [
             "sshpass",
             "-p",
@@ -864,13 +991,38 @@ def build_esxi_post_config_ssh_run_action(
             "StrictHostKeyChecking=no",
             "-o",
             "UserKnownHostsFile=/dev/null",
+            "-o",
+            "LogLevel=ERROR",
+            "-o",
+            "ConnectTimeout=10",
             f"{username}@{host}",
             remote_command,
         ]
         code, out, err = command_runner(cmd)
         if code != 0:
-            raise RuntimeError((err or out or f"ssh command failed ({code})").splitlines()[0])
+            raise RuntimeError(_ssh_failure_summary(code, str(out or ""), str(err or "")))
+        return str(out or ""), str(err or "")
+
+    def run_ssh(remote_command: str) -> dict[str, Any]:
+        out, _err = run_ssh_raw(remote_command)
         return {"status": "applied", "command": remote_command, "stdout": out.splitlines()[-1] if out else ""}
+
+    def refresh_datastore_summary(datastore_name: str) -> dict[str, Any]:
+        if not datastore_name:
+            return {}
+        result: dict[str, Any] = {}
+        try:
+            run_ssh_raw(f"vim-cmd hostsvc/datastore/refresh {_shell_quote(datastore_name)}")
+            result["refreshed"] = True
+        except RuntimeError as exc:
+            result["refresh_warning"] = str(exc)
+        try:
+            summary_out, _summary_err = run_ssh_raw("vim-cmd hostsvc/datastore/listsummary")
+            result["summary_stdout"] = summary_out
+            result.update(_parse_datastore_summary_capacity(summary_out, datastore_name))
+        except RuntimeError as exc:
+            result["summary_warning"] = str(exc)
+        return result
 
     def runner(action_id: str, desired: dict[str, Any]) -> dict[str, Any]:
         if action_id == "discover_connection":
@@ -891,6 +1043,69 @@ def build_esxi_post_config_ssh_run_action(
             if not disk_name:
                 return {"status": "skipped", "reason": "missing_disk_name"}
             return run_ssh(f"vmkfstools -C vmfs6 -S LOCAL-S2 {_shell_quote('/vmfs/devices/disks/' + disk_name)}")
+        if action_id == "netapp_nfs_datastore_mount":
+            if not bool(desired.get("ready")):
+                return {"status": "skipped", "reason": desired.get("blocking_reason") or "missing_netapp_nfs_mount_inputs"}
+            mount_plan = [dict(item or {}) for item in list(desired.get("mount_plan") or [])]
+            if not mount_plan:
+                return {"status": "skipped", "reason": "no_mount_plan"}
+            target = mount_plan[0]
+            datastore_name = str(target.get("datastore_name") or desired.get("datastore_name") or "").strip()
+            nfs_version = str(target.get("nfs_version") or desired.get("nfs_version") or "4.1").strip()
+            list_cmd = "esxcli storage nfs41 list" if nfs_version == "4.1" else "esxcli storage nfs list"
+            for check_cmd, effective_version in (
+                ("esxcli storage nfs41 list", "4.1"),
+                ("esxcli storage nfs list", "3"),
+            ):
+                out, _err = run_ssh_raw(check_cmd)
+                existing_line = next((line for line in out.splitlines() if datastore_name and datastore_name in line), "")
+                if not existing_line:
+                    continue
+                if "true" in existing_line.lower():
+                    datastore_summary = refresh_datastore_summary(datastore_name)
+                    return {
+                        "status": "skipped",
+                        "reason": "datastore_already_mounted",
+                        "stdout": out,
+                        "requested_nfs_version": nfs_version,
+                        "effective_nfs_version": effective_version,
+                        "list_command": check_cmd,
+                        "datastore_summary": datastore_summary,
+                    }
+                raise RuntimeError(
+                    f"Datastore '{datastore_name}' already exists on ESXi but is not accessible or mounted. "
+                    "Manual cleanup or remount review is required before retrying automation."
+                )
+            add_cmd = str(target.get("esxcli_command") or "").strip()
+            fallback_cmd = str(target.get("esxcli_fallback_command") or "").strip()
+            if not add_cmd:
+                return {"status": "skipped", "reason": "missing_esxcli_mount_command"}
+            fallback_used = False
+            try:
+                run_ssh_raw(add_cmd)
+            except RuntimeError as exc:
+                if not (fallback_cmd and nfs_version == "4.1"):
+                    raise
+                cleanup_out, _cleanup_err = run_ssh_raw("esxcli storage nfs41 list")
+                cleanup_line = next((line for line in cleanup_out.splitlines() if datastore_name and datastore_name in line), "")
+                if cleanup_line:
+                    run_ssh_raw(f"esxcli storage nfs41 remove -v {_shell_quote(datastore_name)}")
+                run_ssh_raw(fallback_cmd)
+                fallback_used = True
+                list_cmd = "esxcli storage nfs list"
+            verify_out, _verify_err = run_ssh_raw(list_cmd)
+            if datastore_name and datastore_name not in verify_out:
+                raise RuntimeError(f"Datastore '{datastore_name}' was not present in ESXi NFS mounts after apply.")
+            datastore_summary = refresh_datastore_summary(datastore_name)
+            return {
+                "status": "applied",
+                "command": fallback_cmd if fallback_used else add_cmd,
+                "stdout": verify_out,
+                "fallback_used": fallback_used,
+                "requested_nfs_version": nfs_version,
+                "effective_nfs_version": "3" if fallback_used else nfs_version,
+                "datastore_summary": datastore_summary,
+            }
         if action_id == "vswitch0_uplinks":
             uplinks = [str(item).strip() for item in list(desired.get("uplinks") or []) if str(item).strip()]
             if not uplinks:

@@ -53,6 +53,37 @@ def test_validate_execution_scope_blocks_on_upgrade_gate(monkeypatch):
         main.validate_execution_scope(cfg, "netapp")
 
 
+def test_validate_execution_scope_ignores_unselected_upgrade_gate(monkeypatch):
+    cfg = main.default_config()
+    cfg["included"]["cisco_switch"] = False
+    cfg["included"]["storage"] = False
+    cfg["included"]["netapp"] = False
+    cfg["included"]["esxi"] = True
+    cfg["ilo"]["current_ip"] = "10.10.8.110"
+    cfg["ilo"]["host"] = "10.10.8.110"
+    cfg["esxi"]["hostname"] = "esxi-lab"
+    cfg["esxi"]["management_ip"] = "10.10.8.111"
+    cfg["esxi"]["subnet_mask"] = "255.255.255.0"
+    cfg["esxi"]["gateway"] = "10.10.8.1"
+    cfg["esxi"]["dns_servers"] = ["10.10.8.61", "10.10.8.200"]
+    cfg["esxi"]["root_password"] = "Valid1Pass!"
+    cfg["upgrade_inventory"] = {
+        "cisco_switch": {"current_version": "", "source": ""},
+    }
+    cfg["upgrade_helper"] = {"policies": {"cisco_switch": "block"}}
+    monkeypatch.setattr(main, "scan_upgrade_media", lambda: {
+        "root": "/repo/media",
+        "latest": {"cisco_switch": {"version": "17.15.05", "filename": "cat9k_iosxe.17.15.05.SPA.bin", "path": "/repo/media/cat9k_iosxe.17.15.05.SPA.bin"}},
+        "counts": {"cisco_switch": 1},
+        "candidates": [],
+    })
+
+    main.validate_execution_scope(cfg, "esxi")
+
+    with pytest.raises(ValueError, match="Read the current Cisco version"):
+        main.validate_execution_scope(cfg, "cisco_switch")
+
+
 def test_validate_execution_scope_allows_warn_only_upgrade_gap(monkeypatch):
     cfg = main.default_config()
     cfg["upgrade_inventory"] = {
@@ -103,6 +134,93 @@ def test_upgrade_helper_runs_ilo_upgrade_while_ilo_page_shows_gate_only(client, 
     assert response.status_code == 200
     assert "iLO upgrade status" in response.text
     assert "progress-bar" in response.text
+
+
+def test_upgrade_helper_hides_ilo_run_action_when_firmware_is_current(client, monkeypatch):
+    monkeypatch.setattr(main, "scan_upgrade_media", lambda: {
+        "root": "/repo/media",
+        "latest": {"ilo": {"version": "1.76", "filename": "ilo6_176.fwpkg", "path": "/repo/media/ilo6_176.fwpkg"}},
+        "counts": {"ilo": 1},
+        "candidates": [
+            {"device": "ilo", "version": "1.76", "filename": "ilo6_176.fwpkg", "path": "/repo/media/ilo6_176.fwpkg"},
+        ],
+    })
+    cfg = main.default_config()
+    cfg["upgrade_inventory"] = {
+        "ilo": {"current_version": "1.76", "source": "Latest live iLO inventory", "manager_model": "iLO 6"},
+    }
+    cfg["ilo"]["upgrade"] = {
+        "activity": {"status": "blocked", "phase": "blocked", "message": "iLO upgrade prechecks are not satisfied."},
+        "last_result": {"status": "blocked", "error": "iLO upgrade prechecks are not satisfied."},
+    }
+    main.save_kit_config(cfg)
+
+    response = client.get("/upgrade-helper")
+
+    assert response.status_code == 200
+    assert "No iLO upgrade required" in response.text
+    assert "Run iLO upgrade" not in response.text
+    assert 'hx-post="/run-ilo-upgrade"' not in response.text
+    assert "iLO upgrade prechecks are not satisfied." not in response.text
+    saved = main.load_kit_config()
+    assert saved["ilo"]["upgrade"]["activity"]["status"] == "completed"
+    assert saved["ilo"]["upgrade"]["activity"]["phase"] == "current"
+
+
+def test_upgrade_helper_offers_read_current_ilo_when_version_unknown(client, monkeypatch):
+    monkeypatch.setattr(main, "scan_upgrade_media", lambda: {
+        "root": "/repo/media",
+        "latest": {"ilo": {"version": "1.76", "filename": "ilo6_176.fwpkg", "path": "/repo/media/ilo6_176.fwpkg"}},
+        "counts": {"ilo": 1},
+        "candidates": [
+            {"device": "ilo", "version": "1.76", "filename": "ilo6_176.fwpkg", "path": "/repo/media/ilo6_176.fwpkg"},
+        ],
+    })
+    cfg = main.default_config()
+    cfg["upgrade_inventory"] = {
+        "ilo": {"current_version": "", "source": "", "manager_model": "iLO 6"},
+    }
+    main.save_kit_config(cfg)
+
+    response = client.get("/upgrade-helper")
+
+    assert response.status_code == 200
+    assert "Read current iLO" in response.text
+    assert 'hx-post="/export-ilo-inventory?upgrade_tab=ilo"' in response.text
+    assert "Run iLO upgrade" not in response.text
+
+
+def test_run_ilo_upgrade_marks_current_firmware_complete_without_precheck_error(client, monkeypatch):
+    monkeypatch.setattr(main, "scan_upgrade_media", lambda: {
+        "root": "/repo/media",
+        "latest": {"ilo": {"version": "1.76", "filename": "ilo6_176.fwpkg", "path": "/repo/media/ilo6_176.fwpkg"}},
+        "counts": {"ilo": 1},
+        "candidates": [
+            {"device": "ilo", "version": "1.76", "filename": "ilo6_176.fwpkg", "path": "/repo/media/ilo6_176.fwpkg"},
+        ],
+    })
+    monkeypatch.setattr(main, "_start_ilo_upgrade_worker", lambda cfg, media_scan: (_ for _ in ()).throw(AssertionError("worker should not start")))
+    cfg = main.default_config()
+    cfg["site"]["name"] = "Ilo Current Firmware Kit"
+    cfg["ilo"]["current_ip"] = "10.10.8.50"
+    cfg["ilo"]["host"] = "10.10.8.50"
+    cfg["ilo"]["username"] = "Administrator"
+    cfg["ilo"]["password"] = "kit-password"
+    cfg["upgrade_inventory"] = {
+        "ilo": {"current_version": "1.76", "source": "Latest live iLO inventory", "manager_model": "iLO 6"},
+    }
+    main.save_kit_config(cfg)
+
+    response = client.post("/run-ilo-upgrade", data={"return_page": "upgrade_helper"})
+
+    assert response.status_code == 200
+    assert "iLO already up to date" in response.text
+    assert "prechecks did not pass" not in response.text
+    assert "iLO upgrade blocked" not in response.text
+    saved = main.load_kit_config("Ilo-Current-Firmware-Kit")
+    assert saved["ilo"]["upgrade"]["activity"]["status"] == "completed"
+    assert saved["ilo"]["upgrade"]["activity"]["phase"] == "current"
+    assert saved["ilo"]["upgrade"]["last_result"]["status"] == "current"
 
 
 def test_ilo_page_gate_can_read_current_ilo_when_version_unknown(client, monkeypatch):
@@ -209,11 +327,78 @@ def test_upgrade_helper_shows_netapp_and_cisco_upgrade_actions(client):
 
     response = client.get("/upgrade-helper")
     assert response.status_code == 200
+    assert "upgrade-tabs" in response.text
+    assert "ONTAP" in response.text
+    assert "Cisco" in response.text
+    assert "ESXi" in response.text
+    assert "Firmware/SPP" in response.text
+    assert "Upgrade pre-check" not in response.text
+    assert "Upgrade inventory" not in response.text
+    assert "Detailed planner" not in response.text
+    assert "Read current ONTAP release" not in response.text
+    assert "Run Cisco upgrade" not in response.text
+
+    response = client.get("/upgrade-helper?tab=ontap")
+    assert response.status_code == 200
+    assert "Current release" in response.text
+    assert "Read current ONTAP release" in response.text
     assert "Review ONTAP upgrade plan" in response.text
     assert "Run ONTAP upgrade" in response.text
+
+    response = client.get("/upgrade-helper?tab=cisco")
+    assert response.status_code == 200
     assert "Review Cisco upgrade plan" in response.text
     assert "Run Cisco upgrade" in response.text
     assert "Upgrade Helper" in response.text
+
+
+def test_upgrade_helper_tabs_render_one_module_and_status_badges(client):
+    cfg = main.default_config()
+    cfg["cisco_switch"]["upgrade"] = {
+        "activity": {
+            "status": "running",
+            "phase": "transfer",
+            "message": "Cisco image transfer is running.",
+            "progress_percent": 25,
+            "events": [{"phase": "transfer", "message": "Cisco image transfer is running.", "timestamp": "2026-05-19T12:00:00"}],
+        }
+    }
+    cfg["netapp"]["upgrade"] = {
+        "activity": {
+            "status": "completed",
+            "phase": "complete",
+            "message": "ONTAP upgrade completed.",
+            "progress_percent": 100,
+            "events": [{"phase": "complete", "message": "ONTAP upgrade completed.", "timestamp": "2026-05-19T12:00:00"}],
+        }
+    }
+    main.save_kit_config(cfg)
+
+    response = client.get("/upgrade-helper?tab=ilo")
+
+    assert response.status_code == 200
+    assert 'id="upgrade-helper-tab-shell"' in response.text
+    assert 'class="upgrade-panel upgrade-panel--ilo' in response.text
+    assert 'id="netapp-upgrade-activity"' not in response.text
+    assert 'id="cisco-upgrade-activity"' not in response.text
+    assert "Cisco" in response.text
+    assert "Running" in response.text
+
+    response = client.get("/upgrade-helper/tab/cisco")
+
+    assert response.status_code == 200
+    assert 'data-active-upgrade-tab="cisco"' in response.text
+    assert 'class="upgrade-panel upgrade-panel--cisco silent-poll"' in response.text
+    assert 'hx-get="/upgrade-helper/panel/cisco"' in response.text
+    assert 'hx-target="#cisco-upgrade-activity"' in response.text
+    assert 'id="ilo-upgrade-activity"' not in response.text
+
+    response = client.get("/upgrade-helper/panel/firmware")
+
+    assert response.status_code == 200
+    assert 'class="upgrade-panel upgrade-panel--firmware' in response.text
+    assert "Raw media inventory" in response.text
+    assert "raw-output" in response.text
 
 
 def test_cisco_discover_console_surfaces_permission_denied(client, monkeypatch):
@@ -1516,6 +1701,9 @@ def test_save_global_settings_updates_shared_defaults(client):
             "switch_ip": "10.30.40.2",
             "esxi_ip": "10.30.40.10",
             "ilo_target_ip": "10.30.40.11",
+            "ilo_current_ip": "10.30.40.110",
+            "ilo_username": "Administrator",
+            "ilo_password": "ilo-secret",
             "windows_ip": "10.30.40.20",
             "qnap_ip": "10.30.40.30",
             "iosafe_ip": "10.30.40.31",
@@ -1539,6 +1727,10 @@ def test_save_global_settings_updates_shared_defaults(client):
     cfg = main.load_kit_config("Global-Kit")
     assert cfg["shared_network"]["subnet"] == "10.30.40.0/24"
     assert cfg["ip_plan"]["ilo"] == "10.30.40.11"
+    assert cfg["ilo"]["current_ip"] == "10.30.40.110"
+    assert cfg["ilo"]["host"] == "10.30.40.110"
+    assert cfg["ilo"]["username"] == "Administrator"
+    assert cfg["ilo"]["password"] == "ilo-secret"
     assert cfg["included"]["storage"] is True
 
 
@@ -1580,6 +1772,58 @@ def test_save_global_settings_preserves_module_fields_when_form_is_shared_only(c
     assert saved["netapp"]["host"] == "10.10.8.45"
     assert saved["netapp"]["password"] == "secret"
     assert saved["cisco_switch"]["password"] == "switchsecret"
+
+
+def test_populate_setup_sections_writes_ip_plan_to_module_pages(client):
+    cfg = main.default_config()
+    cfg["site"]["name"] = "Populate Kit"
+    cfg["ilo"]["current_ip"] = "10.1.1.99"
+    cfg["ilo"]["host"] = "10.1.1.99"
+    cfg["netapp"]["host"] = "10.1.1.45"
+    cfg["netapp"]["bootstrap_overrides"] = {"netapp_cluster_mgmt": "10.1.1.45"}
+    cfg["cisco_switch"]["management_ip"] = "10.1.1.2"
+    cfg["vmware"]["vcenter_ip"] = "10.1.1.50"
+    cfg["vmware"]["vcenter_install"]["target_ip"] = "10.1.1.50"
+    main.save_kit_config(cfg)
+
+    response = client.post(
+        "/populate-setup-sections",
+        data={
+            "return_page": "global_settings",
+            "site_name": "Populate Kit",
+            "shared_subnet": "10.77.88.0/24",
+            "gateway_ip": "10.77.88.1",
+            "ilo_current_ip": "10.77.88.110",
+            "ilo_username": "Administrator",
+            "ilo_password": "new-ilo-secret",
+            "dns1": "1.1.1.1",
+            "dns2": "8.8.8.8",
+            "dns3": "",
+            "dns4": "",
+        },
+    )
+
+    assert response.status_code == 200
+    assert "Setup sections populated" in response.text
+    saved = main.load_kit_config("Populate-Kit")
+    assert saved["shared_network"]["subnet"] == "10.77.88.0/24"
+    assert saved["ip_plan"]["gateway"] == "10.77.88.1"
+    assert saved["ilo"]["current_ip"] == "10.77.88.110"
+    assert saved["ilo"]["host"] == "10.77.88.110"
+    assert saved["ilo"]["target_ip"] == "10.77.88.11"
+    assert saved["ilo"]["username"] == "Administrator"
+    assert saved["ilo"]["password"] == "new-ilo-secret"
+    assert saved["esxi"]["management_ip"] == "10.77.88.10"
+    assert saved["windows"]["ip_address"] == "10.77.88.20"
+    assert saved["windows"]["vsphere_host"] == "10.77.88.50"
+    assert saved["qnap"]["ip"] == "10.77.88.30"
+    assert saved["iosafe"]["ip"] == "10.77.88.31"
+    assert saved["cisco_switch"]["management_ip"] == "10.77.88.2"
+    assert saved["netapp"]["host"] == "10.77.88.45"
+    assert saved["netapp"]["management"]["node_01_mgmt_ip"] == "10.77.88.46"
+    assert saved["netapp"]["bootstrap_overrides"]["netapp_sp_a"] == "10.77.88.13"
+    assert saved["vmware"]["vcenter_ip"] == "10.77.88.50"
+    assert saved["vmware"]["vcenter_install"]["target_ip"] == "10.77.88.50"
 
 
 def test_save_global_settings_persists_additional_snmp_users(client):
@@ -2277,6 +2521,12 @@ def test_global_settings_and_workflow_pages_show_defaults_and_dependencies(clien
     assert "Shared DNS and alerts" in global_response.text
     assert "Advanced SNMPv3 users" in global_response.text
     assert "Save shared defaults" in global_response.text
+    assert "Populate setup sections from IP plan" in global_response.text
+    assert 'hx-post="/populate-setup-sections"' in global_response.text
+    assert "First connection to iLO" in global_response.text
+    assert 'name="ilo_current_ip"' in global_response.text
+    assert 'name="ilo_username"' in global_response.text
+    assert 'name="ilo_password"' in global_response.text
     assert "Default addresses" not in global_response.text
     assert "Advanced kit pages" not in global_response.text
     assert 'name="esxi_ip"' not in global_response.text
@@ -3880,7 +4130,7 @@ def test_prepare_execute_windows_offers_safe_real_run(client):
     )
 
     assert response.status_code == 200
-    assert "Dry-run apply" in response.text
+    assert "Real VM deploy" in response.text
 
 
 def test_execute_real_scope_starts_windows_safe_path(client, monkeypatch):
@@ -3917,7 +4167,7 @@ def test_execute_real_scope_starts_windows_safe_path(client, monkeypatch):
     )
 
     assert response.status_code == 200
-    assert "Windows safe execution started in the background." in response.text
+    assert "Windows VM install started in the background." in response.text
     assert started["target"] is main.execute_real_job_in_background
     assert started["args"][1] == "windows"
     assert started["daemon"] is True
@@ -4952,6 +5202,72 @@ def test_run_esxi_real_builds_iso_and_starts_virtual_media_boot(monkeypatch, tmp
     assert "[SKIP] Server already Off before ESXi boot preparation." in off_logs
     assert ("power_reset", "ForceOff", "/redfish/v1/Systems/1") not in off_client.calls
     assert ("power_reset", "On", "/redfish/v1/Systems/1") in off_client.calls
+
+
+def test_run_esxi_real_mounts_netapp_storage_only_when_esxi_is_already_reachable(monkeypatch):
+    cfg = main.default_config()
+    cfg["site"]["name"] = "Reachable ESXi Storage Only Kit"
+    cfg["ilo"]["current_ip"] = ""
+    cfg["ilo"]["host"] = ""
+    cfg["ilo"]["username"] = ""
+    cfg["ilo"]["password"] = ""
+    cfg["included"]["netapp"] = True
+    cfg["netapp"].update(
+        {
+            "storage_protocol": "nfs",
+            "desired": {
+                "svm_name": "stage_nfs",
+                "nfs": {
+                    "volume": "esxi_datastore_01",
+                    "mount_path": "/esxi_datastore_01",
+                    "esxi_mount_targets": ["10.10.8.111"],
+                    "lifs": [
+                        {"name": "nfs_lif_01", "ip": "10.10.8.48", "node": "X20-01", "port": "e0b"},
+                        {"name": "nfs_lif_02", "ip": "10.10.8.49", "node": "X20-02", "port": "e0b"},
+                    ],
+                },
+            },
+        }
+    )
+    cfg["esxi"]["hostname"] = "esxi-lab"
+    cfg["esxi"]["management_ip"] = "10.10.8.111"
+    cfg["esxi"]["subnet_mask"] = "255.255.255.0"
+    cfg["esxi"]["gateway"] = "10.10.8.1"
+    cfg["esxi"]["dns_servers"] = ["10.10.8.61", "10.10.8.200"]
+    cfg["esxi"]["root_password"] = "Valid1Pass!"
+
+    called_actions: list[str] = []
+
+    def fake_ssh_action_builder(run_cfg, preview, **kwargs):
+        def fake_run_action(action_id: str, desired: dict[str, Any]) -> dict[str, Any]:
+            called_actions.append(action_id)
+            return {
+                "status": "applied",
+                "command": "esxcli storage nfs41 add -H '10.10.8.48,10.10.8.49' -s /esxi_datastore_01 -v esxi_datastore_01",
+                "stdout": "esxi_datastore_01 true\n",
+            }
+
+        return fake_run_action
+
+    monkeypatch.setattr(main, "probe_tcp_port", lambda host, port, timeout_seconds=0.75: {"host": host, "port": port, "reachable": True})
+    monkeypatch.setattr(main, "build_esxi_install_review", lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("installer path should not run")))
+    monkeypatch.setattr(main, "build_custom_iso", lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("ISO builder should not run")))
+    monkeypatch.setattr(main, "build_esxi_post_config_ssh_run_action", fake_ssh_action_builder)
+
+    main.run_esxi_real(cfg, run_stamp="20260416-130000")
+
+    job = main.load_job("Reachable ESXi Storage Only Kit")
+    joined_logs = "\n".join(job["logs"])
+
+    assert job["status"] == "Completed"
+    assert called_actions == ["netapp_nfs_datastore_mount"]
+    assert "skipping installer ISO, virtual media, boot override, and power control" in joined_logs
+    assert "installer was not run" in joined_logs
+    assert job["esxi_iso_path"] == ""
+    assert job["esxi_post_config_actions"][0]["id"] == "netapp_nfs_datastore_mount"
+    assert job["esxi_post_config_execution"]["mode"] == "live-ssh-storage-only"
+    assert job["esxi_post_config_execution"]["results"][0]["status"] == "applied"
+    assert job["esxi_management_network"]["storage_only_post_config"] is True
 
 
 def test_run_esxi_real_passes_selected_esxi8_iso_to_builder(monkeypatch, tmp_path):
@@ -11247,7 +11563,7 @@ def test_cisco_page_separates_live_state_from_desired_template(client):
     assert "Approve config" in response.text
     assert "Run Cisco upgrade" not in response.text
     assert "Port map" in response.text
-    assert "data-lens-keep-closed" in response.text
+    assert "data-lens-keep-closed" not in response.text
     assert "GigabitEthernet1/0/24" in response.text
 
 
@@ -11544,55 +11860,45 @@ def test_dashboard_uses_simplified_primary_navigation(client):
     assert 'href="/execution"' in response.text
     assert "Run Center" in response.text
     assert "Skip to content" in response.text
-    assert "Command palette" in response.text
-    assert "Quick jump" in response.text
-    assert "Ctrl K" in response.text
-    assert "Compact view" in response.text
-    assert "Open issues" in response.text
-    assert "Readiness issues" in response.text
-    assert "Blockers and next fixes" in response.text
     assert "Operator companion" in response.text
     assert "Human-readable next move" in response.text
     assert "Take next step" in response.text
-    assert "Explain blockers" in response.text
-    assert "Open proof" in response.text
-    assert "Experience lens" in response.text
-    assert "Calm" in response.text
-    assert "Normal" in response.text
-    assert "Expert" in response.text
-    assert "Calm lens" in response.text
-    assert "Normal lens" in response.text
-    assert "Minimum interface" in response.text
-    assert "Guided workflow" in response.text
-    assert "Full proof mode" in response.text
-    assert "Alt 1" in response.text
-    assert "data-lens-current-copy" in response.text
-    assert "Proof ledger" in response.text
-    assert "Evidence trail" in response.text
-    assert "Current page signal" in response.text
-    assert "Cosmic mode" in response.text
-    assert "Trip" in response.text
-    assert "Reality engine" in response.text
-    assert "Maximum trip" in response.text
-    assert "Emergency normal" in response.text
-    assert "data-reality-range" in response.text
-    assert 'data-density-toggle' in response.text
-    assert 'data-lens="normal"' in response.text
-    assert 'data-density="comfortable"' in response.text
-    assert 'data-visual="normal"' in response.text
-    assert 'data-visual-toggle' in response.text
-    assert 'data-reality-engine-open' in response.text
-    assert 'lab-builder-reality-engine' in response.text
-    assert 'lab-builder-visual-mode' in response.text
     assert 'data-navigate-href=' in response.text
-    assert 'data-proof-drawer-open' in response.text
-    assert 'data-lens-option="expert"' in response.text
-    assert 'data-lens-option="normal"' in response.text
-    assert 'body[data-lens="calm"] .codeblock' in response.text
-    assert "captureLensDetailDefaults" in response.text
-    assert "alignLensDetails" in response.text
-    assert "isTypingTarget" in response.text
-    assert "htmx:afterSettle" in response.text
+    assert "Command palette" not in response.text
+    assert "Quick jump" not in response.text
+    assert "Ctrl K" not in response.text
+    assert "Compact view" not in response.text
+    assert "Comfort view" not in response.text
+    assert "Open issues" not in response.text
+    assert "Readiness issues" not in response.text
+    assert "Blockers and next fixes" not in response.text
+    assert "Explain blockers" not in response.text
+    assert "Open proof" not in response.text
+    assert "Experience lens" not in response.text
+    assert "Calm lens" not in response.text
+    assert "Normal lens" not in response.text
+    assert "Proof ledger" not in response.text
+    assert "Evidence trail" not in response.text
+    assert "Cosmic mode" not in response.text
+    assert "Reality engine" not in response.text
+    assert "Maximum trip" not in response.text
+    assert "Emergency normal" not in response.text
+    assert "data-reality-range" not in response.text
+    assert 'data-density-toggle' not in response.text
+    assert 'data-lens=' not in response.text
+    assert 'data-density=' not in response.text
+    assert 'data-visual=' not in response.text
+    assert 'data-visual-toggle' not in response.text
+    assert 'data-reality-engine-open' not in response.text
+    assert 'lab-builder-reality-engine' not in response.text
+    assert 'lab-builder-visual-mode' not in response.text
+    assert 'data-proof-drawer-open' not in response.text
+    assert 'data-lens-option=' not in response.text
+    assert 'body[data-lens=' not in response.text
+    assert "captureLensDetailDefaults" not in response.text
+    assert "alignLensDetails" not in response.text
+    assert "isTypingTarget" not in response.text
+    assert "htmx:afterSettle" not in response.text
     assert ".sidebar .nav-group:last-of-type" not in response.text
     assert "Run History" not in response.text
     assert "Reset dashboard layout" not in response.text
@@ -11691,10 +11997,10 @@ def test_kits_route_falls_back_to_dashboard_workflow(client):
     response = client.get("/kits")
 
     assert response.status_code == 200
-    assert "Dashboard" in response.text
-    assert "Active kit" in response.text
-    assert "Choose a kit" in response.text
-    assert "Continue setup" in response.text
+    assert "Kits" in response.text
+    assert "Create or switch kit" in response.text
+    assert "Kit storage usage" in response.text
+    assert "Clean generated artifacts" in response.text
 
 
 def test_create_new_kit_updates_active_kit_on_dashboard(client):
@@ -11706,6 +12012,116 @@ def test_create_new_kit_updates_active_kit_on_dashboard(client):
     assert response.status_code == 200
     assert "Active kit" in response.text
     assert "Fresh-Kit" in response.text
+
+
+def test_create_new_kit_from_kit_manager_stays_on_kits_page(client):
+    response = client.post(
+        "/new-kit",
+        data={"new_kit_name": "Fresh Manager Kit", "return_page": "kits"},
+    )
+
+    assert response.status_code == 200
+    assert "Kit storage usage" in response.text
+    assert "Fresh-Manager-Kit" in response.text
+    assert main.get_current_kit_name() == "Fresh-Manager-Kit"
+
+
+def test_create_new_kit_does_not_overwrite_existing_kit(client):
+    cfg = main.default_config()
+    cfg["site"]["name"] = "Existing-Kit"
+    cfg["shared_network"]["subnet"] = "10.44.0.0/24"
+    main.save_kit_config(cfg)
+
+    response = client.post(
+        "/new-kit",
+        data={"new_kit_name": "Existing Kit", "return_page": "kits"},
+    )
+
+    assert response.status_code == 200
+    assert "Kit already exists: Existing-Kit" in response.text
+    assert main.load_kit_config("Existing-Kit")["shared_network"]["subnet"] == "10.44.0.0/24"
+
+
+def test_kit_manager_reports_storage_by_kit(client):
+    cfg = main.default_config()
+    cfg["site"]["name"] = "Storage-Heavy"
+    main.save_kit_config(cfg)
+    main.set_current_kit_name("Storage-Heavy")
+    run_dir = main.RUNS_DIR / "Storage-Heavy" / "20260521-test"
+    run_dir.mkdir(parents=True, exist_ok=True)
+    (run_dir / "live-job.log").write_text("x" * 2048, encoding="utf-8")
+    export_dir = main.EXPORTS_DIR / "builds" / "Storage-Heavy"
+    export_dir.mkdir(parents=True, exist_ok=True)
+    (export_dir / "run-summary.yml").write_text("summary", encoding="utf-8")
+
+    response = client.get("/kits")
+
+    assert response.status_code == 200
+    assert "Storage-Heavy" in response.text
+    assert "Run logs" in response.text
+    assert "Exports" in response.text
+
+
+def test_clean_kit_artifacts_keeps_config_and_removes_excess_files(client):
+    cfg = main.default_config()
+    cfg["site"]["name"] = "Cleanup-Kit"
+    main.save_kit_config(cfg)
+    main.set_current_kit_name("Cleanup-Kit")
+    main.save_job("Cleanup-Kit", {"status": "Complete"})
+    main.save_history("Cleanup-Kit", [{"scope": "test"}])
+    run_dir = main.RUNS_DIR / "Cleanup-Kit" / "20260521-test"
+    run_dir.mkdir(parents=True, exist_ok=True)
+    (run_dir / "live-job.log").write_text("log", encoding="utf-8")
+    generated = main.GENERATED_DIR / "run-summary-Cleanup-Kit-test.yml"
+    generated.parent.mkdir(parents=True, exist_ok=True)
+    generated.write_text("generated", encoding="utf-8")
+    export_dir = main.EXPORTS_DIR / "builds" / "Cleanup-Kit"
+    export_dir.mkdir(parents=True, exist_ok=True)
+    (export_dir / "summary.yml").write_text("export", encoding="utf-8")
+
+    response = client.post(
+        "/clean-kit-artifacts",
+        data={"kit_name": "Cleanup-Kit", "confirm_text": "CLEAN Cleanup-Kit"},
+    )
+
+    assert response.status_code == 200
+    assert "Kit artifacts cleaned" in response.text
+    assert main.kit_path("Cleanup-Kit").exists()
+    assert not main.job_path("Cleanup-Kit").exists()
+    assert not main.history_path("Cleanup-Kit").exists()
+    assert not (main.RUNS_DIR / "Cleanup-Kit").exists()
+    assert not generated.exists()
+    assert not export_dir.exists()
+
+
+def test_delete_kit_removes_config_and_artifacts_but_blocks_active(client):
+    active = main.default_config()
+    active["site"]["name"] = "Active-Kit"
+    main.save_kit_config(active)
+    old = main.default_config()
+    old["site"]["name"] = "Old-Kit"
+    main.save_kit_config(old)
+    main.set_current_kit_name("Active-Kit")
+    run_dir = main.RUNS_DIR / "Old-Kit" / "20260521-test"
+    run_dir.mkdir(parents=True, exist_ok=True)
+    (run_dir / "live-job.log").write_text("log", encoding="utf-8")
+
+    blocked = client.post(
+        "/delete-kit",
+        data={"kit_name": "Active-Kit", "confirm_text": "DELETE Active-Kit"},
+    )
+    deleted = client.post(
+        "/delete-kit",
+        data={"kit_name": "Old-Kit", "confirm_text": "DELETE Old-Kit"},
+    )
+
+    assert blocked.status_code == 200
+    assert "Load a different kit before deleting the active kit" in blocked.text
+    assert deleted.status_code == 200
+    assert "Kit deleted" in deleted.text
+    assert main.kit_path("Active-Kit").exists()
+    assert not main.kit_path("Old-Kit").exists()
+    assert not (main.RUNS_DIR / "Old-Kit").exists()
 
 
 def test_websocket_job_stream_exits_cleanly_on_cancelled_sleep(monkeypatch):
@@ -11886,6 +12302,154 @@ def test_esxi_post_config_preview_builds_targets_and_templates():
     assert preview["plan"]["identity"]["hostname"] == "NSWAN-Kit-77-VP00002"
     assert preview["plan"]["identity"]["domain"] == "Kit-77.forces.mil.ca"
     assert preview["plan"]["datastore_plan"]["create_local_s2_allowed"] is True
+
+
+def test_included_run_orders_netapp_before_esxi_when_both_enabled():
+    cfg = main.default_config()
+    cfg["included"]["netapp"] = True
+    cfg["included"]["esxi"] = True
+
+    selected = main.run_center_scope_keys("included", cfg)
+
+    assert selected.index("netapp") < selected.index("esxi")
+
+
+def test_esxi_post_config_preview_adds_netapp_nfs_mount_action():
+    cfg = main.default_config()
+    cfg["included"]["netapp"] = True
+    cfg["netapp"].update(
+        {
+            "storage_protocol": "nfs",
+            "bootstrap_complete": True,
+            "host": "10.10.8.45",
+            "username": "admin",
+            "password": "secret",
+            "desired": {
+                "svm_name": "stage_nfs",
+                "nfs": {
+                    "volume": "esxi_datastore_01",
+                    "mount_path": "/esxi_datastore_01",
+                    "esxi_mount_targets": ["10.10.8.111"],
+                    "lifs": [
+                        {"name": "nfs_lif_01", "ip": "10.10.8.48", "node": "X20-01", "port": "e0b"},
+                        {"name": "nfs_lif_02", "ip": "10.10.8.49", "node": "X20-02", "port": "e0b"},
+                    ],
+                },
+            },
+        }
+    )
+    cfg["esxi"]["management_ip"] = "10.10.8.111"
+    cfg["esxi"]["root_password"] = "Valid1Pass!"
+
+    preview = main.build_esxi_post_config_preview(cfg)
+    netapp_nfs = preview["plan"]["netapp_nfs"]
+    actions = main.build_esxi_post_config_actions(preview)
+
+    assert netapp_nfs["required"] is True
+    assert netapp_nfs["ready"] is True
+    assert netapp_nfs["datastore_name"] == "esxi_datastore_01"
+    assert netapp_nfs["server_ips"] == ["10.10.8.48", "10.10.8.49"]
+    assert "esxcli storage nfs41 add" in netapp_nfs["mount_plan"][0]["esxcli_command"]
+    assert any(action["id"] == "netapp_nfs_datastore_mount" for action in actions)
+
+
+def test_esxi_post_config_ssh_runner_mounts_netapp_nfs_datastore():
+    cfg = main.default_config()
+    cfg["included"]["netapp"] = True
+    cfg["netapp"].update(
+        {
+            "storage_protocol": "nfs",
+            "desired": {
+                "svm_name": "stage_nfs",
+                "nfs": {
+                    "volume": "esxi_datastore_01",
+                    "mount_path": "/esxi_datastore_01",
+                    "esxi_mount_targets": ["10.10.8.111"],
+                    "lifs": [
+                        {"name": "nfs_lif_01", "ip": "10.10.8.48", "node": "X20-01", "port": "e0b"},
+                        {"name": "nfs_lif_02", "ip": "10.10.8.49", "node": "X20-02", "port": "e0b"},
+                    ],
+                },
+            },
+        }
+    )
+    cfg["esxi"]["management_ip"] = "10.10.8.111"
+    cfg["esxi"]["root_password"] = "Valid1Pass!"
+    preview = main.build_esxi_post_config_preview(cfg)
+    netapp_nfs = preview["plan"]["netapp_nfs"]
+    commands: list[str] = []
+    list_calls = {"nfs41": 0}
+
+    def fake_runner(cmd: list[str]) -> tuple[int, str, str]:
+        remote_command = cmd[-1]
+        commands.append(remote_command)
+        if remote_command == "esxcli storage nfs41 list":
+            list_calls["nfs41"] += 1
+            if list_calls["nfs41"] == 1:
+                return 0, "", ""
+            return 0, "esxi_datastore_01 true\n", ""
+        if remote_command == "vim-cmd hostsvc/datastore/refresh 'esxi_datastore_01'":
+            return 0, "", ""
+        if remote_command == "vim-cmd hostsvc/datastore/listsummary":
+            return 0, '      name = "esxi_datastore_01",\n      capacity = 8502156197888,\n', ""
+        return 0, "ok\n", ""
+
+    run_action = main.build_esxi_post_config_ssh_run_action(cfg, preview, command_runner=fake_runner)
+    result = run_action("netapp_nfs_datastore_mount", netapp_nfs)
+
+    assert result["status"] == "applied"
+    assert any("esxcli storage nfs41 add" in command for command in commands)
+    assert commands[-1] == "vim-cmd hostsvc/datastore/listsummary"
+    assert result["datastore_summary"]["capacity_bytes"] == 8502156197888
+
+
+def test_esxi_post_config_ssh_runner_skips_when_netapp_nfs3_datastore_exists():
+    cfg = main.default_config()
+    cfg["included"]["netapp"] = True
+    cfg["netapp"].update(
+        {
+            "storage_protocol": "nfs",
+            "desired": {
+                "svm_name": "stage_nfs",
+                "nfs": {
+                    "volume": "esxi_datastore_01",
+                    "mount_path": "/esxi_datastore_01",
+                    "esxi_mount_targets": ["10.10.8.111"],
+                    "lifs": [
+                        {"name": "nfs_lif_01", "ip": "10.10.8.48", "node": "X20-01", "port": "e0b"},
+                        {"name": "nfs_lif_02", "ip": "10.10.8.49", "node": "X20-02", "port": "e0b"},
+                    ],
+                },
+            },
+        }
+    )
+    cfg["esxi"]["management_ip"] = "10.10.8.111"
+    cfg["esxi"]["root_password"] = "Valid1Pass!"
+    preview = main.build_esxi_post_config_preview(cfg)
+    netapp_nfs = preview["plan"]["netapp_nfs"]
+    commands: list[str] = []
+
+    def fake_runner(cmd: list[str]) -> tuple[int, str, str]:
+        remote_command = cmd[-1]
+        commands.append(remote_command)
+        if remote_command == "esxcli storage nfs41 list":
+            return 0, "", ""
+        if remote_command == "esxcli storage nfs list":
+            return 0, "esxi_datastore_01  10.10.8.48  /esxi_datastore_01  None  true  true\n", ""
+        if remote_command == "vim-cmd hostsvc/datastore/refresh 'esxi_datastore_01'":
+            return 0, "", ""
+        if remote_command == "vim-cmd hostsvc/datastore/listsummary":
+            return 0, '      name = "esxi_datastore_01",\n      capacity = 8502156197888,\n', ""
+        raise AssertionError(f"unexpected command: {remote_command}")
+
+    run_action = main.build_esxi_post_config_ssh_run_action(cfg, preview, command_runner=fake_runner)
+    result = run_action("netapp_nfs_datastore_mount", netapp_nfs)
+
+    assert result["status"] == "skipped"
+    assert result["reason"] == "datastore_already_mounted"
+    assert result["effective_nfs_version"] == "3"
+    assert result["datastore_summary"]["capacity_bytes"] == 8502156197888
+    assert not any("storage nfs41 add" in command for command in commands)
 
 
 def test_esxi_post_config_validation_flags_missing_ntp_and_uplink_policy():

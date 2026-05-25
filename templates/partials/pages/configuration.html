@@ -1,13 +1,13 @@
 <section class="panel space-y-6">
     <div>
         <h2 class="text-2xl font-bold title-with-icon"><span class="page-icon icon-tone-{{ setup_precheck_summary.tone if setup_precheck_summary else 'progress' }}" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v4"/><path d="M12 17v4"/><path d="M3 12h4"/><path d="M17 12h4"/><circle cx="12" cy="12" r="3.5"/><path d="m5.6 5.6 2.8 2.8"/><path d="m15.6 15.6 2.8 2.8"/><path d="m18.4 5.6-2.8 2.8"/><path d="m8.4 15.6-2.8 2.8"/></svg></span><span>Global Settings</span></h2>
-        <div class="text-sm text-slate-400 mt-1">Shared kit identity, network range, DNS, gateway, and SNMP defaults live here. Module-specific details stay on their own setup pages.</div>
+        <div class="text-sm text-slate-400 mt-1">Shared kit identity, network range, DNS, gateway, SNMP defaults, and first iLO access details live here.</div>
     </div>
 
     {% set precheck_summary = setup_precheck_summary %}
     {% include "partials/components/precheck_summary.html" %}
 
-    <form hx-post="/save-global-settings" hx-target="#main-content" hx-swap="outerHTML" class="space-y-4" x-data='{"snmpUsers": {{ cfg.get("shared_snmp", {}).get("users", [])[1:]|tojson }} }' data-action-title="Saving shared defaults" data-action-start="Saving kit identity, subnet, DNS, gateway, and SNMP defaults.">
+    <form id="global-settings-form" hx-post="/save-global-settings" hx-target="#main-content" hx-swap="outerHTML" class="space-y-4" x-data='{"snmpUsers": {{ cfg.get("shared_snmp", {}).get("users", [])[1:]|tojson }} }' data-action-title="Saving shared defaults" data-action-start="Saving kit identity, subnet, DNS, gateway, and SNMP defaults.">
         <input type="hidden" name="return_page" value="global_settings">
 
         <section class="ops-strip-grid">
@@ -45,6 +45,31 @@
                     <input type="text" name="gateway_ip" value="{{ cfg.get('ip_plan', {}).get('gateway', '') }}" class="input">
                 </div>
             </div>
+        </section>
+
+        <section class="card identity-soft-card">
+            <div class="text-lg font-semibold mb-3">First connection to iLO</div>
+            <div class="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
+                <div>
+                    <label class="block text-sm font-bold text-slate-300 mb-2">Current iLO address</label>
+                    <input type="text" name="ilo_current_ip" value="{{ cfg.get('ilo', {}).get('current_ip', cfg.get('ilo', {}).get('host', '')) }}" class="input">
+                </div>
+                <div>
+                    <label class="block text-sm font-bold text-slate-300 mb-2">iLO username</label>
+                    {% if ilo_field_errors.username %}
+                    <div class="field-error">{{ ilo_field_errors.username|join(' ') }}</div>
+                    {% endif %}
+                    <input type="text" name="ilo_username" value="{{ cfg.get('ilo', {}).get('username', '') }}" class="input{% if ilo_field_errors.username %} input-invalid{% endif %}">
+                </div>
+                <div>
+                    <label class="block text-sm font-bold text-slate-300 mb-2">iLO password</label>
+                    {% if ilo_field_errors.password %}
+                    <div class="field-error">{{ ilo_field_errors.password|join(' ') }}</div>
+                    {% endif %}
+                    <input type="password" name="ilo_password" value="" placeholder="Leave blank to keep saved password" class="input{% if ilo_field_errors.password %} input-invalid{% endif %}">
+                </div>
+            </div>
+            <div class="text-xs text-slate-400 mt-3">Used for firmware reads, upgrade checks, virtual media, and the first ESXi install handoff.</div>
         </section>
 
         <section class="card identity-soft-card">
@@ -177,6 +202,17 @@
 
         <div class="actions">
             <button class="btn btn-primary action-button" type="submit">Save shared defaults</button>
+            <button
+                class="btn action-button"
+                type="button"
+                hx-post="/populate-setup-sections"
+                hx-include="#global-settings-form"
+                hx-target="#main-content"
+                hx-swap="outerHTML"
+                data-action-title="Populating setup sections"
+                data-action-start="Writing the global IP plan into iLO, ESXi, Windows, QNAP, ioSafe, Cisco, NetApp, and vCenter setup pages.">
+                Populate setup sections from IP plan
+            </button>
         </div>
     </form>
 </section>

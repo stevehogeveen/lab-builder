@@ -98,16 +98,17 @@ class VsphereClient:
 
     def connect(self) -> Any:
         try:
-            from pyVim.connect import SmartConnect, SmartConnectNoSSL
+            from pyVim.connect import SmartConnect
         except Exception as exc:
             raise WindowsInterfaceError("pyvmomi is not installed in this environment.") from exc
-        connector = SmartConnect if self.config.verify_tls else SmartConnectNoSSL
+        context = None if self.config.verify_tls else ssl._create_unverified_context()
         try:
-            self._service_instance = connector(
+            self._service_instance = SmartConnect(
                 host=self.config.host,
                 user=self.config.username,
                 pwd=self.config.password,
                 port=self.config.port,
+                sslContext=context,
             )
             return self._service_instance
         except Exception as exc:
@@ -345,7 +346,45 @@ class VsphereClient:
             raise WindowsInterfaceError(f"Could not ensure ESXi port group {name}: {(result['stderr'] or result['stdout']).strip()}")
 
     @staticmethod
-    def _build_standalone_vmx(*, vm_name: str, disk_name: str, nvram_name: str, network_name: str) -> str:
+    def _vim_cmd_vm_exists(output: str, vm_name: str) -> bool:
+        for line in str(output or "").splitlines():
+            parts = line.strip().split()
+            if len(parts) >= 2 and parts[0].isdigit() and parts[1] == vm_name:
+                return True
+        return False
+
+    @staticmethod
+    def _coerce_int(value: Any, default: int, *, minimum: int = 1) -> int:
+        try:
+            parsed = int(str(value).strip())
+        except (TypeError, ValueError):
+            return default
+        return max(minimum, parsed)
+
+    def _converted_disk_is_usable(self, remote_vmdk: str) -> bool:
+        result = self._run_esxi_ssh(
+            f"test -s {shlex.quote(remote_vmdk)} && vmkfstools -e {shlex.quote(remote_vmdk)} >/dev/null 2>&1",
+            timeout_seconds=120,
+        )
+        return bool(result["ok"])
+
+    def _remove_converted_disk(self, remote_vmdk: str) -> None:
+        descriptor = shlex.quote(remote_vmdk)
+        flat = shlex.quote(str(Path(remote_vmdk).with_name(f"{Path(remote_vmdk).stem}-flat.vmdk")))
+        self._run_esxi_ssh(f"rm -f {descriptor} {flat}", timeout_seconds=120)
+
+    @staticmethod
+    def _build_standalone_vmx(
+        *,
+        vm_name: str,
+        disk_name: str,
+        nvram_name: str,
+        network_name: str,
+        cpu_count: Any = 1,
+        memory_mb: Any = 4096,
+    ) -> str:
+        cpus = VsphereClient._coerce_int(cpu_count, 1)
+        memory = VsphereClient._coerce_int(memory_mb, 4096, minimum=256)
         lines = [
             '.encoding = "UTF-8"',
             'config.version = "8"',
@@ -368,8 +407,8 @@ class VsphereClient:
             'pciBridge7.present = "TRUE"',
             'pciBridge7.virtualDev = "pcieRootPort"',
             'pciBridge7.functions = "8"',
-            'memSize = "4096"',
-            'numvcpus = "1"',
+            f'memSize = "{memory}"',
+            f'numvcpus = "{cpus}"',
             'cpuid.coresPerSocket = "1"',
             'scsi0.present = "TRUE"',
             'scsi0.virtualDev = "lsisas1068"',
@@ -423,7 +462,7 @@ class VsphereClient:
                 progress({"percent": max(0, min(100, int(percent))), "message": message})
 
         existing = self._run_esxi_ssh("vim-cmd vmsvc/getallvms", timeout_seconds=60)
-        if existing["ok"] and any(line.split()[1:2] == [vm_name] for line in existing["stdout"].splitlines() if line[:1].isdigit()):
+        if existing["ok"] and self._vim_cmd_vm_exists(existing["stdout"], vm_name):
             return {"ok": True, "changed": False, "vm_name": vm_name, "message": "VM already exists.", "warnings": []}
 
         report(3, f"Ensuring ESXi network port group {network_name}.")
@@ -461,16 +500,20 @@ class VsphereClient:
         converted_disk = f"{vm_name}.vmdk"
         source_vmdk_remote = f"{remote_directory}/{source_vmdk.name}"
         converted_vmdk_remote = f"{remote_directory}/{converted_disk}"
-        report(55, "Converting source stream VMDK to ESXi thin disk.")
-        convert = self._run_esxi_ssh(
-            "vmkfstools -i "
-            f"{shlex.quote(source_vmdk_remote)} "
-            "-d thin "
-            f"{shlex.quote(converted_vmdk_remote)}",
-            timeout_seconds=7200,
-        )
-        if not convert["ok"]:
-            raise WindowsInterfaceError(f"VMDK conversion failed: {(convert['stderr'] or convert['stdout']).strip()}")
+        if self._converted_disk_is_usable(converted_vmdk_remote):
+            report(55, "Using existing converted ESXi thin disk.")
+        else:
+            self._remove_converted_disk(converted_vmdk_remote)
+            report(55, "Converting source stream VMDK to ESXi thin disk.")
+            convert = self._run_esxi_ssh(
+                "vmkfstools -i "
+                f"{shlex.quote(source_vmdk_remote)} "
+                "-d thin "
+                f"{shlex.quote(converted_vmdk_remote)}",
+                timeout_seconds=7200,
+            )
+            if not convert["ok"]:
+                raise WindowsInterfaceError(f"VMDK conversion failed: {(convert['stderr'] or convert['stdout']).strip()}")
 
         nvram_name = f"{vm_name}.nvram"
         if source_nvram:
@@ -484,7 +527,14 @@ class VsphereClient:
 
         vmx_name = f"{vm_name}.vmx"
         vmx_remote = f"{remote_directory}/{vmx_name}"
-        vmx_content = self._build_standalone_vmx(vm_name=vm_name, disk_name=converted_disk, nvram_name=nvram_name, network_name=network_name)
+        vmx_content = self._build_standalone_vmx(
+            vm_name=vm_name,
+            disk_name=converted_disk,
+            nvram_name=nvram_name,
+            network_name=network_name,
+            cpu_count=summary.get("cpu_count") or 1,
+            memory_mb=summary.get("memory_mb") or 4096,
+        )
         report(82, "Writing VMX inventory definition.")
         write_vmx = self._run_esxi_ssh(f"cat > {shlex.quote(vmx_remote)} <<'EOF'\n{vmx_content}EOF", timeout_seconds=60)
         if not write_vmx["ok"]:

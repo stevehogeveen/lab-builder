@@ -6,6 +6,8 @@ import ipaddress
 import json
 import os
 import re
+import shutil
+import subprocess
 import requests
 import socket
 import sqlite3
@@ -23,6 +25,24 @@ from fastapi.templating import Jinja2Templates
 from app.ilo import ILOClient, ILOConfig, ILOError
 from app.ilo_upgrade import build_ilo_upgrade_plan, execute_ilo_upgrade
 from app.upgrade_helper import build_upgrade_helper_context, build_upgrade_inventory, build_upgrade_planner_with_policies, normalize_upgrade_policies, record_upgrade_inventory, scan_upgrade_media
+from app.upgrade_panels import (
+    build_cisco_upgrade_panel,
+    build_ilo_upgrade_panel,
+    build_netapp_upgrade_panel,
+    build_upgrade_helper_tab_context,
+    normalize_upgrade_tab,
+)
+from app.vcenter import (
+    build_vcenter_install_context,
+    build_vcenter_install_panel,
+    configure_vcenter_inventory,
+    ensure_esxi_standard_portgroup,
+    record_vcenter_install_event,
+    validate_vcenter_install_context,
+    vcenter_deploy_command,
+    vcenter_extract_command,
+    write_vcenter_install_specs,
+)
 from app.windows import VsphereClient, VsphereConfig, WinRMClient, WinRMConfig
 from app.esxi.builder import build_custom_iso
 from app.esxi.models import EsxiBuildSpec
@@ -55,6 +75,7 @@ from app.core.config import (
     normalize_ip_plan as core_normalize_ip_plan,
     normalize_snmp_users as core_normalize_snmp_users,
     policy_enabled as core_policy_enabled,
+    populate_setup_sections_from_ip_plan as core_populate_setup_sections_from_ip_plan,
     sanitize_kit_name as core_sanitize_kit_name,
     standard_ilo_policy_accounts as core_standard_ilo_policy_accounts,
     standard_ilo_policy_defaults as core_standard_ilo_policy_defaults,
@@ -135,6 +156,7 @@ from app.stages.ilo.runtime import (
     verify_final_ilo_state as ilo_verify_final_state,
 )
 from app.stages.esxi.runtime import (
+    build_netapp_nfs_post_config_plan as esxi_build_netapp_nfs_post_config_plan,
     build_esxi_post_config_ssh_run_action as esxi_build_post_config_ssh_run_action,
     build_esxi_post_config_actions as esxi_build_post_config_actions,
     build_esxi_post_config_preview as esxi_build_post_config_preview,
@@ -540,6 +562,10 @@ PAGE_META = {
         "title": "ESXi",
         "subtitle": "Review inherited network settings and local ESXi overrides.",
     },
+    "vcenter": {
+        "title": "vCenter",
+        "subtitle": "Deploy the vCenter Server Appliance onto the prepared ESXi and NetApp datastore.",
+    },
     "windows": {
         "title": "Windows",
         "subtitle": "Review inherited network settings and local Windows overrides.",
@@ -572,10 +598,14 @@ PAGE_META = {
         "title": "History",
         "subtitle": "Review recent execution runs for the active kit.",
     },
+    "kits": {
+        "title": "Kits",
+        "subtitle": "Create, switch, and clean saved kit workspaces.",
+    },
 }
 
 STORAGE_APPROVAL_CONFIRM = "APPROVE STORAGE"
-RUN_CENTER_STAGE_KEYS = ["ilo", "storage", "esxi", "windows", "qnap", "iosafe", "cisco_switch", "netapp"]
+RUN_CENTER_STAGE_KEYS = ["ilo", "storage", "netapp", "esxi", "windows", "qnap", "iosafe", "cisco_switch"]
 DEFAULT_KIT_NAME = "Kit-01"
 
 
@@ -613,6 +643,15 @@ def build_esxi_field_errors(cfg: dict[str, Any]) -> dict[str, list[str]]:
     }
 
 
+def build_vcenter_context(cfg: dict[str, Any]) -> dict[str, Any]:
+    return build_vcenter_install_context(
+        cfg,
+        media_dir=MEDIA_DIR,
+        generated_dir=GENERATED_DIR,
+        artifacts_dir=ARTIFACTS_DIR,
+    )
+
+
 build_ilo_field_errors = core_build_ilo_field_errors
 build_snmp_field_errors = core_build_snmp_field_errors
 validate_esxi_hostname = core_validate_esxi_hostname
@@ -640,7 +679,7 @@ def ensure_bootstrap_kit() -> str:
     cfg = merge_defaults({"site": {"name": kit_name}})
     path = kit_path(kit_name)
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(yaml.safe_dump(cfg, sort_keys=False), encoding="utf-8")
+    atomic_write_text(path, yaml.safe_dump(cfg, sort_keys=False))
     return kit_name
 
 
@@ -723,20 +762,48 @@ def get_current_kit_name():
 
 
 def set_current_kit_name(name: str):
-    CURRENT_KIT_FILE.write_text(sanitize_kit_name(name), encoding="utf-8")
+    atomic_write_text(CURRENT_KIT_FILE, sanitize_kit_name(name))
+
+
+def atomic_write_text(path: Path, content: str) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp_path = path.with_name(f".{path.name}.{os.getpid()}.{threading.get_ident()}.tmp")
+    try:
+        tmp_path.write_text(content, encoding="utf-8")
+        os.replace(tmp_path, path)
+    finally:
+        try:
+            if tmp_path.exists():
+                tmp_path.unlink()
+        except Exception:
+            pass
+
+
+def load_yaml_file_with_retry(path: Path) -> Any:
+    last_error: Exception | None = None
+    for attempt in range(3):
+        try:
+            return yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+        except yaml.YAMLError as exc:
+            last_error = exc
+            if attempt < 2:
+                time.sleep(0.05)
+                continue
+            raise
+    if last_error:
+        raise last_error
+    return {}
 
 
 def load_kit_config(kit_name: str | None = None):
     name = sanitize_kit_name(kit_name or get_current_kit_name())
     path = kit_path(name)
     if path.exists():
-        with open(path, "r", encoding="utf-8") as f:
-            data = yaml.safe_load(f) or {}
+        data = load_yaml_file_with_retry(path)
     else:
         if not list_kits() and name == DEFAULT_KIT_NAME:
             ensure_bootstrap_kit()
-            with open(path, "r", encoding="utf-8") as f:
-                data = yaml.safe_load(f) or {}
+            data = load_yaml_file_with_retry(path)
         else:
             data = {}
     data = merge_defaults(data)
@@ -752,8 +819,7 @@ def load_kit_config(kit_name: str | None = None):
 def save_kit_config(cfg: dict):
     kit_name = sanitize_kit_name(cfg.get("site", {}).get("name", "Kit-01"))
     cfg["site"]["name"] = kit_name
-    with open(kit_path(kit_name), "w", encoding="utf-8") as f:
-        yaml.safe_dump(cfg, f, sort_keys=False)
+    atomic_write_text(kit_path(kit_name), yaml.safe_dump(cfg, sort_keys=False))
     set_current_kit_name(kit_name)
     try:
         db_upsert_kit(cfg)
@@ -866,7 +932,12 @@ def write_run_bundle_files(kit_name: str, job: dict[str, Any]) -> None:
             "snmp_apply_status": str(job.get("snmp_apply_status") or ""),
             "local_account_status": str(job.get("local_account_status") or ""),
         }
-    if job.get("esxi_install_values") or job.get("esxi_iso_path") or job.get("esxi_boot_override"):
+    if (
+        job.get("esxi_install_values")
+        or job.get("esxi_iso_path")
+        or job.get("esxi_boot_override")
+        or job.get("esxi_post_config_execution")
+    ):
         summary_payload["esxi_run_summary"] = {
             "install_values": dict(job.get("esxi_install_values") or {}),
             "artifacts": {
@@ -890,6 +961,12 @@ def write_run_bundle_files(kit_name: str, job: dict[str, Any]) -> None:
             "post_install_boot_guard": dict(job.get("esxi_post_install_boot_guard") or {}),
             "power_transitions": dict(job.get("esxi_power_transitions") or {}),
             "management_network": dict(job.get("esxi_management_network") or {}),
+            "post_config": {
+                "preview": dict(job.get("esxi_post_config_preview") or {}),
+                "validation": dict(job.get("esxi_post_config_validation") or {}),
+                "actions": list(job.get("esxi_post_config_actions") or []),
+                "execution": dict(job.get("esxi_post_config_execution") or {}),
+            },
         }
     summary_path.write_text(yaml.safe_dump(summary_payload, sort_keys=False), encoding="utf-8")
 
@@ -1034,6 +1111,184 @@ def save_history(kit_name: str, entries: list[dict]):
     path.parent.mkdir(parents=True, exist_ok=True)
     with open(path, "w", encoding="utf-8") as f:
         yaml.safe_dump(entries, f, sort_keys=False)
+
+
+def format_storage_bytes(size: int | float | None) -> str:
+    value = float(size or 0)
+    units = ["B", "KiB", "MiB", "GiB", "TiB"]
+    for unit in units:
+        if value < 1024 or unit == units[-1]:
+            if unit == "B":
+                return f"{int(value)} B"
+            return f"{value:.1f} {unit}" if value < 10 else f"{value:.0f} {unit}"
+        value /= 1024
+    return "0 B"
+
+
+def _path_disk_usage(path: Path) -> dict[str, int]:
+    if not path.exists():
+        return {"bytes": 0, "files": 0}
+    if path.is_file() or path.is_symlink():
+        try:
+            return {"bytes": int(path.lstat().st_size), "files": 1}
+        except OSError:
+            return {"bytes": 0, "files": 0}
+    total = 0
+    files = 0
+    for child in path.rglob("*"):
+        try:
+            if child.is_file() or child.is_symlink():
+                total += int(child.lstat().st_size)
+                files += 1
+        except OSError:
+            continue
+    return {"bytes": total, "files": files}
+
+
+def _dedupe_paths(paths: list[Path]) -> list[Path]:
+    seen: set[Path] = set()
+    result: list[Path] = []
+    for path in paths:
+        normalized = path
+        try:
+            normalized = path.resolve()
+        except OSError:
+            pass
+        if normalized in seen:
+            continue
+        seen.add(normalized)
+        result.append(path)
+    return result
+
+
+def kit_managed_paths(kit_name: str, *, include_config: bool = False) -> dict[str, list[Path]]:
+    kit = sanitize_kit_name(kit_name)
+    history_config_dir = HISTORY_DIR / "configs"
+    paths: dict[str, list[Path]] = {
+        "config": [kit_path(kit)] if include_config else [],
+        "job": [job_path(kit)],
+        "history": [history_path(kit), *list(history_config_dir.glob(f"{kit}-*.yml"))],
+        "runs": [RUNS_DIR / kit],
+        "generated": [
+            *list(GENERATED_DIR.glob(f"run-summary-{kit}-*.yml")),
+            *list((GENERATED_DIR / "netapp").glob(f"{kit}-*")),
+            GENERATED_DIR / "vcenter" / kit,
+        ],
+        "exports": [EXPORTS_DIR / "builds" / kit],
+    }
+    return {category: _dedupe_paths(items) for category, items in paths.items()}
+
+
+def kit_storage_record(kit_name: str) -> dict[str, Any]:
+    kit = sanitize_kit_name(kit_name)
+    managed = kit_managed_paths(kit, include_config=True)
+    categories = []
+    total_bytes = 0
+    total_files = 0
+    for category, label in (
+        ("config", "Kit config"),
+        ("job", "Job state"),
+        ("history", "History"),
+        ("runs", "Run logs"),
+        ("generated", "Generated reports"),
+        ("exports", "Exports"),
+    ):
+        paths = [path for path in managed.get(category, []) if path.exists()]
+        usage = {"bytes": 0, "files": 0}
+        for path in paths:
+            path_usage = _path_disk_usage(path)
+            usage["bytes"] += path_usage["bytes"]
+            usage["files"] += path_usage["files"]
+        total_bytes += usage["bytes"]
+        total_files += usage["files"]
+        categories.append(
+            {
+                "key": category,
+                "label": label,
+                "bytes": usage["bytes"],
+                "size": format_storage_bytes(usage["bytes"]),
+                "files": usage["files"],
+                "path_count": len(paths),
+            }
+        )
+    return {
+        "name": kit,
+        "current": kit == get_current_kit_name(),
+        "config_exists": kit_path(kit).exists(),
+        "total_bytes": total_bytes,
+        "total_size": format_storage_bytes(total_bytes),
+        "total_files": total_files,
+        "categories": categories,
+        "cleanup_confirm": f"CLEAN {kit}",
+        "delete_confirm": f"DELETE {kit}",
+    }
+
+
+def _kit_names_from_artifacts() -> set[str]:
+    names: set[str] = set(list_kits())
+    if JOBS_DIR.exists():
+        for path in JOBS_DIR.glob("*_job.yml"):
+            names.add(sanitize_kit_name(path.name[: -len("_job.yml")]))
+    if HISTORY_DIR.exists():
+        for path in HISTORY_DIR.glob("*_history.yml"):
+            names.add(sanitize_kit_name(path.name[: -len("_history.yml")]))
+    if RUNS_DIR.exists():
+        for path in RUNS_DIR.iterdir():
+            if path.is_dir():
+                names.add(sanitize_kit_name(path.name))
+    builds_dir = EXPORTS_DIR / "builds"
+    if builds_dir.exists():
+        for path in builds_dir.iterdir():
+            if path.is_dir():
+                names.add(sanitize_kit_name(path.name))
+    return {name for name in names if name}
+
+
+def build_kit_storage_inventory() -> dict[str, Any]:
+    current = get_current_kit_name()
+    records = [kit_storage_record(name) for name in sorted(_kit_names_from_artifacts())]
+    records.sort(key=lambda item: (not item.get("current"), -int(item.get("total_bytes") or 0), str(item.get("name") or "")))
+    total_bytes = sum(int(item.get("total_bytes") or 0) for item in records)
+    removable_bytes = sum(int(item.get("total_bytes") or 0) for item in records if not item.get("current"))
+    return {
+        "current_kit": current,
+        "kits": records,
+        "kit_count": len(records),
+        "total_bytes": total_bytes,
+        "total_size": format_storage_bytes(total_bytes),
+        "removable_bytes": removable_bytes,
+        "removable_size": format_storage_bytes(removable_bytes),
+    }
+
+
+def remove_kit_managed_paths(kit_name: str, *, include_config: bool = False) -> dict[str, Any]:
+    removed: list[str] = []
+    removed_bytes = 0
+    removed_files = 0
+    errors: list[str] = []
+    for paths in kit_managed_paths(kit_name, include_config=include_config).values():
+        for path in paths:
+            if not path.exists():
+                continue
+            usage = _path_disk_usage(path)
+            try:
+                if path.is_dir() and not path.is_symlink():
+                    shutil.rmtree(path)
+                else:
+                    path.unlink()
+                removed.append(str(path))
+                removed_bytes += usage["bytes"]
+                removed_files += usage["files"]
+            except OSError as exc:
+                errors.append(f"{path}: {exc}")
+    return {
+        "removed": removed,
+        "removed_count": len(removed),
+        "removed_files": removed_files,
+        "removed_bytes": removed_bytes,
+        "removed_size": format_storage_bytes(removed_bytes),
+        "errors": errors,
+    }
 
 
 def history_scope_family(scope: str) -> str:
@@ -2716,6 +2971,7 @@ def build_esxi_page_review(cfg: dict[str, Any]) -> dict[str, Any]:
         "validation_notes": list(values["validation_notes"]),
         "post_config_preview": post_config_preview,
         "post_config_validation": post_config_validation,
+        "netapp_dependency": dict(((post_config_preview.get("plan") or {}).get("netapp_nfs")) or {}),
     }
     try:
         base_iso = resolve_esxi_base_iso_path(cfg)
@@ -2844,6 +3100,20 @@ def validation_check(
         "fix": fix,
         "href": href,
     }
+
+
+def build_netapp_nfs_dependency_status(cfg: dict[str, Any]) -> dict[str, Any]:
+    return esxi_build_netapp_nfs_post_config_plan(cfg)
+
+
+def validate_netapp_nfs_dependency_for_esxi(cfg: dict[str, Any]) -> None:
+    dependency = build_netapp_nfs_dependency_status(cfg)
+    if not dependency.get("required") or dependency.get("ready"):
+        return
+    raise ValueError(
+        "ESXi depends on NetApp NFS datastore settings, but NetApp is not ready: "
+        f"{dependency.get('blocking_reason') or 'missing NFS mount inputs'}"
+    )
 
 
 def build_validation_checks(cfg: dict[str, Any], workflow: str) -> list[dict[str, Any]]:
@@ -3039,6 +3309,25 @@ def build_validation_checks(cfg: dict[str, Any], workflow: str) -> list[dict[str
                     href="/esxi",
                 )
             )
+            netapp_dependency = build_netapp_nfs_dependency_status(cfg)
+            if netapp_dependency.get("required"):
+                details = (
+                    f"{netapp_dependency.get('datastore_name') or 'Datastore not set'} | "
+                    f"{netapp_dependency.get('export_path') or 'export path not set'} | "
+                    f"{', '.join(netapp_dependency.get('server_ips') or []) or 'NFS LIFs not set'}"
+                )
+                if not netapp_dependency.get("ready"):
+                    details = str(netapp_dependency.get("blocking_reason") or details)
+                checks.append(
+                    validation_check(
+                        "NetApp NFS datastore plan",
+                        bool(netapp_dependency.get("ready")),
+                        details,
+                        why="ESXi post-config mounts the NetApp datastore after the host is installed, so the NFS target details must be saved first.",
+                        fix="Open NetApp, prepare/apply safe NFS settings, then confirm the NFS LIFs and export path are saved.",
+                        href="/modules/netapp",
+                    )
+                )
         if workflow == "windows":
             windows_cfg = cfg.get("windows", {}) or {}
             checks.append(
@@ -3208,7 +3497,9 @@ def build_setup_precheck_summary(
         if included.get(key):
             workflow_keys.append(key)
     cards = [build_workflow_precheck_card(key, cfg, workflow_contexts) for key in workflow_keys]
-    cards.append(build_upgrade_helper_card(cfg))
+    upgrade_card = build_scoped_upgrade_helper_card(cfg, "included")
+    if upgrade_card.get("total_checks"):
+        cards.append(upgrade_card)
     total_workflows = len(cards)
     ready_workflows = sum(1 for item in cards if item.get("blockers") == 0 and item.get("total_checks"))
     total_blockers = sum(int(item.get("blockers") or 0) for item in cards)
@@ -3338,6 +3629,7 @@ def build_page_precheck_summary(
         "windows": "windows",
         "qnap": "qnap",
         "netapp": "netapp",
+        "vcenter": "vmware",
         "cisco": "cisco_switch",
     }
     workflow_key = workflow_map.get(active_page)
@@ -3452,9 +3744,113 @@ def build_upgrade_helper_card(cfg: dict[str, Any]) -> dict[str, Any]:
     return card
 
 
-def upgrade_gate_blockers(cfg: dict[str, Any]) -> list[dict[str, Any]]:
+UPGRADE_GATE_STAGE_KEYS = {"ilo", "netapp", "cisco_switch"}
+
+
+def upgrade_gate_scope_keys(cfg: dict[str, Any], scope: str | None = None) -> set[str]:
+    if scope is None:
+        return set(UPGRADE_GATE_STAGE_KEYS)
+    selected = set(run_center_scope_keys(scope, cfg))
+    keys = {key for key in selected if key in UPGRADE_GATE_STAGE_KEYS}
+    if "esxi" in selected and build_netapp_nfs_dependency_status(cfg).get("required"):
+        keys.add("netapp")
+    return keys
+
+
+def upgrade_gate_entries_for_scope(cfg: dict[str, Any], scope: str | None = None) -> list[dict[str, Any]]:
     planner = dict((build_upgrade_helper_card(cfg).get("planner") or {}))
-    return [dict(item) for item in list(planner.get("entries") or []) if item.get("blocks_run")]
+    keys = upgrade_gate_scope_keys(cfg, scope)
+    return [
+        dict(item)
+        for item in list(planner.get("entries") or [])
+        if str(item.get("key") or "") in keys
+    ]
+
+
+def upgrade_gate_blockers(cfg: dict[str, Any], scope: str | None = None) -> list[dict[str, Any]]:
+    return [dict(item) for item in upgrade_gate_entries_for_scope(cfg, scope) if item.get("blocks_run")]
+
+
+def build_scoped_upgrade_helper_card(cfg: dict[str, Any], scope: str = "included") -> dict[str, Any]:
+    card = dict(build_upgrade_helper_card(cfg))
+    entries = upgrade_gate_entries_for_scope(cfg, scope)
+    keys = {str(item.get("key") or "") for item in entries}
+    blockers = [dict(item) for item in entries if item.get("blocks_run")]
+    warnings = [dict(item) for item in entries if item.get("warn_only")]
+    ready = [dict(item) for item in entries if not item.get("blocks_run")]
+
+    def entry_item(entry: dict[str, Any]) -> dict[str, str]:
+        status = "Blocked" if entry.get("blocks_run") else ("Warning" if entry.get("warn_only") else "Ready")
+        tone = "pending" if entry.get("blocks_run") else ("progress" if entry.get("warn_only") else "ready")
+        details = " | ".join(
+            part
+            for part in [
+                f"Current {entry.get('current_version') or 'unknown'}",
+                f"Media {entry.get('media_version') or 'not found'}",
+                str(entry.get("media_filename") or "").strip(),
+            ]
+            if part
+        )
+        return {
+            "label": str(entry.get("label") or "Upgrade"),
+            "status": status,
+            "tone": tone,
+            "details": details,
+            "fix": str(entry.get("recommended_action") or ""),
+        }
+
+    next_item = blockers[0] if blockers else (warnings[0] if warnings else None)
+    if blockers:
+        label = "Needs attention"
+        tone = "pending"
+        state = "Read versions" if all(str(item.get("comparison") or "") == "current_unknown" for item in blockers) else "Upgrade first"
+    elif warnings:
+        label = "Review warnings"
+        tone = "progress"
+        state = "Warnings only"
+    else:
+        label = "Ready"
+        tone = "ready"
+        state = "Ready"
+    card.update(
+        {
+            "label": label,
+            "tone": tone,
+            "state_label": label,
+            "blockers": len(blockers),
+            "checks_ready": len(ready),
+            "total_checks": len(entries),
+            "summary_value": state,
+            "items": [entry_item(entry) for entry in entries],
+            "devices": [dict(item) for item in list(card.get("devices") or []) if str(item.get("key") or "") in keys],
+            "planner": {
+                **dict(card.get("planner") or {}),
+                "entries": entries,
+                "blockers": len(blockers),
+                "warnings": len(warnings),
+                "ready": len(ready),
+                "total": len(entries),
+            },
+        }
+    )
+    if next_item:
+        details = ". ".join(
+            part
+            for part in [
+                str(next_item.get("compatibility_summary") or "").strip(),
+                str(next_item.get("recommended_action") or "").strip(),
+            ]
+            if part
+        )
+        card["next_blocker"] = {
+            "label": f"{next_item.get('label', 'Device')} policy blocks the selected run" if next_item.get("blocks_run") else f"{next_item.get('label', 'Device')} has upgrade warnings",
+            "details": details or "Open Upgrade Helper to review this device.",
+            "fix": details or "Open Upgrade Helper to review this device.",
+            "href": "/upgrade-helper",
+        }
+    else:
+        card["next_blocker"] = None
+    return card
 
 
 def upgrade_gate_entry(cfg: dict[str, Any], key: str) -> dict[str, Any]:
@@ -3534,8 +3930,8 @@ def build_workflow_contexts(cfg: dict[str, Any], job: dict[str, Any], history: l
 
 
 def build_recommended_next_step(cfg: dict[str, Any], workflow_contexts: dict[str, dict[str, Any]]) -> dict[str, str]:
-    upgrade_helper = build_upgrade_helper_card(cfg)
-    if int(upgrade_helper.get("blockers") or 0) > 0:
+    upgrade_blockers = upgrade_gate_blockers(cfg, "included")
+    if upgrade_blockers:
         return {
             "title": "Review upgrade gates",
             "summary": "One or more devices need version review or upgrade before you continue the prebuild sequence.",
@@ -3870,15 +4266,15 @@ def execution_mode_for_scope(scope: str) -> dict[str, str]:
     if scope == "windows":
         return {
             "key": "real",
-            "label": "Safe execution",
-            "badge": "Dry-run apply",
-            "summary": "This path validates the uploaded OVA/OVF install inputs and records an execution log without deploying a VM yet.",
-            "what_this_does": "Runs the Windows stage validation/apply simulation from the saved install plan.",
-            "real_changes": "No",
-            "next_step": "Use this to verify run behavior before enabling hypervisor-side deployment.",
-            "run_button": "Start Windows safe execution",
-            "run_note": "This stage currently performs validation only and does not deploy a VM.",
-            "live_intro": "Live progress below is tracking a safe Windows stage execution.",
+            "label": "Real execution",
+            "badge": "Real VM deploy",
+            "summary": "This path imports the selected Windows OVF template into the saved vSphere or ESXi target.",
+            "what_this_does": "Validates the saved plan, uploads the OVF sidecar files, registers the VM, and records the deployment result.",
+            "real_changes": "Yes",
+            "next_step": "Start this after vCenter and the NetApp datastore are ready.",
+            "run_button": "Start Windows VM install",
+            "run_note": "This is the live path. It creates or reuses the Windows VM on the target datastore.",
+            "live_intro": "Live progress below is tracking the Windows VM deployment.",
         }
     if scope == "netapp":
         return {
@@ -3928,6 +4324,12 @@ def build_execution_launch_options(cfg: dict[str, Any], scope: str) -> dict[str,
     }
     storage_review = build_storage_review_context(cfg)
     storage_real = bool(storage_review.get("include_in_ilo_run") and storage_review.get("approved") and not storage_review.get("stale"))
+    esxi_real_summary = "Builds the custom ESXi installer ISO, mounts it through virtual media, sets one-time boot, and starts the real ESXi boot sequence."
+    if build_netapp_nfs_dependency_status(cfg).get("required"):
+        esxi_real_summary = (
+            "If ESXi management is already reachable, skips the installer and applies only the NetApp NFS datastore mount over SSH. "
+            "If ESXi is not reachable, uses the full installer ISO, virtual media, boot override, and power workflow."
+        )
     if scope == "ilo":
         return {
             "preview": preview_option,
@@ -3948,6 +4350,8 @@ def build_execution_launch_options(cfg: dict[str, Any], scope: str) -> dict[str,
             multi_stage_summary = "Runs the included live stages in order."
             if "storage" in supported_real:
                 multi_stage_summary += " The approved storage plan will also be applied."
+            if "netapp" in supported_real and "esxi" in supported_real:
+                multi_stage_summary += " NetApp NFS preparation runs before ESXi post-config mounts the datastore."
             multi_stage_summary += " Later stages use the final iLO IP after the iLO stage finishes."
             return {
                 "preview": preview_option,
@@ -3981,7 +4385,7 @@ def build_execution_launch_options(cfg: dict[str, Any], scope: str) -> dict[str,
                 "real": {
                     "scope": "esxi",
                     "label": "Run for real",
-                    "summary": "Builds the custom ESXi installer ISO, mounts it through virtual media, sets one-time boot, and starts the real ESXi boot sequence.",
+                    "summary": esxi_real_summary,
                 },
             }
         if supported_real == ["netapp"]:
@@ -4008,7 +4412,7 @@ def build_execution_launch_options(cfg: dict[str, Any], scope: str) -> dict[str,
             "real": {
                 "scope": "esxi",
                 "label": "Run for real",
-                "summary": "Builds the custom ESXi installer ISO, mounts it through virtual media, sets one-time boot, and starts the real ESXi boot sequence.",
+                "summary": esxi_real_summary,
             },
         }
     if scope == "windows":
@@ -4016,8 +4420,8 @@ def build_execution_launch_options(cfg: dict[str, Any], scope: str) -> dict[str,
             "preview": preview_option,
             "real": {
                 "scope": "windows",
-                "label": "Run safe Windows stage",
-                "summary": "Validates uploaded OVA/OVF source and saved install plan, then records the stage run without deploying a VM.",
+                "label": "Run Windows install",
+                "summary": "Imports the selected Windows OVF template into vSphere or standalone ESXi.",
             },
         }
     if scope == "netapp":
@@ -4050,12 +4454,15 @@ def build_execution_launch_options(cfg: dict[str, Any], scope: str) -> dict[str,
     if scope.startswith("multi__"):
         selected = run_center_scope_keys(scope, cfg)
         if selected and all(item in {"ilo", "storage", "esxi", "netapp", "cisco_switch"} for item in selected):
+            selected_summary = "Runs the selected live stages in order. Later stages use the final iLO IP after the iLO stage finishes."
+            if "netapp" in selected and "esxi" in selected:
+                selected_summary += " NetApp NFS preparation runs before ESXi post-config mounts the datastore."
             return {
                 "preview": preview_option,
                 "real": {
                     "scope": scope,
                     "label": "Run selected for real",
-                    "summary": "Runs the selected live stages in order. Later stages use the final iLO IP after the iLO stage finishes.",
+                    "summary": selected_summary,
                 },
             }
     return {"preview": preview_option, "real": None}
@@ -4065,10 +4472,9 @@ def build_run_center_readiness_matrix(cfg: dict[str, Any], scope: str) -> list[d
     included_cfg = cfg.get("included", {}) or {}
     storage_review = build_storage_review_context(cfg)
     selected_keys = run_center_scope_keys(scope, cfg)
-    upgrade_card = build_upgrade_helper_card(cfg)
-    upgrade_planner = dict(upgrade_card.get("planner") or {})
-    upgrade_blockers = [dict(item) for item in list(upgrade_planner.get("entries") or []) if item.get("blocks_run")]
-    upgrade_warns = [dict(item) for item in list(upgrade_planner.get("entries") or []) if item.get("warn_only")]
+    upgrade_entries = upgrade_gate_entries_for_scope(cfg, scope)
+    upgrade_blockers = [dict(item) for item in upgrade_entries if item.get("blocks_run")]
+    upgrade_warns = [dict(item) for item in upgrade_entries if item.get("warn_only")]
 
     def stage_in_scope(key: str) -> bool:
         if scope == "included":
@@ -4123,7 +4529,7 @@ def build_run_center_readiness_matrix(cfg: dict[str, Any], scope: str) -> list[d
                 "name": "Upgrade gates",
                 "label": "Ready",
                 "tone": "ready",
-                "summary": "No enforced upgrade blockers are active for this kit.",
+                "summary": "No enforced upgrade blockers are active for the selected stages.",
                 "action": "Open Upgrade Helper if you want to review media and device versions again.",
                 "href": "/upgrade-helper",
             }
@@ -9154,6 +9560,7 @@ build_legacy_offset_plan = core_build_legacy_offset_plan
 normalize_ip_plan = core_normalize_ip_plan
 calc_ip_plan = core_calc_ip_plan
 apply_ip_plan = core_apply_ip_plan
+populate_setup_sections_from_ip_plan = core_populate_setup_sections_from_ip_plan
 
 
 def section_state(complete: bool) -> dict:
@@ -9360,6 +9767,7 @@ def build_execution_review(cfg: dict, scope: str):
                 f"SNMP privacy: {cfg.get('shared_snmp', {}).get('v3_priv_protocol', 'AES')}",
             ]
         if key == "esxi":
+            netapp_dependency = build_netapp_nfs_dependency_status(cfg)
             values = [
                 f"Source: {esxi_install_review.get('source_label') or 'Not set'}",
                 f"Management IP: {esxi_install_review.get('management_ip') or 'Not set'}",
@@ -9390,6 +9798,15 @@ def build_execution_review(cfg: dict, scope: str):
                 values.append(f"Missing required values: {', '.join(esxi_install_review.get('missing_fields') or [])}")
             if esxi_install_review.get("validation_errors"):
                 values.append(f"Saved-value checks: {'; '.join(esxi_install_review.get('validation_errors') or [])}")
+            if netapp_dependency.get("required"):
+                values.append(
+                    "NetApp NFS datastore: "
+                    + (
+                        f"{netapp_dependency.get('datastore_name')} from {', '.join(netapp_dependency.get('server_ips') or [])}"
+                        if netapp_dependency.get("ready")
+                        else str(netapp_dependency.get("blocking_reason") or "Not ready")
+                    )
+                )
             return values
         if key == "windows":
             windows_cfg = cfg.get("windows", {}) or {}
@@ -9483,6 +9900,7 @@ def build_execution_review(cfg: dict, scope: str):
                 {"label": "Approved discovery path", "value": review.get("discovery_raw_path") or "Not set"},
             ]
         if key == "esxi":
+            netapp_dependency = build_netapp_nfs_dependency_status(cfg)
             rows = [
                 {"label": "Source", "value": esxi_install_review.get("source_label") or "Not set"},
                 {"label": "Hostname", "value": esxi_install_review.get("hostname") or "Not set"},
@@ -9511,6 +9929,14 @@ def build_execution_review(cfg: dict, scope: str):
                 rows.append({"label": "NTP server", "value": str(esxi_install_review.get("ntp_server"))})
             if esxi_install_review.get("missing_fields"):
                 rows.append({"label": "Missing required values", "value": ", ".join(esxi_install_review.get("missing_fields") or [])})
+            if netapp_dependency.get("required"):
+                rows.extend(
+                    [
+                        {"label": "NetApp datastore", "value": str(netapp_dependency.get("datastore_name") or "Not set")},
+                        {"label": "NetApp export", "value": str(netapp_dependency.get("export_path") or "Not set")},
+                        {"label": "NetApp NFS servers", "value": ", ".join(netapp_dependency.get("server_ips") or []) or "Not set"},
+                    ]
+                )
             return rows
         return []
 
@@ -9523,6 +9949,8 @@ def build_execution_review(cfg: dict, scope: str):
             deps = ["Global Settings", "Saved ESXi host details", "iLO target ready"]
             if cfg.get("included", {}).get("storage"):
                 deps.append("Storage ready if the install depends on the approved layout")
+            if build_netapp_nfs_dependency_status(cfg).get("required"):
+                deps.append("NetApp NFS datastore plan ready before ESXi post-config")
             return deps
         if key == "windows":
             return ["Global Settings", "Saved Windows VM details"]
@@ -9577,6 +10005,7 @@ def build_execution_review(cfg: dict, scope: str):
                 "verify": "Use the approved artifact, apply the layout, and validate the server again after any required reboot.",
             }
         if key == "esxi":
+            netapp_dependency = build_netapp_nfs_dependency_status(cfg)
             return {
                 "name": "ESXi",
                 "before": f"Installer target {esxi_install_review.get('management_ip') or 'Not set'}",
@@ -9584,7 +10013,14 @@ def build_execution_review(cfg: dict, scope: str):
                     f"Boot custom ISO for {esxi_install_review.get('hostname') or 'Not set'}"
                     f" | built ISO {esxi_install_review.get('output_iso_path') or 'Not set'}"
                 ),
-                "verify": f"Confirm virtual media mount, boot progression, and ESXi reachability on {esxi_install_review.get('management_ip') or 'the target IP'}.",
+                "verify": (
+                    f"Confirm virtual media mount, boot progression, and ESXi reachability on {esxi_install_review.get('management_ip') or 'the target IP'}."
+                    + (
+                        f" Then mount NetApp datastore {netapp_dependency.get('datastore_name')} from {', '.join(netapp_dependency.get('server_ips') or [])}."
+                        if netapp_dependency.get("required") and netapp_dependency.get("ready")
+                        else ""
+                    )
+                ),
             }
         if key == "windows":
             return {
@@ -9870,14 +10306,10 @@ def build_execution_review(cfg: dict, scope: str):
     if scope == "included":
         included = cfg.get("included", {})
         lines.append("Will act on all included components in this kit:")
-        for key in ["ilo", "esxi", "windows", "qnap", "iosafe", "cisco_switch", "netapp"]:
+        for key in RUN_CENTER_STAGE_KEYS:
             if included.get(key):
                 lines.append(f"- {components[key]['name']} -> {components[key]['target']}")
                 included_stages.append(stage_entry(key, True))
-        storage_included = bool(included.get("storage"))
-        if storage_included:
-            lines.append(f"- Storage plan -> {'approved exact artifact' if storage_execution.get('included') else 'not ready'}")
-            included_stages.append(stage_entry("storage", True))
     elif scope.startswith("multi__"):
         lines.append("Will act on the selected stages:")
         for key in selected_scope_keys:
@@ -9935,11 +10367,9 @@ def build_execution_review(cfg: dict, scope: str):
     will_not_run: list[str] = []
     if scope == "included":
         included_cfg = cfg.get("included", {})
-        for key in ["ilo", "esxi", "windows", "qnap", "iosafe", "cisco_switch", "netapp"]:
+        for key in RUN_CENTER_STAGE_KEYS:
             if not included_cfg.get(key):
                 will_not_run.append(components[key]["name"])
-        if not included_cfg.get("storage"):
-            will_not_run.append("Storage / RAID")
     elif scope == "ilo" and not storage_review.get("include_in_ilo_run"):
         will_not_run.append("Storage / RAID")
     if storage_validation_error and "Storage / RAID" not in will_not_run and any(stage["key"] == "storage" for stage in included_stages):
@@ -10092,23 +10522,22 @@ def get_steps_for_scope(cfg: dict, scope: str):
         ]
     if scope == "included":
         steps = ["Preview included kit scope"]
-        included = cfg.get("included", {})
-        if included.get("storage") and registered.get("storage"):
-            steps.append(f"Preview approved {registered['storage'].title} plan")
-        if included.get("ilo") and registered.get("ilo"):
-            steps.append(f"Preview {registered['ilo'].title} actions")
-        if included.get("esxi") and registered.get("esxi"):
-            steps.append(f"Preview {registered['esxi'].title} actions")
-        if included.get("windows"):
-            steps.append("Preview Windows actions")
-        if included.get("qnap"):
-            steps.append("Preview QNAP actions")
-        if included.get("iosafe"):
-            steps.append("Preview ioSafe actions")
-        if included.get("cisco_switch"):
-            steps.append("Preview Cisco switch actions")
-        if included.get("netapp"):
-            steps.append("Run NetApp safe-apply actions")
+        for key in run_center_scope_keys(scope, cfg):
+            if key == "storage" and registered.get("storage"):
+                steps.append(f"Preview approved {registered['storage'].title} plan")
+            elif key == "netapp":
+                steps.append("Run NetApp safe-apply actions")
+            elif key in registered:
+                steps.append(f"Preview {registered[key].title} actions")
+            else:
+                steps.append(
+                    {
+                        "windows": "Preview Windows actions",
+                        "qnap": "Preview QNAP actions",
+                        "iosafe": "Preview ioSafe actions",
+                        "cisco_switch": "Preview Cisco switch actions",
+                    }.get(key, f"Preview {key} actions")
+                )
         steps.append("Preview complete - ready for real included-kit execution")
         return steps
     if scope.startswith("multi__"):
@@ -10132,7 +10561,7 @@ def get_steps_for_scope(cfg: dict, scope: str):
 
 
 def validate_execution_scope(cfg: dict, scope: str) -> None:
-    upgrade_blockers = upgrade_gate_blockers(cfg)
+    upgrade_blockers = upgrade_gate_blockers(cfg, scope)
     if upgrade_blockers:
         primary = upgrade_blockers[0]
         raise ValueError(primary.get("recommended_action") or f"{primary.get('label', 'Upgrade gate')} is blocking this run. Review Upgrade Helper first.")
@@ -10160,6 +10589,7 @@ def validate_execution_scope(cfg: dict, scope: str) -> None:
                 raise ValueError("The approved storage plan is stale and must be reviewed again before an ESXi run.")
             if not storage_review.get("approved"):
                 raise ValueError("ESXi depends on storage for this kit, but no approved storage plan is saved.")
+        validate_netapp_nfs_dependency_for_esxi(cfg)
         return
     if scope.startswith("multi__"):
         selected = run_center_scope_keys(scope, cfg)
@@ -10177,6 +10607,7 @@ def validate_execution_scope(cfg: dict, scope: str) -> None:
                 raise ValueError(f"ESXi setup is missing: {', '.join(esxi_values['missing_fields'])}.")
             if esxi_values["validation_errors"]:
                 raise ValueError(f"ESXi setup has invalid saved values: {'; '.join(esxi_values['validation_errors'])}.")
+            validate_netapp_nfs_dependency_for_esxi(cfg)
         if "cisco_switch" in selected:
             validate_cisco_run_ready()
         return
@@ -10196,9 +10627,13 @@ def validate_execution_scope(cfg: dict, scope: str) -> None:
     if scope == "included" and included.get("cisco_switch"):
         validate_cisco_run_ready()
     if scope == "included" and not included.get("storage"):
+        if included.get("esxi"):
+            validate_netapp_nfs_dependency_for_esxi(cfg)
         return
     if scope == "ilo" or included.get("storage"):
         validate_storage_ready_for_ilo_run(cfg)
+    if scope == "included" and included.get("esxi"):
+        validate_netapp_nfs_dependency_for_esxi(cfg)
 
 
 def update_job(
@@ -10385,6 +10820,8 @@ def execute_real_job_in_background(cfg: dict, scope: str):
                     mark_stage("ilo", "failed")
                     if "storage" in selected:
                         mark_stage("storage", "skipped")
+                    if "netapp" in selected:
+                        mark_stage("netapp", "skipped")
                     if "esxi" in selected:
                         mark_stage("esxi", "skipped")
                     return
@@ -10425,17 +10862,6 @@ def execute_real_job_in_background(cfg: dict, scope: str):
                 cfg = load_kit_config(kit_name)
                 promote_final_ilo_endpoint(cfg)
                 save_kit_config(cfg)
-            if "esxi" in selected:
-                mark_stage("esxi", "running")
-                cfg = load_kit_config(kit_name)
-                promote_final_ilo_endpoint(cfg)
-                save_kit_config(cfg)
-                run_esxi_real(cfg, run_stamp=str((cfg.get("_runtime", {}) or {}).get("esxi_run_stamp") or "").strip() or None)
-                finished_job = load_job(kit_name)
-                if finished_job.get("status") == "Failed":
-                    mark_stage("esxi", "failed")
-                    return
-                mark_stage("esxi", "completed")
             if "netapp" in selected:
                 mark_stage("netapp", "running")
                 cfg = load_kit_config(kit_name)
@@ -10443,8 +10869,22 @@ def execute_real_job_in_background(cfg: dict, scope: str):
                 finished_job = load_job(kit_name)
                 if finished_job.get("status") == "Failed":
                     mark_stage("netapp", "failed")
+                    if "esxi" in selected:
+                        mark_stage("esxi", "skipped")
                     return
                 mark_stage("netapp", "completed")
+            if "esxi" in selected:
+                mark_stage("esxi", "running")
+                cfg = load_kit_config(kit_name)
+                promote_final_ilo_endpoint(cfg)
+                validate_netapp_nfs_dependency_for_esxi(cfg)
+                save_kit_config(cfg)
+                run_esxi_real(cfg, run_stamp=str((cfg.get("_runtime", {}) or {}).get("esxi_run_stamp") or "").strip() or None)
+                finished_job = load_job(kit_name)
+                if finished_job.get("status") == "Failed":
+                    mark_stage("esxi", "failed")
+                    return
+                mark_stage("esxi", "completed")
             if "cisco_switch" in selected:
                 mark_stage("cisco_switch", "running")
                 cfg = load_kit_config(kit_name)
@@ -10559,26 +10999,142 @@ def _execute_windows_stage(cfg: dict[str, Any], kit_name: str) -> None:
     image_kind = str(windows_cfg.get("source_image_kind") or "").strip().lower()
     warnings = list(plan.get("warnings") or [])
 
-    total = 5
+    total = 6
     job = load_job(kit_name)
     update_job(kit_name, job, "Running", "Validate Windows image", 1, total, "[RUNNING] Validating uploaded Windows OVA/OVF image.")
     if not image_path or not Path(image_path).exists() or image_kind not in {"ova", "ovf"}:
-        raise RuntimeError("Windows safe execution blocked: upload a valid OVA/OVF image first.")
+        raise RuntimeError("Windows install blocked: upload or select a valid OVA/OVF image first.")
 
     job = load_job(kit_name)
     update_job(kit_name, job, "Running", "Validate Windows plan", 2, total, "[RUNNING] Validating Windows dry-run install plan.")
     if not bool(plan):
-        raise RuntimeError("Windows safe execution blocked: run Plan Windows install (dry-run) first.")
+        raise RuntimeError("Windows install blocked: run Plan Windows install (dry-run) first.")
     if not bool(plan.get("ready")):
         detail = "; ".join(warnings) if warnings else "planner reported unresolved warnings"
-        raise RuntimeError(f"Windows safe execution blocked: install plan is not ready ({detail}).")
+        raise RuntimeError(f"Windows install blocked: install plan is not ready ({detail}).")
+    vsphere_host = str(windows_cfg.get("vsphere_host") or plan.get("vsphere_host") or "").strip()
+    vsphere_username = str(windows_cfg.get("vsphere_username") or plan.get("vsphere_username") or "").strip()
+    vsphere_password = str(windows_cfg.get("vsphere_password") or "").strip()
+    datastore = str(windows_cfg.get("vsphere_datastore") or plan.get("datastore") or "").strip()
+    network = str(windows_cfg.get("vsphere_network") or plan.get("network") or "VM Network").strip() or "VM Network"
+    vm_name = str(windows_cfg.get("vm_name") or plan.get("vm_name") or "").strip()
+    if not vsphere_host or not vsphere_username or not vsphere_password:
+        raise RuntimeError("Windows install blocked: vSphere/ESXi host, username, and password are required.")
+    if not datastore:
+        raise RuntimeError("Windows install blocked: datastore is required.")
+    if not vm_name:
+        raise RuntimeError("Windows install blocked: VM name is required.")
 
     job = load_job(kit_name)
-    update_job(kit_name, job, "Running", "Record install inputs", 3, total, f"[INFO] VM={plan.get('vm_name') or '(not set)'} image={windows_cfg.get('source_image_name') or image_path}")
+    update_job(kit_name, job, "Running", "Record install inputs", 3, total, f"[INFO] VM={vm_name} image={windows_cfg.get('source_image_name') or image_path}")
+
+    client = VsphereClient(
+        VsphereConfig(
+            host=vsphere_host,
+            username=vsphere_username,
+            password=vsphere_password,
+            verify_tls=False,
+        )
+    )
+
+    def progress(event: dict[str, Any]) -> None:
+        percent = max(0, min(100, int(event.get("percent") or 0)))
+        message = str(event.get("message") or "Windows OVF deployment in progress.")
+        completed = 4 if percent < 35 else 5
+        current_job = load_job(kit_name)
+        update_job(
+            kit_name,
+            current_job,
+            "Running",
+            "Deploy Windows OVF",
+            completed,
+            total,
+            f"[RUNNING] {message} ({percent}%)",
+        )
+
+    standalone_esxi = (
+        vsphere_username.lower() == "root"
+        and vsphere_host == str((cfg.get("esxi") or {}).get("management_ip") or cfg.get("ip_plan", {}).get("esxi") or "").strip()
+    )
     job = load_job(kit_name)
-    update_job(kit_name, job, "Running", "Simulate deployment", 4, total, "[INFO] Safe mode: no VM deployment actions are executed in this stage yet.")
+    update_job(kit_name, job, "Running", "Deploy Windows OVF", 4, total, f"[RUNNING] Deploying {vm_name} to {vsphere_host} / {datastore}.")
+    if standalone_esxi:
+        result = client.deploy_ovf_via_esxi_ssh(
+            ovf_path=image_path,
+            vm_name=vm_name,
+            datastore_name=datastore,
+            network_name=network,
+            power_on=False,
+            progress=progress,
+        )
+    else:
+        try:
+            result = client.deploy_ovf(
+                ovf_path=image_path,
+                vm_name=vm_name,
+                datastore_name=datastore,
+                network_name=network,
+                ovf_network_name=network,
+                disk_provisioning="thin",
+                power_on=False,
+                progress=progress,
+            )
+        except Exception as exc:
+            esxi_host = str((cfg.get("esxi") or {}).get("management_ip") or cfg.get("ip_plan", {}).get("esxi") or "").strip()
+            esxi_password = str((cfg.get("esxi") or {}).get("root_password") or (cfg.get("vmware") or {}).get("esxi_root_password") or "").strip()
+            if not esxi_host or not esxi_password:
+                raise
+            current_job = load_job(kit_name)
+            update_job(
+                kit_name,
+                current_job,
+                "Running",
+                "Deploy Windows OVF",
+                4,
+                total,
+                f"[WARN] vCenter OVF import failed ({str(exc).splitlines()[0]}). Falling back to ESXi SSH registration.",
+            )
+            fallback_client = VsphereClient(
+                VsphereConfig(
+                    host=esxi_host,
+                    username="root",
+                    password=esxi_password,
+                    verify_tls=False,
+                )
+            )
+            result = fallback_client.deploy_ovf_via_esxi_ssh(
+                ovf_path=image_path,
+                vm_name=vm_name,
+                datastore_name=datastore,
+                network_name=network,
+                power_on=False,
+                progress=progress,
+            )
+            result.setdefault("warnings", []).append(f"vCenter OVF import failed; used ESXi SSH fallback: {str(exc).splitlines()[0]}")
+
+    cfg = load_kit_config(kit_name)
+    cfg.setdefault("windows", {})
+    cfg["windows"]["deployment_result"] = {
+        **result,
+        "status": "deployed" if result.get("ok") else "recorded",
+        "note": result.get("message") or "Windows OVF deployment completed.",
+        "esxi_host": vsphere_host,
+        "datastore": datastore,
+        "network": network,
+        "method": result.get("method") or ("esxi_ssh" if standalone_esxi else "vcenter_ovf_import"),
+    }
+    save_kit_config(cfg)
+    append_activity_event(
+        kit_name,
+        "windows_vm_deployed",
+        workflow="windows",
+        state="complete",
+        summary=f"Windows VM {vm_name} deployed to {datastore}.",
+        target=vm_name,
+        details=[f"Target: {vsphere_host}", f"Network: {network}", f"Changed: {bool(result.get('changed'))}"],
+    )
     job = load_job(kit_name)
-    update_job(kit_name, job, "Complete", "Windows safe stage complete", 5, total, "[OK] Windows safe execution completed. No VM changes were made.")
+    update_job(kit_name, job, "Complete", "Windows VM install complete", 6, total, f"[OK] Windows VM deployment completed. Changed: {bool(result.get('changed'))}.")
 
 
 def _execute_cisco_stage(cfg: dict[str, Any], kit_name: str) -> None:
@@ -10999,6 +11555,169 @@ def collect_esxi_boot_evidence(client: ILOClient, *, system_path: str | None = N
     }
 
 
+def _run_esxi_netapp_storage_post_config_only(
+    cfg: dict[str, Any],
+    kit_name: str,
+    job: dict[str, Any],
+    total: int,
+    management_probe: dict[str, Any],
+) -> None:
+    management_ip = str(
+        management_probe.get("host")
+        or (cfg.get("esxi", {}) or {}).get("management_ip")
+        or (cfg.get("ip_plan", {}) or {}).get("esxi")
+        or ""
+    ).strip()
+    update_job(
+        kit_name,
+        job,
+        "Running",
+        "ESXi already reachable",
+        1,
+        total,
+        (
+            "[INFO] ESXi management is already reachable"
+            f" on {management_ip or '(unknown)'}:{management_probe.get('port') or 443}; "
+            "skipping installer ISO, virtual media, boot override, and power control."
+        ),
+    )
+    job = load_job(kit_name)
+    job["esxi_management_network"] = {
+        **dict(management_probe or {}),
+        "status": "Reachable",
+        "result": "Reachable",
+        "storage_only_post_config": True,
+    }
+    save_job(kit_name, job)
+
+    try:
+        update_job(
+            kit_name,
+            job,
+            "Running",
+            "Validate NetApp datastore plan",
+            2,
+            total,
+            "[RUNNING] Validating NetApp NFS datastore inputs for ESXi.",
+        )
+        validate_netapp_nfs_dependency_for_esxi(cfg)
+        post_preview = build_esxi_post_config_preview(cfg)
+        netapp_nfs = dict(((post_preview.get("plan") or {}).get("netapp_nfs")) or {})
+        post_actions = build_esxi_post_config_actions(post_preview)
+        storage_action = next(
+            (dict(action) for action in post_actions if str(action.get("id") or "") == "netapp_nfs_datastore_mount"),
+            None,
+        )
+        if not storage_action:
+            raise RuntimeError("NetApp NFS datastore mount action was not generated for ESXi post-config.")
+
+        job = load_job(kit_name)
+        job["esxi_post_config_preview"] = post_preview
+        job["esxi_post_config_validation"] = {
+            "ok": True,
+            "errors": [],
+            "warnings": list(post_preview.get("warnings") or []),
+            "scope": "netapp_nfs_datastore_mount",
+        }
+        job["esxi_post_config_actions"] = [storage_action]
+        save_job(kit_name, job)
+
+        datastore_name = str(netapp_nfs.get("datastore_name") or "").strip()
+        server_ips = ", ".join(str(item) for item in list(netapp_nfs.get("server_ips") or []) if str(item).strip())
+        update_job(
+            kit_name,
+            job,
+            "Running",
+            "Mount NetApp datastore",
+            3,
+            total,
+            (
+                "[RUNNING] Applying only the NetApp NFS datastore mount on ESXi"
+                f" datastore={datastore_name or '(unknown)'} servers={server_ips or '(unknown)'}."
+            ),
+        )
+        run_action = build_esxi_post_config_ssh_run_action(cfg, post_preview)
+        action_result = dict(run_action("netapp_nfs_datastore_mount", netapp_nfs) or {})
+        action_status = str(action_result.get("status") or "applied").strip().lower()
+        result = {"id": "netapp_nfs_datastore_mount", "status": action_status, "details": action_result}
+        errors: list[str] = []
+        warnings = list(post_preview.get("warnings") or [])
+        if action_status == "failed":
+            errors.append(str(action_result.get("error") or "NetApp datastore mount failed."))
+        elif action_status == "skipped" and str(action_result.get("reason") or "") != "datastore_already_mounted":
+            warnings.append(str(action_result.get("reason") or "NetApp datastore mount was skipped."))
+
+        post_execution = {
+            "ok": not errors,
+            "mode": "live-ssh-storage-only",
+            "actions": [storage_action],
+            "results": [result],
+            "warnings": warnings,
+            "errors": errors,
+            "reboot_required": False,
+            "reboot_performed": False,
+            "transport_mode": "live-ssh-storage-only",
+        }
+        job = load_job(kit_name)
+        job["esxi_post_config_execution"] = post_execution
+        save_job(kit_name, job)
+        if errors:
+            raise RuntimeError(errors[0])
+
+        if action_status == "skipped":
+            reason = str(action_result.get("reason") or "already satisfied").replace("_", " ")
+            log_line = f"[OK] NetApp datastore mount skipped because it is already satisfied: {reason}."
+        else:
+            log_line = f"[OK] NetApp datastore mount applied on ESXi: {datastore_name or 'datastore'}."
+        update_job(kit_name, job, "Running", "Mount NetApp datastore", 12, total, log_line)
+        update_job(
+            kit_name,
+            job,
+            "Completed",
+            "Finished",
+            total,
+            total,
+            (
+                "[OK] ESXi management is already reachable; installer was not run. "
+                f"NetApp datastore mount status={action_status}."
+            ),
+        )
+        append_activity_event(
+            kit_name,
+            "esxi_netapp_storage_post_config_only",
+            workflow="esxi",
+            summary="Skipped ESXi installer and applied NetApp datastore post-config only.",
+            target=management_ip,
+            details=[
+                f"Datastore: {datastore_name or '(unknown)'}",
+                f"NFS servers: {server_ips or '(unknown)'}",
+                f"Mount status: {action_status}",
+            ],
+        )
+    except Exception as exc:
+        detail = str(exc).splitlines()[0]
+        job = load_job(kit_name)
+        job["esxi_post_config_execution"] = {
+            **dict(job.get("esxi_post_config_execution") or {}),
+            "ok": False,
+            "mode": "live-ssh-storage-only",
+            "transport_mode": "live-ssh-storage-only",
+            "errors": [detail],
+            "reboot_required": False,
+            "reboot_performed": False,
+        }
+        save_job(kit_name, job)
+        update_job(
+            kit_name,
+            job,
+            "Failed",
+            "NetApp datastore mount failed",
+            job.get("completed_steps", 0),
+            total,
+            f"[FAILED] {detail}",
+        )
+
+
 def run_esxi_real(cfg: dict, run_stamp: str | None = None):
     kit_name = cfg["site"]["name"]
     existing_job = load_job(kit_name)
@@ -11046,10 +11765,6 @@ def run_esxi_real(cfg: dict, run_stamp: str | None = None):
     job = carry_forward_job_bundle_metadata(kit_name, job)
     save_job(kit_name, job)
 
-    if not login_ip or not username or not password:
-        update_job(kit_name, job, "Failed", "Validation failed", 0, total, "[FAILED] Missing iLO host, username, or password.")
-        return
-
     esxi_values = get_esxi_effective_values(cfg)
     management_ip = str(esxi_values["management_ip"])
     subnet_mask = str(esxi_values["subnet_mask"])
@@ -11082,6 +11797,15 @@ def run_esxi_real(cfg: dict, run_stamp: str | None = None):
         return
     job["esxi_expected_ip"] = management_ip
     save_job(kit_name, job)
+
+    initial_management_probe = probe_tcp_port(management_ip, 443, timeout_seconds=1.5)
+    if initial_management_probe.get("reachable") and build_netapp_nfs_dependency_status(cfg).get("required"):
+        _run_esxi_netapp_storage_post_config_only(cfg, kit_name, job, total, initial_management_probe)
+        return
+
+    if not login_ip or not username or not password:
+        update_job(kit_name, job, "Failed", "Validation failed", 0, total, "[FAILED] Missing iLO host, username, or password.")
+        return
 
     try:
         esxi_review = build_esxi_install_review(cfg, run_stamp=run_stamp)
@@ -14079,6 +14803,15 @@ def render_page(
     dashboard_overview = build_dashboard_overview(cfg, setup_precheck_summary, workflow_contexts, dashboard_job_status, job)
     hardware_identity = build_hardware_identity(cfg)
     upgrade_helper_summary = build_upgrade_helper_card(cfg)
+    if reconcile_current_ilo_upgrade_activity(cfg):
+        upgrade_helper_summary = build_upgrade_helper_card(cfg)
+    if active_page == "execution":
+        execution_scope = str(
+            (execution_review or {}).get("scope")
+            or confirm_scope
+            or "included"
+        )
+        upgrade_helper_summary = build_scoped_upgrade_helper_card(cfg, execution_scope)
     ilo_input_review = build_ilo_input_review(cfg, include_policy_validation=active_page == "ilo")
     snmp_input_review = build_snmp_input_review(cfg)
     ilo_field_errors = build_ilo_field_errors(cfg)
@@ -14091,6 +14824,8 @@ def render_page(
     storage_change_summary = build_storage_change_summary(storage_review, storage_plan)
     esxi_page_review = build_esxi_page_review(cfg)
     esxi_advanced_profile = build_esxi_advanced_profile(cfg, esxi_page_review)
+    vcenter_install = build_vcenter_context(cfg)
+    vcenter_install_panel = build_vcenter_install_panel(cfg, vcenter_install)
     live_job_story = build_live_job_story(job)
     live_stage_cards = build_live_stage_cards(job)
     run_checklist = build_run_checklist(job, cfg)
@@ -14098,6 +14833,26 @@ def render_page(
         cfg,
         query=str(request.query_params.get("report_query", "") or ""),
         report_type=str(request.query_params.get("report_type", "all") or "all"),
+    )
+    kit_storage_inventory = build_kit_storage_inventory() if active_page == "kits" else {}
+    try:
+        from app.netapp_upgrade import build_ontap_upgrade_status
+
+        ontap_upgrade_status = build_ontap_upgrade_status(cfg)
+    except Exception:
+        ontap_upgrade_status = {}
+    ilo_upgrade_panel = build_ilo_upgrade_panel(cfg)
+    cisco_upgrade_panel = build_cisco_upgrade_panel(cfg)
+    netapp_upgrade_panel = build_netapp_upgrade_panel(cfg, ontap_upgrade_status)
+    requested_upgrade_tab = ""
+    if extra_context and extra_context.get("active_upgrade_tab"):
+        requested_upgrade_tab = str(extra_context.get("active_upgrade_tab") or "")
+    requested_upgrade_tab = requested_upgrade_tab or str(request.query_params.get("upgrade_tab") or request.query_params.get("tab") or "")
+    upgrade_tab_context = build_upgrade_helper_tab_context(
+        cfg,
+        ontap_upgrade_status,
+        upgrade_helper_summary,
+        active_tab=normalize_upgrade_tab(requested_upgrade_tab),
     )
     selected_run_scopes = ["included"] if not confirm_scope else (run_center_scope_keys(confirm_scope, cfg) or ([confirm_scope] if confirm_scope == "included" else []))
     ilo_inclusion = component_inclusion_status(cfg, "ilo")
@@ -14179,10 +14934,21 @@ def render_page(
         "esxi_page_review": esxi_page_review,
         "esxi_field_errors": build_esxi_field_errors(cfg),
         "esxi_advanced_profile": esxi_advanced_profile,
+        "vcenter_install": vcenter_install,
+        "vcenter_install_panel": vcenter_install_panel,
         "live_job_story": live_job_story,
         "live_stage_cards": live_stage_cards,
         "run_checklist": run_checklist,
         "report_center": report_center,
+        "kit_storage_inventory": kit_storage_inventory,
+        "ontap_upgrade_status": ontap_upgrade_status,
+        "ilo_upgrade_panel": ilo_upgrade_panel,
+        "cisco_upgrade_panel": cisco_upgrade_panel,
+        "netapp_upgrade_panel": netapp_upgrade_panel,
+        "upgrade_tabs": upgrade_tab_context["upgrade_tabs"],
+        "upgrade_panels": upgrade_tab_context["upgrade_panels"],
+        "active_upgrade_tab": upgrade_tab_context["active_upgrade_tab"],
+        "active_upgrade_panel": upgrade_tab_context["active_upgrade_panel"],
         "ilo_inclusion": ilo_inclusion,
         "esxi_inclusion": esxi_inclusion,
         "windows_inclusion": windows_inclusion,
@@ -14224,6 +14990,9 @@ def page_name_from_request_path(path: str) -> str:
         "apply_storage_layout": "storage",
         "reboot_storage_now": "storage",
         "save_esxi_settings": "esxi",
+        "save_vcenter_settings": "vcenter",
+        "plan_vcenter_install": "vcenter",
+        "run_vcenter_install": "vcenter",
         "save_windows_settings": "windows",
         "save_qnap_settings": "qnap",
         "prepare_execute": "execution",
@@ -14307,6 +15076,48 @@ async def global_settings_page(request: Request):
 async def upgrade_helper_page(request: Request):
     cfg = load_kit_config()
     return render_page(request, cfg, active_page="upgrade_helper")
+
+
+def build_upgrade_helper_tab_partial_context(cfg: dict[str, Any], active_tab: str) -> dict[str, Any]:
+    if reconcile_current_ilo_upgrade_activity(cfg):
+        save_kit_config(cfg)
+    upgrade_helper_summary = build_upgrade_helper_card(cfg)
+    try:
+        from app.netapp_upgrade import build_ontap_upgrade_status
+
+        ontap_upgrade_status = build_ontap_upgrade_status(cfg)
+    except Exception:
+        ontap_upgrade_status = {}
+    return {
+        "cfg": cfg,
+        "upgrade_helper_summary": upgrade_helper_summary,
+        **build_upgrade_helper_tab_context(
+            cfg,
+            ontap_upgrade_status,
+            upgrade_helper_summary,
+            active_tab=normalize_upgrade_tab(active_tab),
+        ),
+    }
+
+
+@app.get("/upgrade-helper/tab/{tab}", response_class=HTMLResponse)
+async def upgrade_helper_tab(request: Request, tab: str):
+    cfg = load_kit_config()
+    return templates.TemplateResponse(
+        request,
+        "partials/components/upgrade_tab_shell.html",
+        build_upgrade_helper_tab_partial_context(cfg, tab),
+    )
+
+
+@app.get("/upgrade-helper/panel/{tab}", response_class=HTMLResponse)
+async def upgrade_helper_panel(request: Request, tab: str):
+    cfg = load_kit_config()
+    return templates.TemplateResponse(
+        request,
+        "partials/components/upgrade_tab_panel.html",
+        build_upgrade_helper_tab_partial_context(cfg, tab),
+    )
 
 
 @app.post("/save-upgrade-policies", response_class=HTMLResponse)
@@ -14452,18 +15263,27 @@ async def plan_ilo_upgrade_route(request: Request, return_page: str = Form("upgr
     _clear_stale_ilo_upgrade_block(cfg, plan)
     save_kit_config(cfg)
     details = list(plan.get("blockers") or []) + list(plan.get("warnings") or []) + list(plan.get("notes") or [])
+    if plan.get("ready"):
+        feedback_title = "iLO upgrade plan ready"
+        feedback_message = f"Matched {plan.get('media_filename') or 'no media file'} for {plan.get('manager_model') or 'unknown iLO family'}."
+        feedback_tone = "ready"
+    elif plan.get("no_upgrade_required"):
+        feedback_title = "iLO firmware is up to date"
+        feedback_message = "The current iLO firmware is equal to or newer than the matched firmware package. No upgrade is required."
+        feedback_tone = "ready"
+        details = list(plan.get("warnings") or []) + list(plan.get("notes") or [])
+    else:
+        feedback_title = "iLO upgrade plan needs attention"
+        feedback_message = "Review the matched media, current version, and saved iLO identity before attempting the upgrade."
+        feedback_tone = "pending"
     return render_page(
         request,
         cfg,
         active_page=return_page if return_page in {"upgrade_helper", "ilo"} else "upgrade_helper",
         action_feedback=build_action_feedback(
-            "iLO upgrade plan ready" if plan.get("ready") else "iLO upgrade plan needs attention",
-            (
-                f"Matched {plan.get('media_filename') or 'no media file'} for {plan.get('manager_model') or 'unknown iLO family'}."
-                if plan.get("ready")
-                else "Review the matched media, current version, and saved iLO identity before attempting the upgrade."
-            ),
-            tone="ready" if plan.get("ready") else "pending",
+            feedback_title,
+            feedback_message,
+            tone=feedback_tone,
             outcomes=[
                 f"Target: {plan.get('host') or 'Not set'}",
                 f"Current version: {plan.get('current_version') or 'Unknown'}",
@@ -14511,7 +15331,7 @@ def _record_ilo_upgrade_activity(cfg: dict[str, Any], event: dict[str, Any], *, 
 
 
 def _clear_stale_ilo_upgrade_block(cfg: dict[str, Any], plan: dict[str, Any]) -> None:
-    if not plan.get("ready"):
+    if not plan.get("ready") and not plan.get("no_upgrade_required"):
         return
     upgrade = cfg.setdefault("ilo", {}).setdefault("upgrade", {})
     activity = dict(upgrade.get("activity") or {})
@@ -14521,6 +15341,56 @@ def _clear_stale_ilo_upgrade_block(cfg: dict[str, Any], plan: dict[str, Any]) ->
         return
     upgrade["activity"] = {}
     upgrade["last_result"] = {}
+
+
+def _record_ilo_upgrade_current(cfg: dict[str, Any], plan: dict[str, Any]) -> dict[str, Any]:
+    now = datetime.now().isoformat()
+    current_version = str(plan.get("current_version") or "unknown").strip() or "unknown"
+    media_version = str(plan.get("media_version") or "unknown").strip() or "unknown"
+    message = f"iLO firmware is already up to date. Current {current_version}; matched media {media_version}. No upgrade was run."
+    result = {
+        "status": "current",
+        "host": plan.get("host") or "",
+        "manager_model": plan.get("manager_model") or "",
+        "previous_version": plan.get("current_version") or "",
+        "target_version": plan.get("media_version") or "",
+        "media_path": str(plan.get("media_path") or ""),
+        "media_filename": str(plan.get("media_filename") or ""),
+        "completed_at": now,
+        "message": message,
+    }
+    cfg.setdefault("ilo", {}).setdefault("upgrade", {})
+    cfg["ilo"]["upgrade"]["last_plan"] = plan
+    cfg["ilo"]["upgrade"]["last_result"] = result
+    cfg["ilo"]["upgrade"]["activity"] = {
+        "status": "completed",
+        "phase": "current",
+        "message": message,
+        "started_at": now,
+        "updated_at": now,
+        "progress_percent": 100,
+        "events": [{"phase": "current", "message": message, "timestamp": now, "progress_percent": 100}],
+    }
+    save_kit_config(cfg)
+    return result
+
+
+def reconcile_current_ilo_upgrade_activity(cfg: dict[str, Any]) -> bool:
+    upgrade = dict(((cfg.get("ilo") or {}).get("upgrade") or {}))
+    activity = dict(upgrade.get("activity") or {})
+    result = dict(upgrade.get("last_result") or {})
+    stale_statuses = {str(activity.get("status") or "").lower(), str(result.get("status") or "").lower()}
+    if "blocked" not in stale_statuses:
+        return False
+    try:
+        sync_ilo_upgrade_inventory_from_latest_live(cfg)
+        plan = build_ilo_upgrade_plan(cfg, scan_upgrade_media())
+    except Exception:
+        return False
+    if not plan.get("no_upgrade_required"):
+        return False
+    _record_ilo_upgrade_current(cfg, plan)
+    return True
 
 
 def _start_ilo_upgrade_worker(cfg: dict[str, Any], media_scan: dict[str, Any]) -> None:
@@ -14589,11 +15459,30 @@ async def run_ilo_upgrade_route(request: Request, return_page: str = Form("upgra
                 outcomes=[f"Phase: {activity.get('phase') or 'unknown'}", f"Last message: {activity.get('message') or 'waiting'}"],
             ),
         )
+    if plan.get("no_upgrade_required"):
+        result = _record_ilo_upgrade_current(cfg, plan)
+        return render_page(
+            request,
+            cfg,
+            active_page=active_page,
+            action_feedback=build_action_feedback(
+                "iLO already up to date",
+                result.get("message") or "The current iLO firmware is equal to or newer than the matched media. No upgrade was run.",
+                tone="ready",
+                outcomes=[
+                    f"Target: {plan.get('host') or 'Not set'}",
+                    f"Current version: {plan.get('current_version') or 'Unknown'}",
+                    f"Matched media: {plan.get('media_version') or 'Not found'}",
+                ],
+                details=list(plan.get("warnings") or []) + list(plan.get("notes") or []),
+            ),
+        )
     if not plan.get("ready"):
-        cfg["ilo"]["upgrade"]["last_result"] = {"status": "blocked", "error": "; ".join(plan.get("blockers") or [])}
+        blocked_message = "; ".join(plan.get("blockers") or ["iLO upgrade prechecks are not satisfied."])
+        cfg["ilo"]["upgrade"]["last_result"] = {"status": "blocked", "error": blocked_message}
         _record_ilo_upgrade_activity(
             cfg,
-            {"phase": "blocked", "message": "; ".join(plan.get("blockers") or ["iLO upgrade prechecks are not satisfied."]), "timestamp": datetime.now().isoformat(), "progress_percent": 100},
+            {"phase": "blocked", "message": blocked_message, "timestamp": datetime.now().isoformat(), "progress_percent": 100},
             status="blocked",
         )
         save_kit_config(cfg)
@@ -14645,7 +15534,8 @@ async def run_ilo_upgrade_route(request: Request, return_page: str = Form("upgra
 @app.get("/ilo-upgrade-activity", response_class=HTMLResponse)
 async def ilo_upgrade_activity_route(request: Request):
     cfg = load_kit_config()
-    return templates.TemplateResponse(request, "partials/components/ilo_upgrade_activity.html", {"cfg": cfg})
+    reconcile_current_ilo_upgrade_activity(cfg)
+    return templates.TemplateResponse(request, "partials/components/ilo_upgrade_activity.html", {"cfg": cfg, "ilo_upgrade_panel": build_ilo_upgrade_panel(cfg)})
 
 
 @app.get("/ilo", response_class=HTMLResponse)
@@ -14663,6 +15553,433 @@ async def ilo_page(request: Request):
 async def esxi_page(request: Request):
     cfg = load_kit_config()
     return render_page(request, cfg, active_page="esxi")
+
+
+@app.get("/vcenter", response_class=HTMLResponse)
+async def vcenter_page(request: Request):
+    cfg = load_kit_config()
+    return render_page(request, cfg, active_page="vcenter")
+
+
+def _persist_vcenter_event(
+    kit_name: str,
+    *,
+    phase: str,
+    message: str,
+    status: str | None = None,
+    progress: int | None = None,
+    details: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    cfg = load_kit_config(kit_name)
+    activity = record_vcenter_install_event(
+        cfg,
+        phase=phase,
+        message=message,
+        status=status,
+        progress=progress,
+        details=details,
+    )
+    save_kit_config(cfg)
+    return activity
+
+
+def _run_vcenter_command(
+    *,
+    kit_name: str,
+    cmd: list[str],
+    log_path: Path,
+    phase: str,
+    start_message: str,
+    complete_message: str,
+    failure_message: str,
+    progress: int,
+    cwd: Path | None = None,
+) -> int:
+    log_path.parent.mkdir(parents=True, exist_ok=True)
+    with log_path.open("a", encoding="utf-8", errors="replace") as log:
+        log.write(f"\n[{time.strftime('%Y-%m-%d %H:%M:%S')}] {start_message}\n")
+        log.write("$ " + " ".join(cmd) + "\n")
+        log.flush()
+        _persist_vcenter_event(
+            kit_name,
+            phase=phase,
+            message=start_message,
+            status="running",
+            progress=progress,
+        )
+        process = subprocess.Popen(
+            cmd,
+            cwd=str(cwd) if cwd else None,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            bufsize=1,
+            env={**os.environ, "TERM": os.environ.get("TERM") or "xterm"},
+        )
+        last_event_at = 0.0
+        assert process.stdout is not None
+        for line in process.stdout:
+            log.write(line)
+            log.flush()
+            now = time.time()
+            clean = line.strip()
+            if clean and now - last_event_at >= 20:
+                _persist_vcenter_event(
+                    kit_name,
+                    phase=phase,
+                    message=clean[:240],
+                    status="running",
+                    progress=progress,
+                )
+                last_event_at = now
+        return_code = process.wait()
+        if return_code == 0:
+            log.write(f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] {complete_message}\n")
+            _persist_vcenter_event(
+                kit_name,
+                phase=phase,
+                message=complete_message,
+                status="running",
+                progress=min(95, progress + 20),
+            )
+        else:
+            log.write(f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] {failure_message} Return code {return_code}.\n")
+            _persist_vcenter_event(
+                kit_name,
+                phase="failed",
+                message=f"{failure_message} Return code {return_code}.",
+                status="failed",
+                progress=100,
+            )
+        log.flush()
+    return return_code
+
+
+def _start_vcenter_install_worker(cfg: dict[str, Any]) -> tuple[bool, list[str]]:
+    kit_name = sanitize_kit_name(cfg.get("site", {}).get("name", DEFAULT_KIT_NAME))
+    context = build_vcenter_context(cfg)
+    blockers = validate_vcenter_install_context(context, require_passwords=True)
+    if blockers:
+        record_vcenter_install_event(
+            cfg,
+            phase="blocked",
+            message=blockers[0],
+            status="blocked",
+            progress=100,
+            details={"blockers": blockers},
+        )
+        save_kit_config(cfg)
+        return False, blockers
+
+    stamp = time.strftime("%Y%m%d-%H%M%S")
+    work_dir = Path(str(context.get("work_dir") or GENERATED_DIR / "vcenter" / kit_name)) / stamp
+    log_path = RUNS_DIR / kit_name / f"{stamp}-vcenter-install" / "live-job.log"
+    spec_paths = write_vcenter_install_specs(context, work_dir)
+    context["spec_path"] = spec_paths["spec_path"]
+    context["redacted_spec_path"] = spec_paths["redacted_spec_path"]
+    context["log_path"] = str(log_path)
+    run_id = f"{stamp}-vcenter-install"
+
+    vmware = cfg.setdefault("vmware", {})
+    vmware["vcenter_ip"] = str(context.get("target_ip") or "")
+    install = vmware.setdefault("vcenter_install", {})
+    install.update(
+        {
+            "target_ip": context.get("target_ip") or "",
+            "system_name": context.get("system_name") or "",
+            "vm_name": context.get("vm_name") or "",
+            "iso_path": context.get("iso_path") or "",
+            "esxi_host": context.get("esxi_host") or "",
+            "esxi_username": context.get("esxi_username") or "root",
+            "datastore": context.get("datastore") or "",
+            "deployment_network": context.get("deployment_network") or "VM Network",
+            "deployment_option": context.get("deployment_option") or "tiny",
+            "thin_disk_mode": bool(context.get("thin_disk_mode", True)),
+            "sso_domain": context.get("sso_domain") or "vsphere.local",
+            "ntp_servers": context.get("ntp_servers") or "",
+            "ssh_enable": bool(context.get("ssh_enable", True)),
+            "last_plan": {
+                "spec_path": spec_paths["redacted_spec_path"],
+                "private_spec_path": spec_paths["spec_path"],
+                "log_path": str(log_path),
+                "installer_extract_dir": context.get("installer_extract_dir") or "",
+                "run_id": run_id,
+            },
+        }
+    )
+    activity = record_vcenter_install_event(
+        cfg,
+        phase="queued",
+        message="vCenter Server Appliance install queued.",
+        status="running",
+        progress=5,
+        details={"run_id": run_id, "redacted_spec_path": spec_paths["redacted_spec_path"]},
+    )
+    activity["run_id"] = run_id
+    activity["log_path"] = str(log_path)
+    activity["redacted_spec_path"] = spec_paths["redacted_spec_path"]
+    activity["installer_extract_dir"] = str(context.get("installer_extract_dir") or "")
+    save_kit_config(cfg)
+
+    def worker(worker_context: dict[str, Any]) -> None:
+        extract_dir = Path(str(worker_context.get("installer_extract_dir") or ""))
+        deploy_path = extract_dir / "vcsa-cli-installer" / "lin64" / "vcsa-deploy"
+        deploy_bin = extract_dir / "vcsa-cli-installer" / "lin64" / "vcsa-deploy.bin"
+        ovftool_path = extract_dir / "vcsa" / "ovftool" / "lin64" / "ovftool"
+        ovftool_bin = extract_dir / "vcsa" / "ovftool" / "lin64" / "ovftool.bin"
+        ova_ready = any((extract_dir / "vcsa").glob("*.ova")) if (extract_dir / "vcsa").exists() else False
+        try:
+            if not deploy_path.exists() or not ova_ready:
+                rc = _run_vcenter_command(
+                    kit_name=kit_name,
+                    cmd=vcenter_extract_command(worker_context),
+                    log_path=log_path,
+                    phase="extract",
+                    start_message="Extracting the VCSA CLI installer and appliance OVA from the ISO.",
+                    complete_message="VCSA installer media extracted.",
+                    failure_message="Could not extract the VCSA installer media.",
+                    progress=15,
+                    cwd=BASE_DIR,
+                )
+                if rc != 0:
+                    return
+            try:
+                for executable_path in (deploy_path, deploy_bin, ovftool_path, ovftool_bin):
+                    if executable_path.exists():
+                        executable_path.chmod(0o755)
+            except OSError:
+                pass
+            try:
+                portgroup_result = ensure_esxi_standard_portgroup(worker_context)
+                _persist_vcenter_event(
+                    kit_name,
+                    phase="network",
+                    message=f"Verified ESXi deployment port group {portgroup_result.get('network')}.",
+                    status="running",
+                    progress=25,
+                    details=portgroup_result,
+                )
+            except Exception as exc:
+                _persist_vcenter_event(
+                    kit_name,
+                    phase="network",
+                    message=f"Could not verify ESXi deployment port group: {str(exc).splitlines()[0]}",
+                    status="failed",
+                    progress=100,
+                )
+                return
+            rc = _run_vcenter_command(
+                kit_name=kit_name,
+                cmd=vcenter_deploy_command(worker_context, str(worker_context.get("spec_path") or "")),
+                log_path=log_path,
+                phase="deploy",
+                start_message="Running VMware vcsa-deploy install against the target ESXi host.",
+                complete_message="VMware vcsa-deploy finished successfully.",
+                failure_message="VMware vcsa-deploy failed.",
+                progress=35,
+                cwd=extract_dir,
+            )
+            if rc != 0:
+                return
+            _persist_vcenter_event(
+                kit_name,
+                phase="inventory",
+                message="Waiting for vCenter API and configuring datacenter, cluster, and ESXi host membership.",
+                status="running",
+                progress=82,
+            )
+            inventory_result = configure_vcenter_inventory(worker_context)
+            _persist_vcenter_event(
+                kit_name,
+                phase="inventory",
+                message=(
+                    f"vCenter inventory ready: datacenter {inventory_result.get('datacenter')}, "
+                    f"cluster {inventory_result.get('cluster')}, host {inventory_result.get('esxi_host')}."
+                ),
+                status="running",
+                progress=94,
+                details=inventory_result,
+            )
+            latest = load_kit_config(kit_name)
+            latest.setdefault("vmware", {})
+            latest["vmware"]["vcenter_ip"] = str(worker_context.get("target_ip") or "")
+            latest["vmware"]["username"] = str(worker_context.get("sso_username") or "administrator@vsphere.local")
+            latest["vmware"]["password"] = str(worker_context.get("sso_password") or latest["vmware"].get("password") or "")
+            latest["vmware"]["datacenter_name"] = str(worker_context.get("datacenter_name") or latest["vmware"].get("datacenter_name") or "")
+            latest["vmware"]["cluster_name"] = str(worker_context.get("cluster_name") or latest["vmware"].get("cluster_name") or "")
+            latest.setdefault("windows", {})
+            latest["windows"]["vsphere_host"] = str(worker_context.get("target_ip") or "")
+            latest["windows"]["vsphere_username"] = latest["vmware"]["username"]
+            latest["windows"]["vsphere_password"] = latest["vmware"]["password"]
+            latest["windows"]["vsphere_datacenter"] = str(latest["vmware"].get("datacenter_name") or "")
+            latest["windows"]["vsphere_datastore"] = str(worker_context.get("datastore") or "")
+            latest["windows"]["vsphere_network"] = str(worker_context.get("deployment_network") or "VM Network")
+            record_vcenter_install_event(
+                latest,
+                phase="complete",
+                message=f"vCenter is deployed at {worker_context.get('target_ip')}.",
+                status="completed",
+                progress=100,
+            )
+            save_kit_config(latest)
+            append_activity_event(
+                kit_name,
+                "vCenter install completed",
+                workflow="vcenter",
+                state="complete",
+                summary=f"vCenter deployed at {worker_context.get('target_ip')}.",
+                target=str(worker_context.get("target_ip") or ""),
+                details=[f"Datastore: {worker_context.get('datastore')}", f"VM: {worker_context.get('vm_name')}"],
+            )
+        except Exception as exc:
+            _persist_vcenter_event(
+                kit_name,
+                phase="failed",
+                message=f"vCenter install worker failed: {exc}",
+                status="failed",
+                progress=100,
+            )
+
+    thread = threading.Thread(target=worker, args=(context,), daemon=True, name=f"vcenter-install-{kit_name}")
+    thread.start()
+    return True, []
+
+
+@app.get("/vcenter/install-panel", response_class=HTMLResponse)
+async def vcenter_install_panel_partial(request: Request):
+    cfg = load_kit_config()
+    context = build_vcenter_context(cfg)
+    return templates.TemplateResponse(
+        request,
+        "partials/components/upgrade_panel_only.html",
+        {"panel": build_vcenter_install_panel(cfg, context)},
+    )
+
+
+@app.post("/save-vcenter-settings", response_class=HTMLResponse)
+async def save_vcenter_settings_route(
+    request: Request,
+    return_page: str = Form("vcenter"),
+    vcenter_target_ip: str = Form(""),
+    vcenter_system_name: str = Form(""),
+    vcenter_vm_name: str = Form(""),
+    vcenter_iso_path: str = Form(""),
+    vcenter_esxi_host: str = Form(""),
+    vcenter_esxi_username: str = Form("root"),
+    vcenter_esxi_password: str = Form(""),
+    vcenter_datastore: str = Form(""),
+    vcenter_deployment_network: str = Form("VM Network"),
+    vcenter_deployment_option: str = Form("tiny"),
+    vcenter_root_password: str = Form(""),
+    vcenter_sso_domain: str = Form("vsphere.local"),
+    vcenter_sso_password: str = Form(""),
+    vcenter_ntp_servers: str = Form(""),
+    vcenter_dns_servers: str = Form(""),
+    vcenter_ssh_enable: str | None = Form(None),
+):
+    cfg = load_kit_config()
+    cfg.setdefault("included", {})["vmware"] = True
+    cfg.setdefault("vmware", {})
+    cfg["vmware"]["vcenter_ip"] = str(vcenter_target_ip or cfg["vmware"].get("vcenter_ip") or "").strip()
+    install = cfg["vmware"].setdefault("vcenter_install", {})
+    install.update(
+        {
+            "target_ip": str(vcenter_target_ip or "").strip(),
+            "system_name": str(vcenter_system_name or "").strip(),
+            "vm_name": str(vcenter_vm_name or "").strip(),
+            "iso_path": str(vcenter_iso_path or "").strip(),
+            "esxi_host": str(vcenter_esxi_host or "").strip(),
+            "esxi_username": str(vcenter_esxi_username or "root").strip(),
+            "datastore": str(vcenter_datastore or "").strip(),
+            "deployment_network": str(vcenter_deployment_network or "VM Network").strip(),
+            "deployment_option": str(vcenter_deployment_option or "tiny").strip(),
+            "sso_domain": str(vcenter_sso_domain or "vsphere.local").strip(),
+            "ntp_servers": str(vcenter_ntp_servers or "").strip(),
+            "dns_servers": [
+                item.strip()
+                for item in str(vcenter_dns_servers or "").replace(";", ",").split(",")
+                if item.strip()
+            ],
+            "ssh_enable": bool(vcenter_ssh_enable),
+        }
+    )
+    if vcenter_esxi_password:
+        install["esxi_password"] = vcenter_esxi_password
+        cfg["vmware"]["esxi_root_password"] = vcenter_esxi_password
+    if vcenter_root_password:
+        install["root_password"] = vcenter_root_password
+    if vcenter_sso_password:
+        install["sso_password"] = vcenter_sso_password
+        cfg["vmware"]["password"] = vcenter_sso_password
+    save_kit_config(cfg)
+    return render_page(
+        request,
+        cfg,
+        active_page="vcenter" if return_page == "vcenter" else "vcenter",
+        action_feedback=build_action_feedback(
+            "vCenter settings saved",
+            "Saved the VCSA target, ESXi placement, datastore, network, and credential settings.",
+            tone="ready",
+            outcomes=[
+                f"Appliance IP: {install.get('target_ip') or cfg['vmware'].get('vcenter_ip') or 'Not set'}",
+                f"ESXi host: {install.get('esxi_host') or 'Not set'}",
+                f"Datastore: {install.get('datastore') or 'Not set'}",
+            ],
+        ),
+    )
+
+
+@app.post("/plan-vcenter-install", response_class=HTMLResponse)
+async def plan_vcenter_install_route(request: Request, return_page: str = Form("vcenter")):
+    cfg = load_kit_config()
+    context = build_vcenter_context(cfg)
+    work_dir = Path(str(context.get("work_dir") or GENERATED_DIR / "vcenter" / sanitize_kit_name(cfg.get("site", {}).get("name", DEFAULT_KIT_NAME)))) / time.strftime("%Y%m%d-%H%M%S")
+    spec_paths = write_vcenter_install_specs(context, work_dir)
+    cfg.setdefault("vmware", {}).setdefault("vcenter_install", {})["last_plan"] = {
+        "spec_path": spec_paths["redacted_spec_path"],
+        "private_spec_path": spec_paths["spec_path"],
+        "installer_extract_dir": context.get("installer_extract_dir") or "",
+    }
+    save_kit_config(cfg)
+    blockers = validate_vcenter_install_context(context, require_passwords=True)
+    return render_page(
+        request,
+        cfg,
+        active_page="vcenter",
+        action_feedback=build_action_feedback(
+            "vCenter install plan generated" if not blockers else "vCenter install plan needs attention",
+            "Generated the VCSA CLI installer JSON spec. Fix blockers before running the deployment." if blockers else "Generated the VCSA CLI installer JSON spec and redacted preview.",
+            tone="pending" if blockers else "ready",
+            outcomes=[
+                f"Redacted spec: {spec_paths['redacted_spec_path']}",
+                f"Appliance IP: {context.get('target_ip')}",
+                f"Datastore: {context.get('datastore')}",
+            ],
+            details=blockers,
+        ),
+    )
+
+
+@app.post("/run-vcenter-install", response_class=HTMLResponse)
+async def run_vcenter_install_route(request: Request, return_page: str = Form("vcenter")):
+    cfg = load_kit_config()
+    started, blockers = _start_vcenter_install_worker(cfg)
+    cfg = load_kit_config()
+    return render_page(
+        request,
+        cfg,
+        active_page="vcenter",
+        action_feedback=build_action_feedback(
+            "vCenter install started" if started else "vCenter install blocked",
+            "The VCSA installer is running in the background. The status panel will update without flashing the global loader." if started else "The VCSA installer was not started because required inputs are missing.",
+            tone="progress" if started else "pending",
+            outcomes=[
+                f"Appliance IP: {((cfg.get('vmware') or {}).get('vcenter_install') or {}).get('target_ip') or (cfg.get('vmware') or {}).get('vcenter_ip') or 'Not set'}",
+                f"Datastore: {(((cfg.get('vmware') or {}).get('vcenter_install') or {}).get('datastore') or 'Not set')}",
+            ],
+            details=blockers,
+        ),
+    )
 
 
 @app.get("/windows", response_class=HTMLResponse)
@@ -14733,7 +16050,7 @@ async def save_storage_target(
 @app.get("/kits", response_class=HTMLResponse)
 async def kits_page(request: Request):
     cfg = load_kit_config()
-    return render_page(request, cfg, active_page="dashboard")
+    return render_page(request, cfg, active_page="kits")
 
 
 @app.get("/history", response_class=HTMLResponse)
@@ -14762,7 +16079,9 @@ async def new_kit_route(request: Request, new_kit_name: str = Form(...), return_
         request,
         runtime={
             "sanitize_kit_name": sanitize_kit_name,
+            "kit_path": kit_path,
             "default_config": default_config,
+            "load_kit_config": load_kit_config,
             "save_kit_config": save_kit_config,
             "save_job": save_job,
             "save_history": save_history,
@@ -14770,6 +16089,83 @@ async def new_kit_route(request: Request, new_kit_name: str = Form(...), return_
         },
         new_kit_name=new_kit_name,
         return_page=return_page,
+    )
+
+
+@app.post("/clean-kit-artifacts", response_class=HTMLResponse)
+async def clean_kit_artifacts_route(
+    request: Request,
+    kit_name: str = Form(...),
+    confirm_text: str = Form(""),
+):
+    cfg = load_kit_config()
+    kit = sanitize_kit_name(kit_name)
+    expected = f"CLEAN {kit}"
+    if str(confirm_text or "").strip() != expected:
+        return render_page(
+            request,
+            cfg,
+            active_page="kits",
+            error_message=f"Type {expected} to clean generated files for {kit}.",
+        )
+    result = remove_kit_managed_paths(kit, include_config=False)
+    return render_page(
+        request,
+        load_kit_config(),
+        active_page="kits",
+        action_feedback=build_action_feedback(
+            "Kit artifacts cleaned",
+            f"Removed generated files for {kit}. The kit config was kept.",
+            tone="ready" if not result.get("errors") else "pending",
+            outcomes=[
+                f"Removed: {result.get('removed_count', 0)} paths",
+                f"Reclaimed: {result.get('removed_size', '0 B')}",
+                f"Files: {result.get('removed_files', 0)}",
+            ],
+            details=list(result.get("errors") or []),
+        ),
+    )
+
+
+@app.post("/delete-kit", response_class=HTMLResponse)
+async def delete_kit_route(
+    request: Request,
+    kit_name: str = Form(...),
+    confirm_text: str = Form(""),
+):
+    cfg = load_kit_config()
+    kit = sanitize_kit_name(kit_name)
+    if kit == get_current_kit_name():
+        return render_page(
+            request,
+            cfg,
+            active_page="kits",
+            error_message="Load a different kit before deleting the active kit.",
+        )
+    expected = f"DELETE {kit}"
+    if str(confirm_text or "").strip() != expected:
+        return render_page(
+            request,
+            cfg,
+            active_page="kits",
+            error_message=f"Type {expected} to delete {kit}.",
+        )
+    result = remove_kit_managed_paths(kit, include_config=True)
+    return render_page(
+        request,
+        load_kit_config(),
+        active_page="kits",
+        action_feedback=build_action_feedback(
+            "Kit deleted",
+            f"Deleted {kit} and its Lab Builder generated files.",
+            tone="ready" if not result.get("errors") else "pending",
+            outcomes=[
+                f"Removed: {result.get('removed_count', 0)} paths",
+                f"Reclaimed: {result.get('removed_size', '0 B')}",
+                f"Files: {result.get('removed_files', 0)}",
+            ],
+            details=list(result.get("errors") or []),
+        ),
     )
 
 
@@ -14947,6 +16343,9 @@ async def save_global_settings_route(
     switch_ip: str | None = Form(None),
     esxi_ip: str | None = Form(None),
     ilo_target_ip: str | None = Form(None),
+    ilo_current_ip: str | None = Form(None),
+    ilo_username: str | None = Form(None),
+    ilo_password: str | None = Form(None),
     windows_ip: str | None = Form(None),
     qnap_ip: str | None = Form(None),
     iosafe_ip: str | None = Form(None),
@@ -15005,6 +16404,9 @@ async def save_global_settings_route(
         switch_ip=switch_ip,
         esxi_ip=esxi_ip,
         ilo_target_ip=ilo_target_ip,
+        ilo_current_ip=ilo_current_ip,
+        ilo_username=ilo_username,
+        ilo_password=ilo_password,
         windows_ip=windows_ip,
         qnap_ip=qnap_ip,
         iosafe_ip=iosafe_ip,
@@ -15043,6 +16445,89 @@ async def save_global_settings_route(
         cisco_gateway=cisco_gateway,
         cisco_enable_password=cisco_enable_password,
     )
+
+
+@app.post("/populate-setup-sections", response_class=HTMLResponse)
+async def populate_setup_sections_route(request: Request):
+    form = await request.form()
+    return_page = str(form.get("return_page") or "global_settings")
+    cfg = load_kit_config()
+    cfg.setdefault("site", {})
+    cfg.setdefault("shared_network", {})
+    cfg.setdefault("ip_plan", {})
+
+    site_name = str(form.get("site_name") or cfg["site"].get("name") or "").strip()
+    if site_name:
+        cfg["site"]["name"] = sanitize_kit_name(site_name)
+
+    shared_subnet = str(form.get("shared_subnet") or cfg["shared_network"].get("subnet") or "10.10.8.0/24").strip()
+    cfg["shared_network"]["subnet"] = shared_subnet
+    if any(field in form for field in ("dns1", "dns2", "dns3", "dns4")):
+        cfg["shared_network"]["dns_servers"] = [
+            str(form.get("dns1") or "").strip(),
+            str(form.get("dns2") or "").strip(),
+            str(form.get("dns3") or "").strip(),
+            str(form.get("dns4") or "").strip(),
+        ]
+    if any(field in form for field in ("ilo_current_ip", "ilo_username", "ilo_password")):
+        ilo_cfg = cfg.setdefault("ilo", {})
+        current_ip = str(form.get("ilo_current_ip") or ilo_cfg.get("current_ip") or ilo_cfg.get("host") or "").strip()
+        ilo_cfg["current_ip"] = current_ip
+        ilo_cfg["host"] = current_ip
+        if "ilo_username" in form:
+            ilo_cfg["username"] = str(form.get("ilo_username") or "")
+        submitted_ilo_password = str(form.get("ilo_password") or "")
+        if submitted_ilo_password:
+            ilo_cfg["password"] = submitted_ilo_password
+    gateway_ip = str(form.get("gateway_ip") or "").strip()
+
+    try:
+        cfg["ip_plan"].update(build_default_ip_plan(shared_subnet))
+        if gateway_ip:
+            cfg["ip_plan"]["gateway"] = gateway_ip
+        cfg, changes = populate_setup_sections_from_ip_plan(cfg)
+        save_kit_config(cfg)
+        change_details = changes[:24]
+        if len(changes) > len(change_details):
+            change_details.append(f"{len(changes) - len(change_details)} additional fields were already updated.")
+        append_activity_event(
+            cfg["site"]["name"],
+            "Global IP plan populated setup sections",
+            workflow="configuration",
+            state="complete",
+            summary=f"{len(changes)} setup field(s) updated from {cfg['shared_network'].get('subnet')}.",
+            target=cfg.get("ip_plan", {}).get("gateway", ""),
+            details=change_details,
+        )
+        return render_page(
+            request,
+            cfg,
+            active_page=return_page,
+            action_feedback=build_action_feedback(
+                "Setup sections populated",
+                "Saved the global network values and wrote the IP plan into the module setup pages.",
+                tone="ready",
+                outcomes=[
+                    f"Subnet: {cfg['shared_network'].get('subnet') or 'Not set'}",
+                    f"Gateway: {cfg.get('ip_plan', {}).get('gateway') or 'Not set'}",
+                    f"Fields updated: {len(changes)}",
+                ],
+                details=change_details or ["All setup section IP fields were already in sync."],
+                links=[
+                    {"label": "Review iLO", "href": "/ilo"},
+                    {"label": "Review ESXi", "href": "/esxi"},
+                    {"label": "Review NetApp", "href": "/netapp"},
+                    {"label": "Review Cisco", "href": "/cisco"},
+                ],
+            ),
+        )
+    except Exception as e:
+        return render_page(
+            request,
+            cfg,
+            active_page=return_page,
+            error_message=f"Could not populate setup sections: {e}",
+        )
 
 
 @app.post("/save-ilo-settings", response_class=HTMLResponse)

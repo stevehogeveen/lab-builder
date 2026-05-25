@@ -8,6 +8,8 @@
     {% set storage_ctx = setup_context.get('storage', {}) %}
     {% set esxi_ctx = setup_context.get('esxi', {}) %}
     {% set windows_ctx = setup_context.get('windows', {}) %}
+    {% set vcenter_activity = cfg.get('vmware', {}).get('vcenter_install', {}).get('activity', {}) or {} %}
+    {% set vcenter_tone = 'ready' if vcenter_activity.get('status') == 'completed' else ('pending' if vcenter_activity.get('status') in ['failed', 'blocked'] else ('progress' if vcenter_activity.get('status') == 'running' else ('progress' if cfg.get('included', {}).get('vmware') else 'muted'))) %}
     {% set qnap_tone = qnap_ctx.get('tone', 'pending') if cfg.get('included', {}).get('qnap') else 'muted' %}
     {% set windows_tone = windows_ctx.get('tone', 'pending') if cfg.get('included', {}).get('windows') else 'muted' %}
     {% set netapp_tone = netapp_ctx.get('tone', 'pending') if cfg.get('included', {}).get('netapp') else 'muted' %}
@@ -38,33 +40,6 @@
         </div>
     </div>
 
-    <div class="sidebar-utility-grid" aria-label="Operator shortcuts">
-        <button class="sidebar-tool-button" type="button" data-command-palette-open aria-haspopup="dialog" aria-controls="command-palette">
-            <span>Quick jump</span>
-            <span class="kbd">Ctrl K</span>
-        </button>
-        <button class="sidebar-tool-button" type="button" data-issue-drawer-open aria-haspopup="dialog" aria-controls="issue-drawer">
-            <span>Open issues</span>
-            <span class="status {{ setup_precheck_summary.tone if setup_precheck_summary else 'progress' }}">{{ setup_precheck_summary.total_blockers if setup_precheck_summary else 0 }}</span>
-        </button>
-        <button class="sidebar-tool-button" type="button" data-proof-drawer-open aria-haspopup="dialog" aria-controls="proof-drawer">
-            <span>Proof ledger</span>
-            <span class="kbd">Trust</span>
-        </button>
-        <button class="sidebar-tool-button" type="button" data-density-toggle aria-pressed="false">
-            <span data-density-label>Compact view</span>
-            <span class="kbd">View</span>
-        </button>
-        <button class="sidebar-tool-button" type="button" data-visual-toggle aria-pressed="false">
-            <span data-visual-label>Cosmic mode</span>
-            <span class="kbd">Trip</span>
-        </button>
-        <button class="sidebar-tool-button" type="button" data-reality-engine-open aria-haspopup="dialog" aria-controls="reality-engine">
-            <span>Reality engine</span>
-            <span class="kbd">Warp</span>
-        </button>
-    </div>
-
     <div class="nav-group">
         <div class="nav-label">Overview</div>
         <a class="nav-link{% if active_page == 'dashboard' %} nav-link-active{% endif %}" href="/dashboard">
@@ -74,6 +49,16 @@
                 <span class="nav-link-copy">
                     <span class="nav-link-title">Dashboard</span>
                     <span class="nav-link-subtitle">Mission control</span>
+                </span>
+            </span>
+        </a>
+        <a class="nav-link{% if active_page == 'kits' %} nav-link-active{% endif %}" href="/kits">
+            <span class="nav-link-shell">
+                <span class="nav-dot nav-dot-progress"></span>
+                <span class="nav-icon icon-tone-progress" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 5h16v14H4z"/><path d="M8 9h8"/><path d="M8 13h5"/><path d="M15 17h1"/></svg></span>
+                <span class="nav-link-copy">
+                    <span class="nav-link-title">Kits</span>
+                    <span class="nav-link-subtitle">Create & clean</span>
                 </span>
             </span>
         </a>
@@ -125,6 +110,15 @@
                 <span class="nav-icon icon-tone-{{ esxi_ctx.get('tone', 'pending') }}" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="5" width="16" height="6" rx="2"/><rect x="4" y="13" width="16" height="6" rx="2"/><path d="M8 8h.01"/><path d="M8 16h.01"/><path d="M12 8h4"/><path d="M12 16h4"/></svg></span>
                 <span class="nav-link-copy">
                     <span class="nav-link-title">ESXi</span>
+                </span>
+            </span>
+        </a>
+        <a class="nav-link{% if active_page == 'vcenter' %} nav-link-active{% endif %}" href="/vcenter">
+            <span class="nav-link-shell">
+                <span class="nav-dot nav-dot-{{ vcenter_tone }}"></span>
+                <span class="nav-icon icon-tone-{{ vcenter_tone }}" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="5" width="16" height="14" rx="2"/><path d="M8 9h8"/><path d="M8 13h5"/><path d="M9 19v2"/><path d="M15 19v2"/></svg></span>
+                <span class="nav-link-copy">
+                    <span class="nav-link-title">vCenter</span>
                 </span>
             </span>
         </a>

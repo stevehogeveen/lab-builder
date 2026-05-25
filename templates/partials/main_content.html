@@ -57,14 +57,14 @@
         {% endif %}
     </section>
     {% endif %}
-    {% set setup_pages = ["global_settings", "configuration", "ilo", "storage", "esxi", "execution"] %}
+    {% set setup_pages = ["global_settings", "configuration", "ilo", "storage", "esxi", "vcenter", "execution"] %}
     {% if config_view_title and config_view_content and active_page not in setup_pages and active_page != "configs" %}
     <details class="card" open>
         <summary class="summary-row">
             <span class="text-lg font-semibold">{{ config_view_title }}</span>
             <span class="status ready">YAML</span>
         </summary>
-        <div class="codeblock mt-4">{{ config_view_content }}</div>
+        <div class="codeblock raw-output mt-4">{{ config_view_content }}</div>
     </details>
     {% elif config_view_title and config_view_content and active_page == "ilo" %}
     <section class="card">
@@ -72,7 +72,7 @@
             <div class="text-lg font-semibold">{{ config_view_title }}</div>
             <span class="status ready">Current iLO</span>
         </div>
-        <div class="codeblock mt-4">{{ config_view_content }}</div>
+        <div class="codeblock raw-output mt-4">{{ config_view_content }}</div>
         <div class="actions mt-4">
             <form action="/download-latest-live-summary" method="post">
                 <button class="btn btn-primary" type="submit">Download current iLO summary</button>
@@ -89,7 +89,7 @@
             <span class="status ready">Technical view</span>
         </div>
         <div class="text-sm text-slate-300">You asked to open a specific artifact or summary, so the full content is shown here. Reports still keeps the archive copy.</div>
-        <div class="codeblock mt-4">{{ config_view_content }}</div>
+        <div class="codeblock raw-output mt-4">{{ config_view_content }}</div>
         <div class="actions mt-4">
             <a class="btn" href="/configs">Open Reports</a>
         </div>
@@ -97,6 +97,8 @@
     {% endif %}
     {% if active_page == "dashboard" %}
         {% include "partials/pages/dashboard.html" %}
+    {% elif active_page == "kits" %}
+        {% include "partials/pages/kits.html" %}
     {% elif active_page in ["global_settings", "configuration"] %}
         {% include "partials/pages/configuration.html" %}
     {% elif active_page == "upgrade_helper" %}
@@ -109,6 +111,8 @@
         {% include "partials/pages/execution.html" %}
     {% elif active_page == "esxi" %}
         {% include "partials/pages/esxi.html" %}
+    {% elif active_page == "vcenter" %}
+        {% include "partials/pages/vcenter.html" %}
     {% elif active_page == "windows" %}
         {% include "partials/pages/windows.html" %}
     {% elif active_page == "qnap" %}
