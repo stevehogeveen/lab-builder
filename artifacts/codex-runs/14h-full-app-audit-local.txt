@@ -1,0 +1,67 @@
+No files were edited. I read the required session docs, inspected templates/routes/tests, and ran `pytest --collect-only` successfully: 454 tests collected.
+
+**Page And Control Inventory**
+- Shell/sidebar/index: navigation to `/dashboard`, `/kits`, `/global-settings`, `/upgrade-helper`, `/ilo`, `/storage`, `/esxi`, `/vcenter`, `/windows`, `/modules/cisco`, `/modules/netapp`, `/modules/ovf-templates`, `/execution`, `/configs`, `/qnap`; plus frontend-only palette/density/issue controls in [index.html](/home/administrator/lab-builder/templates/index.html:1).
+- Dashboard/Kits: kit load/create/delete/clean/view/download via `/load-kit`, `/new-kit`, `/delete-kit`, `/clean-kit-artifacts`, `/view-current-kit-config`, `/download-current-kit-config` in [dashboard.html](/home/administrator/lab-builder/templates/partials/pages/dashboard.html:1) and [kits.html](/home/administrator/lab-builder/templates/partials/pages/kits.html:1).
+- Global settings: `/save-global-settings`, `/populate-setup-sections`; the populate button can rewrite setup module values from global defaults in [configuration.html](/home/administrator/lab-builder/templates/partials/pages/configuration.html:1).
+- Upgrade helper: `/upload-upgrade-media`, `/save-upgrade-policies`, dynamic upgrade tabs/panels in [upgrade_helper.html](/home/administrator/lab-builder/templates/partials/pages/upgrade_helper.html:1).
+- iLO: `/save-ilo-settings`, `/export-ilo-inventory`, `/view-run-summary`, upgrade gate actions in [ilo.html](/home/administrator/lab-builder/templates/partials/pages/ilo.html:1).
+- Storage: `/save-storage-target`, `/read-current-storage`, `/plan-raid-layout`, `/approve-storage-plan`, `/clear-storage-approval`, `/reboot-storage-now`, `/view-storage-artifact`, `/view-run-summary` in [storage.html](/home/administrator/lab-builder/templates/partials/pages/storage.html:198).
+- ESXi: `/save-esxi-settings`, `/view-run-summary`, Run Center link in [esxi.html](/home/administrator/lab-builder/templates/partials/pages/esxi.html:1).
+- vCenter: `/save-vcenter-settings`, `/plan-vcenter-install`, `/run-vcenter-install`, upgrade panel in [vcenter.html](/home/administrator/lab-builder/templates/partials/pages/vcenter.html:27).
+- Windows/OVF: `/save-windows-settings`, `/probe-windows-vsphere`, `/probe-windows-winrm`, `/select-windows-ovf-template`, `/plan-windows-install`, `/modules/ovf-templates/register-directory` in [windows.html](/home/administrator/lab-builder/templates/partials/pages/windows.html:1) and [ovf_templates.html](/home/administrator/lab-builder/templates/partials/pages/ovf_templates.html:1).
+- Cisco: console, SSH, serial, config approval, factory reset, upgrade gates through `/modules/cisco/*` routes in [cisco.html](/home/administrator/lab-builder/templates/partials/pages/cisco.html:366).
+- NetApp: save, test, discover, bootstrap, NFS, convention, factory reset, validate/export/apply, upgrade through `/modules/netapp/*` routes in [netapp.html](/home/administrator/lab-builder/templates/partials/pages/netapp.html:161).
+- Run Center: `/prepare-execute`, `/execute`, `/execute-preview`, `/retry-storage-stage`, `/view-run-summary`, `/download-run-summary`, `/debug-bundles/latest` in [execution.html](/home/administrator/lab-builder/templates/partials/pages/execution.html:66).
+- Reports/History: `/configs`, `/history`, `/view-report`, `/download-report` in [reports.html](/home/administrator/lab-builder/templates/partials/pages/reports.html:1) and [history.html](/home/administrator/lab-builder/templates/partials/pages/history.html:1).
+
+**Prioritized Findings**
+1. Storage artifact routes ignore the selected storage override and use iLO host/current IP instead. This can show/download the wrong server’s report after “Use entered IP.” See [routes.py](/home/administrator/lab-builder/app/modules/storage/routes.py:699) and [routes.py](/home/administrator/lab-builder/app/modules/storage/routes.py:754). `[can test with available server]`
+
+2. Run Center includes an `iosafe` stage, but there is no obvious setup page in the visible navigation. That is suspicious for a one-server/one-switch run because it may imply unavailable hardware or hidden configuration. See [execution.html](/home/administrator/lab-builder/templates/partials/pages/execution.html:283). `[mock/dry-run only]`
+
+3. Several backend routes are not visibly reachable or need explicit “API-only/legacy/destructive” classification: `/apply-storage-layout`, `/probe-storage-capabilities`, `/download-storage-artifact`, `/save-config`, `/autofill-ip-plan`, `/upload-windows-image`, `/register-windows-ovf-path`, Cisco `/discover-state`, `/preview-config`, `/apply-config`, `/backup-config`, NetApp generic `/discover`, `/plan`, `/validate`, `/apply`, `/repair/{issue_id}`, and `/vcenter/install-panel`. `[code inspection only]`
+
+4. Logs/status are inconsistent. Run Center has top-level live status; Storage has a separate progress card and hidden “last result”; NetApp pushes several results/warnings near the bottom; Cisco mixes inline action feedback with raw/current config sections. This increases operator error risk during long runs. `[code inspection only]`
+
+5. Storage, Cisco, and NetApp pages are too dense for high-risk workflows: [storage.html](/home/administrator/lab-builder/templates/partials/pages/storage.html:1) is ~1054 lines, [netapp.html](/home/administrator/lab-builder/templates/partials/pages/netapp.html:1) ~902, [cisco.html](/home/administrator/lab-builder/templates/partials/pages/cisco.html:1) ~864. Destructive actions, discovery, raw outputs, credentials-adjacent fields, and planning all compete for attention. `[code inspection only]`
+
+6. Buttons can reset or overwrite choices unexpectedly: global “Populate setup sections,” Storage “Use iLO defaults,” Storage controller changes uncheck hidden drive selections, NetApp “Use discovered values,” NetApp “Update convention,” and upgrade override checkboxes that post immediately. See [storage.html](/home/administrator/lab-builder/templates/partials/pages/storage.html:558), [netapp.html](/home/administrator/lab-builder/templates/partials/pages/netapp.html:516), and [upgrade_gate_panel.html](/home/administrator/lab-builder/templates/partials/components/upgrade_gate_panel.html:50). `[mock/dry-run only]`
+
+7. Cisco and NetApp use very large forms where read/probe/test buttons also submit broad form state. That makes “look only” actions capable of saving unrelated edits. Cisco form starts at [cisco.html](/home/administrator/lab-builder/templates/partials/pages/cisco.html:366); NetApp form starts at [netapp.html](/home/administrator/lab-builder/templates/partials/pages/netapp.html:161). `[can test with available switch]` for Cisco, `[mock/dry-run only]` for NetApp.
+
+8. vCenter plan/run HTMX buttons are `type="button"` inside the form and should be verified to include the intended form values. Safer behavior would be explicit inclusion. See [vcenter.html](/home/administrator/lab-builder/templates/partials/pages/vcenter.html:105). `[mock/dry-run only]`
+
+9. Hardware access is broadly assumed across iLO/storage/ESXi/vCenter/Windows/Cisco/NetApp/QNAP. With only one server and one switch, NetApp/QNAP and destructive reset/apply/upgrade paths should be mock/dry-run only unless explicitly marked available. `[mock/dry-run only]`
+
+10. There is no automated template-to-route consistency test. The current manual scan did not find a clear missing visible route, but the app is large enough that this should become a guardrail before major edits. `[code inspection only]`
+
+**Tests To Add Or Update**
+- Route/control inventory test for `href`, `action`, `formaction`, `hx-get`, `hx-post`, and generated upgrade panel actions.
+- Explicit route classification test for API-only, legacy, hidden destructive, and visible operator routes.
+- Storage override artifact tests for view/download.
+- Run Center test for `iosafe` visibility/readiness.
+- vCenter HTMX form inclusion test.
+- Cisco/NetApp tests proving read/probe actions do not persist unrelated draft fields unless intended.
+- Tests around overwrite buttons: populate setup sections, NetApp discovered values/convention, Storage controller filtering.
+- Dry-run/mock contract tests for unavailable hardware and destructive routes.
+
+**Safest 14-Hour Fix Order**
+1. Add route/control inventory and route-classification tests first.
+2. Fix Storage artifact host override.
+3. Classify or guard hidden/destructive routes, especially `/apply-storage-layout`.
+4. Resolve the `iosafe` Run Center ambiguity.
+5. Normalize status/log placement patterns page by page.
+6. Add explicit confirmation/preview behavior for overwrite buttons.
+7. Split or simplify Storage, Cisco, and NetApp pages without changing backend behavior.
+8. Tighten dry-run/mock boundaries for unavailable hardware.
+9. Broaden tests around shared routes, state writes, and operator-flow contracts.
+
+**High-Risk Areas**
+Storage apply/reboot/read flows, Cisco factory reset/apply/upgrade, NetApp factory reset/apply/upgrade, Run Center stage execution, and any shared operator-flow changes in `app/main.py`, shared templates, or live-job/status code.
+
+**Low-Risk Quick Wins**
+Add the route inventory test, remove or label duplicate Storage report/build links, add explicit `hx-include` on vCenter plan/run buttons, classify orphan routes, and add visible labels around buttons that overwrite saved choices.
+
+**Recommended First Task**
+Start with the automated route/control inventory plus a route classification manifest. It is low hardware risk, protects the rest of the 14-hour run, and will force every suspicious visible/hidden route into an explicit category before behavior changes begin.
