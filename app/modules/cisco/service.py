@@ -131,16 +131,21 @@ class CiscoModuleService:
         cisco_cfg = dict(cfg.get("cisco_switch") or {})
         return str(cisco_cfg.get("password") or "")
 
+    def _enable_secret(self, cisco_cfg: dict[str, Any]) -> str:
+        return str(cisco_cfg.get("enable_secret") or cisco_cfg.get("enable_password") or "")
+
     def _management_ip(self, context: dict[str, Any]) -> str:
         cfg = dict(context.get("cfg") or {})
         cisco_cfg = dict(cfg.get("cisco_switch") or {})
         return str(cisco_cfg.get("management_ip") or cisco_cfg.get("ip") or cfg.get("ip_plan", {}).get("switch") or "").strip()
 
     def _bootstrap_network_path(self, cisco_cfg: dict[str, Any]) -> tuple[str, str]:
-        configured_port = str(cisco_cfg.get("bootstrap_network_port") or "").strip()
-        configured_mode = str(cisco_cfg.get("bootstrap_network_mode") or "").strip().lower()
+        configured_port = str(cisco_cfg.get("management_port") or cisco_cfg.get("bootstrap_network_port") or "").strip()
+        configured_mode = str(cisco_cfg.get("management_port_mode") or cisco_cfg.get("bootstrap_network_mode") or "").strip().lower()
+        if configured_mode not in {"access", "trunk", "do_not_touch"}:
+            configured_mode = "do_not_touch"
         if configured_port:
-            return configured_port, configured_mode or "trunk"
+            return configured_port, configured_mode or "do_not_touch"
         raw_console_check = str(cisco_cfg.get("last_raw_console_bootstrap_check") or "")
         if raw_console_check:
             interface_status = parse_show_interfaces_status(_extract_command_output(raw_console_check, "show interfaces status", "show ip ssh"))
@@ -161,7 +166,7 @@ class CiscoModuleService:
             mode = str(profile.get("mode") or dict(settings or {}).get("mode") or "").strip().lower()
             if "uplink" in profile_name or mode == "trunk":
                 return str(port), mode or "trunk"
-        return "", configured_mode or "trunk"
+        return "GigabitEthernet1/0/1", configured_mode or "do_not_touch"
 
     def _status_payload(self, context: dict[str, Any]) -> dict[str, Any]:
         cfg = dict(context.get("cfg") or {})
@@ -187,9 +192,15 @@ class CiscoModuleService:
             "connection_method": connection_method,
             "console_port": str(cisco_cfg.get("console_port") or "").strip(),
             "console_baud": int(cisco_cfg.get("console_baud") or 9600),
+            "console_password_present": bool(str(cisco_cfg.get("console_password") or "")),
+            "enable_secret_present": bool(self._enable_secret(cisco_cfg)),
+            "trusted_console_adapter": bool(cisco_cfg.get("trusted_console_adapter")),
             "management_vlan": int(cisco_cfg.get("management_vlan") or 10),
             "subnet_mask": str(cisco_cfg.get("subnet_mask") or "").strip(),
             "gateway": str(cisco_cfg.get("gateway") or cfg.get("ip_plan", {}).get("gateway") or "").strip(),
+            "domain_name": str(cisco_cfg.get("domain_name") or "").strip(),
+            "management_port": str(cisco_cfg.get("management_port") or "GigabitEthernet1/0/1").strip(),
+            "management_port_mode": str(cisco_cfg.get("management_port_mode") or "do_not_touch").strip(),
             "bootstrap_network_port": str(cisco_cfg.get("bootstrap_network_port") or "").strip(),
             "bootstrap_network_mode": str(cisco_cfg.get("bootstrap_network_mode") or "trunk").strip(),
             "effective_bootstrap_network_port": effective_bootstrap_port,
@@ -274,7 +285,7 @@ class CiscoModuleService:
             )
 
         password = str(cisco_cfg.get("password") or "")
-        enable_password = str(cisco_cfg.get("enable_password") or "")
+        enable_password = self._enable_secret(cisco_cfg)
         if password and len(password) < 10:
             add(
                 "warning",
@@ -287,7 +298,7 @@ class CiscoModuleService:
                 "warning",
                 "Enable secret is missing",
                 "Console bootstrap may stop at the Cisco setup dialog until a valid enable secret is supplied.",
-                actions=["Enter an enable secret in More settings.", "Use 10-32 characters with upper/lower case and a digit."],
+                actions=["Enter an enable secret in Access settings.", "Use 10-32 characters with upper/lower case and a digit."],
             )
         elif len(enable_password) < 10 or not (re.search(r"[A-Z]", enable_password) and re.search(r"[a-z]", enable_password) and re.search(r"\d", enable_password)):
             add(
@@ -355,14 +366,14 @@ class CiscoModuleService:
                     "warning",
                     "Cisco SSH is enabled but SCP transfer is not ready",
                     "The switch accepts SSH, but the SCP server is not enabled. Firmware image transfer needs SCP.",
-                    actions=["Run Configure IP using console again to enable SCP.", "Or let the upgrade workflow temporarily enable SCP during transfer."],
+                    actions=["Run Setup Console again to enable SCP.", "Or let the upgrade workflow temporarily enable SCP during transfer."],
                 )
             if not check.get("vlan_exists"):
                 add(
                     "warning",
                     f"Management VLAN {management_vlan} is missing",
                     "The switch currently does not have the desired management VLAN in the VLAN database.",
-                    actions=["Run Configure IP using console to create the VLAN/SVI.", "Or change Management VLAN if this switch should use an existing VLAN."],
+                    actions=["Run Setup Console to create the VLAN/SVI.", "Or change Management VLAN if this switch should use an existing VLAN."],
                 )
             if check.get("vlan_exists") and not check.get("connected_management_ports"):
                 add(
@@ -388,17 +399,17 @@ class CiscoModuleService:
                     actions=["Review whether these are intentional.", "Remove or ignore legacy/default SVIs before final config approval."],
                 )
             suggested = list(check.get("suggested_bootstrap_ports") or [])
-            if suggested and not str(cisco_cfg.get("bootstrap_network_port") or "").strip():
+            if suggested and not str(cisco_cfg.get("management_port") or cisco_cfg.get("bootstrap_network_port") or "").strip():
                 add(
                     "info",
                     "Bootstrap port should be selected explicitly",
                     "Connected switchports were detected, but no bootstrap network port is configured.",
-                    actions=[f"Candidate ports: {', '.join(suggested[:4])}", "Enter the intended port in Network port before bootstrap."],
+                actions=[f"Candidate ports: {', '.join(suggested[:4])}", "Enter the intended port in Management port before bootstrap."],
                 )
 
         override_keys = [
             key
-            for key in ("management_ip", "ip", "gateway", "subnet_mask", "management_vlan", "bootstrap_network_port", "bootstrap_network_mode")
+            for key in ("management_ip", "ip", "gateway", "subnet_mask", "management_vlan", "management_port", "management_port_mode")
             if cisco_cfg.get(key) not in (None, "", ip_plan.get("switch") if key in {"management_ip", "ip"} else None)
         ]
         if override_keys:
@@ -573,6 +584,8 @@ class CiscoModuleService:
                 "prompt_type": item.prompt_type,
                 "score": item.score,
                 "error": item.error,
+                "responded": bool(str(getattr(item, "raw_output", "") or "").strip()),
+                "prompt_unconfirmed": bool(str(getattr(item, "raw_output", "") or "").strip() and not item.error and item.score < 50),
             }
             for item in candidates
         ]
@@ -741,7 +754,7 @@ class CiscoModuleService:
                         "hostname": str(parsed.get("hostname") or ""),
                         "model": str(parsed.get("model") or ""),
                         "platform": str(parsed.get("platform") or ""),
-                        "raw_excerpt": mask_secrets(str(parsed.get("raw_excerpt") or ""), [self._password(context), str(cisco_cfg.get("enable_password") or "")]),
+                        "raw_excerpt": mask_secrets(str(parsed.get("raw_excerpt") or ""), [self._password(context), str(cisco_cfg.get("console_password") or ""), self._enable_secret(cisco_cfg)]),
                         "warnings": [],
                         "status": self._status_payload(context),
                     }
@@ -794,20 +807,39 @@ class CiscoModuleService:
                 "diagnostics": diagnostics,
             }
         matches = [item for item in candidates if item.score >= 50]
+        unconfirmed = [
+            item
+            for item in candidates
+            if item.score < 50 and not str(item.error or "").strip() and str(getattr(item, "raw_output", "") or "").strip()
+        ]
+        usable = matches or unconfirmed
         diagnostics["probe_results"] = self._console_probe_results(candidates)
         summary = ""
         suggestions: list[str] = []
-        if not matches:
+        warnings: list[str] = []
+        if not matches and unconfirmed:
+            summary = "Console responded but Cisco prompt was not confirmed"
+            diagnostics["prompt_unconfirmed"] = True
+            diagnostics["error_summary"] = summary
+            suggestions = [
+                "If this adapter is physically connected to the switch console port, use Trust selected adapter and continue.",
+                "If it is not the switch console, select a different adapter or check the rollover cable.",
+            ]
+            warnings.append(summary)
+        elif not matches:
             summary, suggestions = self._console_failure_summary(diagnostics, candidates)
+        elif len(matches) > 1:
+            warnings.append("Multiple Cisco console candidates were detected. Select the intended console port before configuring management IP.")
+        payload_candidates = list(usable)
         return {
             "module": "cisco",
             "action": "discover_console",
-            "ok": bool(matches),
+            "ok": bool(usable),
             "error": "" if matches else summary,
-            "warnings": ["Multiple Cisco console candidates were detected. Select the intended console port before configuring management IP."] if len(matches) > 1 else [],
+            "warnings": warnings,
             "suggestions": suggestions,
             "status": status,
-            "candidates": discovery_candidates_payload(matches, include_raw=True),
+            "candidates": discovery_candidates_payload(payload_candidates, include_raw=True),
             "probe_results": diagnostics["probe_results"],
             "diagnostics": diagnostics,
         }
@@ -818,13 +850,27 @@ class CiscoModuleService:
         result.update({"module": "cisco", "action": "fix_serial_permissions", "status": status})
         return result
 
-    def bootstrap_management(self, context: dict[str, Any]) -> dict[str, Any]:
+    def bootstrap_management(self, context: dict[str, Any], *, trunk_review_ack: bool = False) -> dict[str, Any]:
         cfg = dict(context.get("cfg") or {})
         cisco_cfg = dict(cfg.get("cisco_switch") or {})
         port = str(cisco_cfg.get("console_port") or "").strip()
         baud = int(cisco_cfg.get("console_baud") or 9600)
+        management_port = str(cisco_cfg.get("management_port") or cisco_cfg.get("bootstrap_network_port") or "GigabitEthernet1/0/1").strip()
+        management_port_mode = str(cisco_cfg.get("management_port_mode") or cisco_cfg.get("bootstrap_network_mode") or "do_not_touch").strip().lower()
+        if management_port_mode not in {"access", "trunk", "do_not_touch"}:
+            management_port_mode = "do_not_touch"
         if not port:
             return {"module": "cisco", "action": "bootstrap_management", "ok": False, "error": "Cisco console port is not selected.", "status": self._status_payload(context)}
+        if management_port_mode == "trunk" and not trunk_review_ack:
+            return {
+                "module": "cisco",
+                "action": "bootstrap_management",
+                "ok": False,
+                "requires_trunk_review": True,
+                "error": "Trunk management port mode requires review before applying.",
+                "warnings": ["Review the selected management port and trunk mode, then confirm the trunk review checkbox before setup."],
+                "status": self._status_payload(context),
+            }
         if not self._management_ip(context):
             return {"module": "cisco", "action": "bootstrap_management", "ok": False, "error": "Cisco management IP is not set.", "status": self._status_payload(context)}
         if not str(cisco_cfg.get("subnet_mask") or "").strip():
@@ -835,6 +881,8 @@ class CiscoModuleService:
             return {"module": "cisco", "action": "bootstrap_management", "ok": False, "error": "Cisco username is not set.", "status": self._status_payload(context)}
         if not self._password(context):
             return {"module": "cisco", "action": "bootstrap_management", "ok": False, "error": "Cisco password is not set.", "status": self._status_payload(context)}
+        if not self._enable_secret(cisco_cfg):
+            return {"module": "cisco", "action": "bootstrap_management", "ok": False, "error": "Cisco enable secret is not set.", "status": self._status_payload(context)}
         management_config = {
             "hostname": str(cisco_cfg.get("hostname") or "sw01").strip(),
             "management_vlan": int(cisco_cfg.get("management_vlan") or 10),
@@ -842,13 +890,16 @@ class CiscoModuleService:
             "subnet_mask": str(cisco_cfg.get("subnet_mask") or "").strip(),
             "gateway": str(cisco_cfg.get("gateway") or cfg.get("ip_plan", {}).get("gateway") or "").strip(),
             "domain_name": str(cisco_cfg.get("domain_name") or "lab.local").strip(),
+            "dns_servers": list(cisco_cfg.get("dns_servers") or []),
             "username": self._username(context),
             "password": self._password(context),
-            "enable_password": str(cisco_cfg.get("enable_password") or ""),
+            "console_password": str(cisco_cfg.get("console_password") or ""),
+            "enable_secret": self._enable_secret(cisco_cfg),
+            "enable_password": self._enable_secret(cisco_cfg),
+            "management_port": management_port,
+            "management_port_mode": management_port_mode,
+            "trunk_review_ack": bool(trunk_review_ack),
         }
-        bootstrap_port, bootstrap_mode = self._bootstrap_network_path(cisco_cfg)
-        management_config["bootstrap_network_port"] = bootstrap_port
-        management_config["bootstrap_network_mode"] = bootstrap_mode
         try:
             with CiscoSerialClient(port, baud) as client:
                 result = client.apply_management_config(management_config)
@@ -874,7 +925,8 @@ class CiscoModuleService:
             "show ip interface brief",
             "show vlan brief",
             f"show run interface Vlan{management_vlan}",
-            "show run | include ^ip default-gateway|^ip domain-name|^ip ssh|^ip scp|^username",
+            "show run | include ^ip default-gateway|^ip domain name|^ip domain-name|^ip name-server|^ip ssh|^ip scp|^username",
+            "show run | section ^line con",
             "show run | section ^line vty",
             "show interfaces status",
             "show ip ssh",
@@ -896,6 +948,29 @@ class CiscoModuleService:
         interface_status = parse_show_interfaces_status(_extract_command_output(output, "show interfaces status", "show ip ssh"))
         svi_name = f"Vlan{management_vlan}"
         svi = dict(ip_interfaces.get(svi_name) or {})
+        svi_run = _extract_command_output(output, f"show run interface Vlan{management_vlan}", "show run | include")
+        run_include = _extract_command_output(output, "show run | include ^ip default-gateway|^ip domain name|^ip domain-name|^ip name-server|^ip ssh|^ip scp|^username", "show run | section ^line con")
+        line_con = _extract_command_output(output, "show run | section ^line con", "show run | section ^line vty")
+        line_vty = _extract_command_output(output, "show run | section ^line vty", "show interfaces status")
+        svi_ip_match = re.search(r"(?im)^\s*ip address\s+(\S+)\s+(\S+)", svi_run)
+        current_management_ip = str(svi.get("ip_address") or "").strip()
+        current_subnet_mask = ""
+        if current_management_ip.lower() == "unassigned":
+            current_management_ip = ""
+        if svi_ip_match:
+            current_management_ip = svi_ip_match.group(1).strip()
+            current_subnet_mask = svi_ip_match.group(2).strip()
+        default_gateway_match = re.search(r"(?im)^\s*ip default-gateway\s+(\S+)", run_include + "\n" + output)
+        current_gateway = default_gateway_match.group(1).strip() if default_gateway_match else ""
+        domain_match = re.search(r"(?im)^\s*ip domain[- ]name\s+(.+?)\s*$", run_include + "\n" + output)
+        current_domain_name = domain_match.group(1).strip() if domain_match else ""
+        name_servers: list[str] = []
+        for match in re.finditer(r"(?im)^\s*ip name-server\s+(.+?)\s*$", run_include + "\n" + output):
+            name_servers.extend([item.strip() for item in match.group(1).split() if item.strip()])
+        username = self._username(context)
+        username_configured = bool(re.search(rf"(?im)^\s*username\s+{re.escape(username)}\b", run_include + "\n" + output)) if username else bool(re.search(r"(?im)^\s*username\s+\S+\b", run_include + "\n" + output))
+        console_login_local = bool(re.search(r"(?im)^\s*login local\s*$", line_con))
+        vty_login_local = bool(re.search(r"(?im)^\s*login local\s*$", line_vty))
         unexpected_svis = [
             f"{name} {data.get('ip_address')}"
             for name, data in sorted(ip_interfaces.items())
@@ -904,8 +979,9 @@ class CiscoModuleService:
             and str(data.get("ip_address") or "").strip().lower() not in {"", "unassigned"}
         ]
         vlan_exists = bool(re.search(rf"(?im)^\s*{management_vlan}\s+\S+\s+active\b", output))
-        ssh_enabled = "SSH Enabled" in output
-        scp_enabled = bool(re.search(r"(?im)^ip scp server enable\s*$", output))
+        ssh_version2 = bool(re.search(r"(?im)\bSSH Enabled\s*-\s*version\s*2|^\s*ip ssh version\s+2\b", output))
+        ssh_enabled = "SSH Enabled" in output or ssh_version2
+        scp_enabled = bool(re.search(r"(?im)^\s*ip scp server enable\s*$", output))
         host_reachable = self._host_can_reach(management_ip) if vlan_exists else None
         host_route = self._host_network_diagnostics(management_ip, subnet_mask, gateway) if vlan_exists else {}
         gateway_reachable = None
@@ -949,6 +1025,10 @@ class CiscoModuleService:
             warnings.append(f"Cisco default gateway {gateway} is configured, but the switch cannot ping it from the management VLAN.")
         if unexpected_svis:
             warnings.append("Unexpected SVI address exists: " + ", ".join(unexpected_svis))
+        if management_ip and current_management_ip and current_management_ip != management_ip:
+            warnings.append(f"VLAN {management_vlan} currently has IP {current_management_ip}, but the saved management IP is {management_ip}.")
+        if gateway and current_gateway and current_gateway != gateway:
+            warnings.append(f"Switch default gateway is {current_gateway}, but the saved gateway is {gateway}.")
         ok = bool(vlan_exists and ssh_enabled and svi_admin_status == "up" and svi_protocol == "up")
         return {
             "module": "cisco",
@@ -957,9 +1037,18 @@ class CiscoModuleService:
             "error": "" if ok else "Console bootstrap is configured, but network reachability is not ready.",
             "management_vlan": management_vlan,
             "management_svi": svi,
+            "current_management_ip": current_management_ip,
+            "current_subnet_mask": current_subnet_mask,
+            "default_gateway": current_gateway,
+            "domain_name": current_domain_name,
+            "name_servers": name_servers,
             "vlan_exists": vlan_exists,
             "ssh_enabled": ssh_enabled,
+            "ssh_version2": ssh_version2,
             "scp_enabled": scp_enabled,
+            "username_configured": username_configured,
+            "console_login_local": console_login_local,
+            "vty_login_local": vty_login_local,
             "host_reachable": host_reachable,
             "host_route": host_route,
             "gateway_reachable": gateway_reachable,
@@ -968,7 +1057,7 @@ class CiscoModuleService:
             "all_connected_ports": all_connected_ports,
             "suggested_bootstrap_ports": [item["name"] for item in all_connected_ports if not item["name"].lower().startswith("ap")],
             "warnings": warnings,
-            "raw_output": mask_secrets(output, [self._password(context), str(cisco_cfg.get("enable_password") or "")]),
+            "raw_output": mask_secrets(output, [self._password(context), str(cisco_cfg.get("console_password") or ""), self._enable_secret(cisco_cfg)]),
             "status": self._status_payload(context),
         }
 

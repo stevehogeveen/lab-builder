@@ -1570,6 +1570,18 @@ def test_save_config_persists_manual_completion_and_ilo_ips(client):
             "cisco_switch_hostname": "sw01",
             "cisco_switch_username": "admin",
             "cisco_switch_password": "secret",
+            "cisco_console_password": "console-secret",
+            "cisco_console_port": "/dev/ttyUSB0",
+            "cisco_console_baud": "115200",
+            "cisco_management_vlan": "20",
+            "cisco_management_ip": "10.10.8.22",
+            "cisco_subnet_mask": "255.255.255.0",
+            "cisco_gateway": "10.10.8.1",
+            "cisco_domain_name": "lab.local",
+            "cisco_enable_secret": "EnableSecret123",
+            "cisco_management_port": "GigabitEthernet1/0/1",
+            "cisco_management_port_mode": "access",
+            "cisco_trusted_console_adapter": "true",
             "snmp_v3_username": "snmpuser",
             "snmp_v3_auth_protocol": "SHA",
             "snmp_v3_auth_password": "authsecret",
@@ -1591,6 +1603,16 @@ def test_save_config_persists_manual_completion_and_ilo_ips(client):
     assert cfg["ilo"]["target_ip"] == "10.10.8.11"
     assert cfg["ilo"]["host"] == "10.10.8.50"
     assert cfg["ilo"]["dns_servers"][:2] == ["9.9.9.9", "8.8.4.4"]
+    assert cfg["cisco_switch"]["console_password"] == "console-secret"
+    assert cfg["cisco_switch"]["console_port"] == "/dev/ttyUSB0"
+    assert cfg["cisco_switch"]["console_baud"] == 115200
+    assert cfg["cisco_switch"]["management_vlan"] == 20
+    assert cfg["cisco_switch"]["management_ip"] == "10.10.8.22"
+    assert cfg["cisco_switch"]["domain_name"] == "lab.local"
+    assert cfg["cisco_switch"]["enable_password"] == "EnableSecret123"
+    assert cfg["cisco_switch"]["management_port"] == "GigabitEthernet1/0/1"
+    assert cfg["cisco_switch"]["management_port_mode"] == "access"
+    assert cfg["cisco_switch"]["trusted_console_adapter"] is True
 
 
 def test_apply_ip_plan_allows_netapp_cluster_mgmt_alias_to_match_netapp_host():
@@ -11552,11 +11574,18 @@ def test_cisco_page_separates_live_state_from_desired_template(client):
     response = client.get("/cisco")
 
     assert response.status_code == 200
-    assert "Upgrade, access, then approve" in response.text
+    assert "Bootstrap console, then approve" in response.text
     assert "Console access" in response.text
     assert "Current console config" in response.text
     assert "Test console access" in response.text
-    assert "Apply Access Configs" in response.text
+    assert "Trust selected adapter" in response.text
+    assert "Setup Console" in response.text
+    assert 'name="cisco_console_password"' in response.text
+    assert 'name="cisco_enable_secret"' in response.text
+    assert 'name="cisco_management_port"' in response.text
+    assert 'name="cisco_management_port_mode"' in response.text
+    assert 'name="cisco_trusted_console_adapter"' in response.text
+    assert "Apply Access Configs" not in response.text
     assert "Switch Config and Run Approval" in response.text
     assert "Current Switch Config" in response.text
     assert "Save to config" in response.text

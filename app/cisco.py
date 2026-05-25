@@ -642,7 +642,8 @@ class CiscoSerialClient:
 
         username = str(config.get("username") or "admin").strip()
         password = str(config.get("password") or "")
-        enable_password = str(config.get("enable_password") or "")
+        console_password = str(config.get("console_password") or password)
+        enable_password = str(config.get("enable_secret") or config.get("enable_password") or "")
         if prompt_type == "initial_dialog":
             output += self.run_command("no")
             if re.search(r"(?is)terminate autoinstall|continue with configuration dialog", output):
@@ -652,8 +653,8 @@ class CiscoSerialClient:
         if prompt_type == "username" and username:
             output += self.run_command(username, redact=False)
             prompt_type, _score = detect_cisco_prompt(output)
-        if prompt_type == "password" and password:
-            output += self.run_command(password, redact=True)
+        if prompt_type == "password" and console_password:
+            output += self.run_command(console_password, redact=True)
             prompt_type, _score = detect_cisco_prompt(output)
         if prompt_type == "user_exec":
             output += self.run_command("enable")
@@ -686,7 +687,7 @@ class CiscoSerialClient:
             management_ip=str(config.get("management_ip") or ""),
             commands=commands,
             error="" if ok else command_error or "Cisco management bootstrap did not complete cleanly. Review raw serial output in technical details.",
-            output=mask_secrets(output, [password, enable_password]),
+            output=mask_secrets(output, [password, console_password, enable_password]),
         )
 
     def run_command(self, command: str, *, redact: bool = False, wait_seconds: float = 2.0) -> str:
@@ -724,44 +725,87 @@ class CiscoSerialClient:
         domain_name = str(config.get("domain_name") or "lab.local").strip()
         username = str(config.get("username") or "admin").strip()
         password = str(config.get("password") or "").strip()
-        bootstrap_network_port = normalize_interface_name(str(config.get("bootstrap_network_port") or "").strip())
-        bootstrap_network_mode = str(config.get("bootstrap_network_mode") or "trunk").strip().lower()
+        enable_secret = str(config.get("enable_secret") or config.get("enable_password") or "").strip()
+        dns_servers = [str(item).strip() for item in list(config.get("dns_servers") or []) if str(item).strip()]
+        dns1 = str(config.get("dns1") or (dns_servers[0] if dns_servers else "")).strip()
+        management_port = normalize_interface_name(
+            str(config.get("management_port") or config.get("bootstrap_network_port") or "").strip()
+        )
+        management_port_mode = str(
+            config.get("management_port_mode") or config.get("bootstrap_network_mode") or "do_not_touch"
+        ).strip().lower()
+        if management_port_mode not in {"access", "trunk", "do_not_touch"}:
+            management_port_mode = "do_not_touch"
         secret = SECRET_MASK if mask and password else password
+        enable_secret_value = SECRET_MASK if mask and enable_secret else enable_secret
         commands = [
-            "terminal length 0",
+            "enable",
             "configure terminal",
             f"hostname {hostname}",
             f"vlan {management_vlan}",
-            "name MANAGEMENT",
+            "name MGMT",
             "exit",
         ]
-        if bootstrap_network_port:
-            commands.append(f"interface {bootstrap_network_port}")
-            commands.append("description Bootstrap management path")
-            if bootstrap_network_mode == "access":
-                commands.append("switchport mode access")
-                commands.append(f"switchport access vlan {management_vlan}")
-            else:
-                commands.append("switchport mode trunk")
-                commands.append(f"switchport trunk allowed vlan add {management_vlan}")
-            commands.extend(["no shutdown", "exit"])
-        commands.extend([
-            f"interface vlan {management_vlan}",
-            f"ip address {management_ip} {subnet_mask}",
-            "no shutdown",
-            "exit",
-            f"ip default-gateway {gateway}",
-            f"ip domain name {domain_name}",
-            f"username {username} privilege 15 secret {secret}",
-            "crypto key generate rsa modulus 2048",
-            "ip ssh version 2",
-            "ip scp server enable",
-            "line vty 0 31",
-            "login local",
-            "transport input ssh",
-            "end",
-            "write memory",
-        ])
+        if management_port and management_port_mode == "access":
+            commands.extend(
+                [
+                    f"interface {management_port}",
+                    "description LAB BUILDER MANAGEMENT",
+                    "switchport mode access",
+                    f"switchport access vlan {management_vlan}",
+                    "spanning-tree portfast",
+                    "no shutdown",
+                    "exit",
+                ]
+            )
+        elif management_port and management_port_mode == "trunk" and bool(config.get("trunk_review_ack")):
+            commands.extend(
+                [
+                    f"interface {management_port}",
+                    "description LAB BUILDER MANAGEMENT",
+                    "switchport mode trunk",
+                    f"switchport trunk allowed vlan add {management_vlan}",
+                    "no shutdown",
+                    "exit",
+                ]
+            )
+        commands.extend(
+            [
+                f"interface vlan {management_vlan}",
+                f"ip address {management_ip} {subnet_mask}",
+                "no shutdown",
+                "exit",
+                f"ip default-gateway {gateway}",
+                f"ip domain name {domain_name}",
+            ]
+        )
+        if dns1:
+            commands.append(f"ip name-server {dns1}")
+        commands.extend(
+            [
+                "ip ssh version 2",
+                "crypto key generate rsa modulus 4096",
+            ]
+        )
+        if enable_secret:
+            commands.append(f"enable secret {enable_secret_value}")
+        commands.extend(
+            [
+                f"username {username} privilege 15 secret {secret}",
+                "line con 0",
+                "logging synchronous",
+                "login local",
+                "exit",
+                "line vty 0 15",
+                "logging synchronous",
+                "login local",
+                "transport input ssh",
+                "exit",
+                "ip scp server enable",
+                "end",
+                "write memory",
+            ]
+        )
         return commands
 
 
@@ -866,10 +910,12 @@ def default_cisco_switch_config() -> dict[str, Any]:
         "ip": "",
         "username": "admin",
         "password": "",
+        "console_password": "",
         "enable_password": "",
         "connection_method": "auto",
         "console_port": "",
         "console_baud": 9600,
+        "trusted_console_adapter": False,
         "domain_name": "example.local",
         "dns_servers": ["10.10.8.1"],
         "ntp_servers": ["10.10.8.1", "10.10.8.2"],
@@ -877,6 +923,8 @@ def default_cisco_switch_config() -> dict[str, Any]:
         "management_ip": "",
         "subnet_mask": "255.255.255.0",
         "gateway": "",
+        "management_port": "GigabitEthernet1/0/1",
+        "management_port_mode": "do_not_touch",
         "bootstrap_network_port": "",
         "bootstrap_network_mode": "trunk",
         "vlans": [dict(item) for item in DEFAULT_CISCO_VLANS],
@@ -897,6 +945,20 @@ def normalize_cisco_switch_config(cfg: dict[str, Any]) -> dict[str, Any]:
             base[key] = value
     base["management_ip"] = str(base.get("management_ip") or base.get("ip") or "").strip()
     base["gateway"] = str(base.get("gateway") or "").strip()
+    base["enable_secret"] = str(base.get("enable_secret") or base.get("enable_password") or "")
+    base["enable_password"] = str(base.get("enable_password") or base.get("enable_secret") or "")
+    base["console_password"] = str(base.get("console_password") or "")
+    base["trusted_console_adapter"] = bool(base.get("trusted_console_adapter"))
+    if "management_port" not in raw and str(raw.get("bootstrap_network_port") or "").strip():
+        base["management_port"] = str(raw.get("bootstrap_network_port") or "").strip()
+    base["management_port"] = normalize_interface_name(str(base.get("management_port") or "GigabitEthernet1/0/1").strip())
+    if "management_port_mode" not in raw and str(raw.get("bootstrap_network_mode") or "").strip():
+        base["management_port_mode"] = str(raw.get("bootstrap_network_mode") or "").strip()
+    base["management_port_mode"] = str(base.get("management_port_mode") or "do_not_touch").strip().lower()
+    if base["management_port_mode"] not in {"access", "trunk", "do_not_touch"}:
+        base["management_port_mode"] = "do_not_touch"
+    base["bootstrap_network_port"] = str(base.get("bootstrap_network_port") or "").strip()
+    base["bootstrap_network_mode"] = str(base.get("bootstrap_network_mode") or base.get("management_port_mode") or "trunk").strip()
     profiles = {key: dict(value) for key, value in DEFAULT_CISCO_PORT_PROFILES.items()}
     for name, profile in dict(raw.get("port_profiles") or {}).items():
         merged = dict(profiles.get(str(name), DEFAULT_CISCO_PORT_PROFILES["custom"]))

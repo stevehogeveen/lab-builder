@@ -71,3 +71,19 @@ def test_console_discovery_reports_open_adapter_without_prompt(monkeypatch):
     assert result["ok"] is False
     assert "opened successfully" in result["error"]
     assert any("console cable" in suggestion for suggestion in result["suggestions"])
+
+
+def test_console_discovery_allows_responding_adapter_without_confirmed_prompt(monkeypatch):
+    monkeypatch.setattr(cisco_service, "CiscoSerialDiscovery", FakeDiscovery)
+    monkeypatch.setattr(cisco_service, "serial_runtime_diagnostics", lambda: _diagnostics())
+    FakeDiscovery.candidates = [
+        CiscoSerialCandidate(port="/dev/ttyUSB0", baud=9600, raw_output="unrecognized console text", score=0)
+    ]
+
+    result = cisco_service.CiscoModuleService().discover_console({"cfg": {}})
+
+    assert result["ok"] is True
+    assert result["error"] == "Console responded but Cisco prompt was not confirmed"
+    assert result["candidates"][0]["port"] == "/dev/ttyUSB0"
+    assert result["probe_results"][0]["prompt_unconfirmed"] is True
+    assert any("Trust selected adapter" in suggestion for suggestion in result["suggestions"])

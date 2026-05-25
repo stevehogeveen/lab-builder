@@ -2171,6 +2171,7 @@ def build_dashboard_job_status(history: list[dict[str, Any]]) -> dict[str, Any]:
         ("ilo", "iLO", ["ilo"]),
         ("storage", "Storage", ["storage-apply", "storage-reboot"]),
         ("esxi", "ESXi", ["esxi"]),
+        ("vmware", "vCenter", ["vcenter", "vmware"]),
         ("windows", "Windows", ["windows"]),
         ("qnap", "QNAP", ["qnap"]),
         ("netapp", "NetApp", ["netapp"]),
@@ -3145,7 +3146,7 @@ def build_validation_checks(cfg: dict[str, Any], workflow: str) -> list[dict[str
                 href="/ilo",
             )
         )
-    if workflow in {"ilo", "esxi", "windows", "qnap", "netapp", "cisco_switch"}:
+    if workflow in {"ilo", "esxi", "windows", "qnap", "netapp", "vmware", "cisco_switch"}:
         checks.append(
             validation_check(
                 "Shared defaults",
@@ -3248,12 +3249,13 @@ def build_validation_checks(cfg: dict[str, Any], workflow: str) -> list[dict[str
                     href="/storage#storage-review-start",
                 )
             )
-    if workflow in {"esxi", "windows", "qnap", "netapp"}:
+    if workflow in {"esxi", "windows", "qnap", "netapp", "vmware"}:
         target_map = {
             "esxi": cfg.get("esxi", {}).get("management_ip") or cfg.get("ip_plan", {}).get("esxi", ""),
             "windows": cfg.get("windows", {}).get("ip_address") or cfg.get("ip_plan", {}).get("windows", ""),
             "qnap": cfg.get("qnap", {}).get("ip") or cfg.get("ip_plan", {}).get("qnap", ""),
             "netapp": cfg.get("netapp", {}).get("host") or cfg.get("ip_plan", {}).get("netapp", ""),
+            "vmware": ((cfg.get("vmware") or {}).get("vcenter_install") or {}).get("target_ip") or (cfg.get("vmware") or {}).get("vcenter_ip", ""),
         }
         checks.append(
             validation_check(
@@ -3261,8 +3263,8 @@ def build_validation_checks(cfg: dict[str, Any], workflow: str) -> list[dict[str
                 bool(target_map.get(workflow)),
                 target_map.get(workflow) or "Target address is missing.",
                 why="This stage needs a target address before it can be reviewed or run safely.",
-                fix=f"Open the {workflow.upper() if workflow == 'esxi' else workflow.title()} page and save the target settings.",
-                href=f"/{workflow}",
+                fix=f"Open the {'vCenter' if workflow == 'vmware' else (workflow.upper() if workflow == 'esxi' else workflow.title())} page and save the target settings.",
+                href="/vcenter" if workflow == "vmware" else f"/{workflow}",
             )
         )
         if workflow == "esxi":
@@ -3375,6 +3377,19 @@ def build_validation_checks(cfg: dict[str, Any], workflow: str) -> list[dict[str
                     why="The QNAP workflow needs saved sign-in details before a real run.",
                     fix="Open the QNAP page and save the username and password.",
                     href="/qnap",
+                )
+            )
+        if workflow == "vmware":
+            vcenter_context = build_vcenter_context(cfg)
+            blockers = list(vcenter_context.get("blockers") or [])
+            checks.append(
+                validation_check(
+                    "Install context",
+                    not blockers,
+                    "Ready" if not blockers else str(blockers[0]),
+                    why="vCenter deployment needs the appliance target, VCSA media, ESXi placement, DNS, gateway, datastore, and passwords before the installer can run.",
+                    fix="Open vCenter and save the missing VCSA deployment values.",
+                    href="/vcenter",
                 )
             )
         if workflow == "netapp":
@@ -3493,7 +3508,7 @@ def build_setup_precheck_summary(
     workflow_keys = ["ilo"]
     if included.get("storage"):
         workflow_keys.append("storage")
-    for key in ["esxi", "windows", "qnap", "netapp", "cisco_switch"]:
+    for key in ["esxi", "vmware", "windows", "qnap", "netapp", "cisco_switch"]:
         if included.get(key):
             workflow_keys.append(key)
     cards = [build_workflow_precheck_card(key, cfg, workflow_contexts) for key in workflow_keys]
@@ -3898,9 +3913,24 @@ def build_workflow_contexts(cfg: dict[str, Any], job: dict[str, Any], history: l
         "review_href": "/storage",
     }
 
+    vcenter_context = build_vcenter_context(cfg)
+    vcenter_activity = dict(vcenter_context.get("activity") or {})
+    vcenter_install = dict(((cfg.get("vmware") or {}).get("vcenter_install") or {}))
+    vcenter_target = str(vcenter_context.get("target_ip") or "").strip()
+    vcenter_plan_summary = " / ".join(
+        [
+            value
+            for value in [
+                str(vcenter_context.get("esxi_host") or "").strip(),
+                str(vcenter_context.get("datastore") or "").strip(),
+            ]
+            if value
+        ]
+    )
     for key, name, target, config_summary in [
         ("ilo", "iLO", (cfg.get("ilo", {}).get("current_ip") or cfg.get("ilo", {}).get("host") or "").strip(), (cfg.get("ilo", {}).get("hostname") or "").strip()),
         ("esxi", "ESXi", (cfg.get("esxi", {}).get("management_ip") or cfg.get("ip_plan", {}).get("esxi") or "").strip(), (cfg.get("esxi", {}).get("hostname") or "").strip()),
+        ("vmware", "vCenter", vcenter_target, vcenter_plan_summary),
         ("windows", "Windows", (cfg.get("windows", {}).get("ip_address") or cfg.get("ip_plan", {}).get("windows") or "").strip(), (cfg.get("windows", {}).get("vm_name") or "").strip()),
         ("qnap", "QNAP", (cfg.get("qnap", {}).get("ip") or cfg.get("ip_plan", {}).get("qnap") or "").strip(), (cfg.get("qnap", {}).get("hostname") or "").strip()),
         ("netapp", "NetApp", (cfg.get("netapp", {}).get("host") or cfg.get("ip_plan", {}).get("netapp") or "").strip(), (cfg.get("netapp", {}).get("storage_protocol") or "nfs").strip().upper()),
@@ -3908,9 +3938,20 @@ def build_workflow_contexts(cfg: dict[str, Any], job: dict[str, Any], history: l
     ]:
         checks = build_validation_checks(cfg, key)
         state, label, tone = checks_status(checks)
-        if str(job.get("scope") or "") == key and str(job.get("status") or "") == "Running":
+        if key == "vmware":
+            activity_status = str(vcenter_activity.get("status") or "").strip().lower()
+            if activity_status in {"running", "waiting"}:
+                state, label, tone = "running", workflow_state_ui("running")["label"], workflow_state_ui("running")["tone"]
+            elif activity_status == "completed":
+                state, label, tone = "complete", workflow_state_ui("complete")["label"], workflow_state_ui("complete")["tone"]
+            elif activity_status in {"failed", "blocked"}:
+                state, label, tone = "failed", workflow_state_ui("failed")["label"], workflow_state_ui("failed")["tone"]
+            elif not any(not item.get("ok") for item in checks) and vcenter_install.get("last_plan"):
+                state, label, tone = "planned", workflow_state_ui("planned")["label"], workflow_state_ui("planned")["tone"]
+        running_scopes = {key, "vcenter"} if key == "vmware" else {key}
+        if current_scope in running_scopes and current_status == "Running":
             state, label, tone = "running", workflow_state_ui("running")["label"], workflow_state_ui("running")["tone"]
-        latest = latest_history_entry_for_scope(history, [key])
+        latest = latest_history_entry_for_scope(history, ["vcenter", "vmware"] if key == "vmware" else [key])
         contexts[key] = {
             "key": key,
             "name": name,
@@ -3923,7 +3964,7 @@ def build_workflow_contexts(cfg: dict[str, Any], job: dict[str, Any], history: l
             "approved_summary": "This workflow uses saved settings directly." if cfg.get("included", {}).get(key) else "This workflow is currently not included in the kit.",
             "result_summary": (latest.get("status") or "No run has been recorded yet.") if latest else "No run has been recorded yet.",
             "checks": checks,
-            "review_href": "/cisco" if key == "cisco_switch" else f"/{key}",
+            "review_href": "/cisco" if key == "cisco_switch" else ("/vcenter" if key == "vmware" else f"/{key}"),
         }
 
     return contexts
@@ -3942,7 +3983,7 @@ def build_recommended_next_step(cfg: dict[str, Any], workflow_contexts: dict[str
         return {"title": "Set the iLO target", "summary": "Start on the iLO page and save the current iLO address and credentials first.", "href": "/ilo"}
     if cfg.get("included", {}).get("storage") and workflow_contexts["storage"]["state"] in {"not_started", "discovered", "planned", "stale"}:
         return {"title": "Finish storage review", "summary": "Go to Storage / RAID, confirm the current server, and approve the exact storage plan before the final run.", "href": "/storage"}
-    for key in ["esxi", "windows", "qnap", "netapp", "cisco_switch"]:
+    for key in ["esxi", "vmware", "windows", "qnap", "netapp", "cisco_switch"]:
         if cfg.get("included", {}).get(key) and workflow_contexts[key]["state"] in {"not_started", "failed"}:
             return {"title": f"Open {workflow_contexts[key]['name']} page", "summary": f"Open the {workflow_contexts[key]['name']} page and finish the saved setup values.", "href": workflow_contexts[key]["review_href"]}
     return {"title": "Review the run", "summary": "Open Run Center to review the included stages, checks, and warnings before starting.", "href": "/execution"}
@@ -16228,13 +16269,19 @@ async def save_config_route(
     cisco_switch_hostname: str = Form(""),
     cisco_switch_username: str = Form(""),
     cisco_switch_password: str = Form(""),
+    cisco_console_password: str = Form(""),
     cisco_console_port: str = Form(""),
     cisco_console_baud: int = Form(9600),
     cisco_management_vlan: int = Form(10),
     cisco_management_ip: str = Form(""),
     cisco_subnet_mask: str = Form(""),
     cisco_gateway: str = Form(""),
+    cisco_domain_name: str = Form(""),
+    cisco_enable_secret: str = Form(""),
     cisco_enable_password: str = Form(""),
+    cisco_management_port: str = Form(""),
+    cisco_management_port_mode: str = Form(""),
+    cisco_trusted_console_adapter: str | None = Form(None),
     netapp_host: str = Form(""),
     netapp_username: str = Form("admin"),
     netapp_password: str = Form(""),
@@ -16317,13 +16364,19 @@ async def save_config_route(
         cisco_switch_hostname=cisco_switch_hostname,
         cisco_switch_username=cisco_switch_username,
         cisco_switch_password=cisco_switch_password,
+        cisco_console_password=cisco_console_password,
         cisco_console_port=cisco_console_port,
         cisco_console_baud=cisco_console_baud,
         cisco_management_vlan=cisco_management_vlan,
         cisco_management_ip=cisco_management_ip,
         cisco_subnet_mask=cisco_subnet_mask,
         cisco_gateway=cisco_gateway,
+        cisco_domain_name=cisco_domain_name,
+        cisco_enable_secret=cisco_enable_secret,
         cisco_enable_password=cisco_enable_password,
+        cisco_management_port=cisco_management_port,
+        cisco_management_port_mode=cisco_management_port_mode,
+        cisco_trusted_console_adapter=cisco_trusted_console_adapter,
         netapp_host=netapp_host,
         netapp_username=netapp_username,
         netapp_password=netapp_password,
@@ -16376,13 +16429,19 @@ async def save_global_settings_route(
     cisco_switch_hostname: str | None = Form(None),
     cisco_switch_username: str | None = Form(None),
     cisco_switch_password: str | None = Form(None),
+    cisco_console_password: str | None = Form(None),
     cisco_console_port: str | None = Form(None),
     cisco_console_baud: int | None = Form(None),
     cisco_management_vlan: int | None = Form(None),
     cisco_management_ip: str | None = Form(None),
     cisco_subnet_mask: str | None = Form(None),
     cisco_gateway: str | None = Form(None),
+    cisco_domain_name: str | None = Form(None),
+    cisco_enable_secret: str | None = Form(None),
     cisco_enable_password: str | None = Form(None),
+    cisco_management_port: str | None = Form(None),
+    cisco_management_port_mode: str | None = Form(None),
+    cisco_trusted_console_adapter: str | None = Form(None),
 ):
     return await save_global_settings_handler(
         request,
@@ -16437,13 +16496,19 @@ async def save_global_settings_route(
         cisco_switch_hostname=cisco_switch_hostname,
         cisco_switch_username=cisco_switch_username,
         cisco_switch_password=cisco_switch_password,
+        cisco_console_password=cisco_console_password,
         cisco_console_port=cisco_console_port,
         cisco_console_baud=cisco_console_baud,
         cisco_management_vlan=cisco_management_vlan,
         cisco_management_ip=cisco_management_ip,
         cisco_subnet_mask=cisco_subnet_mask,
         cisco_gateway=cisco_gateway,
+        cisco_domain_name=cisco_domain_name,
+        cisco_enable_secret=cisco_enable_secret,
         cisco_enable_password=cisco_enable_password,
+        cisco_management_port=cisco_management_port,
+        cisco_management_port_mode=cisco_management_port_mode,
+        cisco_trusted_console_adapter=cisco_trusted_console_adapter,
     )
 
 

@@ -6,11 +6,12 @@ Update this file before large edits and after finishing a meaningful slice.
 
 ## Rules
 
-1. Claim write scope before editing shared files.
-2. Keep ownership narrow: list exact files or directories.
-3. Add a short "working on" note while active.
-4. Append a "changed" note when you finish a slice.
-5. If two sessions need the same file, stop and re-assign explicitly here first.
+1. Read `AGENTS.md`, `docs/workflow-session-scopes.md`, `docs/operator-flow-contract.md`, `docs/automation-principles.md`, and `docs/ux-product-principles.md` before editing.
+2. Claim write scope before editing shared files.
+3. Keep ownership narrow: list exact files or directories.
+4. Add a short "working on" note while active.
+5. Append a "changed" note when you finish a slice.
+6. If two sessions need the same file, stop and re-assign explicitly here first.
 
 ## Session Template
 
@@ -36,6 +37,34 @@ Copy this block and update it in place.
 ```
 
 ## Active Sessions
+
+### Session: cisco
+- Status: active
+- Branch: experience/operator-companion
+- Scope owner: Cisco workflow, Cisco setup UI, serial-console bootstrap, and Cisco validation
+- Working on: Cisco operator-flow setup round after serial-console bootstrap changes
+- Blocked by: none
+- Ready to hand off: Current Cisco console-bootstrap slice is implemented, tested, and ready to commit
+- Files claimed:
+  - app/cisco.py
+  - app/modules/cisco/**
+  - templates/partials/pages/cisco.html
+  - tests/test_cisco_*.py
+- Shared files touched with caution:
+  - SESSION_COORDINATION.md
+  - AGENTS.md
+  - docs/README.md
+  - docs/operator-flow-contract.md
+  - docs/workflow-session-scopes.md
+  - app/main.py
+  - app/core/config.py
+  - app/modules/configs/routes.py
+  - tests/test_app.py
+  - tests/test_operator_flow_contract.py
+- Last changed:
+  - 2026-05-25 America/Toronto - Read operator-flow session docs, claimed Cisco workflow scope, and prepared current Cisco bootstrap/operator-contract changes for commit.
+- Next intended change:
+  - Align Cisco page sections explicitly to Context, Targets, Credentials, Current State, Preflight, Plan, Execute, Monitor, Evidence, and Next Step.
 
 ### Session: netapp
 - Status: active

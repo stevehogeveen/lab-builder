@@ -18,6 +18,10 @@
 {% set has_ssh = cisco.last_ssh_test.get('ok') %}
 {% set has_version = cisco.last_discovered_version %}
 {% set approval = cisco.config_approval or {} %}
+{% set current_management_ip = console_check.get('current_management_ip') or '' %}
+{% set current_gateway = console_check.get('default_gateway') or '' %}
+{% set current_domain_name = console_check.get('domain_name') or '' %}
+{% set management_port_mode = cisco.management_port_mode or cisco_cfg.get('management_port_mode', 'do_not_touch') %}
 {% set upgrade_current = cisco_gate_entry.get('current_version') or upgrade_plan.get('current_version') or cisco.last_discovered_version %}
 {% set upgrade_target = cisco_gate_entry.get('media_version') or upgrade_plan.get('media_version') %}
 {% set upgrade_comparison = cisco_gate_entry.get('comparison') or upgrade_plan.get('comparison') %}
@@ -38,7 +42,7 @@
     {% set upgrade_decision_tone = 'pending' %}
 {% endif %}
 {% set upgrade_ready = upgrade_result.get('status') == 'completed' or cisco_upgrade_override or (not cisco_upgrade_blocked and cisco_gate_entry) or upgrade_comparison in ['current_enough', 'already_current', 'equal'] %}
-{% set ip_ready = console_check.get('vlan_exists') and has_management_ip %}
+{% set ip_ready = console_check.get('vlan_exists') and (current_management_ip or has_management_ip) %}
 {% set ssh_ready = console_check.get('ssh_enabled') %}
 {% set scp_ready = console_check.get('scp_enabled') %}
 {% set host_reachable = console_check.get('host_reachable') %}
@@ -63,7 +67,7 @@
         {% set feedback_area = 'factory' %}
     {% elif 'approved' in feedback_title or 'preview' in feedback_title or 'plan' in feedback_title or 'config needs attention' in feedback_title %}
         {% set feedback_area = 'run' %}
-    {% elif 'management ip configured' in feedback_title or 'management config failed' in feedback_title %}
+    {% elif 'management ip configured' in feedback_title or 'management config failed' in feedback_title or 'console setup' in feedback_title or 'trunk review' in feedback_title %}
         {% set feedback_area = 'access' %}
     {% elif 'ssh' in feedback_title or 'management' in feedback_title or 'console bootstrap' in feedback_title %}
         {% set feedback_area = 'console_config' %}
@@ -364,11 +368,11 @@
             <div class="cisco-hero">
                 <div>
                     <div class="cisco-title-row">
-                        <h2 class="text-2xl font-bold">Upgrade, access, then approve</h2>
+                        <h2 class="text-2xl font-bold">Bootstrap console, then approve</h2>
                         <span class="status {{ 'ready' if run_ready else ('danger' if blocker_count else 'pending') }}">{{ 'Ready for Run Center' if run_ready else (blocker_count ~ ' blocker' ~ ('' if blocker_count == 1 else 's') if blocker_count else 'Needs review') }}</span>
                     </div>
                     <div class="cisco-subtitle">
-                        Work left to right: confirm console access, read the current switch-side IP/SSH/SCP state, decide whether the image needs an upgrade, then approve the final plan for Run Center.
+                        Use the serial console to set the management VLAN, IP, SSH, and SCP before relying on network SSH checks.
                     </div>
                 </div>
             </div>
@@ -386,9 +390,11 @@
                 <div class="cisco-facts">
                     <div class="cisco-fact"><span>Console port</span><strong>{{ has_console or 'not selected' }}</strong></div>
                     <div class="cisco-fact"><span>Baud</span><strong>{{ cisco.console_baud or 9600 }}</strong></div>
+                    <div class="cisco-fact"><span>Trusted</span><strong>{{ 'yes' if cisco.trusted_console_adapter or cisco_cfg.get('trusted_console_adapter') else 'no' }}</strong></div>
                 </div>
                 <div class="cisco-actions">
-                    <button class="btn" type="button" hx-post="/modules/cisco/discover-console">Test console access</button>
+                    <button class="btn" type="button" hx-post="/modules/cisco/test-console-access">Test console access</button>
+                    <button class="btn" type="submit" hx-post="/modules/cisco/trust-console-adapter">Trust selected adapter</button>
                 </div>
                 {% if action_feedback and feedback_area == 'console' %}
                 {{ cisco_inline_feedback(action_feedback) }}
@@ -404,13 +410,14 @@
                 </div>
                 <div class="cisco-step-copy">Read the switch-side VLAN, management IP, SSH, SCP, and gateway state from console, then test SSH from this app host.</div>
                 <div class="cisco-facts">
-                    <div class="cisco-fact"><span>IP</span><strong>{{ has_management_ip or 'not set' }}</strong></div>
-                    <div class="cisco-fact"><span>Gateway</span><strong>{{ cisco.gateway or cfg.get('ip_plan', {}).get('gateway', 'not set') }}</strong></div>
+                    <div class="cisco-fact"><span>VLAN</span><strong>{{ console_check.get('management_vlan') or cisco.management_vlan or 10 }}{% if console_check %} {{ 'exists' if console_check.get('vlan_exists') else 'missing' }}{% endif %}</strong></div>
+                    <div class="cisco-fact"><span>Current IP</span><strong>{{ current_management_ip or has_management_ip or 'not set' }}</strong></div>
+                    <div class="cisco-fact"><span>Gateway</span><strong>{{ current_gateway or cisco.gateway or cfg.get('ip_plan', {}).get('gateway', 'not set') }}</strong></div>
                     <div class="cisco-fact"><span>SSH</span><strong>{{ 'enabled' if ssh_ready else 'disabled' }}</strong></div>
                     <div class="cisco-fact"><span>SCP</span><strong>{{ 'enabled' if scp_ready else 'disabled' }}</strong></div>
                 </div>
                 <div class="cisco-actions">
-                    <button class="btn" type="submit" hx-post="/modules/cisco/verify-console-bootstrap">Check current config</button>
+                    <button class="btn" type="submit" hx-post="/modules/cisco/check-current-config">Check current config</button>
                     <button class="btn" type="submit" hx-post="/modules/cisco/test-ssh">Test SSH</button>
                 </div>
                 {% if action_feedback and feedback_area == 'console_config' %}
@@ -441,8 +448,12 @@
                     <input type="password" name="cisco_switch_password" value="{{ cisco_cfg.get('password', '') }}" class="input" autocomplete="current-password">
                 </div>
                 <div class="cisco-field">
-                    <label>Enable password</label>
-                    <input type="password" name="cisco_enable_password" value="{{ cisco_cfg.get('enable_password', '') }}" class="input" autocomplete="current-password">
+                    <label>Console password</label>
+                    <input type="password" name="cisco_console_password" value="{{ cisco_cfg.get('console_password', '') }}" class="input" autocomplete="current-password">
+                </div>
+                <div class="cisco-field">
+                    <label>Enable secret</label>
+                    <input type="password" name="cisco_enable_secret" value="{{ cisco_cfg.get('enable_secret') or cisco_cfg.get('enable_password', '') }}" class="input" autocomplete="current-password">
                 </div>
                 <div class="cisco-field">
                     <label>VLAN</label>
@@ -457,6 +468,10 @@
                     <input type="text" name="cisco_gateway" value="{{ cisco.gateway or cfg.get('ip_plan', {}).get('gateway', '') }}" class="input">
                 </div>
                 <div class="cisco-field">
+                    <label>Domain name</label>
+                    <input type="text" name="cisco_domain_name" value="{{ cisco.domain_name or cisco_cfg.get('domain_name', 'lab.local') }}" class="input">
+                </div>
+                <div class="cisco-field">
                     <label>Console port</label>
                     <select name="cisco_console_port" class="input">
                         {% if not cisco.console_port %}<option value="">Select after find</option>{% endif %}
@@ -466,9 +481,40 @@
                         {% if cisco.console_port and not cisco.last_console_candidates %}<option value="{{ cisco.console_port }}" selected>{{ cisco.console_port }}</option>{% endif %}
                     </select>
                 </div>
+                <div class="cisco-field">
+                    <label>Baud</label>
+                    <input type="number" name="cisco_console_baud" value="{{ cisco.console_baud or cisco_cfg.get('console_baud', 9600) or 9600 }}" class="input" min="1200" step="1">
+                </div>
+                <div class="cisco-field">
+                    <label>Management port</label>
+                    <input type="text" name="cisco_management_port" value="{{ cisco.management_port or cisco_cfg.get('management_port', 'GigabitEthernet1/0/1') }}" class="input">
+                </div>
+                <div class="cisco-field">
+                    <label>Port mode</label>
+                    <select name="cisco_management_port_mode" class="input">
+                        <option value="do_not_touch" {% if management_port_mode == 'do_not_touch' %}selected{% endif %}>Do not touch</option>
+                        <option value="access" {% if management_port_mode == 'access' %}selected{% endif %}>Access</option>
+                        <option value="trunk" {% if management_port_mode == 'trunk' %}selected{% endif %}>Trunk</option>
+                    </select>
+                </div>
+                <div class="cisco-field">
+                    <label>Trusted adapter</label>
+                    <input type="hidden" name="cisco_trusted_console_adapter" value="false">
+                    <label class="inline-flex items-center gap-2 text-sm text-slate-300 normal-case tracking-normal">
+                        <input type="checkbox" name="cisco_trusted_console_adapter" value="true" {% if cisco.trusted_console_adapter or cisco_cfg.get('trusted_console_adapter') %}checked{% endif %}>
+                        Use selected console adapter
+                    </label>
+                </div>
+            </div>
+            <div class="cisco-field mt-4">
+                <label>Trunk review</label>
+                <label class="inline-flex items-center gap-2 text-sm text-slate-300 normal-case tracking-normal">
+                    <input type="checkbox" name="cisco_trunk_review_ack" value="true">
+                    I reviewed the selected management port and want Setup Console to apply trunk settings if Port mode is Trunk.
+                </label>
             </div>
             <div class="cisco-actions mt-4">
-                <button class="btn btn-primary" type="submit" hx-post="/modules/cisco/bootstrap-management" data-action-title="Applying Cisco access config" data-action-start="Configuring management VLAN, switch IP, SSH, SCP, and gateway through the console.">Apply Access Configs</button>
+                <button class="btn btn-primary" type="submit" hx-post="/modules/cisco/setup-console" data-action-title="Setting up Cisco console" data-action-start="Configuring management VLAN, switch IP, SSH, SCP, and gateway through the console.">Setup Console</button>
             </div>
             {% if action_feedback and feedback_area == 'access' %}
             {{ cisco_inline_feedback(action_feedback) }}
@@ -527,14 +573,6 @@
                 <div class="cisco-field">
                     <label>Hostname</label>
                     <input type="text" name="cisco_switch_hostname" value="{{ cisco.hostname or cisco_cfg.get('hostname', 'sw01') }}" class="input">
-                </div>
-                <div class="cisco-field">
-                    <label>Domain</label>
-                    <input type="text" name="cisco_domain_name" value="{{ cisco_cfg.get('domain_name', 'lab.local') }}" class="input">
-                </div>
-                <div class="cisco-field">
-                    <label>Network port</label>
-                    <input type="text" name="cisco_bootstrap_network_port" value="{{ cisco_cfg.get('bootstrap_network_port', '') }}" class="input" placeholder="{{ cisco.effective_bootstrap_network_port or 'optional' }}">
                 </div>
                 <div class="cisco-field">
                     <label>DNS servers</label>
@@ -686,7 +724,7 @@
                         <tr class="border-t border-slate-800">
                             <td class="py-2 pr-3 font-semibold">{{ probe.port }}</td>
                             <td class="py-2 pr-3">{{ probe.baud }}</td>
-                            <td class="py-2 pr-3">{{ probe.prompt_type or ('opened, no prompt' if not probe.error else 'probe failed') }}</td>
+                            <td class="py-2 pr-3">{{ 'Console responded but Cisco prompt was not confirmed' if probe.prompt_unconfirmed else (probe.prompt_type or ('opened, no prompt' if not probe.error else 'probe failed')) }}</td>
                             <td class="py-2 pr-3 text-slate-400">{{ probe.error or 'none' }}</td>
                         </tr>
                         {% endfor %}
@@ -698,6 +736,7 @@
             {% endif %}
             {% if cisco.last_show_version %}<pre class="raw-output mt-4">{{ cisco.last_show_version }}</pre>{% endif %}
             {% if cisco.last_serial_output %}<pre class="raw-output mt-4">{{ cisco.last_serial_output }}</pre>{% endif %}
+            {% if cisco.last_console_management_state %}<pre class="raw-output mt-4">{{ cisco.last_console_management_state }}</pre>{% endif %}
             {% if cisco.last_console_diagnostics %}<pre class="raw-output mt-4">{{ cisco.last_console_diagnostics | tojson(indent=2) }}</pre>{% endif %}
             {% if cisco.last_console_probe_results %}<pre class="raw-output mt-4">{{ cisco.last_console_probe_results | tojson(indent=2) }}</pre>{% endif %}
             {% if cisco.last_raw_port_discovery %}<pre class="raw-output mt-4">{{ cisco.last_raw_port_discovery }}</pre>{% endif %}

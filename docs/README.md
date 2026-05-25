@@ -7,6 +7,8 @@
 - Dependency setup is documented in [HOWTO.md](HOWTO.md#1-install-dependencies).
 - Python packages are pinned in [../requirements.txt](../requirements.txt).
 - Offline ONTAP REST compatibility catalog: [ontap-api-catalog.md](ontap-api-catalog.md)
+- Workflow session scopes for parallel Codex work: [workflow-session-scopes.md](workflow-session-scopes.md)
+- Operator flow contract for all setup workflows: [operator-flow-contract.md](operator-flow-contract.md)
 
 ## UI Sections
 

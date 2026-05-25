@@ -124,6 +124,10 @@ def _split_multiline(raw: str) -> list[str]:
     return [line.strip() for line in str(raw or "").splitlines() if line.strip()]
 
 
+def _coerce_bool(value: Any) -> bool:
+    return str(value or "").strip().lower() in {"1", "true", "yes", "on"}
+
+
 def _update_cisco_model_from_form(cisco_cfg: dict, form: dict[str, Any], cfg: dict[str, Any] | None = None) -> None:
     for form_key, cfg_key in (
         ("cisco_switch_hostname", "hostname"),
@@ -131,6 +135,9 @@ def _update_cisco_model_from_form(cisco_cfg: dict, form: dict[str, Any], cfg: di
         ("cisco_subnet_mask", "subnet_mask"),
         ("cisco_gateway", "gateway"),
         ("cisco_domain_name", "domain_name"),
+        ("cisco_console_port", "console_port"),
+        ("cisco_management_port", "management_port"),
+        ("cisco_management_port_mode", "management_port_mode"),
         ("cisco_apply_mode", "apply_mode"),
     ):
         if form_key in form:
@@ -139,6 +146,19 @@ def _update_cisco_model_from_form(cisco_cfg: dict, form: dict[str, Any], cfg: di
         cisco_cfg["ip"] = cisco_cfg["management_ip"]
     if form.get("cisco_management_vlan"):
         cisco_cfg["management_vlan"] = int(str(form.get("cisco_management_vlan") or "10"))
+    if form.get("cisco_console_baud"):
+        cisco_cfg["console_baud"] = int(str(form.get("cisco_console_baud") or "9600"))
+    if form.get("cisco_switch_username"):
+        cisco_cfg["username"] = str(form.get("cisco_switch_username") or "").strip()
+    if form.get("cisco_switch_password"):
+        cisco_cfg["password"] = str(form.get("cisco_switch_password") or "")
+    if form.get("cisco_console_password"):
+        cisco_cfg["console_password"] = str(form.get("cisco_console_password") or "")
+    enable_secret = str(form.get("cisco_enable_secret") or form.get("cisco_enable_password") or "")
+    if enable_secret:
+        cisco_cfg["enable_password"] = enable_secret
+    if "cisco_trusted_console_adapter" in form:
+        cisco_cfg["trusted_console_adapter"] = _coerce_bool(form.get("cisco_trusted_console_adapter"))
     if form.get("cisco_dns_servers") is not None:
         cisco_cfg["dns_servers"] = _split_multiline(str(form.get("cisco_dns_servers") or ""))
     if form.get("cisco_ntp_servers") is not None:
@@ -213,15 +233,19 @@ async def cisco_discover_version(
 
     cfg = main.load_kit_config()
     cisco_cfg = cfg.setdefault("cisco_switch", {})
-    _update_cisco_access(
-        cisco_cfg,
-        hostname=cisco_switch_hostname,
-        username=cisco_switch_username,
-        password=cisco_switch_password,
-        management_ip=cisco_management_ip,
-        console_port=cisco_console_port,
-        console_baud=cisco_console_baud,
-    )
+    form = dict(await request.form())
+    if form:
+        _update_cisco_access_from_form(cisco_cfg, form)
+    else:
+        _update_cisco_access(
+            cisco_cfg,
+            hostname=cisco_switch_hostname,
+            username=cisco_switch_username,
+            password=cisco_switch_password,
+            management_ip=cisco_management_ip,
+            console_port=cisco_console_port,
+            console_baud=cisco_console_baud,
+        )
     context = {"cfg": cfg}
     result = service.discover_version_any(context)
     if result.get("ok"):
@@ -284,6 +308,7 @@ def _update_cisco_access(
     hostname: str = "",
     username: str = "",
     password: str = "",
+    console_password: str = "",
     console_port: str = "",
     console_baud: int | str = "",
     management_vlan: int | str = "",
@@ -291,7 +316,11 @@ def _update_cisco_access(
     subnet_mask: str = "",
     gateway: str = "",
     domain_name: str = "",
+    enable_secret: str = "",
     enable_password: str = "",
+    management_port: str = "",
+    management_port_mode: str = "",
+    trusted_console_adapter: bool | None = None,
     bootstrap_network_port: str = "",
     bootstrap_network_mode: str = "",
 ) -> None:
@@ -301,6 +330,8 @@ def _update_cisco_access(
         cisco_cfg["username"] = str(username).strip()
     if password:
         cisco_cfg["password"] = str(password)
+    if console_password:
+        cisco_cfg["console_password"] = str(console_password)
     if console_port:
         cisco_cfg["console_port"] = str(console_port).strip()
     if console_baud:
@@ -316,20 +347,59 @@ def _update_cisco_access(
         cisco_cfg["gateway"] = str(gateway).strip()
     if domain_name:
         cisco_cfg["domain_name"] = str(domain_name).strip()
-    if enable_password:
-        cisco_cfg["enable_password"] = str(enable_password)
+    resolved_enable = str(enable_secret or enable_password or "")
+    if resolved_enable:
+        cisco_cfg["enable_password"] = resolved_enable
+    if management_port:
+        cisco_cfg["management_port"] = str(management_port).strip()
+    if management_port_mode:
+        cisco_cfg["management_port_mode"] = str(management_port_mode).strip()
+    if trusted_console_adapter is not None:
+        cisco_cfg["trusted_console_adapter"] = bool(trusted_console_adapter)
     if bootstrap_network_port:
         cisco_cfg["bootstrap_network_port"] = str(bootstrap_network_port).strip()
     if bootstrap_network_mode:
         cisco_cfg["bootstrap_network_mode"] = str(bootstrap_network_mode).strip()
 
 
+def _update_cisco_access_from_form(cisco_cfg: dict, form: dict[str, Any]) -> None:
+    enable_secret = str(form.get("cisco_enable_secret") or form.get("cisco_enable_password") or "")
+    management_port = str(form.get("cisco_management_port") or form.get("cisco_bootstrap_network_port") or "")
+    management_port_mode = str(form.get("cisco_management_port_mode") or form.get("cisco_bootstrap_network_mode") or "")
+    trusted: bool | None = None
+    if "cisco_trusted_console_adapter" in form:
+        trusted = _coerce_bool(form.get("cisco_trusted_console_adapter"))
+    _update_cisco_access(
+        cisco_cfg,
+        hostname=str(form.get("cisco_switch_hostname") or ""),
+        username=str(form.get("cisco_switch_username") or ""),
+        password=str(form.get("cisco_switch_password") or ""),
+        console_password=str(form.get("cisco_console_password") or ""),
+        console_port=str(form.get("cisco_console_port") or ""),
+        console_baud=str(form.get("cisco_console_baud") or ""),
+        management_vlan=str(form.get("cisco_management_vlan") or ""),
+        management_ip=str(form.get("cisco_management_ip") or ""),
+        subnet_mask=str(form.get("cisco_subnet_mask") or ""),
+        gateway=str(form.get("cisco_gateway") or ""),
+        domain_name=str(form.get("cisco_domain_name") or ""),
+        enable_secret=enable_secret,
+        management_port=management_port,
+        management_port_mode=management_port_mode,
+        trusted_console_adapter=trusted,
+        bootstrap_network_port=str(form.get("cisco_bootstrap_network_port") or ""),
+        bootstrap_network_mode=str(form.get("cisco_bootstrap_network_mode") or ""),
+    )
+
+
 @router.post("/modules/cisco/discover-console", response_class=HTMLResponse)
+@router.post("/modules/cisco/test-console-access", response_class=HTMLResponse)
 async def cisco_discover_console(request: Request, return_page: str = Form("cisco")):
     from app import main
 
     cfg = main.load_kit_config()
     cisco_cfg = cfg.setdefault("cisco_switch", {})
+    form = dict(await request.form())
+    _update_cisco_access_from_form(cisco_cfg, form)
     result = service.discover_console({"cfg": cfg})
     candidates = list(result.get("candidates") or [])
     probe_results = list(result.get("probe_results") or [])
@@ -385,14 +455,62 @@ async def cisco_discover_console(request: Request, return_page: str = Form("cisc
     if result.get("ok"):
         if len(candidates) == 1:
             outcomes = [f"Console: {cisco_cfg.get('console_port')} @ {cisco_cfg.get('console_baud')}"]
-            title = "Cisco console found"
+            title = "Cisco console found" if not result.get("error") else "Cisco console responded"
         else:
             outcomes = [f"{len(candidates)} console candidates found", "Select the intended port before configuring management IP."]
             title = "Choose Cisco console"
-        feedback = main.build_action_feedback(title, "Serial discovery only sent a newline and did not change switch configuration.", tone="ready", outcomes=outcomes, details=details)
+        feedback = main.build_action_feedback(title, str(result.get("error") or "Serial discovery only sent a newline and did not change switch configuration."), tone="ready", outcomes=outcomes, details=details)
     else:
         message = str(cisco_cfg.get("last_discovery_error") or result.get("error") or "No Cisco console prompt was detected.")
         feedback = main.build_action_feedback("Cisco console not found", message, tone="pending", details=details)
+    return _render_cisco_page(request, cfg, action_feedback=feedback)
+
+
+@router.post("/modules/cisco/trust-console-adapter", response_class=HTMLResponse)
+async def cisco_trust_console_adapter(request: Request):
+    from app import main
+
+    cfg = main.load_kit_config()
+    cisco_cfg = cfg.setdefault("cisco_switch", {})
+    form = dict(await request.form())
+    _update_cisco_access_from_form(cisco_cfg, form)
+    selected_port = str(cisco_cfg.get("console_port") or "").strip()
+    if not selected_port:
+        candidates = list(cisco_cfg.get("last_console_candidates") or cisco_cfg.get("last_console_probe_results") or [])
+        if len(candidates) == 1:
+            selected_port = str(candidates[0].get("port") or "").strip()
+            cisco_cfg["console_port"] = selected_port
+            cisco_cfg["console_baud"] = int(candidates[0].get("baud") or cisco_cfg.get("console_baud") or 9600)
+    if selected_port:
+        cisco_cfg["trusted_console_adapter"] = True
+        cisco_cfg["connection_method"] = "console"
+        cisco_cfg["last_discovery_error"] = ""
+        cisco_cfg["last_cisco_action"] = {
+            "mode": "trust_console_adapter",
+            "ok": True,
+            "port": selected_port,
+            "completed_at": datetime.now(timezone.utc).isoformat(),
+        }
+        main.save_kit_config(cfg)
+        feedback = main.build_action_feedback(
+            "Cisco console adapter trusted",
+            "The selected serial adapter is saved for console setup even though discovery may not have confirmed the Cisco prompt.",
+            tone="ready",
+            outcomes=[f"Console: {selected_port} @ {cisco_cfg.get('console_baud') or 9600}"],
+        )
+    else:
+        cisco_cfg["last_cisco_action"] = {
+            "mode": "trust_console_adapter",
+            "ok": False,
+            "error": "Select a console port before trusting the adapter.",
+            "completed_at": datetime.now(timezone.utc).isoformat(),
+        }
+        main.save_kit_config(cfg)
+        feedback = main.build_action_feedback(
+            "Choose Cisco console",
+            "Select a serial adapter before trusting it for console setup.",
+            tone="pending",
+        )
     return _render_cisco_page(request, cfg, action_feedback=feedback)
 
 
@@ -438,50 +556,25 @@ async def cisco_fix_serial_permissions(
 
 
 @router.post("/modules/cisco/bootstrap-management", response_class=HTMLResponse)
+@router.post("/modules/cisco/setup-console", response_class=HTMLResponse)
 async def cisco_bootstrap_management(
     request: Request,
     return_page: str = Form("cisco"),
-    cisco_switch_hostname: str = Form(""),
-    cisco_switch_username: str = Form(""),
-    cisco_switch_password: str = Form(""),
-    cisco_console_port: str = Form(""),
-    cisco_console_baud: int = Form(9600),
-    cisco_management_vlan: int = Form(10),
-    cisco_management_ip: str = Form(""),
-    cisco_subnet_mask: str = Form(""),
-    cisco_gateway: str = Form(""),
-    cisco_domain_name: str = Form(""),
-    cisco_enable_password: str = Form(""),
-    cisco_bootstrap_network_port: str = Form(""),
-    cisco_bootstrap_network_mode: str = Form("trunk"),
 ):
     from app import main
 
     cfg = main.load_kit_config()
     cisco_cfg = cfg.setdefault("cisco_switch", {})
-    _update_cisco_access(
-        cisco_cfg,
-        hostname=cisco_switch_hostname,
-        username=cisco_switch_username,
-        password=cisco_switch_password,
-        console_port=cisco_console_port,
-        console_baud=cisco_console_baud,
-        management_vlan=cisco_management_vlan,
-        management_ip=cisco_management_ip,
-        subnet_mask=cisco_subnet_mask,
-        gateway=cisco_gateway,
-        domain_name=cisco_domain_name,
-        enable_password=cisco_enable_password,
-        bootstrap_network_port=cisco_bootstrap_network_port,
-        bootstrap_network_mode=cisco_bootstrap_network_mode,
-    )
+    form = dict(await request.form())
+    _update_cisco_access_from_form(cisco_cfg, form)
     matches = list(cisco_cfg.get("last_console_candidates") or [])
     if not cisco_cfg.get("console_port") and len(matches) > 1:
         feedback = main.build_action_feedback("Choose Cisco console", "Multiple console ports matched. Select the intended port before configuring management IP.", tone="pending")
         main.save_kit_config(cfg)
         return _render_cisco_page(request, cfg, action_feedback=feedback)
 
-    result = service.bootstrap_management({"cfg": cfg})
+    trunk_review_ack = _coerce_bool(form.get("cisco_trunk_review_ack"))
+    result = service.bootstrap_management({"cfg": cfg}, trunk_review_ack=trunk_review_ack)
     cisco_cfg["last_bootstrap"] = {key: value for key, value in result.items() if key not in {"status", "output"}}
     cisco_cfg["last_serial_output"] = str(result.get("output") or cisco_cfg.get("last_serial_output") or "")
     cisco_cfg["last_bootstrap_at"] = datetime.now(timezone.utc).isoformat()
@@ -495,9 +588,9 @@ async def cisco_bootstrap_management(
     main.save_kit_config(cfg)
     bootstrap_check = dict(cisco_cfg.get("last_console_bootstrap_check") or {})
     feedback = main.build_action_feedback(
-        "Cisco management IP configured" if result.get("ok") else "Cisco management config failed",
+        "Cisco console setup complete" if result.get("ok") else ("Cisco trunk review needed" if result.get("requires_trunk_review") else "Cisco console setup failed"),
         "Console bootstrap completed. Use Test SSH before running version discovery or upgrades." if result.get("ok") and bootstrap_check.get("ok") else str(result.get("error") or bootstrap_check.get("error") or "Console bootstrap needs attention."),
-        tone="ready" if result.get("ok") and bootstrap_check.get("ok") else ("pending" if result.get("ok") else "danger"),
+        tone="ready" if result.get("ok") and bootstrap_check.get("ok") else ("pending" if result.get("ok") or result.get("requires_trunk_review") else "danger"),
         outcomes=[f"Management IP: {cisco_cfg.get('management_ip') or cisco_cfg.get('ip') or 'Not set'}", f"Console: {cisco_cfg.get('console_port') or 'Not selected'}"],
         details=list(result.get("warnings") or []) + list(bootstrap_check.get("warnings") or []),
     )
@@ -505,11 +598,14 @@ async def cisco_bootstrap_management(
 
 
 @router.post("/modules/cisco/verify-console-bootstrap", response_class=HTMLResponse)
+@router.post("/modules/cisco/check-current-config", response_class=HTMLResponse)
 async def cisco_verify_console_bootstrap(request: Request):
     from app import main
 
     cfg = main.load_kit_config()
     cisco_cfg = cfg.setdefault("cisco_switch", {})
+    form = dict(await request.form())
+    _update_cisco_access_from_form(cisco_cfg, form)
     result = service.verify_console_bootstrap({"cfg": cfg})
     cisco_cfg["last_console_bootstrap_check"] = {key: value for key, value in result.items() if key not in {"status", "raw_output"}}
     cisco_cfg["last_raw_console_bootstrap_check"] = str(result.get("raw_output") or "")
@@ -528,7 +624,10 @@ async def cisco_verify_console_bootstrap(request: Request):
         tone="ready" if result.get("ok") else "pending",
         outcomes=[
             f"VLAN {result.get('management_vlan') or cisco_cfg.get('management_vlan')}: {'exists' if result.get('vlan_exists') else 'missing'}",
+            f"IP: {result.get('current_management_ip') or 'not set'}",
+            f"Gateway: {result.get('default_gateway') or 'not set'}",
             f"SSH: {'enabled' if result.get('ssh_enabled') else 'not enabled'}",
+            f"SCP: {'enabled' if result.get('scp_enabled') else 'not enabled'}",
         ],
         details=list(result.get("warnings") or []),
     )
@@ -539,15 +638,13 @@ async def cisco_verify_console_bootstrap(request: Request):
 async def cisco_test_ssh(
     request: Request,
     return_page: str = Form("cisco"),
-    cisco_switch_username: str = Form(""),
-    cisco_switch_password: str = Form(""),
-    cisco_management_ip: str = Form(""),
 ):
     from app import main
 
     cfg = main.load_kit_config()
     cisco_cfg = cfg.setdefault("cisco_switch", {})
-    _update_cisco_access(cisco_cfg, username=cisco_switch_username, password=cisco_switch_password, management_ip=cisco_management_ip)
+    form = dict(await request.form())
+    _update_cisco_access_from_form(cisco_cfg, form)
     result = service.test_ssh({"cfg": cfg})
     cisco_cfg["last_ssh_test"] = {"ok": bool(result.get("ok")), "host": str(result.get("host") or ""), "error": str(result.get("error") or ""), "tested_at": datetime.now(timezone.utc).isoformat()}
     if result.get("ok"):
@@ -596,13 +693,7 @@ async def cisco_discover_ports(request: Request):
     cfg = main.load_kit_config()
     cisco_cfg = cfg.setdefault("cisco_switch", {})
     form = dict(await request.form())
-    _update_cisco_access(
-        cisco_cfg,
-        hostname=str(form.get("cisco_switch_hostname") or ""),
-        username=str(form.get("cisco_switch_username") or ""),
-        password=str(form.get("cisco_switch_password") or ""),
-        management_ip=str(form.get("cisco_management_ip") or ""),
-    )
+    _update_cisco_access_from_form(cisco_cfg, form)
     result = service.discover_ports({"cfg": cfg})
     if result.get("ok"):
         discovery = dict(result.get("discovery") or {})
@@ -629,13 +720,7 @@ async def cisco_discover_state(request: Request):
     cfg = main.load_kit_config()
     cisco_cfg = cfg.setdefault("cisco_switch", {})
     form = dict(await request.form())
-    _update_cisco_access(
-        cisco_cfg,
-        hostname=str(form.get("cisco_switch_hostname") or ""),
-        username=str(form.get("cisco_switch_username") or ""),
-        password=str(form.get("cisco_switch_password") or ""),
-        management_ip=str(form.get("cisco_management_ip") or ""),
-    )
+    _update_cisco_access_from_form(cisco_cfg, form)
     version_result = service.discover({"cfg": cfg})
     ports_result = service.discover_ports({"cfg": cfg}) if version_result.get("ok") else {"ok": False, "error": "Skipped because SSH version discovery did not succeed."}
     backup_result = service.backup_config({"cfg": cfg}) if version_result.get("ok") else {"ok": False, "error": "Skipped because SSH version discovery did not succeed."}

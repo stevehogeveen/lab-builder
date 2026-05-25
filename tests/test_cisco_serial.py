@@ -335,17 +335,46 @@ def test_management_bootstrap_can_configure_minimal_network_port():
             "domain_name": "lab.local",
             "username": "admin",
             "password": "DoNotLeak",
-            "bootstrap_network_port": "Te1/1/1",
-            "bootstrap_network_mode": "trunk",
+            "enable_secret": "Enable123!",
+            "management_port": "Te1/1/1",
+            "management_port_mode": "access",
         },
         mask=False,
     )
 
     assert "vlan 10" in commands
     assert "interface TenGigabitEthernet1/1/1" in commands
-    assert "switchport mode trunk" in commands
-    assert "switchport trunk allowed vlan add 10" in commands
+    assert "switchport mode access" in commands
+    assert "switchport access vlan 10" in commands
+    assert "spanning-tree portfast" in commands
+    assert "switchport mode trunk" not in commands
+    assert "crypto key generate rsa modulus 4096" in commands
+    assert "line con 0" in commands
+    assert "line vty 0 15" in commands
+    assert "ip scp server enable" in commands
     assert commands.index("interface TenGigabitEthernet1/1/1") < commands.index("interface vlan 10")
+
+
+def test_management_bootstrap_requires_trunk_review_ack_for_trunk_port():
+    config = {
+        "hostname": "sw01",
+        "management_vlan": 10,
+        "management_ip": "10.10.8.2",
+        "subnet_mask": "255.255.255.0",
+        "gateway": "10.10.8.1",
+        "domain_name": "lab.local",
+        "username": "admin",
+        "password": "DoNotLeak",
+        "management_port": "Te1/1/1",
+        "management_port_mode": "trunk",
+    }
+
+    unreviewed = cisco.CiscoSerialClient.build_management_commands(config, mask=False)
+    reviewed = cisco.CiscoSerialClient.build_management_commands({**config, "trunk_review_ack": True}, mask=False)
+
+    assert "interface TenGigabitEthernet1/1/1" not in unreviewed
+    assert "switchport mode trunk" in reviewed
+    assert "switchport trunk allowed vlan add 10" in reviewed
 
 
 def test_append_cisco_log_creates_log_and_masks_secrets(tmp_path, monkeypatch):
