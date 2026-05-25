@@ -12,6 +12,7 @@ from fastapi.responses import HTMLResponse
 from app.cisco_upgrade import build_cisco_upgrade_plan, execute_cisco_factory_reset, execute_cisco_upgrade
 from app.modules.cisco.service import CiscoModuleService
 from app.upgrade_helper import record_upgrade_inventory
+from app.upgrade_panels import build_cisco_upgrade_panel
 
 
 router = APIRouter()
@@ -991,7 +992,7 @@ async def cisco_upgrade_activity(request: Request):
     from app import main
 
     cfg = main.load_kit_config()
-    return main.templates.TemplateResponse(request, "partials/components/cisco_upgrade_activity.html", {"cfg": cfg})
+    return main.templates.TemplateResponse(request, "partials/components/cisco_upgrade_activity.html", {"cfg": cfg, "cisco_upgrade_panel": build_cisco_upgrade_panel(cfg)})
 
 
 def register_module_routes(app: FastAPI) -> None:

@@ -625,7 +625,7 @@
             {% endif %}
             <details class="card card-compact mt-4">
                 <summary class="summary-row"><span class="font-semibold">Config preview</span><span class="status progress">dry-run</span></summary>
-                <pre class="mt-3 whitespace-pre-wrap text-sm text-slate-300">{{ cisco_cfg.get('last_config_preview', 'No preview yet.') }}</pre>
+                <pre class="raw-output mt-3">{{ cisco_cfg.get('last_config_preview', 'No preview yet.') }}</pre>
             </details>
             <div class="text-sm text-slate-400 mt-4">
                 {% if approval.get('state') == 'approved' %}
@@ -696,15 +696,15 @@
             {% elif console_diag.get('ordered_ports') %}
             <div class="text-sm text-slate-400 mt-4">Detected adapters: {{ console_diag.get('ordered_ports') | join(', ') }}</div>
             {% endif %}
-            {% if cisco.last_show_version %}<pre class="mt-4 whitespace-pre-wrap text-sm text-slate-300">{{ cisco.last_show_version }}</pre>{% endif %}
-            {% if cisco.last_serial_output %}<pre class="mt-4 whitespace-pre-wrap text-sm text-slate-300">{{ cisco.last_serial_output }}</pre>{% endif %}
-            {% if cisco.last_console_diagnostics %}<pre class="mt-4 whitespace-pre-wrap text-sm text-slate-300">{{ cisco.last_console_diagnostics | tojson(indent=2) }}</pre>{% endif %}
-            {% if cisco.last_console_probe_results %}<pre class="mt-4 whitespace-pre-wrap text-sm text-slate-300">{{ cisco.last_console_probe_results | tojson(indent=2) }}</pre>{% endif %}
-            {% if cisco.last_raw_port_discovery %}<pre class="mt-4 whitespace-pre-wrap text-sm text-slate-300">{{ cisco.last_raw_port_discovery }}</pre>{% endif %}
-            {% if cisco.last_running_config_backup %}<pre class="mt-4 whitespace-pre-wrap text-sm text-slate-300">{{ cisco.last_running_config_backup }}</pre>{% endif %}
+            {% if cisco.last_show_version %}<pre class="raw-output mt-4">{{ cisco.last_show_version }}</pre>{% endif %}
+            {% if cisco.last_serial_output %}<pre class="raw-output mt-4">{{ cisco.last_serial_output }}</pre>{% endif %}
+            {% if cisco.last_console_diagnostics %}<pre class="raw-output mt-4">{{ cisco.last_console_diagnostics | tojson(indent=2) }}</pre>{% endif %}
+            {% if cisco.last_console_probe_results %}<pre class="raw-output mt-4">{{ cisco.last_console_probe_results | tojson(indent=2) }}</pre>{% endif %}
+            {% if cisco.last_raw_port_discovery %}<pre class="raw-output mt-4">{{ cisco.last_raw_port_discovery }}</pre>{% endif %}
+            {% if cisco.last_running_config_backup %}<pre class="raw-output mt-4">{{ cisco.last_running_config_backup }}</pre>{% endif %}
         </details>
 
-        <details class="card identity-soft-card cisco-advanced" data-lens-keep-closed style="border-color: color-mix(in srgb, var(--bad) 45%, var(--border));">
+        <details class="card identity-soft-card cisco-advanced" style="border-color: color-mix(in srgb, var(--bad) 45%, var(--border));">
             <summary class="summary-row"><span class="font-semibold">Factory reset switch</span><span class="status danger">destructive</span></summary>
             <div class="text-sm text-slate-400 mt-3">Deletes startup-config and vlan.dat, then reloads the switch.</div>
             <div class="grid grid-cols-1 md:grid-cols-[minmax(0,1fr)_auto] gap-3 mt-4 items-end">
@@ -733,12 +733,12 @@
             {% if cisco.last_console_management_state %}
             <details class="mt-4">
                 <summary class="summary-row"><span class="font-semibold">Show run output</span><span class="status progress">expand</span></summary>
-                <pre class="mt-3 whitespace-pre-wrap text-sm text-slate-300">{{ cisco.last_console_management_state }}</pre>
+                <pre class="raw-output mt-3">{{ cisco.last_console_management_state }}</pre>
             </details>
             {% elif cisco.last_running_config_backup %}
             <details class="mt-4">
                 <summary class="summary-row"><span class="font-semibold">Show run output</span><span class="status progress">expand</span></summary>
-                <pre class="mt-3 whitespace-pre-wrap text-sm text-slate-300">{{ cisco.last_running_config_backup }}</pre>
+                <pre class="raw-output mt-3">{{ cisco.last_running_config_backup }}</pre>
             </details>
             {% else %}
             <div class="text-sm text-slate-400 mt-4">No show run output captured yet. Use Check current config.</div>

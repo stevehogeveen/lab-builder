@@ -76,11 +76,17 @@ def build_ilo_upgrade_plan(cfg: dict[str, Any], media_scan: dict[str, Any]) -> d
         warnings.append("Current iLO version is already equal to or newer than the matched media.")
 
     ready = not blockers and comparison is not None and comparison < 0
+    no_upgrade_required = comparison is not None and comparison >= 0
+    state = "upgrade_required" if ready else ("already_current" if no_upgrade_required else "blocked")
     if ready:
         notes.append("Upgrade can proceed through the iLO Redfish update service.")
+    elif no_upgrade_required:
+        notes.append("No iLO firmware upgrade is required before continuing.")
 
     return {
         "ready": ready,
+        "state": state,
+        "no_upgrade_required": no_upgrade_required,
         "host": host,
         "username": username,
         "password_present": password_present,
@@ -119,6 +125,32 @@ def execute_ilo_upgrade(
                 "progress_percent": 10,
             }
         )
+    if plan.get("no_upgrade_required"):
+        completed_at = datetime.now(timezone.utc).isoformat()
+        result = {
+            "status": "current",
+            "host": plan.get("host") or "",
+            "manager_model": plan.get("manager_model") or "",
+            "previous_version": plan.get("current_version") or "",
+            "target_version": plan.get("media_version") or "",
+            "media_path": str(plan.get("media_path") or ""),
+            "media_filename": str(plan.get("media_filename") or ""),
+            "completed_at": completed_at,
+            "message": "iLO firmware is already equal to or newer than the matched media. No upgrade was run.",
+        }
+        cfg.setdefault("ilo", {}).setdefault("upgrade", {})
+        cfg["ilo"]["upgrade"]["last_plan"] = plan
+        cfg["ilo"]["upgrade"]["last_result"] = result
+        if progress:
+            progress(
+                {
+                    "phase": "current",
+                    "message": result["message"],
+                    "timestamp": completed_at,
+                    "progress_percent": 100,
+                }
+            )
+        return result
     if not plan.get("ready"):
         raise ILOError("; ".join(list(plan.get("blockers") or []) or ["iLO upgrade prechecks are not satisfied."]))
 

@@ -1,0 +1,25 @@
+{% from "partials/components/upgrade_components.html" import upgrade_panel %}
+{% set active_tab = active_upgrade_tab or 'ilo' %}
+<section id="upgrade-helper-tab-shell" class="upgrade-tab-shell" data-active-upgrade-tab="{{ active_tab }}">
+    <nav class="upgrade-tabs" role="tablist" aria-label="Upgrade modules">
+        {% for tab in upgrade_tabs or [] %}
+        <a
+            class="upgrade-tab{% if tab.key == active_tab %} upgrade-tab--active{% endif %}{% if tab.attention %} upgrade-tab--attention{% endif %}{% if tab.running %} upgrade-tab--running{% endif %}"
+            href="{{ tab.href }}"
+            role="tab"
+            aria-selected="{{ 'true' if tab.key == active_tab else 'false' }}"
+            hx-get="{{ tab.partial_href }}"
+            hx-target="#upgrade-helper-tab-shell"
+            hx-swap="outerHTML"
+            hx-push-url="{{ tab.href }}"
+        >
+            <span class="upgrade-tab__label">{{ tab.label }}</span>
+            <span class="upgrade-tab__badge status-badge status-badge--{{ tab.status_css }}">{{ tab.badge_label }}</span>
+        </a>
+        {% endfor %}
+    </nav>
+
+    <section id="upgrade-helper-tab-panel" class="upgrade-tab-panel" role="tabpanel" aria-label="{{ active_upgrade_panel.get('title') or 'Upgrade module' }}">
+        {{ upgrade_panel(active_upgrade_panel) }}
+    </section>
+</section>

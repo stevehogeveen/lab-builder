@@ -1,0 +1,112 @@
+{% macro upgrade_panel(panel) %}
+{% set panel = panel or {} %}
+{% set panel_id = panel.get('id') or panel.get('module', 'upgrade') ~ '-upgrade-activity' %}
+{% set status_key = (panel.get('status') or 'not_started') | replace('_', '-') %}
+<section
+    id="{{ panel_id }}"
+    class="upgrade-panel upgrade-panel--{{ panel.get('module', 'generic') }}{% if panel.get('polling') %} silent-poll{% endif %}"
+    {% if panel.get('polling') and panel.get('poll_url') %}data-silent-poll="true" hx-get="{{ panel.get('poll_url') }}" hx-trigger="every {{ panel.get('poll_interval') or '5s' }}" hx-target="#{{ panel_id }}" hx-swap="outerHTML"{% endif %}
+>
+    <div class="upgrade-panel__header">
+        <h2 class="upgrade-panel__title">{{ panel.get('title') or 'Upgrade status' }}</h2>
+        <span class="upgrade-panel__badge status-badge status-badge--{{ status_key }}">{{ panel.get('status_label') or (panel.get('status') or 'not_started') | replace('_', ' ') | title }}</span>
+    </div>
+
+    <div class="upgrade-panel__metrics">
+        {% for metric in panel.get('metrics', []) %}
+        <div class="metric-card">
+            <div class="metric-card__label">{{ metric.get('label') or 'Metric' }}</div>
+            <div class="metric-card__value">{{ metric.get('value') if metric.get('value') not in [none, ''] else 'Not set' }}</div>
+        </div>
+        {% endfor %}
+    </div>
+
+    <div class="upgrade-panel__progress" aria-label="Progress {{ panel.get('progress', 0) }}%">
+        <div class="upgrade-panel__progress-bar" style="width: {{ panel.get('progress', 0) }}%;"></div>
+    </div>
+
+    {% if panel.get('latest_message') %}
+    <div class="upgrade-panel__message">
+        <div class="upgrade-panel__message-label">Latest message</div>
+        <div class="upgrade-panel__message-text">{{ panel.get('latest_message') }}</div>
+    </div>
+    {% endif %}
+
+    {% if panel.get('focus_title') or panel.get('focus_message') %}
+    <div class="upgrade-panel__message">
+        <div class="upgrade-panel__message-label">Current focus</div>
+        <div class="upgrade-panel__message-text">
+            {% if panel.get('focus_title') %}<strong>{{ panel.get('focus_title') }}</strong>{% if panel.get('focus_message') %}<br>{% endif %}{% endif %}
+            {{ panel.get('focus_message') or '' }}
+        </div>
+    </div>
+    {% endif %}
+
+    {% if panel.get('job_id') %}
+    <div class="upgrade-panel__job">
+        <div class="upgrade-panel__job-label">{{ panel.get('job_label') or 'Job' }}</div>
+        <div class="upgrade-panel__job-value">{{ panel.get('job_id') }}</div>
+    </div>
+    {% endif %}
+
+    {% if panel.get('actions') %}
+    <div class="upgrade-panel__actions">
+        {% for action in panel.get('actions', []) %}
+            {% set action_type = action.get('type') or 'button' %}
+            {% if action_type == 'status' %}
+            {% set action_status = (action.get('status') or 'completed') | replace('_', '-') %}
+            <span class="upgrade-panel__action-status status-badge status-badge--{{ action_status }}">{{ action.get('label') or 'Ready' }}</span>
+            {% elif action_type == 'checkbox' %}
+            <label class="upgrade-panel__check">
+                <input
+                    type="checkbox"
+                    name="{{ action.get('name') or 'enabled' }}"
+                    value="{{ action.get('value') or 'true' }}"
+                    {% if action.get('checked') %}checked{% endif %}
+                    {% if action.get('hx_post') %}hx-post="{{ action.get('hx_post') }}"{% endif %}
+                    {% if action.get('hx_vals') %}hx-vals='{{ action.get("hx_vals") | tojson }}'{% endif %}
+                    hx-trigger="change"
+                    hx-target="{{ action.get('hx_target') or '#main-content' }}"
+                    hx-swap="{{ action.get('hx_swap') or 'outerHTML' }}"
+                >
+                <span>{{ action.get('label') or 'Enabled' }}</span>
+            </label>
+            {% elif action.get('href') %}
+            <a class="btn{% if action.get('style') == 'primary' %} btn-primary{% endif %}" href="{{ action.get('href') }}">{{ action.get('label') or 'Open' }}</a>
+            {% else %}
+            <button
+                class="btn{% if action.get('style') == 'primary' %} btn-primary{% endif %}"
+                type="button"
+                {% if action.get('hx_post') %}hx-post="{{ action.get('hx_post') }}"{% endif %}
+                {% if action.get('hx_get') %}hx-get="{{ action.get('hx_get') }}"{% endif %}
+                {% if action.get('hx_vals') %}hx-vals='{{ action.get("hx_vals") | tojson }}'{% endif %}
+                {% if action.get('hx_include') %}hx-include="{{ action.get('hx_include') }}"{% endif %}
+                hx-target="{{ action.get('hx_target') or '#main-content' }}"
+                hx-swap="{{ action.get('hx_swap') or 'outerHTML' }}"
+                {% if action.get('action_title') %}data-action-title="{{ action.get('action_title') }}"{% endif %}
+                {% if action.get('action_start') %}data-action-start="{{ action.get('action_start') }}"{% endif %}
+                {% if action.get('action_complete') %}data-action-complete="{{ action.get('action_complete') }}"{% endif %}
+            >{{ action.get('label') or 'Run' }}</button>
+            {% endif %}
+        {% endfor %}
+    </div>
+    {% endif %}
+
+    {% if panel.get('events') %}
+    <div class="event-log">
+        {% for event in panel.get('events', []) %}
+        <div class="event-log__row event-log__row--{{ (event.get('severity') or 'info') | replace('_', '-') }}">
+            <div class="event-log__time">{{ event.get('time') or '--:--:--' }}</div>
+            <div class="event-log__stage">{{ event.get('stage') or 'event' }}</div>
+            <div class="event-log__message">{{ event.get('message') or 'Event recorded.' }}</div>
+        </div>
+        {% endfor %}
+    </div>
+    {% endif %}
+
+    <details class="raw-output-wrap">
+        <summary>{{ panel.get('raw_label') or 'Raw output' }}</summary>
+        <pre class="raw-output">{{ panel.get('raw_output') or 'No raw output captured.' }}</pre>
+    </details>
+</section>
+{% endmacro %}

@@ -41,6 +41,9 @@
         {% if upgrade_device_key == 'cisco_switch' %}
         <button class="btn btn-primary" type="submit" hx-post="/modules/cisco/discover-version" hx-vals='{"return_page":"{{ upgrade_return_page }}"}' hx-target="#main-content" hx-swap="outerHTML" data-action-title="Checking Cisco version" data-action-start="Reading show version by SSH, with console fallback if SSH is not ready." data-action-complete="Cisco version check finished.">Check current Cisco version</button>
         {% endif %}
+        {% if upgrade_device_key == 'netapp' %}
+        <button class="btn btn-primary" type="button" hx-post="/modules/netapp/plan-upgrade" hx-vals='{"return_page":"{{ upgrade_return_page }}"}' hx-target="#main-content" hx-swap="outerHTML" data-action-title="Reading current ONTAP release" data-action-start="Connecting to ONTAP and reading the current cluster release." data-action-complete="Current ONTAP release check finished.">Read current ONTAP release</button>
+        {% endif %}
         {% if upgrade_device_key == 'ilo' and not gate_entry.get('current_version') %}
         <button class="btn btn-primary" type="button" hx-post="/export-ilo-inventory" hx-vals='{"return_page":"{{ upgrade_return_page }}"}' hx-target="#main-content" hx-swap="outerHTML" data-action-title="Reading current iLO" data-action-start="Connecting to iLO and reading the current firmware version.">Read current iLO</button>
         {% endif %}

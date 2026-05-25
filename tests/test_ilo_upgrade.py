@@ -35,6 +35,77 @@ def test_build_ilo_upgrade_plan_requires_live_identity_and_matching_media():
     assert plan["media_version"] == "1.76"
 
 
+def test_build_ilo_upgrade_plan_marks_current_firmware_as_noop():
+    cfg = {
+        "ilo": {
+            "current_ip": "10.10.8.50",
+            "host": "10.10.8.50",
+            "username": "Administrator",
+            "password": "secret",
+        },
+        "upgrade_inventory": {
+            "ilo": {
+                "current_version": "1.76",
+                "source": "Latest live iLO inventory",
+                "manager_model": "iLO 6",
+            }
+        },
+    }
+    media_scan = {
+        "root": "/repo/media",
+        "latest": {"ilo": {"version": "1.76", "filename": "ilo6_176.fwpkg", "path": "/repo/media/ilo6_176.fwpkg"}},
+        "counts": {"ilo": 1},
+        "candidates": [
+            {"device": "ilo", "version": "1.76", "filename": "ilo6_176.fwpkg", "path": "/repo/media/ilo6_176.fwpkg"},
+        ],
+    }
+
+    plan = build_ilo_upgrade_plan(cfg, media_scan)
+
+    assert plan["ready"] is False
+    assert plan["state"] == "already_current"
+    assert plan["no_upgrade_required"] is True
+    assert plan["blockers"] == []
+
+
+def test_execute_ilo_upgrade_noops_when_current_firmware_is_not_older():
+    cfg = {
+        "ilo": {
+            "current_ip": "10.10.8.50",
+            "host": "10.10.8.50",
+            "username": "Administrator",
+            "password": "secret",
+        },
+        "upgrade_inventory": {
+            "ilo": {
+                "current_version": "1.76",
+                "source": "Latest live iLO inventory",
+                "manager_model": "iLO 6",
+            }
+        },
+    }
+    media_scan = {
+        "root": "/repo/media",
+        "latest": {"ilo": {"version": "1.76", "filename": "ilo6_176.fwpkg", "path": "/repo/media/ilo6_176.fwpkg"}},
+        "counts": {"ilo": 1},
+        "candidates": [
+            {"device": "ilo", "version": "1.76", "filename": "ilo6_176.fwpkg", "path": "/repo/media/ilo6_176.fwpkg"},
+        ],
+    }
+    events = []
+
+    result = execute_ilo_upgrade(
+        cfg,
+        media_scan,
+        build_client=lambda **_: (_ for _ in ()).throw(AssertionError("client should not be built")),
+        progress=events.append,
+    )
+
+    assert result["status"] == "current"
+    assert cfg["ilo"]["upgrade"]["last_result"]["status"] == "current"
+    assert [event["phase"] for event in events] == ["precheck", "current"]
+
+
 def test_execute_ilo_upgrade_updates_cached_inventory():
     cfg = {
         "ilo": {
