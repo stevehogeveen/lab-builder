@@ -1,0 +1,26 @@
+Task chosen: OVF Templates persistent status placement.
+
+Changed [ovf_templates.html](/home/administrator/lab-builder/templates/partials/pages/ovf_templates.html:78) to add a bottom “Reports and next step” card showing the latest registered OVF template or an empty “No OVF template action recorded yet” state. Added focused coverage in [test_ovf_templates_page.py](/home/administrator/lab-builder/tests/test_ovf_templates_page.py:68). Updated coordination at [SESSION_COORDINATION.md](/home/administrator/lab-builder/SESSION_COORDINATION.md:41).
+
+Inspected: mission/rules/backlog, session coordination, operator-flow/UX/validation docs, OVF template page, OVF routes/service, Windows OVF selection area, and existing OVF tests.
+
+Verified buttons/routes/forms:
+- `GET /modules/ovf-templates`
+- `POST /modules/ovf-templates/register-directory`
+- `Register directory` form/button
+- `Open Windows setup` link to `/windows`
+- Existing Windows OVF select/register flow through focused existing test
+
+Tests/checks run:
+- `.venv/bin/python -m pytest tests/test_ovf_templates_page.py tests/test_app.py::test_ovf_templates_register_directory_and_windows_selects_template tests/test_app.py::test_ovf_templates_page_renders_from_sidebar_route` passed, 4 tests
+- `.venv/bin/python -m pytest tests/test_operator_flow_contract.py` passed, 6 tests
+- `.venv/bin/python -m compileall app` passed
+- `git diff --check` passed
+
+Real hardware used: no.
+
+Mocked/dry-run only: local temporary OVF directory registration in tests; no NetApp, vCenter, ESXi, switch, or server calls.
+
+Remaining risks: no browser screenshot pass and no full pytest run in this cycle.
+
+Recommended next task: a focused History page detail/log clutter audit, avoiding active Cisco and NetApp scopes.

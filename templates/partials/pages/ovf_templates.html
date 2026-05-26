@@ -74,4 +74,51 @@
             {% endif %}
         </div>
     </div>
+
+    {% set ovf_last_template_id = (cfg.get('ovf_templates', {}) or {}).get('last_selected_template_id', '') %}
+    {% set ovf_last = namespace(item=None) %}
+    {% for item in templates %}
+        {% if item.get('id') == ovf_last_template_id %}
+            {% set ovf_last.item = item %}
+        {% endif %}
+    {% endfor %}
+    <div class="card identity-soft-card mt-4">
+        <div class="text-lg font-semibold mb-3">Reports and next step</div>
+        <div class="ops-strip-card mb-3" style="margin-top: 0;">
+            <div class="flex items-start justify-between gap-3">
+                <div>
+                    <div class="dashboard-kicker">What happened last</div>
+                    {% if ovf_last.item %}
+                    <div class="font-semibold">OVF template registered</div>
+                    {% else %}
+                    <div class="font-semibold">No OVF template action recorded yet</div>
+                    {% endif %}
+                </div>
+                {% if ovf_last.item %}
+                    {% set ovf_readiness = ovf_last.item.get('readiness', {}) or {} %}
+                    <span class="status {{ ovf_readiness.get('tone', 'progress') }}">{{ ovf_readiness.get('label', 'Review') }}</span>
+                {% else %}
+                    <span class="status pending">Not started</span>
+                {% endif %}
+            </div>
+            {% if ovf_last.item %}
+            <div class="text-sm text-slate-400 mt-2">{{ ovf_last.item.get('name') or ovf_last.item.get('id') }} is registered for VM setup workflows.</div>
+            <div class="text-sm text-slate-400 mt-1">{{ (ovf_last.item.get('source_location_type') or 'local')|replace('_', ' ')|title }} source | {{ ovf_last.item.get('file_count', 0) }} files | {{ ovf_last.item.get('total_size_display', '0 B') }}</div>
+            {% else %}
+            <div class="text-sm text-slate-400 mt-2">Register a full OVF directory once and the latest template status will stay here.</div>
+            {% endif %}
+        </div>
+        <div class="text-sm text-slate-400 mb-3">
+            {% if templates %}
+            Select the registered template from the Windows setup page before planning the Windows install.
+            {% else %}
+            Start by registering the directory that contains the OVF descriptor and all referenced files.
+            {% endif %}
+        </div>
+        {% if templates %}
+        <div class="actions">
+            <a class="btn btn-primary action-button" href="/windows">Open Windows setup</a>
+        </div>
+        {% endif %}
+    </div>
 </section>
