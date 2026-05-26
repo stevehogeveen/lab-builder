@@ -12862,6 +12862,9 @@ def test_history_and_report_center_show_run_bundle_links(client):
     assert "Recent runs" in history_response.text
     assert "Open run summary" in history_response.text
     assert "Related reports" in history_response.text
+    assert 'hx-post="/view-report"' in history_response.text
+    assert 'name="return_page" value="configs"' in history_response.text
+    assert 'name="return_page" value="history"' not in history_response.text
 
     configs_response = client.get("/configs")
     assert configs_response.status_code == 200

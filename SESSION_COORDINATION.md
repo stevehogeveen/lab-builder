@@ -38,6 +38,25 @@ Copy this block and update it in place.
 
 ## Active Sessions
 
+### Session: history-quality-cycle
+- Status: done
+- Branch: codex/14h-quality-run
+- Scope owner: History page report-opening flow cleanup
+- Working on: Completed History page report-opening destination cleanup without hardware access.
+- Blocked by: none
+- Ready to hand off: History page run-summary and storage-plan buttons now open technical report content on the Reports surface; focused render tests, Reports route test, and compile check pass.
+- Files claimed:
+  - templates/partials/pages/history.html
+  - tests/test_app.py
+- Shared files touched with caution:
+  - SESSION_COORDINATION.md
+  - tests/test_app.py
+- Last changed:
+  - 2026-05-25 23:03 EDT - Claimed narrow History page report-opening destination slice for the 14-hour quality run.
+  - 2026-05-25 23:04 EDT - Routed History page report-open forms to Reports and verified focused tests.
+- Next intended change:
+  - Continue with a separate backlog cycle; suggested next target is a focused setup page last-action/log placement audit for an unclaimed page.
+
 ### Session: dashboard-quality-cycle
 - Status: done
 - Branch: codex/14h-quality-run

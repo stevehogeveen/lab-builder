@@ -1,0 +1,27 @@
+**Task Chosen**
+History page technical-output destination cleanup: keep opened run summaries/storage plans on the Reports technical details surface instead of rendering raw report content back into History.
+
+**Files Inspected**
+`.codex/mission.md`, `.codex/rules.md`, `.codex/backlog.md`, required session docs, `SESSION_COORDINATION.md`, `templates/partials/pages/history.html`, `app/main.py`, `app/modules/configs/routes.py`, `tests/test_app.py`, `tests/test_reports.py`.
+
+**Files Changed**
+- [templates/partials/pages/history.html](/home/administrator/lab-builder/templates/partials/pages/history.html:86): History `Open run summary` and `Open storage plan used` forms now submit with `return_page=configs`.
+- [tests/test_app.py](/home/administrator/lab-builder/tests/test_app.py:12865): added render assertions that History report forms target Reports, not History.
+- [SESSION_COORDINATION.md](/home/administrator/lab-builder/SESSION_COORDINATION.md:41): claimed and closed the cycle.
+
+**Buttons/Routes/Forms Verified**
+`/history`, `/configs`, `hx-post="/view-report"`, History `Open run summary`, History `Open storage plan used`, and `Related reports` links. `/view-report` still uses the existing safe report handler.
+
+**Tests/Checks Run**
+- `.venv/bin/python -m pytest tests/test_app.py -k "history_and_report_center_show_run_bundle_links or history_page_shows_human_friendly_run_summary or history_page_renders_boolean_config_summary_values"`: passed.
+- `.venv/bin/python -m pytest tests/test_reports.py`: passed.
+- `.venv/bin/python -m compileall app`: passed.
+
+**Hardware**
+No real hardware used. This was route/template validation only, using TestClient and temporary test paths.
+
+**Remaining Risks**
+History still has inline expanded execution-log drawers for stored run entries; this cycle only fixed opened report artifacts landing on the Reports technical details surface. Existing untracked `artifacts/codex-runs/...` files were left untouched.
+
+**Recommended Next Task**
+Focused audit of History inline execution-log drawers, or one unclaimed setup page last-action/log placement check. No commit or push was made.
