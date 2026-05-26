@@ -47,6 +47,13 @@ def vcenter_client(tmp_path: Path, monkeypatch):
         yield test_client
 
 
+def _button_containing(html: str, marker: str) -> str:
+    marker_index = html.index(marker)
+    button_start = html.rfind("<button", 0, marker_index)
+    button_end = html.find("</button>", marker_index) + len("</button>")
+    return html[button_start:button_end]
+
+
 def test_vcenter_context_defaults_to_lab_subnet_offset_and_caps_dns(tmp_path: Path):
     iso = tmp_path / "VMware-VCSA-all-8.0.3.iso"
     iso.write_text("placeholder", encoding="utf-8")
@@ -132,8 +139,47 @@ def test_vcenter_page_wires_visible_form_actions(vcenter_client):
     assert 'data-action-complete="vCenter setup saved."' in response.text
     assert 'data-action-complete="vCenter deployment spec generated."' in response.text
     assert 'data-action-complete="vCenter appliance deployment request submitted."' in response.text
+    start_button = _button_containing(response.text, 'hx-post="/run-vcenter-install"')
+    assert "disabled" in start_button
     assert "Generate deployment spec" in response.text
     assert "Start vCenter appliance deployment" in response.text
+
+
+def test_vcenter_start_deployment_button_enables_when_ready(vcenter_client):
+    iso = main.MEDIA_DIR / "VMware-VCSA-all-8.0.3.iso"
+    iso.write_text("placeholder", encoding="utf-8")
+    cfg = main.default_config()
+    cfg["site"]["name"] = "VCenter Ready Kit"
+    cfg["shared_network"]["subnet"] = "192.168.1.0/24"
+    cfg["shared_network"]["dns_servers"] = ["192.168.1.1"]
+    cfg["ip_plan"]["subnet"] = "192.168.1.0/24"
+    cfg["ip_plan"]["gateway"] = "192.168.1.1"
+    cfg["esxi"]["management_ip"] = "192.168.1.10"
+    cfg["esxi"]["root_password"] = "ValidPass1!"
+    cfg["vmware"]["vcenter_install"].update(
+        {
+            "target_ip": "192.168.1.50",
+            "system_name": "vcenter.lab.local",
+            "vm_name": "SVCNTR-LAB",
+            "iso_path": str(iso),
+            "esxi_host": "192.168.1.10",
+            "esxi_username": "root",
+            "esxi_password": "ValidPass1!",
+            "datastore": "datastore1",
+            "deployment_network": "VM Network",
+            "root_password": "ValidPass1!",
+            "sso_password": "ValidPass1!",
+            "dns_servers": ["192.168.1.1"],
+            "ntp_servers": "192.168.1.1",
+        }
+    )
+    main.save_kit_config(cfg)
+
+    response = vcenter_client.get("/vcenter")
+
+    assert response.status_code == 200
+    start_button = _button_containing(response.text, 'hx-post="/run-vcenter-install"')
+    assert "disabled" not in start_button
 
 
 def test_save_vcenter_settings_persists_visible_form_values(vcenter_client):

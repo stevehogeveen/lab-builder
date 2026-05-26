@@ -1,0 +1,4 @@
+ SESSION_COORDINATION.md               | 18 ++++++++++++++
+ templates/partials/pages/vcenter.html |  2 +-
+ tests/test_vcenter.py                 | 46 +++++++++++++++++++++++++++++++++++
+ 3 files changed, 65 insertions(+), 1 deletion(-)

@@ -1,0 +1,29 @@
+Task chosen: vCenter deployment button safety/flow audit.
+
+Files inspected: `AGENTS.md`, `.codex/*`, required docs, `SESSION_COORDINATION.md`, `templates/partials/pages/vcenter.html`, `app/main.py`, `app/vcenter.py`, `tests/test_vcenter.py`.
+
+Files changed:
+- [templates/partials/pages/vcenter.html](/home/administrator/lab-builder/templates/partials/pages/vcenter.html:106)
+- [tests/test_vcenter.py](/home/administrator/lab-builder/tests/test_vcenter.py:50)
+- [SESSION_COORDINATION.md](/home/administrator/lab-builder/SESSION_COORDINATION.md:41)
+
+Verified buttons/routes/forms:
+- `#vcenter-settings-form`
+- Save vCenter setup -> `POST /save-vcenter-settings`
+- Generate deployment spec -> `POST /plan-vcenter-install`
+- Start vCenter appliance deployment -> `POST /run-vcenter-install`
+
+Change made: the real vCenter deployment button is now disabled until existing `vcenter_install.ready` checks pass. Backend blocking behavior is unchanged.
+
+Tests/checks run:
+- `.venv/bin/python -m pytest tests/test_vcenter.py` -> 7 passed
+- `.venv/bin/python -m pytest tests/test_operator_flow_contract.py` -> 6 passed
+- `.venv/bin/python -m compileall app` -> passed
+
+Real hardware used: no.
+
+Mocked/dry-run only: FastAPI `TestClient`, temporary config/media directories, placeholder VCSA ISO file. No vCenter, NetApp, QNAP, ESXi, or hardware deployment calls were made.
+
+Remaining risks: full pytest suite was not run because this was a narrow template/test slice. Browser-level click behavior was not tested, but route rendering and backend blocked-route coverage are in place.
+
+Recommended next task: another unclaimed real-action readiness audit, especially any setup page where a destructive or hardware-changing button is enabled before readiness is clear.

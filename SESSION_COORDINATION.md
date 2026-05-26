@@ -38,6 +38,24 @@ Copy this block and update it in place.
 
 ## Active Sessions
 
+### Session: vcenter-start-button-readiness-quality-cycle
+- Status: done
+- Branch: codex/14h-quality-run
+- Scope owner: vCenter deployment start button readiness safety
+- Working on: Completed readiness gating for the existing vCenter real deployment button while preserving the backend blocked-route guard.
+- Blocked by: none
+- Ready to hand off: vCenter Start deployment is disabled until page readiness passes; focused vCenter render tests, operator-flow contract tests, and compile check pass.
+- Files claimed:
+  - templates/partials/pages/vcenter.html
+  - tests/test_vcenter.py
+- Shared files touched with caution:
+  - SESSION_COORDINATION.md
+- Last changed:
+  - 2026-05-26 06:07 EDT - Claimed narrow vCenter deployment start-button readiness slice for the 14-hour quality run.
+  - 2026-05-26 06:07 EDT - Disabled the vCenter real deployment button until readiness passes and verified focused route/template coverage.
+- Next intended change:
+  - Continue with a separate backlog cycle; suggested next target is another unclaimed real-action readiness/button audit.
+
 ### Session: cisco-run-approval-feedback-quality-cycle
 - Status: done
 - Branch: codex/14h-quality-run

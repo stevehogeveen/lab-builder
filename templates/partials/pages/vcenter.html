@@ -103,7 +103,7 @@
                 <div class="actions">
                     <button class="btn btn-primary action-button" type="submit">Save vCenter setup</button>
                     <button class="btn action-button" type="button" hx-post="/plan-vcenter-install" hx-include="#vcenter-settings-form" hx-target="#main-content" hx-swap="outerHTML" data-action-title="Planning vCenter install" data-action-start="Generating the vCenter Server Appliance installer spec." data-action-complete="vCenter deployment spec generated.">Generate deployment spec</button>
-                    <button class="btn btn-primary action-button" type="button" hx-post="/run-vcenter-install" hx-include="#vcenter-settings-form" hx-target="#main-content" hx-swap="outerHTML" data-action-title="Starting vCenter appliance deployment" data-action-start="Launching VMware vcsa-deploy." data-action-complete="vCenter appliance deployment request submitted.">Start vCenter appliance deployment</button>
+                    <button class="btn btn-primary action-button" type="button" hx-post="/run-vcenter-install" hx-include="#vcenter-settings-form" hx-target="#main-content" hx-swap="outerHTML" data-action-title="Starting vCenter appliance deployment" data-action-start="Launching VMware vcsa-deploy." data-action-complete="vCenter appliance deployment request submitted." {% if not vcenter_install.ready %}disabled{% endif %}>Start vCenter appliance deployment</button>
                 </div>
             </form>
         </section>
