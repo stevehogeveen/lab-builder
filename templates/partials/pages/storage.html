@@ -196,7 +196,7 @@
 
         <div class="card" id="storage-review-start">
             <div class="text-lg font-semibold mb-2">Target server</div>
-            <form hx-post="/save-storage-target" hx-target="#main-content" hx-swap="outerHTML" data-action-title="Saving storage target" data-action-start="Saving the storage target and sign-in details.">
+            <form hx-post="/save-storage-target" hx-target="#main-content" hx-swap="outerHTML" data-action-title="Saving storage target" data-action-start="Saving the storage target and sign-in details." data-action-complete="Storage target saved.">
                 <input type="hidden" name="return_page" value="storage">
                 <div class="grid grid-cols-1 md:grid-cols-3 gap-3">
                     <label>

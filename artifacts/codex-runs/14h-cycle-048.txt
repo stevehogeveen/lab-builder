@@ -1,0 +1,22 @@
+Task chosen: Storage setup Target server save feedback.
+
+Files inspected: session docs/backlog, [storage.html](/home/administrator/lab-builder/templates/partials/pages/storage.html:199), [test_storage.py](/home/administrator/lab-builder/tests/test_storage.py:148), and storage route references in `app/modules/storage/routes.py` / `app/main.py`.
+
+Files changed:
+- [storage.html](/home/administrator/lab-builder/templates/partials/pages/storage.html:199): added `data-action-complete="Storage target saved."`
+- [test_storage.py](/home/administrator/lab-builder/tests/test_storage.py:171): added focused render coverage
+- [SESSION_COORDINATION.md](/home/administrator/lab-builder/SESSION_COORDINATION.md:41): claimed and closed the slice
+
+Verified buttons/forms/routes:
+- `POST /save-storage-target`
+- `Use entered IP` submit button, `storage_target_mode=override`
+- `Use iLO defaults` submit button, `storage_target_mode=defaults`
+- Existing mocked route tests cover both save paths.
+
+Checks run:
+- `.venv/bin/python -m pytest tests/test_storage.py::test_storage_target_save_controls_use_specific_completion_feedback` passed
+- `.venv/bin/python -m pytest tests/test_app.py::test_save_storage_target_persists_explicit_storage_credentials tests/test_app.py::test_save_storage_target_can_clear_override_and_use_ilo_defaults` passed
+- `.venv/bin/python -m pytest tests/test_operator_flow_contract.py` passed
+- `.venv/bin/python -m compileall app` passed
+
+No real hardware was used. This was template/render and mocked route validation only. Remaining risk: the browser-side HTMX feedback was not manually exercised, but the required metadata and routes are covered. Recommended next task: Storage approval removal completion feedback metadata. No commit or push was made.

@@ -168,6 +168,32 @@ def test_storage_read_current_control_uses_specific_completion_feedback(storage_
     assert '<button class="btn action-button" type="submit">Display current storage setup</button>' in response.text
 
 
+def test_storage_target_save_controls_use_specific_completion_feedback(storage_client):
+    cfg = main.default_config()
+    cfg["site"]["name"] = "Storage Target Kit"
+    cfg["ilo"]["current_ip"] = "192.168.1.50"
+    cfg["ilo"]["target_ip"] = "192.168.1.51"
+    cfg["ilo"]["username"] = "Administrator"
+    cfg["ilo"]["password"] = "kit-password"
+    main.save_kit_config(cfg)
+
+    response = storage_client.get("/storage")
+
+    assert response.status_code == 200
+    assert 'hx-post="/save-storage-target"' in response.text
+    assert 'data-action-title="Saving storage target"' in response.text
+    assert 'data-action-start="Saving the storage target and sign-in details."' in response.text
+    assert 'data-action-complete="Storage target saved."' in response.text
+    assert (
+        '<button class="btn btn-primary action-button" type="submit" name="storage_target_mode" value="override">Use entered IP</button>'
+        in response.text
+    )
+    assert (
+        '<button class="btn action-button" type="submit" name="storage_target_mode" value="defaults">Use iLO defaults</button>'
+        in response.text
+    )
+
+
 def test_storage_artifact_view_controls_use_shared_action_feedback(storage_client):
     cfg = main.default_config()
     cfg["site"]["name"] = "Storage Artifact Kit"
