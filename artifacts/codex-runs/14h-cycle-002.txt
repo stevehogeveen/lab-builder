@@ -1,0 +1,28 @@
+Completed one controlled cycle.
+
+- Task chosen: QNAP setup save/status audit.
+- Files inspected: QNAP template, QNAP route handler, QNAP service stub, main route wiring, existing app/operator-flow tests.
+- Files changed:
+  - [app/modules/qnap/routes.py](/home/administrator/lab-builder/app/modules/qnap/routes.py:47) now reports `Included in kit: Yes/No` in the save receipt.
+  - [tests/test_qnap.py](/home/administrator/lab-builder/tests/test_qnap.py:54) adds focused QNAP page/route coverage.
+
+Buttons/routes/forms verified:
+- `Save QNAP setup` form: `hx-post="/save-qnap-settings"` -> `save_qnap_settings_route` -> `save_qnap_settings_handler`
+- Form fields: hostname, username, password, inclusion checkbox
+- Links: `/global-settings`, `/execution`
+- Verified blank password preserves the saved secret and the receipt does not expose it.
+
+Checks run:
+- `.venv/bin/python -m pytest tests/test_qnap.py` passed, 2 tests
+- `.venv/bin/python -m pytest tests/test_app.py::test_save_esxi_windows_and_qnap_page_settings` passed
+- `.venv/bin/python -m pytest tests/test_operator_flow_contract.py` passed, 6 tests
+- `.venv/bin/python -m compileall app` passed
+- `git diff --check -- app/modules/qnap/routes.py tests/test_qnap.py` passed
+
+Real hardware used: none.
+
+Mocked/dry-run only: FastAPI `TestClient`, isolated temp kit/config/media/artifact paths, and stubbed upgrade-media scan. No QNAP hardware or network calls.
+
+Remaining risks: I did not run a browser HTMX click test. QNAP automation remains manual-only by design. Existing untracked `artifacts/codex-runs/14h-cycle-002.txt` was present before this cycle and left untouched.
+
+Recommended next task: audit another unclaimed setup page’s visible buttons and result/status placement, preferably Windows or OVF Templates. No commit or push was made.

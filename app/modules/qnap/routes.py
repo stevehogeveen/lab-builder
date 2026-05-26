@@ -44,6 +44,7 @@ async def save_qnap_settings_handler(
             outcomes=[
                 f"Hostname: {cfg['qnap'].get('hostname', '') or 'Not set'}",
                 f"Target: {cfg['qnap'].get('ip', '') or cfg.get('ip_plan', {}).get('qnap', '') or 'Not set'}",
+                f"Included in kit: {'Yes' if cfg['included'].get('qnap') else 'No'}",
             ],
         ),
     )
