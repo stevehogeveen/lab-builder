@@ -77,7 +77,7 @@
                 <span>{{ action.get('label') or 'Enabled' }}</span>
             </label>
             {% elif action.get('href') %}
-            <a class="btn{% if action.get('style') == 'primary' %} btn-primary{% endif %}" href="{{ action.get('href') }}">{{ action.get('label') or 'Open' }}</a>
+            <a class="btn{% if action.get('style') == 'primary' %} btn-primary{% endif %} action-button" href="{{ action.get('href') }}">{{ action.get('label') or 'Open' }}</a>
             {% else %}
             <button
                 class="btn{% if action.get('style') == 'primary' %} btn-primary{% endif %} action-button"

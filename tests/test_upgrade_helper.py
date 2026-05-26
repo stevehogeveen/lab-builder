@@ -79,6 +79,15 @@ def _button_markup(html: str, label: str) -> str:
     return html[start:end]
 
 
+def _anchor_markup(html: str, label: str) -> str:
+    label_pos = html.index(f">{label}</a>")
+    start = html.rfind("<a", 0, label_pos)
+    end = html.find("</a>", label_pos) + len("</a>")
+    assert start != -1
+    assert end != -1
+    return html[start:end]
+
+
 def test_upgrade_helper_generated_plan_actions_have_specific_action_feedback(upgrade_helper_client, monkeypatch):
     def media_item(device: str, version: str, filename: str) -> dict[str, str]:
         return {
@@ -170,6 +179,29 @@ def test_upgrade_helper_generated_tab_actions_use_shared_action_button_class(upg
         markup = _button_markup(response.text, label)
         assert expected_class in markup
         assert f'hx-post="{route}"' in markup
+
+
+def test_upgrade_helper_generated_link_actions_use_shared_action_button_class(upgrade_helper_client):
+    for tab, labels in {
+        "ilo": [
+            ("Open iLO", "/ilo", 'class="btn action-button"'),
+        ],
+        "esxi": [
+            ("Open ESXi settings", "/esxi", 'class="btn btn-primary action-button"'),
+            ("Open Execution", "/execution", 'class="btn action-button"'),
+        ],
+        "firmware": [
+            ("Upload firmware/media", "#upgrade-media-upload", 'class="btn btn-primary action-button"'),
+            ("Open Reports", "/configs", 'class="btn action-button"'),
+        ],
+    }.items():
+        response = upgrade_helper_client.get(f"/upgrade-helper?tab={tab}")
+
+        assert response.status_code == 200
+        for label, href, expected_class in labels:
+            markup = _anchor_markup(response.text, label)
+            assert expected_class in markup
+            assert f'href="{href}"' in markup
 
 
 def test_upgrade_helper_override_toggle_has_specific_action_feedback(upgrade_helper_client):

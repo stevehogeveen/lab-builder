@@ -38,6 +38,25 @@ Copy this block and update it in place.
 
 ## Active Sessions
 
+### Session: upgrade-helper-link-action-feedback-quality-cycle
+- Status: done
+- Branch: codex/14h-quality-run
+- Scope owner: Upgrade Helper generated link action visual consistency
+- Working on: Completed shared action-button treatment for generated Upgrade Helper link actions without changing destinations or hardware behavior.
+- Blocked by: none
+- Ready to hand off: Upgrade Helper generated link actions now match the shared action-button treatment; focused render, operator-flow contract, and compile checks pass.
+- Files claimed:
+  - templates/partials/components/upgrade_components.html
+  - tests/test_upgrade_helper.py
+- Shared files touched with caution:
+  - SESSION_COORDINATION.md
+  - templates/partials/components/upgrade_components.html
+- Last changed:
+  - 2026-05-26 05:44 EDT - Claimed narrow Upgrade Helper generated link-action feedback slice for the 14-hour quality run.
+  - 2026-05-26 05:44 EDT - Added shared action-button class to generated Upgrade Helper links and verified focused route/template coverage.
+- Next intended change:
+  - Continue with a separate backlog cycle; suggested next target is another unclaimed generated/link action consistency audit or a setup-page status placement guard.
+
 ### Session: reports-download-action-feedback-quality-cycle
 - Status: done
 - Branch: codex/14h-quality-run

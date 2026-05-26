@@ -1,0 +1,27 @@
+Task chosen: Upgrade Helper generated link action consistency.
+
+Files inspected: required session docs, `.codex/*`, `SESSION_COORDINATION.md`, Upgrade Helper component/test files, plus nearby page patterns for QNAP, Windows, Reports, History, Kits, Dashboard, and OVF Templates.
+
+Files changed:
+- [templates/partials/components/upgrade_components.html](/home/administrator/lab-builder/templates/partials/components/upgrade_components.html:80)
+- [tests/test_upgrade_helper.py](/home/administrator/lab-builder/tests/test_upgrade_helper.py:82)
+- [SESSION_COORDINATION.md](/home/administrator/lab-builder/SESSION_COORDINATION.md:40)
+
+Buttons/routes/forms verified:
+- `Open iLO` -> `/ilo`
+- `Open ESXi settings` -> `/esxi`
+- `Open Execution` -> `/execution`
+- `Upload firmware/media` -> `#upgrade-media-upload`
+- `Open Reports` -> `/configs`
+- Confirmed generated HTMX Upgrade Helper action buttons still render with their existing `hx-post` routes.
+
+Checks run:
+- `.venv/bin/python -m pytest tests/test_upgrade_helper.py` -> 21 passed
+- `.venv/bin/python -m pytest tests/test_operator_flow_contract.py` -> 6 passed
+- `.venv/bin/python -m compileall app` -> passed
+
+No real hardware was used. This was route/template rendering only; `scan_upgrade_media` remained mocked in the focused tests.
+
+Remaining risk: I did not run a browser screenshot pass, so this verifies rendered markup rather than visual layout pixels. Existing untracked `artifacts/codex-runs/14h-cycle-059*` files were left untouched.
+
+Recommended next task: a separate small audit of another unclaimed generated/link action surface or a setup-page status placement guard.
