@@ -38,6 +38,26 @@ Copy this block and update it in place.
 
 ## Active Sessions
 
+### Session: netapp-cisco-style-operator-mode-cleanup
+- Status: active
+- Branch: codex/14h-quality-run
+- Scope owner: NetApp page operator-mode cleanup and debug-mode consolidation
+- Working on: Simplifying the NetApp setup page into Cisco-like operator cards with saved/current/discovered value separation and moving raw diagnostics into Debug Mode.
+- Blocked by: none
+- Ready to hand off: none
+- Files claimed:
+  - templates/partials/pages/netapp.html
+  - app/modules/netapp/routes.py
+  - app/modules/netapp/service.py
+  - tests/test_netapp_module.py
+  - tests/test_netapp_upgrade.py
+- Shared files touched with caution:
+  - SESSION_COORDINATION.md
+- Last changed:
+  - 2026-05-26 14:20 EDT - Claimed NetApp operator-mode cleanup slice after inspecting NetApp routes, service, template, tests, and Cisco page reference.
+- Next intended change:
+  - Simplify NetApp template and add focused NetApp render tests.
+
 ### Session: netapp-cisco-like-console-reset-page
 - Status: done
 - Branch: codex/14h-quality-run

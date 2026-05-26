@@ -1,42 +1,31 @@
-You are running an overnight Lab Builder physical-equipment hardening pass until 6:00 AM local time.
+You are running an overnight Lab Builder preparation and hardening pass until 6:00 AM local time.
 
-Primary physical test scope:
-- Cisco switch
-- NetApp
-- HPE iLO
-- ESXi install/configuration flow
-- OVF/OVA template handling and deployment prep
+Important current condition:
+- The operator is not connected to physical lab equipment tonight.
+- Do not run real physical hardware actions tonight.
+- Do not attempt to contact Cisco, NetApp, iLO, ESXi, or any real device tonight.
+- All testing tonight must be mocks, fake clients, fake console sessions, dry-runs, route tests, template tests, unit tests, contract tests, and documentation/checklist work.
+- The home/lab network for later testing will be 192.168.1.0/24.
+- There will be no NetApp physically available tonight, but NetApp must be prepared for real testing tomorrow.
+
+Primary prep scope:
+- Cisco switch workflow
+- NetApp workflow
+- iLO workflow
+- ESXi install/configuration workflow
+- OVF/OVA workflow
 
 Primary product goal:
-Make the physical setup pages consistent, clean, and useful.
+Prepare the app so tomorrow's real hardware testing is clean, guided, and consistent.
 
 The Cisco setup page is the model:
-- clear guided access/setup flow
-- current state separated from saved kit config
+- clear guided setup flow
+- current/discovered state separated from saved kit config
 - clear next step
 - clear last result
-- logs/status in a consistent place
-- advanced details available in Debug Mode/details
-- no clutter on the operator path
-
-The NetApp page must be redesigned to follow the same operator pattern as Cisco:
-- Get initial access
-- Assign/verify management IPs
-- Verify SSH/API access
-- Discover current state
-- Configure required settings
-- Prepare/perform upgrade if needed
-- Show completed state
-
-NetApp-specific intent:
-- The NetApp page currently has too much redundant/cluttered functionality.
-- Remove, hide, consolidate, or move redundant NetApp controls into Debug Mode.
-- Do not delete useful troubleshooting capability; move it to Debug Mode/details.
-- Operator Mode should show the least amount of information needed to complete setup.
-- Debug Mode should show raw discovery, API responses, logs, routes, artifacts, and troubleshooting detail.
-- NetApp setup should feel similar to Cisco: guide the operator from first access to completed configuration.
-- If NetApp initial setup requires serial/SP/cluster setup rather than a Cisco-style console, represent that honestly in the UI.
-- Do not pretend NetApp is Cisco, but make the workflow experience consistent.
+- consistent logs/status placement
+- advanced details moved to Debug Mode/details
+- minimal Operator Mode
 
 Two UI modes:
 1. Operator Mode:
@@ -46,7 +35,7 @@ Two UI modes:
    - least amount of information needed to complete the job
    - clear next step
    - clear last result
-   - consistent structure across Cisco, NetApp, iLO, ESXi, OVF
+   - consistent structure across Cisco, NetApp, iLO, ESXi, and OVF
 
 2. Debug Mode:
    - detailed
@@ -58,97 +47,95 @@ Two UI modes:
    - test history
    - recovery suggestions
 
-UX rules:
-- Every physical setup page should clearly show:
-  1. What this page is for
-  2. What to do next
-  3. What happened last
-  4. Current completion state
-  5. A consistent place for logs/status
-  6. A clear way to open Debug Mode/details
-- Use progressive disclosure: hide advanced/debug detail until needed.
-- Remove duplicate buttons, repeated explanations, and conflicting status blocks.
-- Separate discovered/current state from saved kit config from values ready to apply.
-- Do not show contradictory messages like "IP found" and "nothing set" without explaining the difference.
-- Make destructive actions clearly labeled and manual/operator-triggered.
+Hard UI consistency requirement:
+Each physical setup page should clearly show:
+1. What this page is for
+2. What to do next
+3. What happened last
+4. Current completion state
+5. A consistent place for logs/status
+6. A clear way to open Debug Mode/details
 
-Physical testing rules:
-- Real physical tests are allowed only for the available Cisco switch, NetApp, iLO/server, ESXi target, and OVF/OVA workflow tied to that equipment.
-- Destructive real hardware actions are allowed only when manual/operator-triggered and clearly labeled.
-- Automated pytest tests must never touch real hardware.
-- Automated tests must use fake clients, fake console sessions, mocks, dry-runs, route tests, or template tests.
-- Do not log passwords, secrets, tokens, or private keys.
+Network note:
+- Tomorrow/home lab network will be 192.168.1.0/24.
+- Use 192.168.1.0/24 in examples, suggested defaults, docs, dry-run fixtures, and test scenarios where appropriate.
+- Do not globally overwrite kit values if the saved kit explicitly uses another network.
+- Clearly separate saved config, discovered/current state, and suggested values.
 
-Cisco requirements:
-- Fully test factory-reset switch onboarding.
-- Handle the Cisco initial setup dialog.
-- Handle IOS XE forced enable secret path after answering no.
-- Validate Cisco password policy.
-- At the final setup wizard menu, choose 0, never 2.
-- End at completed Access Settings.
+Cisco prep requirements:
+- Prepare the factory-reset switch workflow for tomorrow.
+- Use fake console/session tests only tonight.
+- Support:
+  - initial config dialog
+  - forced enable secret after answering no
+  - password policy validation
+  - final setup menu choosing 0, never 2
+  - normal CLI bootstrap after wizard fallback
+  - completed Access Settings state
+- Make manual real-switch test checklist clear for tomorrow.
 
-NetApp requirements:
-- Simplify the NetApp operator page so it mirrors the Cisco guided setup structure.
-- Identify redundant/stupid/duplicated NetApp controls and either remove them, consolidate them, or move them to Debug Mode.
-- NetApp Operator Mode should guide:
-  1. Physical/management access status
+NetApp prep requirements:
+- No physical NetApp available tonight.
+- Do not attempt real NetApp API, SSH, SP, or console access.
+- Prepare the NetApp page for tomorrow's physical testing.
+- Make NetApp workflow similar to Cisco operator flow:
+  1. initial access/status
   2. SP/e0M/cluster/SVM management IP plan
-  3. Apply or verify management IPs
-  4. Verify SSH/API access
-  5. Discover controllers/nodes/interfaces/version
-  6. Validate readiness
-  7. Configure required settings
-  8. Upgrade readiness/upgrade action if available
-  9. Completed state
-- Use existing Lab Builder NetApp IP conventions where available:
-  - Controller A SP offset .13
-  - Controller B SP offset .14
-  - cluster management .45
-  - Controller A e0M/node management .46
-  - Controller B e0M/node management .47
-  - SVM management .48
-  - iSCSI LIFs commonly .51-.54
-- Do not globally hard-code those conventions if kit config overrides them.
-- Show conventions as suggestions/defaults, not hidden magic.
-- Debug Mode should include raw ONTAP/API/SSH details, route info, discovered state, and recovery guidance.
-- If a NetApp action cannot be tested physically tonight, create dry-run/contract/template tests and clearly mark it as not physically tested.
+  3. apply/verify management IPs
+  4. verify SSH/API access
+  5. discover controllers/nodes/interfaces/version
+  6. validate readiness
+  7. configure required settings
+  8. upgrade readiness/action if available
+  9. completed state
+- Remove, hide, consolidate, or move redundant NetApp controls to Debug Mode.
+- Do not delete useful diagnostics. Move them to Debug Mode/details.
+- Use mocks/dry-runs and tests to prepare everything possible for tomorrow.
+- Add/update a NetApp manual test checklist for tomorrow.
 
-iLO requirements:
-- Test physical iLO connection, credentials, current state read, DNS/network settings, SNMP/settings if present, virtual media readiness, power state detection, and safe reset/power flow.
-- Operator Mode should be clean.
-- Debug Mode should include Redfish details and recovery guidance.
+iLO prep requirements:
+- Do not contact real iLO tonight.
+- Prepare mock/dry-run coverage and UI consistency.
+- Operator Mode clean.
+- Debug Mode includes Redfish details/recovery guidance when available.
 
-ESXi requirements:
-- Test ESXi preparation/install workflow against the available server.
-- Validate iLO virtual media mount, boot override, power state handling, ISO selection/build path, kickstart/password validation, and install status/log clarity.
-- Physical install must be manual/operator-triggered and clearly logged.
+ESXi prep requirements:
+- Do not run a real ESXi install tonight.
+- Prepare dry-run/mock/template tests for ISO, kickstart, iLO virtual media, boot override, and install status clarity.
+- Operator Mode clean.
+- Debug Mode detailed.
 
-OVF/OVA requirements:
-- Test OVF/OVA template registration, selected template display, file/path validation, and deployment prep.
+OVF/OVA prep requirements:
+- Prepare OVF/OVA template registration, selected template display, file/path validation, and deployment prep.
 - If deployment requires unavailable infrastructure, use dry-run/mocks and show limitation clearly.
+
+Testing rules:
+- Automated pytest tests must never touch real hardware.
+- No real serial, SSH, Redfish, ONTAP, ESXi, or vCenter calls tonight.
+- Use fake clients and monkeypatching for all external calls.
+- Keep tests green.
 
 Code quality rules:
 - Work in small focused changes.
 - Prefer shared components/helpers for repeated page patterns.
 - Remove functionality where it is not useful for completing the physical job.
-- Do not delete useful debug capability; move it into Debug Mode/details.
-- Preserve existing working behavior unless it is clearly broken.
+- Do not delete useful debug capability. Move it into Debug Mode/details.
+- Preserve existing working behavior unless clearly broken.
 - Add/update tests for changed behavior.
-- Keep tests green.
 - Commit only after pytest and compileall pass.
-- Do not push automatically.
+- Do not push automatically unless explicitly asked.
 
 Time management:
-- First priority: Cisco factory reset to completed Access Settings.
-- Second priority: NetApp page simplification and guided setup structure.
-- Third priority: iLO physical flow consistency.
-- Fourth priority: ESXi/OVF physical/prep flow consistency.
-- Near the end of the run, stop starting big changes and focus on tests, stability, and handoff notes.
+- First priority: Cisco factory reset prep and checklist.
+- Second priority: NetApp Cisco-style operator flow prep for tomorrow.
+- Third priority: iLO consistency/mock prep.
+- Fourth priority: ESXi/OVF prep.
+- Near the end, stop starting big changes and focus on tests, stability, and handoff notes.
 
 Before editing each cycle:
 - Pick one focused task.
 - State which page/flow is being worked on.
-- State whether real hardware, dry-run, mock, or template/route tests will be used.
+- State that tonight is mock/dry-run/test-only, not real hardware.
 - List files expected to change.
 
 After each cycle:
