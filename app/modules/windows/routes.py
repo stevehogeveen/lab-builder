@@ -16,6 +16,25 @@ router = APIRouter()
 ovf_service = OvfTemplateService()
 
 
+WINDOWS_SETTINGS_TEXT_FIELDS = {
+    "windows_vm_name",
+    "windows_admin_password",
+    "windows_vsphere_host",
+    "windows_vsphere_username",
+    "windows_vsphere_password",
+    "windows_vsphere_datacenter",
+    "windows_vsphere_datastore",
+    "windows_vsphere_network",
+    "windows_vsphere_folder",
+    "windows_vsphere_resource_pool",
+    "windows_winrm_username",
+    "windows_winrm_password",
+    "windows_winrm_port",
+}
+WINDOWS_SETTINGS_CHECKBOX_FIELDS = {"windows_winrm_use_https", "included_windows"}
+WINDOWS_SETTINGS_FORM_FIELDS = WINDOWS_SETTINGS_TEXT_FIELDS | WINDOWS_SETTINGS_CHECKBOX_FIELDS
+
+
 def _apply_ovf_template_to_windows_cfg(windows_cfg: dict[str, Any], template: dict[str, Any]) -> None:
     windows_cfg["ovf_template_id"] = str(template.get("id") or "")
     windows_cfg["source_image_path"] = str(template.get("descriptor_path") or "")
@@ -36,6 +55,54 @@ def _apply_ovf_template_to_windows_cfg(windows_cfg: dict[str, Any], template: di
         "disk_capacity": template.get("disk_capacity", ""),
     }
     windows_cfg["install_plan"] = {}
+
+
+def _apply_windows_settings_form(cfg: dict[str, Any], form: dict[str, Any]) -> bool:
+    if not any(key in form for key in WINDOWS_SETTINGS_FORM_FIELDS):
+        return False
+
+    windows_cfg = cfg.setdefault("windows", {})
+    cfg.setdefault("included", {})
+
+    if "windows_vm_name" in form:
+        windows_cfg["vm_name"] = str(form.get("windows_vm_name") or "")
+    if "windows_admin_password" in form:
+        windows_cfg["admin_password"] = preserve_secret(
+            str(form.get("windows_admin_password") or ""),
+            windows_cfg.get("admin_password"),
+        )
+    if "windows_vsphere_host" in form:
+        windows_cfg["vsphere_host"] = str(form.get("windows_vsphere_host") or "").strip()
+    if "windows_vsphere_username" in form:
+        windows_cfg["vsphere_username"] = str(form.get("windows_vsphere_username") or "").strip()
+    if form.get("windows_vsphere_password"):
+        windows_cfg["vsphere_password"] = str(form.get("windows_vsphere_password") or "")
+    if "windows_vsphere_datacenter" in form:
+        windows_cfg["vsphere_datacenter"] = str(form.get("windows_vsphere_datacenter") or "").strip()
+    if "windows_vsphere_datastore" in form:
+        windows_cfg["vsphere_datastore"] = str(form.get("windows_vsphere_datastore") or "").strip()
+    if "windows_vsphere_network" in form:
+        windows_cfg["vsphere_network"] = str(form.get("windows_vsphere_network") or "").strip()
+    if "windows_vsphere_folder" in form:
+        windows_cfg["vsphere_folder"] = str(form.get("windows_vsphere_folder") or "").strip()
+    if "windows_vsphere_resource_pool" in form:
+        windows_cfg["vsphere_resource_pool"] = str(form.get("windows_vsphere_resource_pool") or "").strip()
+    if "windows_winrm_username" in form:
+        windows_cfg["winrm_username"] = str(form.get("windows_winrm_username") or "").strip() or "Administrator"
+    if form.get("windows_winrm_password"):
+        windows_cfg["winrm_password"] = str(form.get("windows_winrm_password") or "")
+    if "windows_winrm_port" in form:
+        try:
+            windows_cfg["winrm_port"] = int(str(form.get("windows_winrm_port") or "5986"))
+        except ValueError:
+            windows_cfg["winrm_port"] = 5986
+
+    full_settings_form = WINDOWS_SETTINGS_TEXT_FIELDS.issubset(set(form.keys()))
+    if "windows_winrm_use_https" in form or full_settings_form:
+        windows_cfg["winrm_use_https"] = form.get("windows_winrm_use_https") == "on"
+    if "included_windows" in form or full_settings_form:
+        cfg["included"]["windows"] = form.get("included_windows") == "on"
+    return True
 
 
 async def save_windows_settings_handler(
@@ -59,26 +126,26 @@ async def save_windows_settings_handler(
     included_windows: str | None = Form(None),
 ):
     cfg = runtime["load_kit_config"]()
-    cfg["windows"]["vm_name"] = windows_vm_name
-    cfg["windows"]["admin_password"] = preserve_secret(windows_admin_password, cfg["windows"].get("admin_password"))
-    cfg["windows"]["vsphere_host"] = windows_vsphere_host.strip()
-    cfg["windows"]["vsphere_username"] = windows_vsphere_username.strip()
-    if windows_vsphere_password:
-        cfg["windows"]["vsphere_password"] = windows_vsphere_password
-    cfg["windows"]["vsphere_datacenter"] = windows_vsphere_datacenter.strip()
-    cfg["windows"]["vsphere_datastore"] = windows_vsphere_datastore.strip()
-    cfg["windows"]["vsphere_network"] = windows_vsphere_network.strip()
-    cfg["windows"]["vsphere_folder"] = windows_vsphere_folder.strip()
-    cfg["windows"]["vsphere_resource_pool"] = windows_vsphere_resource_pool.strip()
-    cfg["windows"]["winrm_username"] = windows_winrm_username.strip() or "Administrator"
-    if windows_winrm_password:
-        cfg["windows"]["winrm_password"] = windows_winrm_password
-    try:
-        cfg["windows"]["winrm_port"] = int(windows_winrm_port or 5986)
-    except ValueError:
-        cfg["windows"]["winrm_port"] = 5986
-    cfg["windows"]["winrm_use_https"] = windows_winrm_use_https == "on"
-    cfg["included"]["windows"] = included_windows == "on"
+    form = {
+        "windows_vm_name": windows_vm_name,
+        "windows_admin_password": windows_admin_password,
+        "windows_vsphere_host": windows_vsphere_host,
+        "windows_vsphere_username": windows_vsphere_username,
+        "windows_vsphere_password": windows_vsphere_password,
+        "windows_vsphere_datacenter": windows_vsphere_datacenter,
+        "windows_vsphere_datastore": windows_vsphere_datastore,
+        "windows_vsphere_network": windows_vsphere_network,
+        "windows_vsphere_folder": windows_vsphere_folder,
+        "windows_vsphere_resource_pool": windows_vsphere_resource_pool,
+        "windows_winrm_username": windows_winrm_username,
+        "windows_winrm_password": windows_winrm_password,
+        "windows_winrm_port": windows_winrm_port,
+    }
+    if windows_winrm_use_https is not None:
+        form["windows_winrm_use_https"] = windows_winrm_use_https
+    if included_windows is not None:
+        form["included_windows"] = included_windows
+    _apply_windows_settings_form(cfg, form)
     cfg = runtime["apply_ip_plan"](cfg)
     runtime["save_kit_config"](cfg)
     runtime["append_activity_event"](
@@ -289,6 +356,7 @@ async def plan_windows_install_handler(
     return_page: str = Form("windows"),
 ):
     cfg = runtime["load_kit_config"]()
+    _apply_windows_settings_form(cfg, {key: value for key, value in dict(await request.form()).items()})
     windows_cfg = cfg.get("windows", {}) or {}
     warnings: list[str] = []
     image_path = str(windows_cfg.get("source_image_path") or "").strip()
@@ -346,7 +414,7 @@ async def plan_windows_install_handler(
         cfg["site"]["name"],
         "windows_install_planned",
         workflow="windows",
-        summary="Built a dry-run Windows VM install plan from saved settings.",
+        summary="Built a dry-run Windows VM install plan from current Windows settings.",
         target=plan.get("vm_name") or "",
         details=[f"Warnings: {len(warnings)}"],
     )
@@ -376,8 +444,11 @@ async def probe_windows_vsphere_handler(
     return_page: str = Form("windows"),
 ):
     cfg = runtime["load_kit_config"]()
+    posted_settings = _apply_windows_settings_form(cfg, {key: value for key, value in dict(await request.form()).items()})
     windows_cfg = cfg.get("windows", {}) or {}
     if not str(windows_cfg.get("vsphere_host") or "").strip() or not str(windows_cfg.get("vsphere_username") or "").strip() or not str(windows_cfg.get("vsphere_password") or ""):
+        if posted_settings:
+            runtime["save_kit_config"](cfg)
         return runtime["render_page"](request, cfg, active_page=return_page, error_message="vSphere probe failed: host, username, and password are required.")
     try:
         client = runtime["build_vsphere_client"](windows_cfg)
@@ -411,9 +482,12 @@ async def probe_windows_winrm_handler(
     return_page: str = Form("windows"),
 ):
     cfg = runtime["load_kit_config"]()
+    posted_settings = _apply_windows_settings_form(cfg, {key: value for key, value in dict(await request.form()).items()})
     windows_cfg = cfg.get("windows", {}) or {}
     host = str(windows_cfg.get("ip_address") or cfg.get("ip_plan", {}).get("windows") or "").strip()
     if not host or not str(windows_cfg.get("winrm_username") or "").strip() or not str(windows_cfg.get("winrm_password") or ""):
+        if posted_settings:
+            runtime["save_kit_config"](cfg)
         return runtime["render_page"](request, cfg, active_page=return_page, error_message="WinRM probe failed: host, username, and password are required.")
     try:
         client = runtime["build_winrm_client"](windows_cfg, host)

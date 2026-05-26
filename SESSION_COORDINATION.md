@@ -125,6 +125,26 @@ Copy this block and update it in place.
 - Next intended change:
   - Continue with a separate backlog cycle; suggested next target is another unclaimed setup page button/route audit.
 
+### Session: windows-quality-cycle
+- Status: done
+- Branch: codex/14h-quality-run
+- Scope owner: Windows setup page button/route audit
+- Working on: Completed Windows visible-form action fix for probe and dry-run plan buttons
+- Blocked by: none
+- Ready to hand off: Windows probe and plan actions include current visible setup values; focused tests and compile check pass
+- Files claimed:
+  - app/modules/windows/routes.py
+  - templates/partials/pages/windows.html
+  - tests/test_app.py
+- Shared files touched with caution:
+  - SESSION_COORDINATION.md
+  - tests/test_app.py
+- Last changed:
+  - 2026-05-25 21:32 EDT - Claimed narrow Windows visible-form action slice for the 14-hour quality run.
+  - 2026-05-25 21:36 EDT - Wired Windows probe and dry-run plan actions to visible form values and verified with focused tests.
+- Next intended change:
+  - Continue with a separate backlog cycle; suggested next target is another unclaimed setup page button/route audit.
+
 ### Session: rest-of-app
 - Status: paused
 - Branch: experience/operator-companion

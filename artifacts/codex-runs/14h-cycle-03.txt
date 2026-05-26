@@ -1,0 +1,30 @@
+Task chosen: Windows setup page button/flow audit for stale visible form values.
+
+Files inspected: `.codex/mission.md`, `.codex/rules.md`, `.codex/backlog.md`, coordination/docs, [windows.html](/home/administrator/lab-builder/templates/partials/pages/windows.html), [routes.py](/home/administrator/lab-builder/app/modules/windows/routes.py), [test_app.py](/home/administrator/lab-builder/tests/test_app.py).
+
+Files changed:
+- [SESSION_COORDINATION.md](/home/administrator/lab-builder/SESSION_COORDINATION.md)
+- [app/modules/windows/routes.py](/home/administrator/lab-builder/app/modules/windows/routes.py)
+- [templates/partials/pages/windows.html](/home/administrator/lab-builder/templates/partials/pages/windows.html)
+- [tests/test_app.py](/home/administrator/lab-builder/tests/test_app.py)
+
+Buttons/routes/forms verified:
+- `Save Windows setup` -> `/save-windows-settings`
+- `Probe vSphere` -> `/probe-windows-vsphere`
+- `Probe WinRM` -> `/probe-windows-winrm`
+- `Plan Windows install (dry-run)` -> `/plan-windows-install`
+
+Change made: Windows probe and dry-run plan actions now include `#windows-settings-form`, and the route handlers apply posted visible values before probing/planning. Blank password fields still preserve saved secrets.
+
+Tests/checks run:
+- `.venv/bin/python -m pytest tests/test_app.py -k "windows_page_wires_visible_form_actions or plan_windows_install_uses_posted_visible_form_values or probe_windows_vsphere_uses_posted_visible_form_values or probe_windows_winrm_uses_posted_visible_form_values or upload_windows_image_and_plan_dry_run or windows_probe_routes_require_saved_credentials or save_esxi_windows_and_qnap_page_settings"`: 7 passed
+- `.venv/bin/python -m compileall app`: passed
+- `git diff --check`: passed
+
+Real hardware used: none.
+
+Mocked/dry-run only: vSphere and WinRM probes were mocked; Windows install planning stayed dry-run/template-route only.
+
+Remaining risks: I did not run the full pytest suite or a browser HTMX manual pass. Existing untracked `artifacts/codex-runs/14h-cycle-03*` files were left untouched.
+
+Recommended next task: another unclaimed setup page button/route audit, likely QNAP or ESXi visible-form actions.

@@ -13274,6 +13274,40 @@ def test_verify_final_ilo_state_reports_hostname_dns_and_snmp_mismatches():
     assert result["matched"] is False
 
 
+def _windows_visible_form_data(**overrides):
+    data = {
+        "return_page": "windows",
+        "windows_vm_name": "win-posted",
+        "windows_admin_password": "AdminPass1!",
+        "windows_vsphere_host": "192.168.1.10",
+        "windows_vsphere_username": "root",
+        "windows_vsphere_password": "VspherePass1!",
+        "windows_vsphere_datacenter": "ha-datacenter",
+        "windows_vsphere_datastore": "datastore1",
+        "windows_vsphere_network": "VM Network",
+        "windows_vsphere_folder": "",
+        "windows_vsphere_resource_pool": "",
+        "windows_winrm_username": "Administrator",
+        "windows_winrm_password": "WinRmPass1!",
+        "windows_winrm_port": "5986",
+        "windows_winrm_use_https": "on",
+        "included_windows": "on",
+    }
+    data.update(overrides)
+    return data
+
+
+def test_windows_page_wires_visible_form_actions(client):
+    response = client.get("/windows")
+
+    assert response.status_code == 200
+    assert 'id="windows-settings-form"' in response.text
+    assert 'hx-post="/save-windows-settings"' in response.text
+    assert 'hx-post="/probe-windows-vsphere" hx-include="#windows-settings-form"' in response.text
+    assert 'hx-post="/probe-windows-winrm" hx-include="#windows-settings-form"' in response.text
+    assert 'hx-post="/plan-windows-install" hx-include="#windows-settings-form"' in response.text
+
+
 def test_upload_windows_image_rejects_non_ova_ovf(client):
     cfg = main.default_config()
     cfg["site"]["name"] = "Windows Upload Kit"
@@ -13285,6 +13319,136 @@ def test_upload_windows_image_rejects_non_ova_ovf(client):
     )
     assert response.status_code == 200
     assert "Only .ova or .ovf uploads are supported." in response.text
+
+
+def test_plan_windows_install_uses_posted_visible_form_values(client):
+    cfg = main.default_config()
+    cfg["site"]["name"] = "Windows Posted Plan Kit"
+    cfg["shared_network"]["subnet"] = "192.168.1.0/24"
+    cfg["shared_network"]["dns_servers"] = ["192.168.1.1"]
+    cfg["ip_plan"]["subnet"] = "192.168.1.0/24"
+    cfg["ip_plan"]["gateway"] = "192.168.1.1"
+    cfg["ip_plan"]["windows"] = "192.168.1.20"
+    image_path = main.EXPORTS_DIR / "windows-images" / "posted.ova"
+    image_path.parent.mkdir(parents=True, exist_ok=True)
+    image_path.write_bytes(b"ova-bytes")
+    cfg["windows"]["source_image_path"] = str(image_path)
+    cfg["windows"]["source_image_name"] = "posted.ova"
+    cfg["windows"]["source_image_kind"] = "ova"
+    main.save_kit_config(cfg)
+
+    response = client.post("/plan-windows-install", data=_windows_visible_form_data())
+
+    assert response.status_code == 200
+    assert "Windows install plan preview" in response.text
+    assert "AdminPass1!" not in response.text
+    assert "VspherePass1!" not in response.text
+    assert "WinRmPass1!" not in response.text
+    saved = main.load_kit_config("Windows-Posted-Plan-Kit")
+    windows_cfg = saved["windows"]
+    install_plan = windows_cfg.get("install_plan") or {}
+    assert saved["included"]["windows"] is True
+    assert windows_cfg["vm_name"] == "win-posted"
+    assert windows_cfg["admin_password"] == "AdminPass1!"
+    assert windows_cfg["vsphere_host"] == "192.168.1.10"
+    assert windows_cfg["vsphere_password"] == "VspherePass1!"
+    assert install_plan["vm_name"] == "win-posted"
+    assert install_plan["vsphere_host"] == "192.168.1.10"
+    assert install_plan["datastore"] == "datastore1"
+    assert install_plan["network"] == "VM Network"
+    assert install_plan["ready"] is True
+
+
+def test_probe_windows_vsphere_uses_posted_visible_form_values(client, monkeypatch):
+    seen = {}
+
+    class FakeVsphereClient:
+        def __init__(self, config):
+            seen["host"] = config.host
+            seen["username"] = config.username
+            seen["password"] = config.password
+
+        def inventory_summary(self):
+            return {
+                "connected": True,
+                "product": "VMware ESXi",
+                "api_version": "8.0",
+                "datacenters": ["ha-datacenter"],
+            }
+
+    monkeypatch.setattr(main, "VsphereClient", FakeVsphereClient)
+    cfg = main.default_config()
+    cfg["site"]["name"] = "Windows Posted Probe Kit"
+    main.save_kit_config(cfg)
+
+    response = client.post(
+        "/probe-windows-vsphere",
+        data=_windows_visible_form_data(
+            windows_vsphere_host="192.168.1.30",
+            windows_vsphere_username="root",
+            windows_vsphere_password="ProbePass1!",
+        ),
+    )
+
+    assert response.status_code == 200
+    assert "vSphere interface reachable" in response.text
+    assert "ProbePass1!" not in response.text
+    assert seen == {"host": "192.168.1.30", "username": "root", "password": "ProbePass1!"}
+    saved = main.load_kit_config("Windows-Posted-Probe-Kit")
+    assert saved["windows"]["vsphere_host"] == "192.168.1.30"
+    assert saved["windows"]["vsphere_password"] == "ProbePass1!"
+    assert saved["windows"]["last_vsphere_probe"]["connected"] is True
+
+
+def test_probe_windows_winrm_uses_posted_visible_form_values(client, monkeypatch):
+    seen = {}
+
+    class FakeWinRMClient:
+        def __init__(self, config):
+            self.config = config
+            seen["host"] = config.host
+            seen["username"] = config.username
+            seen["password"] = config.password
+            seen["port"] = config.port
+            seen["use_https"] = config.use_https
+
+        def probe(self):
+            return {
+                "connected": True,
+                "endpoint": f"https://{self.config.host}:{self.config.port}/wsman",
+                "status_code": 200,
+                "stdout": "WIN-POSTED",
+                "stderr": "",
+            }
+
+    monkeypatch.setattr(main, "WinRMClient", FakeWinRMClient)
+    cfg = main.default_config()
+    cfg["site"]["name"] = "Windows Posted WinRM Kit"
+    cfg["ip_plan"]["windows"] = "192.168.1.40"
+    main.save_kit_config(cfg)
+
+    response = client.post(
+        "/probe-windows-winrm",
+        data=_windows_visible_form_data(
+            windows_winrm_username="Administrator",
+            windows_winrm_password="PostedWinRm1!",
+            windows_winrm_port="5986",
+        ),
+    )
+
+    assert response.status_code == 200
+    assert "WinRM probe complete" in response.text
+    assert "PostedWinRm1!" not in response.text
+    assert seen == {
+        "host": "192.168.1.40",
+        "username": "Administrator",
+        "password": "PostedWinRm1!",
+        "port": 5986,
+        "use_https": True,
+    }
+    saved = main.load_kit_config("Windows-Posted-WinRM-Kit")
+    assert saved["windows"]["winrm_password"] == "PostedWinRm1!"
+    assert saved["windows"]["last_winrm_probe"]["connected"] is True
 
 
 def test_upload_windows_image_and_plan_dry_run(client):
