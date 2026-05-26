@@ -69,12 +69,14 @@ def test_global_settings_aliases_wire_visible_controls(global_settings_client):
         assert 'id="global-settings-form"' in response.text
         assert 'name="return_page" value="global_settings"' in response.text
         assert 'hx-post="/save-global-settings"' in response.text
+        assert 'data-action-complete="Shared defaults saved."' in response.text
         assert 'type="submit">Save shared defaults' in response.text
 
         populate_button = _button_containing(response.text, 'hx-post="/populate-setup-sections"')
         assert 'type="button"' in populate_button
         assert 'hx-include="#global-settings-form"' in populate_button
         assert 'hx-target="#main-content"' in populate_button
+        assert 'data-action-complete="Setup sections populated."' in populate_button
         assert "Populate setup sections from IP plan" in populate_button
 
         add_user_button = _button_containing(response.text, "snmpUsers.push")

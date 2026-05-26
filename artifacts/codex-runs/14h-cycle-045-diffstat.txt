@@ -1,0 +1,4 @@
+ SESSION_COORDINATION.md                     | 19 +++++++++++++++++++
+ templates/partials/pages/configuration.html |  5 +++--
+ tests/test_global_settings_page.py          |  2 ++
+ 3 files changed, 24 insertions(+), 2 deletions(-)
