@@ -38,6 +38,24 @@ Copy this block and update it in place.
 
 ## Active Sessions
 
+### Session: reports-related-links-consistency-quality-cycle
+- Status: done
+- Branch: codex/14h-quality-run
+- Scope owner: Reports related-report link visual consistency
+- Working on: Completed shared action-button treatment and focused render coverage for existing Reports related-report links without changing navigation behavior.
+- Blocked by: none
+- Ready to hand off: Reports related-report links remain native `/configs` query navigation; focused Reports, operator-flow contract, and compile checks pass.
+- Files claimed:
+  - templates/partials/pages/reports.html
+  - tests/test_reports.py
+- Shared files touched with caution:
+  - SESSION_COORDINATION.md
+- Last changed:
+  - 2026-05-26 06:30 EDT - Claimed narrow Reports related-report link consistency slice for the 14-hour quality run.
+  - 2026-05-26 06:30 EDT - Added shared action-button class to Reports related-report links and verified focused checks.
+- Next intended change:
+  - Continue with a separate backlog cycle; suggested next target is another unclaimed native navigation/control consistency audit or setup-page status placement guard.
+
 ### Session: reports-search-button-consistency-quality-cycle
 - Status: done
 - Branch: codex/14h-quality-run

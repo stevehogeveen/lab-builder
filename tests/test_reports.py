@@ -90,7 +90,7 @@ def test_reports_page_wires_visible_controls_to_report_routes(reports_client):
     assert '<button class="btn action-button" type="submit">Download</button>' in response.text
     assert str(report_path) in response.text
     assert str(run_summary_path) in response.text
-    assert 'href="/configs?report_query=192.168.1.11"' in response.text
+    assert '<a class="btn action-button" href="/configs?report_query=192.168.1.11">Related reports</a>' in response.text
     assert "Open bundle" in response.text
     assert "View" in response.text
     assert "Download" in response.text
