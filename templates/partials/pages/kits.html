@@ -53,7 +53,7 @@
                         {% endfor %}
                     </select>
                 </label>
-                <button class="btn" type="submit">Load selected kit</button>
+                <button class="btn action-button" type="submit">Load selected kit</button>
             </form>
         </div>
     </section>
@@ -84,7 +84,7 @@
                         <form hx-post="/load-kit" hx-target="#main-content" hx-swap="outerHTML" data-action-title="Loading kit" data-action-start="Switching the active kit.">
                             <input type="hidden" name="return_page" value="kits">
                             <input type="hidden" name="selected_kit" value="{{ kit.name }}">
-                            <button class="btn" type="submit">Load</button>
+                            <button class="btn action-button" type="submit">Load</button>
                         </form>
                         {% endif %}
                     </div>

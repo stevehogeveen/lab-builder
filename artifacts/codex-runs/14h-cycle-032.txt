@@ -1,0 +1,19 @@
+Task chosen: Kits page load-kit action feedback consistency.
+
+Changed [kits.html](/home/administrator/lab-builder/templates/partials/pages/kits.html:56) so both Kits load controls now use `btn action-button`, matching the page’s create/clean/delete actions. Updated [tests/test_app.py](/home/administrator/lab-builder/tests/test_app.py:12194) to verify the load buttons render with shared action feedback styling. Also updated [SESSION_COORDINATION.md](/home/administrator/lab-builder/SESSION_COORDINATION.md:40).
+
+Files inspected: required session docs, `.codex/mission.md`, `.codex/rules.md`, `.codex/backlog.md`, [kits.html](/home/administrator/lab-builder/templates/partials/pages/kits.html:1), [app/main.py](/home/administrator/lab-builder/app/main.py:16142), [app/modules/configs/routes.py](/home/administrator/lab-builder/app/modules/configs/routes.py:59), and [tests/test_app.py](/home/administrator/lab-builder/tests/test_app.py:12180).
+
+Buttons/routes/forms verified: `/new-kit`, `/load-kit`, `/clean-kit-artifacts`, `/delete-kit`; specifically fixed the “Load selected kit” and per-kit “Load” buttons.
+
+Tests/checks run:
+- `.venv/bin/python -m pytest tests/test_app.py::test_kits_page_wires_visible_actions_to_expected_routes` passed.
+- `.venv/bin/python -m compileall app` passed.
+
+Real hardware used: none.
+
+Mocked/dry-run only: route/template rendering through the test client; no external systems touched.
+
+Remaining risks: no browser-level HTMX interaction test was run, but the focused render test covers the route wiring and button markup.
+
+Recommended next task: another unclaimed small button/route audit, preferably a setup page status-placement guard.

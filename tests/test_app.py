@@ -12194,6 +12194,8 @@ def test_kits_page_wires_visible_actions_to_expected_routes(client):
     assert response.text.count('hx-post="/load-kit"') >= 2
     assert 'hx-post="/clean-kit-artifacts"' in response.text
     assert 'hx-post="/delete-kit"' in response.text
+    assert '<button class="btn action-button" type="submit">Load selected kit</button>' in response.text
+    assert '<button class="btn action-button" type="submit">Load</button>' in response.text
     assert '<button class="btn btn-danger action-button" type="submit">Clean artifacts</button>' in response.text
     assert '<button class="btn btn-danger action-button" type="submit">Delete kit</button>' in response.text
     assert "Type <strong>CLEAN Old-Kit</strong>" in response.text
