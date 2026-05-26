@@ -75,7 +75,7 @@
             <a class="btn{% if action.get('style') == 'primary' %} btn-primary{% endif %}" href="{{ action.get('href') }}">{{ action.get('label') or 'Open' }}</a>
             {% else %}
             <button
-                class="btn{% if action.get('style') == 'primary' %} btn-primary{% endif %}"
+                class="btn{% if action.get('style') == 'primary' %} btn-primary{% endif %} action-button"
                 type="button"
                 {% if action.get('hx_post') %}hx-post="{{ action.get('hx_post') }}"{% endif %}
                 {% if action.get('hx_get') %}hx-get="{{ action.get('hx_get') }}"{% endif %}

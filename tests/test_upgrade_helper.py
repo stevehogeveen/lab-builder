@@ -70,6 +70,23 @@ def test_upgrade_helper_media_and_policy_controls_have_feedback_metadata(upgrade
     assert 'class="btn btn-primary action-button" type="submit">Save policies</button>' in response.text
 
 
+def test_upgrade_helper_generated_tab_actions_use_shared_action_button_class(upgrade_helper_client):
+    response = upgrade_helper_client.get("/upgrade-helper?tab=cisco")
+
+    assert response.status_code == 200
+    for label, route, expected_class in [
+        ("Review Cisco upgrade plan", "/modules/cisco/plan-upgrade?upgrade_tab=cisco", 'class="btn action-button"'),
+        ("Run Cisco upgrade", "/modules/cisco/run-upgrade?upgrade_tab=cisco", 'class="btn btn-primary action-button"'),
+        ("Read Cisco version", "/modules/cisco/discover-version?upgrade_tab=cisco", 'class="btn action-button"'),
+    ]:
+        label_pos = response.text.index(f">{label}</button>")
+        start = response.text.rfind("<button", 0, label_pos)
+        end = response.text.find("</button>", label_pos) + len("</button>")
+        markup = response.text[start:end]
+        assert expected_class in markup
+        assert f'hx-post="{route}"' in markup
+
+
 def test_save_upgrade_policies_keeps_selected_helper_tab(upgrade_helper_client):
     response = upgrade_helper_client.post(
         "/save-upgrade-policies?upgrade_tab=cisco",

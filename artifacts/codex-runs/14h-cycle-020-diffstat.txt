@@ -1,0 +1,4 @@
+ SESSION_COORDINATION.md                               | 19 +++++++++++++++++++
+ templates/partials/components/upgrade_components.html |  2 +-
+ tests/test_upgrade_helper.py                          | 17 +++++++++++++++++
+ 3 files changed, 37 insertions(+), 1 deletion(-)
