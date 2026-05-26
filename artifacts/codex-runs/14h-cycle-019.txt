@@ -1,0 +1,37 @@
+**Task Chosen**
+Priority 1: Dashboard Living kit map navigation-control audit.
+
+**What Changed**
+Converted the Dashboard Living kit map controls from JavaScript-only navigation buttons to native links:
+- [dashboard.html](/home/administrator/lab-builder/templates/partials/pages/dashboard.html:102)
+- [test_app.py](/home/administrator/lab-builder/tests/test_app.py:12024)
+
+Updated coordination:
+- [SESSION_COORDINATION.md](/home/administrator/lab-builder/SESSION_COORDINATION.md:38)
+
+**Files Inspected**
+`.codex/mission.md`, `.codex/rules.md`, `.codex/backlog.md`, required session docs, `templates/partials/pages/dashboard.html`, `templates/index.html`, `tests/test_app.py`.
+
+**Buttons/Routes/Forms Verified**
+- Dashboard Living kit map module controls now use native `href="{{ item.href }}"`.
+- Run Center map control now uses native `href="/execution"`.
+- No forms were changed.
+- Existing global `data-navigate-href` handler remains for other shell controls.
+
+**Tests/Checks Run**
+- `.venv/bin/python -m pytest tests/test_app.py -k "dashboard_uses_simplified_primary_navigation or dashboard_shows_recommended_next_step_and_workflow_cards"`: passed
+- `.venv/bin/python -m pytest tests/test_app.py -k dashboard`: passed, 9 tests
+- `.venv/bin/python -m pytest tests/test_operator_flow_contract.py`: passed, 6 tests
+- `.venv/bin/python -m compileall app`: passed
+
+**Hardware**
+No real hardware was used.
+
+**Mocked/Dry-Run Only**
+Route/template rendering checks only. No hardware calls, no destructive actions.
+
+**Remaining Risks**
+I did not run the full pytest suite or do a browser visual pass. Existing untracked run artifacts were left untouched.
+
+**Recommended Next Task**
+A small clutter/status placement audit on another unclaimed page, or another native-navigation fallback check for non-form controls.

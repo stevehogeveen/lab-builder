@@ -38,6 +38,25 @@ Copy this block and update it in place.
 
 ## Active Sessions
 
+### Session: dashboard-map-navigation-quality-cycle
+- Status: done
+- Branch: codex/14h-quality-run
+- Scope owner: Dashboard Living kit map native navigation controls
+- Working on: Completed Dashboard Living kit map native navigation controls without hardware access.
+- Blocked by: none
+- Ready to hand off: Living kit map navigation now works as native links; focused Dashboard tests, operator-flow contract tests, and compile check pass.
+- Files claimed:
+  - templates/partials/pages/dashboard.html
+  - tests/test_app.py
+- Shared files touched with caution:
+  - SESSION_COORDINATION.md
+  - tests/test_app.py
+- Last changed:
+  - 2026-05-25 23:59 EDT - Claimed narrow Dashboard Living kit map navigation-control slice for the 14-hour quality run.
+  - 2026-05-25 23:59 EDT - Converted Living kit map navigation controls to anchors and verified focused route/template coverage.
+- Next intended change:
+  - Continue with a separate backlog cycle; suggested next target is a small clutter/status audit on an unclaimed page or another native-navigation fallback check.
+
 ### Session: kits-destructive-controls-quality-cycle
 - Status: done
 - Branch: codex/14h-quality-run

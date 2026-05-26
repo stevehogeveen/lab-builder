@@ -12021,7 +12021,11 @@ def test_dashboard_uses_simplified_primary_navigation(client):
     assert "Operator companion" in response.text
     assert "Human-readable next move" in response.text
     assert "Take next step" in response.text
-    assert 'data-navigate-href=' in response.text
+    map_section = response.text.split('aria-label="Living kit map"', 1)[1].split('<div class="constellation-story"', 1)[0]
+    assert '<a class="constellation-node constellation-node-' in map_section
+    assert 'href="/execution"' in map_section
+    assert '<button class="constellation-node' not in map_section
+    assert "data-navigate-href" not in map_section
     assert "Command palette" not in response.text
     assert "Quick jump" not in response.text
     assert "Ctrl K" not in response.text

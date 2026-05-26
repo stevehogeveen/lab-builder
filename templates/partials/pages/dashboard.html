@@ -99,15 +99,15 @@
                 </div>
             </div>
             {% for item in dashboard_overview.module_rows %}
-            <button class="constellation-node constellation-node-{{ item.tone }}" type="button" data-navigate-href="{{ item.href }}" style="--node-angle: {{ loop.index0 * 43 }};">
+            <a class="constellation-node constellation-node-{{ item.tone }}" href="{{ item.href }}" style="--node-angle: {{ loop.index0 * 43 }};">
                 <span class="constellation-node-title">{{ item.name }}</span>
                 <span class="constellation-node-summary truncate-single" title="{{ item.summary }}">{{ item.label }} · {{ item.checks_ready }}/{{ item.total_checks }} checks</span>
-            </button>
+            </a>
             {% endfor %}
-            <button class="constellation-node constellation-node-progress" type="button" data-navigate-href="/execution" style="--node-angle: {{ (dashboard_overview.module_rows | length) * 43 }};">
+            <a class="constellation-node constellation-node-progress" href="/execution" style="--node-angle: {{ (dashboard_overview.module_rows | length) * 43 }};">
                 <span class="constellation-node-title">Run Center</span>
                 <span class="constellation-node-summary">Final approval and live proof</span>
-            </button>
+            </a>
         </div>
 
         <div class="constellation-story">
