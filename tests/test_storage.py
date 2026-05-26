@@ -194,6 +194,40 @@ def test_storage_target_save_controls_use_specific_completion_feedback(storage_c
     )
 
 
+def test_storage_clear_approval_control_uses_specific_completion_feedback(storage_client):
+    cfg = main.default_config()
+    cfg["site"]["name"] = "Storage Clear Approval Kit"
+    cfg["ilo"]["current_ip"] = "192.168.1.50"
+    cfg["ilo"]["host"] = "192.168.1.50"
+    cfg["ilo"]["target_ip"] = "192.168.1.51"
+    cfg["ilo"]["username"] = "Administrator"
+    cfg["ilo"]["password"] = "kit-password"
+    main.save_kit_config(cfg)
+
+    discovery = _storage_artifact_discovery()
+    export_paths = main.export_storage_discovery_snapshot(cfg, discovery, host="192.168.1.50")
+    plan = main.build_raid_plan(discovery, export_paths)
+    plan_paths = main.export_raid_plan_snapshot(cfg, plan, export_paths)
+    main.approve_storage_plan_for_cfg(
+        cfg,
+        discovery=discovery,
+        discovery_paths=export_paths,
+        plan=plan,
+        plan_paths=plan_paths,
+        include_in_ilo_run=True,
+    )
+    main.save_kit_config(cfg)
+
+    response = storage_client.get("/storage")
+
+    assert response.status_code == 200
+    assert 'hx-post="/clear-storage-approval"' in response.text
+    assert 'data-action-title="Removing approval"' in response.text
+    assert 'data-action-start="Removing approval from this storage plan."' in response.text
+    assert 'data-action-complete="Storage approval removed."' in response.text
+    assert '<button class="btn action-button" type="submit">Remove approval</button>' in response.text
+
+
 def test_storage_artifact_view_controls_use_shared_action_feedback(storage_client):
     cfg = main.default_config()
     cfg["site"]["name"] = "Storage Artifact Kit"

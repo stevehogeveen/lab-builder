@@ -1,0 +1,27 @@
+Task chosen: Storage setup `Remove approval` action feedback consistency.
+
+Files inspected: required session docs, `.codex` mission/rules/backlog, [storage.html](/home/administrator/lab-builder/templates/partials/pages/storage.html:677), [storage routes](/home/administrator/lab-builder/app/modules/storage/routes.py:477), [main.py](/home/administrator/lab-builder/app/main.py:17237), and [test_storage.py](/home/administrator/lab-builder/tests/test_storage.py:197).
+
+Files changed:
+- [templates/partials/pages/storage.html](/home/administrator/lab-builder/templates/partials/pages/storage.html:677): added `data-action-complete="Storage approval removed."`
+- [tests/test_storage.py](/home/administrator/lab-builder/tests/test_storage.py:197): added focused render coverage for the approved Storage `Remove approval` form
+- [SESSION_COORDINATION.md](/home/administrator/lab-builder/SESSION_COORDINATION.md:41): claimed and closed the slice
+
+Buttons/routes/forms verified:
+- Button: `Remove approval`
+- Form: `hx-post="/clear-storage-approval"`
+- Route: `POST /clear-storage-approval`
+- Handler: `clear_storage_approval_handler`
+
+Tests/checks run:
+- `.venv/bin/python -m pytest tests/test_storage.py` passed, 5 tests
+- `.venv/bin/python -m pytest tests/test_operator_flow_contract.py` passed, 6 tests
+- `.venv/bin/python -m compileall app` passed
+
+Real hardware used: no.
+
+Mocked/dry-run only: Storage approval state and rendered page were built from test config/artifacts only. No iLO/server hardware calls were made.
+
+Remaining risks: I verified the rendered HTMX metadata, not a live browser click animation. Existing untracked `artifacts/codex-runs/14h-cycle-049*` files were left untouched.
+
+Recommended next task: another narrow unclaimed setup-page action-feedback gap or button/route audit.
