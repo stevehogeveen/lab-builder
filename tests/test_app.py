@@ -11626,8 +11626,11 @@ def test_dashboard_shows_recommended_next_step_and_workflow_cards(client):
     assert "Choose a kit" in active_section
     assert "Create a new kit" in response.text
     assert "Use an existing kit" in response.text
-    assert "Open current config" in response.text
-    assert "Download current config" in response.text
+    assert "Open active kit config" in response.text
+    assert "Download active kit config" in response.text
+    assert 'hx-post="/view-current-kit-config"' in response.text
+    assert 'action="/download-current-kit-config"' in response.text
+    assert 'data-action-title="Opening active kit config"' in response.text
     assert "Recommended next step" in response.text
     assert "Open next step" in response.text
     assert "Build path" in response.text
@@ -11665,6 +11668,9 @@ def test_dashboard_load_previous_kit_uses_saved_kit_dropdown(client):
 
     assert response.status_code == 200
     assert 'name="selected_kit"' in response.text
+    assert 'hx-post="/load-kit"' in response.text
+    assert 'data-action-title="Switching active kit"' in response.text
+    assert 'class="btn action-button" type="submit"' in response.text
     assert "Switch active kit" in response.text
     selector_section = response.text.split('name="selected_kit"', 1)[1]
     assert ">Older-Dash-Kit<" in selector_section

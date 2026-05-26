@@ -1,0 +1,35 @@
+**Task Chosen**
+Dashboard quick-action control clarity and route guard.
+
+**Files Inspected**
+`SESSION_COORDINATION.md`, required docs, `.codex/*`, [dashboard.html](/home/administrator/lab-builder/templates/partials/pages/dashboard.html:27), [test_app.py](/home/administrator/lab-builder/tests/test_app.py:11620), and `app/main.py` route definitions.
+
+**Files Changed**
+- [dashboard.html](/home/administrator/lab-builder/templates/partials/pages/dashboard.html:27): clarified “current config” to “active kit config” and added shared action-feedback metadata to HTMX Dashboard controls.
+- [test_app.py](/home/administrator/lab-builder/tests/test_app.py:11629): tightened Dashboard route/template assertions.
+- [SESSION_COORDINATION.md](/home/administrator/lab-builder/SESSION_COORDINATION.md:41): claimed and closed the slice.
+
+**Buttons/Routes/Forms Verified**
+- `Switch active kit` -> `hx-post="/load-kit"`
+- `Open active kit config` -> `hx-post="/view-current-kit-config"`
+- `Download active kit config` -> `action="/download-current-kit-config"`
+
+**Tests/Checks Run**
+- `.venv/bin/python -m pytest tests/test_app.py::test_dashboard_shows_recommended_next_step_and_workflow_cards tests/test_app.py::test_dashboard_load_previous_kit_uses_saved_kit_dropdown`
+- `.venv/bin/python -m pytest tests/test_operator_flow_contract.py`
+- `.venv/bin/python -m compileall app`
+- `git diff --check`
+
+All passed.
+
+**Hardware**
+No real hardware was used.
+
+**Mocked/Dry-Run Only**
+Only route/template rendering and static route inspection were used. No device calls.
+
+**Remaining Risks**
+I did not run the full pytest suite or a browser visual pass. Existing untracked run artifacts under `artifacts/codex-runs/` were left untouched.
+
+**Recommended Next Task**
+Pick another unclaimed page for a focused button/route audit, or a setup-page status placement guard.
