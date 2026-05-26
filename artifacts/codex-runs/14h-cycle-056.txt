@@ -1,0 +1,27 @@
+Task chosen: Cisco setup page button feedback audit for the “Current console config” actions.
+
+Files inspected: required session/docs/backlog files, Cisco template/routes/tests, plus nearby page patterns for consistency.  
+Files changed:
+- [cisco.html](/home/administrator/lab-builder/templates/partials/pages/cisco.html:431)
+- [test_cisco_page.py](/home/administrator/lab-builder/tests/test_cisco_page.py:54)
+- [SESSION_COORDINATION.md](/home/administrator/lab-builder/SESSION_COORDINATION.md:38)
+
+Buttons/routes/forms verified:
+- Shared Cisco setup form
+- `Check current config` -> `POST /modules/cisco/check-current-config` -> `cisco_verify_console_bootstrap`
+- `Test SSH` -> `POST /modules/cisco/test-ssh` -> `cisco_test_ssh`
+
+Changed behavior: both buttons now use the standard `action-button` class plus explicit local `data-action-title`, `data-action-start`, and `data-action-complete` text. Backend behavior and hardware behavior were unchanged.
+
+Checks run:
+- `.venv/bin/python -m pytest tests/test_cisco_page.py`
+- `.venv/bin/python -m pytest tests/test_operator_flow_contract.py`
+- `.venv/bin/python -m compileall app`
+
+Real hardware used: no.
+
+Mocked/dry-run only: isolated TestClient rendering and route-registration checks only; no Cisco switch connection was attempted.
+
+Remaining risks: the actual Cisco SSH/console actions were not executed against hardware in this cycle. Other Cisco actions still have older or incomplete feedback metadata.
+
+Recommended next task: audit the Cisco `Setup Console` button feedback metadata and focused render coverage.

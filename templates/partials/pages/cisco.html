@@ -428,8 +428,8 @@
                     <div class="cisco-fact"><span>SCP</span><strong>{{ 'enabled' if scp_ready else 'disabled' }}</strong></div>
                 </div>
                 <div class="cisco-actions">
-                    <button class="btn" type="submit" hx-post="/modules/cisco/check-current-config">Check current config</button>
-                    <button class="btn" type="submit" hx-post="/modules/cisco/test-ssh">Test SSH</button>
+                    <button class="btn action-button" type="submit" hx-post="/modules/cisco/check-current-config" data-action-title="Checking Cisco current config" data-action-start="Reading VLAN, management IP, gateway, SSH, and SCP from the selected console path." data-action-complete="Cisco current config check finished.">Check current config</button>
+                    <button class="btn action-button" type="submit" hx-post="/modules/cisco/test-ssh" data-action-title="Testing Cisco SSH" data-action-start="Connecting to the saved Cisco management IP with the saved switch credentials." data-action-complete="Cisco SSH test finished.">Test SSH</button>
                 </div>
                 {% if action_feedback and feedback_area == 'console_config' %}
                 {{ cisco_inline_feedback(action_feedback) }}
