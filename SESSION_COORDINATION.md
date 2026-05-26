@@ -38,6 +38,24 @@ Copy this block and update it in place.
 
 ## Active Sessions
 
+### Session: kits-quality-cycle
+- Status: done
+- Branch: codex/14h-quality-run
+- Scope owner: Kits page button/route rendering guard
+- Working on: Completed focused Kits page visible-action template guard without hardware access.
+- Blocked by: none
+- Ready to hand off: Kits page create, load, clean, and delete controls are covered by focused render assertions; focused tests and compile check pass.
+- Files claimed:
+  - tests/test_app.py
+- Shared files touched with caution:
+  - SESSION_COORDINATION.md
+  - tests/test_app.py
+- Last changed:
+  - 2026-05-25 22:23 EDT - Claimed narrow Kits page button/route test slice for the 14-hour quality run.
+  - 2026-05-25 22:24 EDT - Added focused Kits page action-route rendering guard and verified focused tests.
+- Next intended change:
+  - Continue with a separate backlog cycle; suggested next target is another unclaimed page button/route audit.
+
 ### Session: esxi-quality-cycle
 - Status: done
 - Branch: codex/14h-quality-run

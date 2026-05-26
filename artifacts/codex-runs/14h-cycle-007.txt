@@ -1,0 +1,34 @@
+Task chosen: Kits page visible button/route guard from Priority 1 and Priority 6.
+
+Files inspected:
+- `.codex/mission.md`, `.codex/rules.md`, `.codex/backlog.md`
+- `SESSION_COORDINATION.md`
+- `docs/workflow-session-scopes.md`, `docs/operator-flow-contract.md`, `docs/automation-principles.md`, `docs/ux-product-principles.md`, `docs/validation.md`
+- `templates/partials/pages/kits.html`
+- `app/main.py`
+- `tests/test_app.py`
+
+Files changed:
+- [tests/test_app.py](/home/administrator/lab-builder/tests/test_app.py:12135): added a focused render test for Kits page visible actions.
+- [SESSION_COORDINATION.md](/home/administrator/lab-builder/SESSION_COORDINATION.md:41): claimed and closed the narrow cycle.
+
+Buttons/routes/forms verified:
+- `Create new kit` -> `hx-post="/new-kit"` -> `new_kit_route`
+- `Load selected kit` and per-row `Load` -> `hx-post="/load-kit"` -> `load_kit_route`
+- `Clean artifacts` -> `hx-post="/clean-kit-artifacts"` -> `clean_kit_artifacts_route`
+- `Delete kit` -> `hx-post="/delete-kit"` -> `delete_kit_route`
+- Safety prompts for `CLEAN Old-Kit`, `DELETE Old-Kit`, and active-kit delete blocking text.
+
+Tests/checks run:
+- `.venv/bin/python -m pytest tests/test_app.py -k "kits_route_falls_back_to_dashboard_workflow or kits_page_wires_visible_actions_to_expected_routes or create_new_kit or kit_manager_reports_storage_by_kit or clean_kit_artifacts or delete_kit"`: 8 passed.
+- `.venv/bin/python -m compileall app`: passed.
+
+Real hardware used: no.
+
+Mocked/dry-run only: test client rendering with temporary kit configs; no hardware routes or live device calls.
+
+Remaining risks:
+- This guards server-rendered HTML and route wiring, not a browser-level HTMX interaction test.
+- Existing untracked `artifacts/codex-runs/14h-cycle-007*.txt` files were left untouched.
+
+Recommended next task: run the same small button/route audit pattern on another unclaimed page, preferably `history` or `reports`, since active Cisco and NetApp ownership should still be avoided.

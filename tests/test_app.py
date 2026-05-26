@@ -12132,6 +12132,28 @@ def test_kits_route_falls_back_to_dashboard_workflow(client):
     assert "Clean generated artifacts" in response.text
 
 
+def test_kits_page_wires_visible_actions_to_expected_routes(client):
+    active = main.default_config()
+    active["site"]["name"] = "Active-Kit"
+    main.save_kit_config(active)
+    old = main.default_config()
+    old["site"]["name"] = "Old-Kit"
+    main.save_kit_config(old)
+    main.set_current_kit_name("Active-Kit")
+
+    response = client.get("/kits")
+
+    assert response.status_code == 200
+    assert 'hx-post="/new-kit"' in response.text
+    assert 'hx-post="/load-kit"' in response.text
+    assert response.text.count('hx-post="/load-kit"') >= 2
+    assert 'hx-post="/clean-kit-artifacts"' in response.text
+    assert 'hx-post="/delete-kit"' in response.text
+    assert "Type <strong>CLEAN Old-Kit</strong>" in response.text
+    assert "Type <strong>DELETE Old-Kit</strong>" in response.text
+    assert "Load a different kit before deleting this active kit." in response.text
+
+
 def test_create_new_kit_updates_active_kit_on_dashboard(client):
     response = client.post(
         "/new-kit",
