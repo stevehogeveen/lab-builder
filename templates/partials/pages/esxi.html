@@ -63,7 +63,7 @@
 
     <section class="card workflow-hero-card" x-show="tab === 'basic'">
         <div class="text-lg font-semibold mb-3">Save ESXi setup</div>
-        <form hx-post="/save-esxi-settings" hx-target="#main-content" hx-swap="outerHTML" class="space-y-4" data-action-title="Saving ESXi setup" data-action-start="Saving the ESXi installer and post-config settings.">
+        <form hx-post="/save-esxi-settings" hx-target="#main-content" hx-swap="outerHTML" class="space-y-4" data-action-title="Saving ESXi setup" data-action-start="Saving the ESXi installer and post-config settings." data-action-complete="ESXi setup saved.">
             <input type="hidden" name="return_page" value="esxi">
             <div class="grid grid-cols-1 md:grid-cols-2 gap-3">
                 <div>

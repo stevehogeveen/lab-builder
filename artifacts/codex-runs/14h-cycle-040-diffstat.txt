@@ -1,0 +1,4 @@
+ SESSION_COORDINATION.md            | 18 ++++++++++++++++++
+ templates/partials/pages/esxi.html |  2 +-
+ tests/test_esxi.py                 | 11 +++++++++++
+ 3 files changed, 30 insertions(+), 1 deletion(-)

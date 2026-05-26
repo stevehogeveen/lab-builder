@@ -51,6 +51,17 @@ def esxi_client(tmp_path: Path, monkeypatch):
         yield test_client
 
 
+def test_esxi_page_save_form_uses_shared_completion_feedback(esxi_client):
+    response = esxi_client.get("/esxi")
+
+    assert response.status_code == 200
+    assert 'hx-post="/save-esxi-settings"' in response.text
+    assert 'data-action-title="Saving ESXi setup"' in response.text
+    assert 'data-action-start="Saving the ESXi installer and post-config settings."' in response.text
+    assert 'data-action-complete="ESXi setup saved."' in response.text
+    assert '<button class="btn btn-primary action-button" type="submit">Save ESXi setup</button>' in response.text
+
+
 def test_esxi_page_latest_receipt_open_log_uses_report_route(esxi_client):
     cfg = main.default_config()
     cfg["site"]["name"] = "ESXi Log Kit"

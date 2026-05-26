@@ -38,6 +38,24 @@ Copy this block and update it in place.
 
 ## Active Sessions
 
+### Session: esxi-save-feedback-quality-cycle
+- Status: done
+- Branch: codex/14h-quality-run
+- Scope owner: ESXi setup save action feedback consistency
+- Working on: Completed explicit shared completion feedback metadata for the ESXi setup save form without changing save behavior.
+- Blocked by: none
+- Ready to hand off: ESXi save action now has explicit completion feedback; focused ESXi tests, operator-flow contract tests, and compile check pass.
+- Files claimed:
+  - templates/partials/pages/esxi.html
+  - tests/test_esxi.py
+- Shared files touched with caution:
+  - SESSION_COORDINATION.md
+- Last changed:
+  - 2026-05-26 02:55 EDT - Claimed narrow ESXi save action-feedback slice for the 14-hour quality run.
+  - 2026-05-26 02:55 EDT - Added ESXi save completion metadata and verified focused render coverage.
+- Next intended change:
+  - Continue with a separate backlog cycle; suggested next target is iLO save action-feedback completion metadata or another unclaimed setup-page status-placement guard.
+
 ### Session: ovf-template-registration-feedback-quality-cycle
 - Status: done
 - Branch: codex/14h-quality-run

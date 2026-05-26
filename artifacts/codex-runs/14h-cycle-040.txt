@@ -1,0 +1,34 @@
+**Task Chosen**
+Added explicit completion feedback to the ESXi setup save form.
+
+**Files Inspected**
+`SESSION_COORDINATION.md`, required docs, `.codex/mission.md`, `.codex/rules.md`, `.codex/backlog.md`, ESXi template/test files, and `app/modules/esxi_config/routes.py`.
+
+**Files Changed**
+- [templates/partials/pages/esxi.html](/home/administrator/lab-builder/templates/partials/pages/esxi.html:66)
+- [tests/test_esxi.py](/home/administrator/lab-builder/tests/test_esxi.py:54)
+- [SESSION_COORDINATION.md](/home/administrator/lab-builder/SESSION_COORDINATION.md:41)
+
+**Buttons/Routes/Forms Verified**
+- `Save ESXi setup` form renders with `hx-post="/save-esxi-settings"`.
+- `Save ESXi setup` button keeps shared `action-button` styling.
+- Added/verified `data-action-complete="ESXi setup saved."`.
+- Existing ESXi `Open log` report route guard still passes.
+
+**Tests/Checks Run**
+- `.venv/bin/python -m pytest tests/test_esxi.py` passed.
+- `.venv/bin/python -m pytest tests/test_operator_flow_contract.py` passed.
+- `.venv/bin/python -m compileall app` passed.
+- `git diff --check` passed.
+
+**Hardware**
+No real hardware was used.
+
+**Mocked/Dry-Run Only**
+FastAPI `TestClient` rendering with temporary config/media/artifact directories; no ESXi, vCenter, NetApp, QNAP, switch, or server calls.
+
+**Remaining Risks**
+This only verifies template feedback metadata and the existing report-open route. It does not re-test a live ESXi save click in a browser.
+
+**Recommended Next Task**
+Apply the same narrow completion-feedback audit to the iLO setup save form.
