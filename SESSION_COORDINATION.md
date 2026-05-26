@@ -38,6 +38,23 @@ Copy this block and update it in place.
 
 ## Active Sessions
 
+### Session: global-settings-quality-cycle
+- Status: done
+- Branch: codex/14h-quality-run
+- Scope owner: Configuration / Global Settings page button-route rendering guard
+- Working on: Completed focused Global Settings visible-control route/template coverage without hardware access.
+- Blocked by: none
+- Ready to hand off: Global Settings and Configuration aliases now have focused render coverage for save, populate, and SNMP user controls; focused tests, operator-flow contract tests, and compile check pass.
+- Files claimed:
+  - tests/test_global_settings_page.py
+- Shared files touched with caution:
+  - SESSION_COORDINATION.md
+- Last changed:
+  - 2026-05-26 00:00 EDT - Claimed narrow Global Settings control wiring test slice for the 14-hour quality run.
+  - 2026-05-26 00:06 EDT - Added Global Settings alias control wiring guard and verified focused tests.
+- Next intended change:
+  - Continue with a separate backlog cycle; suggested next target is another unclaimed setup page button/route audit or status placement guard.
+
 ### Session: execution-summary-quality-cycle
 - Status: done
 - Branch: codex/14h-quality-run
