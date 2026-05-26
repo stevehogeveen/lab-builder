@@ -70,6 +70,94 @@ def test_upgrade_helper_media_and_policy_controls_have_feedback_metadata(upgrade
     assert 'class="btn btn-primary action-button" type="submit">Save policies</button>' in response.text
 
 
+def _button_markup(html: str, label: str) -> str:
+    label_pos = html.index(f">{label}</button>")
+    start = html.rfind("<button", 0, label_pos)
+    end = html.find("</button>", label_pos) + len("</button>")
+    assert start != -1
+    assert end != -1
+    return html[start:end]
+
+
+def test_upgrade_helper_generated_plan_actions_have_specific_action_feedback(upgrade_helper_client, monkeypatch):
+    def media_item(device: str, version: str, filename: str) -> dict[str, str]:
+        return {
+            "device": device,
+            "version": version,
+            "filename": filename,
+            "path": str(main.MEDIA_DIR / filename),
+        }
+
+    ilo_media = media_item("ilo", "3.19", "ilo5_319.fwpkg")
+    ontap_media = media_item("netapp", "9.17.1", "9171_q_image.tgz")
+    cisco_media = media_item("cisco_switch", "17.15.05", "cat9k_iosxe.17.15.05.SPA.bin")
+    monkeypatch.setattr(
+        main,
+        "scan_upgrade_media",
+        lambda: {
+            "root": str(main.MEDIA_DIR),
+            "latest": {
+                "ilo": {key: value for key, value in ilo_media.items() if key != "device"},
+                "netapp": {key: value for key, value in ontap_media.items() if key != "device"},
+                "cisco_switch": {key: value for key, value in cisco_media.items() if key != "device"},
+            },
+            "counts": {"ilo": 1, "netapp": 1, "cisco_switch": 1},
+            "candidates": [ilo_media, ontap_media, cisco_media],
+        },
+    )
+
+    ilo_response = upgrade_helper_client.get("/upgrade-helper?tab=ilo")
+    ontap_response = upgrade_helper_client.get("/upgrade-helper?tab=ontap")
+    cisco_response = upgrade_helper_client.get("/upgrade-helper?tab=cisco")
+
+    assert ilo_response.status_code == 200
+    assert ontap_response.status_code == 200
+    assert cisco_response.status_code == 200
+
+    for html, label, route, title, complete in [
+        (
+            ilo_response.text,
+            "Read current iLO",
+            "/export-ilo-inventory?upgrade_tab=ilo",
+            "Reading current iLO",
+            "Current iLO read finished.",
+        ),
+        (
+            ilo_response.text,
+            "Plan iLO upgrade",
+            "/plan-ilo-upgrade?upgrade_tab=ilo",
+            "Planning iLO upgrade",
+            "iLO upgrade plan review finished.",
+        ),
+        (
+            ontap_response.text,
+            "Review ONTAP upgrade plan",
+            "/modules/netapp/plan-upgrade?upgrade_tab=ontap",
+            "Reviewing ONTAP upgrade plan",
+            "ONTAP upgrade plan review finished.",
+        ),
+        (
+            cisco_response.text,
+            "Review Cisco upgrade plan",
+            "/modules/cisco/plan-upgrade?upgrade_tab=cisco",
+            "Reviewing Cisco upgrade plan",
+            "Cisco upgrade plan review finished.",
+        ),
+        (
+            cisco_response.text,
+            "Read Cisco version",
+            "/modules/cisco/discover-version?upgrade_tab=cisco",
+            "Reading Cisco version",
+            "Cisco version check finished.",
+        ),
+    ]:
+        markup = _button_markup(html, label)
+        assert f'hx-post="{route}"' in markup
+        assert f'data-action-title="{title}"' in markup
+        assert 'data-action-start="' in markup
+        assert f'data-action-complete="{complete}"' in markup
+
+
 def test_upgrade_helper_generated_tab_actions_use_shared_action_button_class(upgrade_helper_client):
     response = upgrade_helper_client.get("/upgrade-helper?tab=cisco")
 
@@ -79,10 +167,7 @@ def test_upgrade_helper_generated_tab_actions_use_shared_action_button_class(upg
         ("Run Cisco upgrade", "/modules/cisco/run-upgrade?upgrade_tab=cisco", 'class="btn btn-primary action-button"'),
         ("Read Cisco version", "/modules/cisco/discover-version?upgrade_tab=cisco", 'class="btn action-button"'),
     ]:
-        label_pos = response.text.index(f">{label}</button>")
-        start = response.text.rfind("<button", 0, label_pos)
-        end = response.text.find("</button>", label_pos) + len("</button>")
-        markup = response.text[start:end]
+        markup = _button_markup(response.text, label)
         assert expected_class in markup
         assert f'hx-post="{route}"' in markup
 

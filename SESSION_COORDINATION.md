@@ -38,6 +38,24 @@ Copy this block and update it in place.
 
 ## Active Sessions
 
+### Session: upgrade-helper-plan-feedback-quality-cycle
+- Status: done
+- Branch: codex/14h-quality-run
+- Scope owner: Upgrade Helper plan/review action feedback consistency
+- Working on: Completed explicit shared action-feedback metadata for existing Upgrade Helper read/plan/review buttons without changing routes or hardware behavior.
+- Blocked by: none
+- Ready to hand off: Upgrade Helper generated read/plan/review actions now have specific local completion feedback; focused Upgrade Helper tests, operator-flow contract tests, and compile check pass.
+- Files claimed:
+  - app/upgrade_panels.py
+  - tests/test_upgrade_helper.py
+- Shared files touched with caution:
+  - SESSION_COORDINATION.md
+- Last changed:
+  - 2026-05-26 04:45 EDT - Claimed narrow Upgrade Helper plan/review action-feedback slice for the 14-hour quality run.
+  - 2026-05-26 04:45 EDT - Added generated action metadata and verified focused render coverage.
+- Next intended change:
+  - Continue with a separate backlog cycle; suggested next target is another unclaimed generated action-feedback gap or setup-page route audit.
+
 ### Session: storage-repair-feedback-quality-cycle
 - Status: done
 - Branch: codex/14h-quality-run

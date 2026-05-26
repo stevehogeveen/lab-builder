@@ -1,0 +1,40 @@
+**Task Chosen**
+Upgrade Helper generated action feedback consistency for existing read/plan/review buttons.
+
+**Files Inspected**
+`.codex/mission.md`, `.codex/rules.md`, `.codex/backlog.md`, `AGENTS.md`, coordination/docs, plus Upgrade Helper files:
+[app/upgrade_panels.py](/home/administrator/lab-builder/app/upgrade_panels.py:587), [templates/partials/components/upgrade_components.html](/home/administrator/lab-builder/templates/partials/components/upgrade_components.html), [templates/partials/pages/upgrade_helper.html](/home/administrator/lab-builder/templates/partials/pages/upgrade_helper.html), [tests/test_upgrade_helper.py](/home/administrator/lab-builder/tests/test_upgrade_helper.py:82).
+
+**Files Changed**
+[app/upgrade_panels.py](/home/administrator/lab-builder/app/upgrade_panels.py:587): added `data-action-*` metadata via existing `_action` fields for:
+- Read current iLO
+- Plan iLO upgrade
+- Review ONTAP upgrade plan
+- Review Cisco upgrade plan
+- Read Cisco version
+
+[tests/test_upgrade_helper.py](/home/administrator/lab-builder/tests/test_upgrade_helper.py:73): added focused rendered-button assertions for route wiring and action feedback metadata.
+
+[SESSION_COORDINATION.md](/home/administrator/lab-builder/SESSION_COORDINATION.md:41): claimed and closed the slice.
+
+**Buttons/Routes Verified**
+Verified rendered HTMX wiring and local feedback metadata for:
+- `/export-ilo-inventory?upgrade_tab=ilo`
+- `/plan-ilo-upgrade?upgrade_tab=ilo`
+- `/modules/netapp/plan-upgrade?upgrade_tab=ontap`
+- `/modules/cisco/plan-upgrade?upgrade_tab=cisco`
+- `/modules/cisco/discover-version?upgrade_tab=cisco`
+
+**Tests/Checks Run**
+- `.venv/bin/python -m pytest tests/test_upgrade_helper.py` passed: 20 passed
+- `.venv/bin/python -m pytest tests/test_operator_flow_contract.py` passed: 6 passed
+- `.venv/bin/python -m compileall app` passed
+
+**Hardware**
+No real hardware was used. Upgrade media state was mocked in the route/template rendering test. ONTAP/Cisco/iLO routes were not executed against devices.
+
+**Remaining Risks**
+This validates rendered controls and metadata, not live device behavior. Existing untracked run artifacts under `artifacts/codex-runs/` were left untouched.
+
+**Recommended Next Task**
+Audit another unclaimed generated action-feedback gap or a narrow setup-page route/button flow, avoiding active Cisco and NetApp-owned files.

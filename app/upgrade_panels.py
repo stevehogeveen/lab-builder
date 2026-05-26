@@ -584,9 +584,18 @@ def _ilo_actions(cfg: dict[str, Any], upgrade_helper_summary: dict[str, Any] | N
                 style="primary",
                 action_title="Reading current iLO",
                 action_start="Connecting to iLO and reading the current firmware version.",
+                action_complete="Current iLO read finished.",
             )
         )
-    actions.append(_action("Plan iLO upgrade", hx_post="/plan-ilo-upgrade?upgrade_tab=ilo"))
+    actions.append(
+        _action(
+            "Plan iLO upgrade",
+            hx_post="/plan-ilo-upgrade?upgrade_tab=ilo",
+            action_title="Planning iLO upgrade",
+            action_start="Checking the saved iLO version, available media, and upgrade policy.",
+            action_complete="iLO upgrade plan review finished.",
+        )
+    )
     if comparison == "upgrade_available":
         actions.append(
             _action(
@@ -615,7 +624,13 @@ def _netapp_actions(cfg: dict[str, Any], upgrade_helper_summary: dict[str, Any] 
             action_start="Connecting to ONTAP and reading the current cluster release.",
             action_complete="Current ONTAP release check finished.",
         ),
-        _action("Review ONTAP upgrade plan", hx_post="/modules/netapp/plan-upgrade?upgrade_tab=ontap"),
+        _action(
+            "Review ONTAP upgrade plan",
+            hx_post="/modules/netapp/plan-upgrade?upgrade_tab=ontap",
+            action_title="Reviewing ONTAP upgrade plan",
+            action_start="Checking the current ONTAP release, available media, and upgrade policy.",
+            action_complete="ONTAP upgrade plan review finished.",
+        ),
         _action(
             "Run ONTAP upgrade",
             hx_post="/modules/netapp/run-upgrade?upgrade_tab=ontap",
@@ -632,7 +647,13 @@ def _netapp_actions(cfg: dict[str, Any], upgrade_helper_summary: dict[str, Any] 
 def _cisco_actions(cfg: dict[str, Any], upgrade_helper_summary: dict[str, Any] | None) -> list[dict[str, Any]]:
     cisco_vals = {"return_page": "upgrade_helper"}
     return [
-        _action("Review Cisco upgrade plan", hx_post="/modules/cisco/plan-upgrade?upgrade_tab=cisco"),
+        _action(
+            "Review Cisco upgrade plan",
+            hx_post="/modules/cisco/plan-upgrade?upgrade_tab=cisco",
+            action_title="Reviewing Cisco upgrade plan",
+            action_start="Checking the current Cisco version, available image, and upgrade policy.",
+            action_complete="Cisco upgrade plan review finished.",
+        ),
         _action(
             "Run Cisco upgrade",
             hx_post="/modules/cisco/run-upgrade?upgrade_tab=cisco",
@@ -641,7 +662,14 @@ def _cisco_actions(cfg: dict[str, Any], upgrade_helper_summary: dict[str, Any] |
             action_start="Queueing Cisco image transfer and install. The Cisco upgrade status panel will keep updating.",
             action_complete="Cisco upgrade worker started. Watch the status panel.",
         ),
-        _action("Read Cisco version", hx_post="/modules/cisco/discover-version?upgrade_tab=cisco", hx_vals=cisco_vals),
+        _action(
+            "Read Cisco version",
+            hx_post="/modules/cisco/discover-version?upgrade_tab=cisco",
+            hx_vals=cisco_vals,
+            action_title="Reading Cisco version",
+            action_start="Checking the switch version by SSH, with console fallback when needed.",
+            action_complete="Cisco version check finished.",
+        ),
         _override_control("cisco", "cisco_switch", bool(((upgrade_helper_summary or {}).get("overrides") or {}).get("cisco_switch"))),
         _action("Open Cisco", href="/modules/cisco"),
     ]
