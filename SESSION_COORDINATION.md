@@ -38,6 +38,25 @@ Copy this block and update it in place.
 
 ## Active Sessions
 
+### Session: storage-read-current-feedback-quality-cycle
+- Status: done
+- Branch: codex/14h-quality-run
+- Scope owner: Storage setup read-current action feedback consistency
+- Working on: Completed explicit completion feedback metadata for the Storage setup Display current storage setup action without changing route or hardware behavior.
+- Blocked by: none
+- Ready to hand off: Storage read-current action now has specific completion feedback; focused Storage tests, mocked read-current route tests, operator-flow contract tests, and compile check pass.
+- Files claimed:
+  - templates/partials/pages/storage.html
+  - tests/test_storage.py
+- Shared files touched with caution:
+  - SESSION_COORDINATION.md
+- Last changed:
+  - 2026-05-26 03:45 EDT - Claimed narrow Storage read-current action-feedback slice for the 14-hour quality run.
+  - 2026-05-26 03:48 EDT - Added read-current completion metadata and verified focused route/template coverage.
+  - 2026-05-26 03:48 EDT - Verified existing mocked read-current storage route coverage also passes.
+- Next intended change:
+  - Continue with a separate backlog cycle; suggested next target is another unclaimed setup-page action-feedback gap such as Storage target save or approval removal completion metadata.
+
 ### Session: global-settings-action-complete-feedback-quality-cycle
 - Status: done
 - Branch: codex/14h-quality-run

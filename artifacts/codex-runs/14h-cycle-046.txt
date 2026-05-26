@@ -1,0 +1,21 @@
+Task chosen: Storage setup `Display current storage setup` action-feedback completion.
+
+Files inspected: `.codex/mission.md`, `.codex/rules.md`, `.codex/backlog.md`, required session docs, [storage.html](/home/administrator/lab-builder/templates/partials/pages/storage.html:304), [tests/test_storage.py](/home/administrator/lab-builder/tests/test_storage.py:148), `app/modules/storage/routes.py`, and `app/main.py`.
+
+Files changed:
+- [SESSION_COORDINATION.md](/home/administrator/lab-builder/SESSION_COORDINATION.md:41)
+- [templates/partials/pages/storage.html](/home/administrator/lab-builder/templates/partials/pages/storage.html:304)
+- [tests/test_storage.py](/home/administrator/lab-builder/tests/test_storage.py:148)
+
+Verified button/form/route: `Display current storage setup` form posting to `/read-current-storage`, routed through the storage read-current handler. Added `data-action-complete="Current storage setup loaded."` and a focused render assertion.
+
+Tests/checks run:
+- `.venv/bin/python -m pytest tests/test_storage.py tests/test_operator_flow_contract.py` passed, `9 passed`
+- `.venv/bin/python -m pytest tests/test_app.py::test_storage_page_requires_manual_current_storage_read tests/test_app.py::test_read_current_storage_saves_discovery_export_and_renders_summary` passed, `2 passed`
+- `.venv/bin/python -m compileall app` passed
+
+No real hardware was used. Storage route behavior was verified through existing mocked/TestClient coverage only.
+
+Remaining risks: browser-side action-feedback timing was not Playwright-tested, and nearby Storage actions still have similar missing completion metadata.
+
+Recommended next task: a separate narrow pass for Storage target save or approval-removal completion feedback. No commit or push was performed.

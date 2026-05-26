@@ -301,7 +301,7 @@
             <div class="text-sm text-amber-300">Current storage cannot be loaded yet because the storage sign-in details are incomplete.</div>
             {% elif not storage_discovery %}
             <div class="result" style="margin-top: 0;">No storage read has been run on this page yet.</div>
-            <form hx-post="/read-current-storage" hx-target="#main-content" hx-swap="outerHTML" class="actions mt-3" data-action-title="Reading current storage" data-action-start="Connecting to iLO and reading the current controller, volumes, and drives.">
+            <form hx-post="/read-current-storage" hx-target="#main-content" hx-swap="outerHTML" class="actions mt-3" data-action-title="Reading current storage" data-action-start="Connecting to iLO and reading the current controller, volumes, and drives." data-action-complete="Current storage setup loaded.">
                 <input type="hidden" name="return_page" value="storage">
                 <button class="btn action-button" type="submit">Display current storage setup</button>
             </form>

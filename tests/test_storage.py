@@ -145,6 +145,29 @@ def test_storage_page_latest_receipt_open_log_uses_report_route(storage_client):
     assert "scope: storage-apply:create_only" in open_response.text
 
 
+def test_storage_read_current_control_uses_specific_completion_feedback(storage_client):
+    cfg = main.default_config()
+    cfg["site"]["name"] = "Storage Read Kit"
+    cfg["ilo"]["current_ip"] = "192.168.1.50"
+    cfg["ilo"]["host"] = "192.168.1.50"
+    cfg["ilo"]["target_ip"] = "192.168.1.51"
+    cfg["ilo"]["username"] = "Administrator"
+    cfg["ilo"]["password"] = "kit-password"
+    main.save_kit_config(cfg)
+
+    response = storage_client.get("/storage")
+
+    assert response.status_code == 200
+    assert 'hx-post="/read-current-storage"' in response.text
+    assert 'data-action-title="Reading current storage"' in response.text
+    assert (
+        'data-action-start="Connecting to iLO and reading the current controller, volumes, and drives."'
+        in response.text
+    )
+    assert 'data-action-complete="Current storage setup loaded."' in response.text
+    assert '<button class="btn action-button" type="submit">Display current storage setup</button>' in response.text
+
+
 def test_storage_artifact_view_controls_use_shared_action_feedback(storage_client):
     cfg = main.default_config()
     cfg["site"]["name"] = "Storage Artifact Kit"
