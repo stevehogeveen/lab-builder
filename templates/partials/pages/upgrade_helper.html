@@ -12,7 +12,7 @@
             <span class="text-lg font-semibold">Firmware and upgrade media</span>
             <span class="status progress">Upload</span>
         </summary>
-        <form hx-post="/upload-upgrade-media?upgrade_tab={{ active_tab }}" hx-encoding="multipart/form-data" hx-target="#main-content" hx-swap="outerHTML" class="mt-4">
+        <form hx-post="/upload-upgrade-media?upgrade_tab={{ active_tab }}" hx-encoding="multipart/form-data" hx-target="#main-content" hx-swap="outerHTML" class="mt-4" data-action-title="Uploading upgrade media" data-action-start="Saving the selected firmware or install media file." data-action-complete="Upgrade media upload finished.">
             <input type="hidden" name="return_page" value="upgrade_helper">
             <label class="block border border-dashed border-slate-600 rounded-lg p-5 bg-slate-950/40 cursor-pointer">
                 <input class="sr-only" type="file" name="media_file" accept=".bin,.fw,.fwpkg,.gz,.img,.iso,.tar,.tgz,.zip" required>
@@ -20,7 +20,7 @@
                 <div class="text-xs text-slate-500 mt-1">Allowed: .bin, .fw, .fwpkg, .tgz, .tar, .gz, .zip, .img, .iso</div>
             </label>
             <div class="actions mt-4">
-                <button class="btn btn-primary" type="submit">Upload</button>
+                <button class="btn btn-primary action-button" type="submit">Upload</button>
             </div>
         </form>
     </details>
@@ -33,7 +33,7 @@
             </span>
             <span class="status {{ upgrade.tone or 'progress' }}">{{ upgrade.label or 'Review' }}</span>
         </summary>
-        <form hx-post="/save-upgrade-policies?upgrade_tab={{ active_tab }}" hx-target="#main-content" hx-swap="outerHTML" class="mt-4">
+        <form hx-post="/save-upgrade-policies?upgrade_tab={{ active_tab }}" hx-target="#main-content" hx-swap="outerHTML" class="mt-4" data-action-title="Saving upgrade policies" data-action-start="Saving the upgrade gate policy choices." data-action-complete="Upgrade policies saved.">
             <input type="hidden" name="return_page" value="upgrade_helper">
             <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
                 <div>
@@ -65,7 +65,7 @@
                 </div>
             </div>
             <div class="actions mt-4">
-                <button class="btn btn-primary" type="submit">Save policies</button>
+                <button class="btn btn-primary action-button" type="submit">Save policies</button>
             </div>
         </form>
     </details>

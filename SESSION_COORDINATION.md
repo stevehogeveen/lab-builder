@@ -38,6 +38,24 @@ Copy this block and update it in place.
 
 ## Active Sessions
 
+### Session: upgrade-helper-controls-quality-cycle
+- Status: done
+- Branch: codex/14h-quality-run
+- Scope owner: Upgrade Helper media and policy control feedback audit
+- Working on: Completed Upgrade Helper media and policy control feedback cleanup without hardware access.
+- Blocked by: none
+- Ready to hand off: Upload and policy-save controls now use the shared action feedback metadata pattern; focused Upgrade Helper tests, operator-flow contract tests, and compile check pass.
+- Files claimed:
+  - templates/partials/pages/upgrade_helper.html
+  - tests/test_upgrade_helper.py
+- Shared files touched with caution:
+  - SESSION_COORDINATION.md
+- Last changed:
+  - 2026-05-25 23:43 EDT - Claimed narrow Upgrade Helper media/policy control feedback slice for the 14-hour quality run.
+  - 2026-05-25 23:43 EDT - Added action metadata to Upgrade Helper upload/policy controls and verified route/template coverage.
+- Next intended change:
+  - Continue with a separate backlog cycle; suggested next target is another unclaimed page button/route audit or a setup-page clutter/status placement pass.
+
 ### Session: global-settings-quality-cycle
 - Status: done
 - Branch: codex/14h-quality-run

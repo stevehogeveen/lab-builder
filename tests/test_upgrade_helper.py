@@ -1,6 +1,109 @@
 from pathlib import Path
 
+import pytest
+from fastapi.testclient import TestClient
+
+import app.main as main
 from app.upgrade_helper import MEDIA_SCAN_ROOT, REPO_ROOT, build_upgrade_helper_context, build_upgrade_helper_summary, build_upgrade_inventory, build_upgrade_planner, build_upgrade_planner_with_policies, compare_versions, normalize_upgrade_policies, record_upgrade_inventory, scan_upgrade_media, select_upgrade_candidate
+
+
+@pytest.fixture()
+def upgrade_helper_client(tmp_path: Path, monkeypatch):
+    config_dir = tmp_path / "config"
+    media_dir = tmp_path / "media"
+    artifacts_dir = tmp_path / "artifacts"
+    exports_dir = artifacts_dir / "exports"
+    paths = {
+        "CONFIG_DIR": config_dir,
+        "KITS_DIR": config_dir / "kits",
+        "CURRENT_KIT_FILE": config_dir / "current_kit.txt",
+        "MEDIA_DIR": media_dir,
+        "FIRMWARE_UPLOAD_DIR": media_dir / "firmware",
+        "ARTIFACTS_DIR": artifacts_dir,
+        "GENERATED_DIR": artifacts_dir / "generated",
+        "JOBS_DIR": artifacts_dir / "jobs",
+        "HISTORY_DIR": artifacts_dir / "history",
+        "RUNS_DIR": artifacts_dir / "runs",
+        "EXPORTS_DIR": exports_dir,
+        "BUILD_OUTPUT_DIR": exports_dir / "builds",
+        "ILO_CONFIG_EXPORT_DIR": artifacts_dir / "history" / "ilo-configs",
+        "CONFIG_EXPORT_DIR": artifacts_dir / "history" / "configs",
+        "LIVE_ILO_CONFIG_DIR": artifacts_dir / "history" / "ilo-live-configs",
+        "ILO_INVENTORY_DIR": artifacts_dir / "history" / "ilo-inventory",
+        "ILO_LIVE_EXPORT_DIR": exports_dir / "ilo" / "live",
+        "STORAGE_RAID_EXPORT_DIR": exports_dir / "storage-raid",
+        "DEBUG_BUNDLES_DIR": artifacts_dir / "debug-bundles",
+    }
+    for value in paths.values():
+        if isinstance(value, Path) and value.suffix == "":
+            value.mkdir(parents=True, exist_ok=True)
+    for name, value in paths.items():
+        monkeypatch.setattr(main, name, value)
+    monkeypatch.setenv("LAB_BUILDER_VALIDATE_ESXI_MEDIA_URL", "0")
+    monkeypatch.setenv("LAB_BUILDER_LIVE_RUN_CENTER_CHECKS", "0")
+    monkeypatch.setattr(
+        main,
+        "scan_upgrade_media",
+        lambda: {"root": str(media_dir), "latest": {}, "counts": {}, "candidates": []},
+    )
+    main.set_current_kit_name("Upgrade-Helper-Test-Kit")
+
+    with TestClient(main.app) as test_client:
+        yield test_client
+
+
+def test_upgrade_helper_media_and_policy_controls_have_feedback_metadata(upgrade_helper_client):
+    response = upgrade_helper_client.get("/upgrade-helper?tab=ontap")
+
+    assert response.status_code == 200
+    assert 'data-active-upgrade-tab="ontap"' in response.text
+    assert 'hx-post="/upload-upgrade-media?upgrade_tab=ontap"' in response.text
+    assert 'hx-encoding="multipart/form-data"' in response.text
+    assert 'data-action-title="Uploading upgrade media"' in response.text
+    assert 'data-action-start="Saving the selected firmware or install media file."' in response.text
+    assert 'class="btn btn-primary action-button" type="submit">Upload</button>' in response.text
+    assert 'hx-post="/save-upgrade-policies?upgrade_tab=ontap"' in response.text
+    assert 'data-action-title="Saving upgrade policies"' in response.text
+    assert 'name="policy_ilo"' in response.text
+    assert 'name="policy_netapp"' in response.text
+    assert 'name="policy_cisco_switch"' in response.text
+    assert 'class="btn btn-primary action-button" type="submit">Save policies</button>' in response.text
+
+
+def test_save_upgrade_policies_keeps_selected_helper_tab(upgrade_helper_client):
+    response = upgrade_helper_client.post(
+        "/save-upgrade-policies?upgrade_tab=cisco",
+        data={
+            "return_page": "upgrade_helper",
+            "policy_ilo": "warn",
+            "policy_netapp": "ignore",
+            "policy_cisco_switch": "block",
+        },
+    )
+
+    assert response.status_code == 200
+    assert "Upgrade policies saved" in response.text
+    assert 'data-active-upgrade-tab="cisco"' in response.text
+    assert "Review Cisco upgrade plan" in response.text
+    saved = main.load_kit_config()
+    assert saved["upgrade_helper"]["policies"] == {
+        "ilo": "warn",
+        "netapp": "ignore",
+        "cisco_switch": "block",
+    }
+
+
+def test_upload_upgrade_media_saves_file_without_hardware(upgrade_helper_client):
+    response = upgrade_helper_client.post(
+        "/upload-upgrade-media?upgrade_tab=firmware",
+        data={"return_page": "upgrade_helper"},
+        files={"media_file": ("ilo6_176.fwpkg", b"fake firmware", "application/octet-stream")},
+    )
+
+    assert response.status_code == 200
+    assert "Firmware media uploaded" in response.text
+    assert 'data-active-upgrade-tab="firmware"' in response.text
+    assert (main.FIRMWARE_UPLOAD_DIR / "ilo6_176.fwpkg").read_bytes() == b"fake firmware"
 
 
 def test_compare_versions_handles_ontap_patch_versions():
