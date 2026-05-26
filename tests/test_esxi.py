@@ -75,6 +75,8 @@ def test_esxi_page_latest_receipt_open_log_uses_report_route(esxi_client):
     assert response.status_code == 200
     assert "Last ESXi run" in response.text
     assert 'hx-post="/view-report"' in response.text
+    assert 'data-action-title="Opening ESXi run log"' in response.text
+    assert '<button class="btn action-button" type="submit">Open log</button>' in response.text
     assert 'name="return_page" value="esxi"' in response.text
     assert 'name="report_path"' in response.text
     assert str(summary_path) in response.text

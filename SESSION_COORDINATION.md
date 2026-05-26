@@ -38,6 +38,24 @@ Copy this block and update it in place.
 
 ## Active Sessions
 
+### Session: esxi-open-log-action-feedback-quality-cycle
+- Status: done
+- Branch: codex/14h-quality-run
+- Scope owner: ESXi latest-run Open log action feedback consistency
+- Working on: Completed ESXi latest-run Open log action feedback consistency without changing the report route.
+- Blocked by: none
+- Ready to hand off: ESXi latest-run Open log now uses shared action feedback metadata; focused ESXi and operator-flow checks pass.
+- Files claimed:
+  - templates/partials/pages/esxi.html
+  - tests/test_esxi.py
+- Shared files touched with caution:
+  - SESSION_COORDINATION.md
+- Last changed:
+  - 2026-05-26 01:35 EDT - Claimed narrow ESXi latest-run Open log action-feedback slice for the 14-hour quality run.
+  - 2026-05-26 01:36 EDT - Added shared action metadata/classes to the ESXi Open log control and verified focused coverage.
+- Next intended change:
+  - Continue with a separate backlog cycle; suggested next target is another unclaimed latest-run Open log action-feedback audit such as Storage or Dashboard.
+
 ### Session: ilo-open-log-action-feedback-quality-cycle
 - Status: done
 - Branch: codex/14h-quality-run

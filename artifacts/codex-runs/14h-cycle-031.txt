@@ -1,0 +1,29 @@
+Task chosen: ESXi latest-run `Open log` action feedback consistency.
+
+Files inspected: required session docs, `.codex/mission.md`, `.codex/rules.md`, `.codex/backlog.md`, ESXi/iLO/storage templates/tests, and `/view-report` route wiring.
+
+Files changed:
+- [SESSION_COORDINATION.md](/home/administrator/lab-builder/SESSION_COORDINATION.md:41)
+- [templates/partials/pages/esxi.html](/home/administrator/lab-builder/templates/partials/pages/esxi.html:348)
+- [tests/test_esxi.py](/home/administrator/lab-builder/tests/test_esxi.py:78)
+
+Buttons/routes/forms verified:
+- `GET /esxi` renders latest ESXi receipt.
+- `Open log` form posts `hx-post="/view-report"` with `return_page=esxi` and `report_path`.
+- `/view-report` opens the saved ESXi report.
+- Adjacent `/execution` Run Center link was inspected and left unchanged.
+
+Change made: added shared action-feedback metadata and `action-button` styling to the ESXi latest-run `Open log` control, matching the iLO pattern without changing behavior.
+
+Tests/checks run:
+- `.venv/bin/python -m pytest tests/test_esxi.py` passed.
+- `.venv/bin/python -m pytest tests/test_operator_flow_contract.py` passed.
+- `.venv/bin/python -m compileall app` passed.
+
+Real hardware used: none.
+
+Mocked/dry-run only: route/template validation used `TestClient`, temp kit/config directories, and mocked upgrade media scan. No hardware or network calls were made.
+
+Remaining risks: no browser-level HTMX interaction screenshot was run; coverage is focused route/template verification.
+
+Recommended next task: audit another unclaimed latest-run `Open log` action-feedback control, likely Storage or Dashboard.
