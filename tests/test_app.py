@@ -12119,6 +12119,9 @@ def test_ovf_templates_page_renders_from_sidebar_route(client):
     assert response.status_code == 200
     assert "OVF Templates" in response.text
     assert "Register local template directory" in response.text
+    assert 'hx-post="/modules/ovf-templates/register-directory"' in response.text
+    assert 'name="ovf_template_directory"' in response.text
+    assert ">Register directory</button>" in response.text
     assert "Dashboard mission control" not in response.text
 
 
@@ -13685,7 +13688,11 @@ def test_ovf_template_directory_requires_descriptor_choice_when_multiple_ovfs(cl
     )
 
     assert response.status_code == 200
+    assert "OVF template not registered" in response.text
+    assert "Fix the directory or descriptor choice" in response.text
+    assert "Warning: something needs attention" not in response.text
     assert "Multiple .ovf descriptors were found." in response.text
+    assert response.text.count("Multiple .ovf descriptors were found.") == 1
     assert "one.ovf" in response.text
     assert "two.ovf" in response.text
 

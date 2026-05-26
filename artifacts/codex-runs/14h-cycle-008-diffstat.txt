@@ -1,0 +1,4 @@
+ SESSION_COORDINATION.md             | 19 +++++++++++++++++++
+ app/modules/ovf_templates/routes.py |  8 +++++++-
+ tests/test_app.py                   |  7 +++++++
+ 3 files changed, 33 insertions(+), 1 deletion(-)

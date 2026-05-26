@@ -1,0 +1,36 @@
+**Task Chosen**
+Priority 1/2: OVF Templates register-directory feedback audit. I fixed failed registration feedback so it appears once in the shared “What happened last” receipt instead of duplicating as both a warning popup and receipt.
+
+**Files Inspected**
+`.codex/mission.md`, `.codex/rules.md`, `.codex/backlog.md`, required session docs, plus OVF template route/template/tests.
+
+**Files Changed**
+- [app/modules/ovf_templates/routes.py](/home/administrator/lab-builder/app/modules/ovf_templates/routes.py:59): failed registration now returns shared action feedback.
+- [tests/test_app.py](/home/administrator/lab-builder/tests/test_app.py:12122): added form/route wiring assertions.
+- [tests/test_app.py](/home/administrator/lab-builder/tests/test_app.py:13691): added duplicate-feedback guard.
+- [SESSION_COORDINATION.md](/home/administrator/lab-builder/SESSION_COORDINATION.md:41): claimed and completed the slice.
+
+**Buttons/Routes/Forms Verified**
+- `GET /modules/ovf-templates`
+- `hx-post="/modules/ovf-templates/register-directory"`
+- `ovf_template_directory` form field
+- `Register directory` submit button
+- `register_ovf_template_directory` failure path
+
+**Tests/Checks Run**
+- `.venv/bin/python -m pytest tests/test_app.py::test_ovf_templates_page_renders_from_sidebar_route tests/test_app.py::test_ovf_template_directory_requires_descriptor_choice_when_multiple_ovfs tests/test_app.py::test_ovf_templates_register_directory_and_windows_selects_template -q`
+  - `3 passed`
+- `.venv/bin/python -m compileall app`
+  - passed
+
+**Hardware**
+No real hardware was used.
+
+**Mocked/Dry-Run Only**
+Used FastAPI test client and temporary synthetic OVF files/directories. No NetApp, vCenter, ESXi, switch, or server calls.
+
+**Remaining Risks**
+No browser-level HTMX click test was run; coverage is route/template rendering and POST behavior.
+
+**Recommended Next Task**
+A focused Reports or History button/route audit, especially `view-report`, `download-report`, and related bundle links. No commit or push was performed.

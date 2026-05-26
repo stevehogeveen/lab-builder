@@ -56,7 +56,13 @@ async def register_ovf_template_directory(
         details = list(result.get("warnings") or [])
         if candidates:
             details.append(f"Candidates: {', '.join(candidates)}")
-        return _render_ovf_page(request, cfg, error_message=" ".join(details))
+        feedback = main.build_action_feedback(
+            "OVF template not registered",
+            "Fix the directory or descriptor choice, then submit the form again.",
+            tone="pending",
+            details=details,
+        )
+        return _render_ovf_page(request, cfg, action_feedback=feedback)
 
     main.save_kit_config(cfg)
     template = dict(result.get("template") or {})

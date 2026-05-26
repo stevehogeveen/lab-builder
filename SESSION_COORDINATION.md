@@ -38,6 +38,25 @@ Copy this block and update it in place.
 
 ## Active Sessions
 
+### Session: ovf-templates-quality-cycle
+- Status: done
+- Branch: codex/14h-quality-run
+- Scope owner: OVF Templates register-directory feedback audit
+- Working on: Completed OVF Templates failed-registration feedback cleanup without hardware access.
+- Blocked by: none
+- Ready to hand off: OVF Templates register-directory button route is covered; failures now show once in the shared action receipt.
+- Files claimed:
+  - app/modules/ovf_templates/routes.py
+  - tests/test_app.py
+- Shared files touched with caution:
+  - SESSION_COORDINATION.md
+  - tests/test_app.py
+- Last changed:
+  - 2026-05-25 22:31 EDT - Claimed narrow OVF Templates failed-registration feedback slice for the 14-hour quality run.
+  - 2026-05-25 22:32 EDT - Routed failed OVF directory registration through shared action feedback and verified focused tests.
+- Next intended change:
+  - Continue with a separate backlog cycle; suggested next target is a focused Reports or History button/route audit.
+
 ### Session: kits-quality-cycle
 - Status: done
 - Branch: codex/14h-quality-run
