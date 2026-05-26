@@ -1,0 +1,4 @@
+ SESSION_COORDINATION.md                 | 20 ++++++++++++++++++++
+ templates/partials/pages/execution.html |  3 +++
+ tests/test_app.py                       |  3 +++
+ 3 files changed, 26 insertions(+)

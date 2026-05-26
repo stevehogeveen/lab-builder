@@ -1,0 +1,28 @@
+Task chosen: Run Center action-feedback consistency for existing review and launch controls.
+
+Files inspected: required session docs, `.codex/mission.md`, `.codex/rules.md`, `.codex/backlog.md`, [execution.html](/home/administrator/lab-builder/templates/partials/pages/execution.html:276), [app/modules/execution/routes.py](/home/administrator/lab-builder/app/modules/execution/routes.py:65), [templates/index.html](/home/administrator/lab-builder/templates/index.html:3555), and focused `tests/test_app.py` coverage.
+
+Files changed:
+- [SESSION_COORDINATION.md](/home/administrator/lab-builder/SESSION_COORDINATION.md:41)
+- [templates/partials/pages/execution.html](/home/administrator/lab-builder/templates/partials/pages/execution.html:276)
+- [tests/test_app.py](/home/administrator/lab-builder/tests/test_app.py:4188)
+
+Buttons/routes/forms verified:
+- `Review run`: `hx-post="/prepare-execute"` -> `prepare_execute_handler`
+- `Run for real`: `hx-post="/execute"` -> `execute_scope_handler`
+- `Start preview run`: `hx-post="/execute-preview"` -> `execute_preview_scope_handler`
+
+Change made: added explicit `data-action-complete` messages for those three Run Center forms and pinned them in focused rendering assertions. No route behavior changed.
+
+Tests/checks run:
+- `.venv/bin/python -m pytest tests/test_app.py -k "execution_page_warns_when_storage_is_not_approved or prepare_execute_marks_included_scope_as_preview_only or execute_preview_scope_reports_preview_started"`: passed
+- `.venv/bin/python -m pytest tests/test_operator_flow_contract.py`: passed
+- `.venv/bin/python -m compileall app`: passed
+
+Real hardware used: none.
+
+Mocked/dry-run only: FastAPI route/template rendering checks only; no hardware calls.
+
+Remaining risks: no browser-level HTMX interaction test and no full pytest run in this cycle. Pre-existing untracked `artifacts/codex-runs/14h-cycle-047*` files were not touched.
+
+Recommended next task: another narrow action-feedback gap, such as Dashboard active-kit config actions or Kits create/load completion metadata.

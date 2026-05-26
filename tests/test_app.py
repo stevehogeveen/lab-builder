@@ -4185,6 +4185,9 @@ def test_prepare_execute_marks_included_scope_as_preview_only(client):
     assert "Mode" in response.text
     assert "Start preview run" in response.text
     assert "Run for real" in response.text
+    assert 'data-action-complete="Run review ready."' in response.text
+    assert 'data-action-complete="Real run request submitted."' in response.text
+    assert 'data-action-complete="Preview run requested."' in response.text
     assert "/execute-preview" in response.text
     assert "/execute" in response.text
     assert "Ready to run" in response.text

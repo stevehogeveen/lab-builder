@@ -273,6 +273,7 @@
             class="card card-compact"
             data-action-title="Preparing run review"
             data-action-start="Checking the selected run."
+            data-action-complete="Run review ready."
         >
             {% set selected_values = execution_review.selected_scopes_for_form if execution_review and execution_review.selected_scopes_for_form else selected_run_scopes %}
             <input type="hidden" name="return_page" value="execution">
@@ -366,6 +367,7 @@
                 hx-swap="outerHTML"
                 data-action-title="Starting real run"
                 data-action-start="Starting the real run."
+                data-action-complete="Real run request submitted."
             >
                 <input type="hidden" name="scope" value="{{ execution_review.launch_options.real.scope if execution_review.launch_options.real else confirm_scope }}">
                 <input type="hidden" name="return_page" value="execution">
@@ -490,6 +492,7 @@
                     class="card card-compact"
                     data-action-title="Starting preview run"
                     data-action-start="Starting a preview-only run."
+                    data-action-complete="Preview run requested."
                 >
                     <input type="hidden" name="scope" value="{{ execution_review.launch_options.preview.scope }}">
                     <input type="hidden" name="return_page" value="execution">
