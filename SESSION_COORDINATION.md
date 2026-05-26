@@ -38,13 +38,102 @@ Copy this block and update it in place.
 
 ## Active Sessions
 
+### Session: netapp-cisco-like-console-reset-page
+- Status: done
+- Branch: codex/14h-quality-run
+- Scope owner: NetApp page operator-flow reshape, console access placement, and factory reset visibility
+- Working on: Completed NetApp setup page reshape to follow the Cisco page shape for console access, factory reset, current state, plan, execution, evidence, and next step.
+- Blocked by: none
+- Ready to hand off: NetApp page now exposes console access, current ONTAP access, access settings, plan/execute, bootstrap, and factory reset in a Cisco-like operator flow with local action feedback. Focused NetApp tests, operator-flow contract tests, compileall, full pytest, and localhost page smoke check pass.
+- Files claimed:
+  - templates/partials/pages/netapp.html
+  - app/modules/netapp/routes.py
+  - app/modules/netapp/service.py
+  - app/netapp.py
+  - app/netapp_console.py
+  - tests/test_netapp_*.py
+- Shared files touched with caution:
+  - SESSION_COORDINATION.md
+- Last changed:
+  - 2026-05-26 13:31 EDT - Took over stale NetApp page coordination for the explicit Cisco-like console/reset page request.
+  - 2026-05-26 13:43 EDT - Reshaped the NetApp page around Cisco-like console/current access cards, visible factory reset controls, and specific action feedback; verified focused NetApp tests, operator-flow contract, compileall, full pytest, and localhost smoke check.
+- Next intended change:
+  - None.
+
+### Session: cisco-upgrade-ssh-and-run-config
+- Status: done
+- Branch: codex/14h-quality-run
+- Scope owner: Cisco upgrade/approval SSH check placement and switch config generation for Run Center
+- Working on: Completed nearby SSH test actions for Cisco upgrade and approval blockers, and expanded generated Cisco switch config so requested baseline commands are included in preview/apply/run.
+- Blocked by: none
+- Ready to hand off: Cisco upgrade helper and approval surfaces now expose SSH testing near the relevant actions; full Cisco config generation includes the requested baseline, VLAN, access, monitoring/SNMP, banner, and copy-run-start commands. Focused Cisco tests, operator-flow contract tests, compileall, and full pytest pass.
+- Files claimed:
+  - app/cisco.py
+  - app/modules/cisco/routes.py
+  - app/modules/cisco/service.py
+  - app/upgrade_panels.py
+  - templates/partials/pages/cisco.html
+  - tests/test_cisco_*.py
+  - tests/test_upgrade_helper.py
+- Shared files touched with caution:
+  - SESSION_COORDINATION.md
+- Last changed:
+  - 2026-05-26 12:56 EDT - Claimed Cisco upgrade SSH-check and run-config coverage slice before editing.
+  - 2026-05-26 13:04 EDT - Added Cisco SSH test actions beside upgrade/approval controls, expanded full switch config/run generation with requested baseline commands, and verified focused, contract, compileall, and full pytest.
+- Next intended change:
+  - None.
+
+### Session: cisco-console-privileged-exec-failure-fix
+- Status: done
+- Branch: codex/14h-quality-run
+- Scope owner: Cisco console setup wizard fallback and privileged EXEC recovery
+- Working on: Completed Cisco setup wizard continuation, privileged EXEC recovery diagnostics, Access Settings completion feedback, and fake-console coverage.
+- Blocked by: none
+- Ready to hand off: Cisco console setup now reports prompt/action diagnostics on privileged EXEC failure; focused Cisco tests, full pytest, and compileall pass with the repo virtualenv.
+- Files claimed:
+  - app/cisco.py
+  - app/modules/cisco/routes.py
+  - app/modules/cisco/service.py
+  - templates/partials/pages/cisco.html
+  - tests/test_cisco_*.py
+- Shared files touched with caution:
+  - SESSION_COORDINATION.md
+- Last changed:
+  - 2026-05-26 11:26 EDT - Claimed narrow Cisco console privileged EXEC failure fix before code edits.
+  - 2026-05-26 11:36 EDT - Added Cisco console prompt diagnostics, password-policy prompt handling, Access Settings completion feedback, and fake-console coverage; focused Cisco tests, full pytest, and compileall pass.
+- Next intended change:
+  - none
+
+### Session: cisco-access-run-current-kit
+- Status: done
+- Branch: codex/14h-quality-run
+- Scope owner: Cisco current access run, serial-console bootstrap, and access-flow error fix for the active kit
+- Working on: Completed the Cisco current access/setup flow for Lab-Uplands-G10 through console setup, current config verification, SSH test, and version discovery.
+- Blocked by: none
+- Ready to hand off: Cisco access is configured and verified on VLAN 80 at 10.10.8.2; SSH and version discovery pass; only informational explicit-override notice remains.
+- Files claimed:
+  - app/cisco.py
+  - app/modules/cisco/routes.py
+  - app/modules/cisco/service.py
+  - templates/partials/pages/cisco.html
+  - tests/test_cisco_*.py
+  - config/kits/Lab-Uplands-G10.yml
+  - artifacts/logs/cisco.log
+- Shared files touched with caution:
+  - SESSION_COORDINATION.md
+- Last changed:
+  - 2026-05-26 09:52 EDT - Claimed current-branch Cisco access run for the active Lab-Uplands-G10 kit before executing or editing the Cisco workflow.
+  - 2026-05-26 09:58 EDT - Ran Cisco console discovery, setup console, current config verification, SSH test, and version discovery successfully for Lab-Uplands-G10.
+- Next intended change:
+  - none
+
 ### Session: cisco-factory-onboarding-fix
 - Status: done
 - Branch: codex/14h-quality-run
 - Scope owner: Cisco onboarding UX, saved/discovered status clarity, and console bootstrap state handling
-- Working on: Completed forced setup wizard final-menu handling, password policy validation, and post-bootstrap log/result clarity without touching real hardware from tests.
+- Working on: Completed full factory-reset onboarding validation updates, exact missing-saved discovered-state wording, and the real-switch manual checklist.
 - Blocked by: none
-- Ready to hand off: Cisco page separates discovered/current, saved kit config, values ready to apply, and last action/log; manual Setup Console validates strong Cisco password and enable secret before serial access; fake-console tests cover assisted setup and final-menu behavior; focused Cisco tests, full pytest, and compileall pass.
+- Ready to hand off: Cisco factory-reset onboarding fake-console coverage, exact discovered-not-saved page/status copy, and manual real-switch checklist are in place; focused Cisco tests and full pytest pass; compileall passes through the repo virtualenv because system python is unavailable.
 - Files claimed:
   - app/cisco.py
   - app/modules/cisco/routes.py
@@ -54,6 +143,7 @@ Copy this block and update it in place.
   - tests/test_cisco_serial.py
   - tests/test_cisco_module.py
   - tests/test_cisco_console_feedback.py
+  - docs/cisco-factory-reset-onboarding-checklist.md
 - Shared files touched with caution:
   - SESSION_COORDINATION.md
 - Last changed:
@@ -62,6 +152,8 @@ Copy this block and update it in place.
   - 2026-05-26 09:04 EDT - Revalidated focused Cisco tests, full pytest, and compileall after the final setup-dialog prompt regex tightening.
   - 2026-05-26 09:30 EDT - Reopened Cisco onboarding fix to add forced wizard final-menu handling and strong fallback password validation requested by the operator.
   - 2026-05-26 09:42 EDT - Added setup wizard final-menu selection 0, strong password validation before serial opens, delayed write-memory until CLI config succeeds, and fake-console/page/service coverage; final focused Cisco tests, full pytest, and compileall pass.
+  - 2026-05-26 10:34 EDT - Reopened Cisco factory-reset onboarding validation for exact missing-saved wording, manual checklist, focused Cisco tests, full pytest, and compileall.
+  - 2026-05-26 10:38 EDT - Added forced-secret-after-no fake-console test, exact discovered-not-saved copy, and Cisco manual checklist; focused Cisco tests and full pytest pass; compileall passes with .venv python.
 - Next intended change:
   - none
 
@@ -1247,11 +1339,11 @@ Copy this block and update it in place.
   - Align Cisco page sections explicitly to Context, Targets, Credentials, Current State, Preflight, Plan, Execute, Monitor, Evidence, and Next Step.
 
 ### Session: netapp
-- Status: active
+- Status: paused
 - Branch: unknown
 - Scope owner: NetApp workflow, NetApp module UI, NetApp planning/validation
 - Working on: Final NetApp page completion, protocol-object editing, and richer dry-run review
-- Blocked by: none
+- Blocked by: Superseded by current-session NetApp page reshape request on codex/14h-quality-run.
 - Ready to hand off: Page-complete NetApp review slice can hand off after template and route parsing updates are recorded here
 - Files claimed:
   - app/modules/netapp/**
@@ -1283,8 +1375,9 @@ Copy this block and update it in place.
   - 2026-05-19 America/Toronto - Made sidebar NetApp navigation render from saved/cached state instead of running synchronous live ONTAP discovery; explicit NetApp actions still perform live reads.
   - 2026-05-19 America/Toronto - Fixed ONTAP upgrade runner so validation-completed pending-version state is not mistaken for an already-running software update; runner now sends the actual start request after validation.
   - 2026-05-19 America/Toronto - Tightened ONTAP upgrade completion detection so target-version visibility during an in-progress takeover/giveback phase does not mark Lab Builder complete; corrected current Lab-Uplands-G10 activity back to running while ONTAP reports in_progress.
+  - 2026-05-26 13:31 EDT - Paused stale unknown-branch NetApp claim so the current explicit NetApp page reshape can own the files narrowly.
 - Next intended change:
-  - Use operator feedback from the next manual test pass to tighten layout, wording, and any remaining protocol-detail validations.
+  - Superseded by `netapp-cisco-like-console-reset-page`.
 
 ### Session: vcenter-quality-cycle
 - Status: done

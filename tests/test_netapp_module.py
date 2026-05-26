@@ -91,12 +91,16 @@ def test_netapp_module_route_returns_200_with_bootstrap_and_connection_state(cli
 
     assert response.status_code == 200
     assert "NetApp setup" in response.text
-    assert "Connection Target" in response.text
+    assert "Bootstrap console, then apply" in response.text
+    assert "Current access" in response.text
+    assert "Current ONTAP access" in response.text
+    assert "Access settings" in response.text
     assert "Bootstrap Plan" in response.text
     assert "ONTAP API / Cluster Management IP" in response.text
     assert "Test ONTAP API connection" in response.text
     assert "NetApp console access" in response.text
     assert "Detect NetApp console USB" in response.text
+    assert "Test console access" in response.text
     assert "Factory reset NetApp" in response.text
     assert "Build factory reset runbook" in response.text
     assert "FACTORY RESET NETAPP" in response.text
@@ -649,7 +653,7 @@ def test_netapp_prepare_nfs_storage_defaults_normalizes_and_shows_quick_start(cl
 
     assert response.status_code == 200
     assert "NFS storage defaults prepared" in response.text
-    assert "NFS storage quick start" in response.text
+    assert "Plan and execute storage" in response.text
     assert "stage_nfs" in response.text
     assert "esxi_nfs_policy" in response.text
     saved = main.load_kit_config()

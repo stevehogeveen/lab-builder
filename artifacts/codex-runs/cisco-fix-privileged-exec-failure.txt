@@ -1,0 +1,14 @@
+Implemented the Cisco console fix without changing IP addressing logic.
+
+Changed:
+- [app/cisco.py](/home/administrator/lab-builder/app/cisco.py): continued reading after initial dialog, handled forced setup/password prompts, final menu `0`, `Switch>` enable flow, password policy failures, and richer privileged EXEC failure diagnostics without secrets.
+- [app/modules/cisco/routes.py](/home/administrator/lab-builder/app/modules/cisco/routes.py) and [cisco.html](/home/administrator/lab-builder/templates/partials/pages/cisco.html): successful verified setup now shows completed Cisco Access Settings feedback.
+- [tests/test_cisco_serial.py](/home/administrator/lab-builder/tests/test_cisco_serial.py) and [tests/test_cisco_page.py](/home/administrator/lab-builder/tests/test_cisco_page.py): added fake-console/page coverage for the requested paths and diagnostic message.
+
+Validation:
+- Bare `python` is not on PATH (`python: command not found`), so I used the repo venv.
+- `.venv/bin/python -m pytest -q tests/test_cisco_*.py` → `54 passed`
+- `.venv/bin/python -m pytest -q` → `512 passed`
+- `.venv/bin/python -m compileall app` → passed
+
+No commit was made. Existing dirty/untracked Cisco-session artifacts were left intact.

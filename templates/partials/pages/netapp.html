@@ -1,4 +1,4 @@
-<section class="panel space-y-4">
+<section class="panel netapp-page space-y-5">
     {% set payload = netapp_payload or {} %}
     {% set plan = payload.get('plan', {}) %}
     {% set discovery = payload.get('discovery', {}) %}
@@ -81,6 +81,246 @@
         {% endif %}
     {% endfor %}
     {% set legacy_convention_warning = legacy_warning_ns.value %}
+    {% set api_readiness = (bootstrap.get('bootstrap_checks', {}) or {}).get('api_readiness', {}) %}
+    {% set has_console = console.get('port') %}
+    {% set console_ready = console_probe.get('ok') or has_console %}
+    {% set api_auth_ready = connection_test.get('api_auth_ok') or api_readiness.get('api_auth_ok') or has_snapshot %}
+    {% set netapp_run_ready = bootstrap_complete and api_auth_ready and not payload.get('error') %}
+    {% set apply_result = payload.get('apply', {}) %}
+    {% set last_action_title = action_feedback.title if action_feedback else 'NetApp page loaded' %}
+    {% set last_action_summary = action_feedback.summary if action_feedback else 'No NetApp action has run in this view yet.' %}
+    {% set feedback_title = (last_action_title or '') | lower %}
+    {% set feedback_area = '' %}
+    {% if action_feedback %}
+        {% if 'console' in feedback_title or 'choose netapp console' in feedback_title %}
+            {% set feedback_area = 'console' %}
+        {% elif 'factory reset' in feedback_title %}
+            {% set feedback_area = 'factory' %}
+        {% elif 'connection' in feedback_title or 'api' in feedback_title or 'current netapp' in feedback_title or 'discovered netapp' in feedback_title or 'discovery' in feedback_title %}
+            {% set feedback_area = 'current' %}
+        {% elif 'apply' in feedback_title or 'safe' in feedback_title %}
+            {% set feedback_area = 'execute' %}
+        {% elif 'nfs' in feedback_title or 'plan' in feedback_title or 'validated' in feedback_title %}
+            {% set feedback_area = 'plan' %}
+        {% elif 'bootstrap' in feedback_title %}
+            {% set feedback_area = 'bootstrap' %}
+        {% else %}
+            {% set feedback_area = 'status' %}
+        {% endif %}
+    {% endif %}
+    {% macro netapp_inline_feedback(feedback) -%}
+    <div class="netapp-action-feedback {{ feedback.tone }}">
+        <strong>{{ feedback.title }}:</strong>
+        <span>{{ feedback.summary }}</span>
+        {% if feedback.outcomes %}
+        <span class="netapp-action-feedback-meta">{{ feedback.outcomes | join(' · ') }}</span>
+        {% endif %}
+        {% if feedback.details %}
+        <span class="netapp-action-feedback-meta">{{ feedback.details[0] | truncate(180) }}</span>
+        {% endif %}
+    </div>
+    {%- endmacro %}
+
+    <style>
+        .netapp-page {
+            container-type: inline-size;
+        }
+
+        .netapp-hero {
+            display: grid;
+            grid-template-columns: minmax(0, 1fr) auto;
+            gap: 1rem;
+            align-items: start;
+        }
+
+        .netapp-title-row {
+            display: flex;
+            flex-wrap: wrap;
+            gap: .65rem;
+            align-items: center;
+        }
+
+        .netapp-subtitle {
+            max-width: 68rem;
+            margin-top: .4rem;
+            color: var(--muted);
+            font-size: .94rem;
+        }
+
+        .netapp-state-grid {
+            display: grid;
+            grid-template-columns: repeat(4, minmax(0, 1fr));
+            gap: .85rem;
+        }
+
+        .netapp-state-card,
+        .netapp-step {
+            min-width: 0;
+            padding: .9rem;
+            border: 1px solid var(--border);
+            border-radius: .95rem;
+            background: color-mix(in srgb, var(--panel) 88%, transparent);
+        }
+
+        .netapp-state-card-title,
+        .netapp-step-header {
+            display: flex;
+            justify-content: space-between;
+            gap: .75rem;
+            align-items: flex-start;
+        }
+
+        .netapp-state-card-title {
+            color: var(--text);
+            font-size: .88rem;
+            font-weight: 800;
+        }
+
+        .netapp-state-card-value {
+            margin-top: .45rem;
+            overflow: hidden;
+            color: var(--text);
+            font-size: 1rem;
+            font-weight: 800;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+
+        .netapp-state-card-note,
+        .netapp-step-copy {
+            margin-top: .25rem;
+            color: var(--muted);
+            font-size: .8rem;
+            line-height: 1.35;
+        }
+
+        .netapp-console-row {
+            display: grid;
+            grid-template-columns: repeat(2, minmax(0, 1fr));
+            gap: .85rem;
+        }
+
+        .netapp-step {
+            display: grid;
+            gap: .65rem;
+            align-content: start;
+        }
+
+        .netapp-step-title {
+            font-size: 1rem;
+            font-weight: 800;
+            line-height: 1.2;
+        }
+
+        .netapp-facts {
+            display: grid;
+            grid-template-columns: repeat(2, minmax(0, 1fr));
+            gap: .45rem;
+        }
+
+        .netapp-fact {
+            min-width: 0;
+            padding: .55rem .65rem;
+            border: 1px solid color-mix(in srgb, var(--border) 82%, transparent);
+            border-radius: .8rem;
+            background: color-mix(in srgb, var(--panel) 82%, transparent);
+        }
+
+        .netapp-fact span,
+        .netapp-field label {
+            display: block;
+            color: var(--muted);
+            font-size: .68rem;
+            font-weight: 800;
+            letter-spacing: .08em;
+            text-transform: uppercase;
+        }
+
+        .netapp-fact strong {
+            display: block;
+            margin-top: .2rem;
+            overflow: hidden;
+            color: var(--text);
+            font-size: .9rem;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+
+        .netapp-compact-grid,
+        .netapp-reset-grid {
+            display: grid;
+            grid-template-columns: repeat(4, minmax(0, 1fr));
+            gap: .85rem;
+        }
+
+        .netapp-field label {
+            margin-bottom: .35rem;
+        }
+
+        .netapp-actions {
+            display: flex;
+            flex-wrap: wrap;
+            gap: .55rem;
+        }
+
+        .netapp-actions .btn {
+            min-height: 2.45rem;
+            padding: .58rem .78rem;
+            font-size: .86rem;
+        }
+
+        .netapp-action-feedback {
+            color: var(--muted);
+            font-size: .82rem;
+            line-height: 1.35;
+        }
+
+        .netapp-action-feedback strong {
+            color: var(--text);
+        }
+
+        .netapp-action-feedback.ready strong {
+            color: var(--good);
+        }
+
+        .netapp-action-feedback.pending strong {
+            color: var(--warn);
+        }
+
+        .netapp-action-feedback.danger strong {
+            color: var(--bad);
+        }
+
+        .netapp-action-feedback-meta {
+            display: block;
+            margin-top: .15rem;
+            color: color-mix(in srgb, var(--muted) 82%, var(--text));
+        }
+
+        .netapp-danger-panel {
+            border-color: color-mix(in srgb, var(--bad) 50%, var(--border));
+            background: color-mix(in srgb, var(--bad) 5%, var(--surface));
+        }
+
+        @container (max-width: 1180px) {
+            .netapp-state-grid,
+            .netapp-compact-grid,
+            .netapp-reset-grid {
+                grid-template-columns: repeat(2, minmax(0, 1fr));
+            }
+        }
+
+        @container (max-width: 720px) {
+            .netapp-hero,
+            .netapp-console-row,
+            .netapp-state-grid,
+            .netapp-compact-grid,
+            .netapp-reset-grid,
+            .netapp-facts {
+                grid-template-columns: 1fr;
+            }
+        }
+    </style>
 
     <div class="flex items-start justify-between gap-4">
         <div>
@@ -101,52 +341,40 @@
     ] %}
     {% include "partials/components/setup_strip.html" %}
 
-    <div class="ops-metric-grid">
-        <div class="ops-metric-card">
-            <div class="dashboard-kicker">Cluster</div>
-            <div class="font-semibold">{{ discovered_cluster_name or planned_cluster_name or 'Not set' }}</div>
-            <div class="mt-2">
-                <span class="status {{ 'danger' if cluster_name_mismatch else ('ready' if discovered_cluster_name else 'progress') }}">{{ 'Mismatch' if cluster_name_mismatch else ('Discovered' if discovered_cluster_name else 'Planned') }}</span>
+    <section class="netapp-state-grid" aria-label="NetApp operator flow summary">
+        <article class="netapp-state-card">
+            <div class="netapp-state-card-title">
+                <span>Current access</span>
+                <span class="status {{ 'ready' if api_auth_ready else 'pending' }}">{{ 'API verified' if api_auth_ready else 'Test needed' }}</span>
             </div>
-        </div>
-        <div class="ops-metric-card">
-            <div class="dashboard-kicker">Cluster mgmt</div>
-            <div class="font-semibold">{{ discovered_cluster_mgmt_ip or planned_cluster_mgmt_ip or 'Not set' }}</div>
-            <div class="mt-2">
-                <span class="status {{ 'danger' if cluster_mgmt_mismatch else ('ready' if discovered_cluster_mgmt_ip else 'progress') }}">{{ 'Mismatch' if cluster_mgmt_mismatch else ('Discovered' if discovered_cluster_mgmt_ip else 'Planned') }}</span>
+            <div class="netapp-state-card-value">{{ connection_target_ip or 'Not set' }}</div>
+            <div class="netapp-state-card-note">ONTAP cluster management endpoint used by discovery, validation, safe apply, and upgrades.</div>
+        </article>
+        <article class="netapp-state-card">
+            <div class="netapp-state-card-title">
+                <span>Desired final</span>
+                <span class="status {{ 'danger' if cluster_mgmt_mismatch or node_mgmt_mismatch else ('ready' if planned_cluster_mgmt_ip else 'pending') }}">{{ 'Mismatch' if cluster_mgmt_mismatch or node_mgmt_mismatch else ('Planned' if planned_cluster_mgmt_ip else 'Needs values') }}</span>
             </div>
-        </div>
-        <div class="ops-metric-card">
-            <div class="dashboard-kicker">Node mgmt</div>
-            <div class="font-semibold">{{ discovered_node_mgmt_ips | join(' / ') if discovered_node_mgmt_ips else ((planned_node_01_mgmt_ip or '?') ~ ' / ' ~ (planned_node_02_mgmt_ip or '?')) }}</div>
-            <div class="mt-2">
-                <span class="status {{ 'danger' if node_mgmt_mismatch else ('ready' if discovered_node_mgmt_ips else 'progress') }}">{{ 'Mismatch' if node_mgmt_mismatch else ('Discovered' if discovered_node_mgmt_ips else 'Planned') }}</span>
+            <div class="netapp-state-card-value">{{ planned_cluster_mgmt_ip or 'Not planned' }}</div>
+            <div class="netapp-state-card-note">Cluster {{ planned_cluster_name or 'not set' }} · Nodes {{ (planned_node_01_mgmt_ip or '?') ~ ' / ' ~ (planned_node_02_mgmt_ip or '?') }}</div>
+        </article>
+        <article class="netapp-state-card">
+            <div class="netapp-state-card-title">
+                <span>Discovered reality</span>
+                <span class="status {{ 'danger' if cluster_name_mismatch or cluster_mgmt_mismatch else ('ready' if has_snapshot else 'pending') }}">{{ 'Mismatch' if cluster_name_mismatch or cluster_mgmt_mismatch else ('Discovered' if has_snapshot else 'Not read') }}</span>
             </div>
-        </div>
-        <div class="ops-metric-card">
-            <div class="dashboard-kicker">Protocol</div>
-            <div class="font-semibold">{{ selected_protocol | upper }}{% if active_protocols %} / {{ active_protocols | join(', ') | upper }}{% endif %}</div>
-        </div>
-        <div class="ops-metric-card">
-            <div class="dashboard-kicker">ONTAP</div>
-            <div class="font-semibold">{{ current_ontap_release or 'Unknown' }}</div>
-            <div class="mt-2">
-                <span class="status {{ 'ready' if current_ontap_release else 'progress' }}">{{ 'Current release' if current_ontap_release else 'Read needed' }}</span>
+            <div class="netapp-state-card-value">{{ discovered_cluster_mgmt_ip or discovered_cluster_name or 'Not checked yet' }}</div>
+            <div class="netapp-state-card-note">ONTAP {{ current_ontap_release or 'unknown' }} · Nodes {{ discovery.get('node_count') or 0 }} · Disks {{ discovery.get('disk_count') or 0 }}</div>
+        </article>
+        <article class="netapp-state-card">
+            <div class="netapp-state-card-title">
+                <span>Last action result/log</span>
+                <span class="status {{ action_feedback.tone if action_feedback else 'pending' }}">{{ action_feedback.status_label if action_feedback else 'Not run' }}</span>
             </div>
-        </div>
-        <div class="ops-metric-card">
-            <div class="dashboard-kicker">Nodes</div>
-            <div class="font-semibold">{{ discovery.get('node_count') or 0 }}</div>
-        </div>
-        <div class="ops-metric-card">
-            <div class="dashboard-kicker">Disks</div>
-            <div class="font-semibold">{{ discovery.get('disk_count') or 0 }}</div>
-        </div>
-        <div class="ops-metric-card">
-            <div class="dashboard-kicker">Warnings</div>
-            <div class="font-semibold">{{ (warnings|length) if has_snapshot else (bootstrap_warnings|length) }}</div>
-        </div>
-    </div>
+            <div class="netapp-state-card-value">{{ last_action_title }}</div>
+            <div class="netapp-state-card-note">{{ last_action_summary }}</div>
+        </article>
+    </section>
 
     {% set netapp_upgrade_entry = ((upgrade_helper_summary.get('planner', {}).get('entries', []) | selectattr('key', 'equalto', 'netapp') | list | first) | default({}, true)) if upgrade_helper_summary else {} %}
     {% set netapp_upgrade_override = upgrade_helper_summary.get('overrides', {}).get('netapp') if upgrade_helper_summary else false %}
@@ -160,41 +388,34 @@
     <div class="{% if netapp_upgrade_blocked and not netapp_upgrade_override %}upgrade-gated-content{% endif %}">
     <form hx-post="/modules/netapp/save-settings" hx-target="#main-content" hx-swap="outerHTML" class="space-y-4">
         <input type="hidden" name="bootstrap_complete" value="{{ 'true' if bootstrap_complete else 'false' }}">
-        <section class="card workflow-hero-card">
-            <div class="text-lg font-semibold mb-3">Connection Target</div>
-            <div class="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-3">
+        <section class="card identity-soft-card" data-action-panel>
+            <div class="netapp-hero">
                 <div>
-                    <label class="block text-sm font-bold text-slate-300 mb-2">ONTAP API / Cluster Management IP</label>
-                    <input class="input" name="netapp_host" value="{{ cfg.get('netapp', {}).get('host', '') }}" placeholder="10.10.10.45">
-                    <div class="text-xs text-slate-400 mt-2">Current API target. This is the address the app uses to talk to ONTAP.</div>
-                </div>
-                <div>
-                    <label class="block text-sm font-bold text-slate-300 mb-2">Username</label>
-                    <input class="input" name="netapp_username" value="{{ cfg.get('netapp', {}).get('username', 'admin') }}" placeholder="admin">
-                </div>
-                <div>
-                    <label class="block text-sm font-bold text-slate-300 mb-2">Password</label>
-                    <input class="input" type="password" name="netapp_password" value="" placeholder="Enter password">
-                </div>
-                <div>
-                    <label class="block text-sm font-bold text-slate-300 mb-2">Storage protocol</label>
-                    <select class="input" name="netapp_storage_protocol">
-                        <option value="nfs" {% if selected_protocol == 'nfs' %}selected{% endif %}>NFS</option>
-                        <option value="iscsi" {% if selected_protocol == 'iscsi' %}selected{% endif %}>iSCSI</option>
-                    </select>
+                    <div class="netapp-title-row">
+                        <h2 class="text-2xl font-bold">Bootstrap console, then apply</h2>
+                        <span class="status {{ 'ready' if netapp_run_ready else ('danger' if payload.get('error') else 'pending') }}">{{ 'Ready for safe apply' if netapp_run_ready else ('Blocked' if payload.get('error') else 'Needs review') }}</span>
+                    </div>
+                    <div class="netapp-subtitle">Use the serial console for factory reset and bootstrap recovery, then prove ONTAP API access before discovery, validation, or safe apply.</div>
                 </div>
             </div>
-            <div class="compact-panel mt-4">
-                <div class="flex items-start justify-between gap-4 mb-3">
-                    <div>
-                        <div class="compact-title">NetApp console access</div>
-                        <div class="text-sm text-slate-500">Use this when the management IP is on the wrong subnet and the app must recover access through a USB serial console.</div>
-                    </div>
-                    <span class="status-badge status-badge--{{ 'completed' if console.get('port') else 'waiting' }}">{{ 'Selected' if console.get('port') else 'USB needed' }}</span>
+        </section>
+
+        <section class="netapp-console-row">
+            <article class="netapp-step">
+                <div class="netapp-step-header">
+                    <div class="netapp-step-title">Console access</div>
+                    <span class="status {{ 'ready' if console_ready else 'pending' }}">{{ 'Connected' if console_ready else 'Not found' }}</span>
                 </div>
-                <div class="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-3">
-                    <div>
-                        <label class="block text-sm font-bold text-slate-300 mb-2">Console USB port</label>
+                <div class="netapp-step-copy">Find the NetApp USB serial console and prove the selected console reaches an ONTAP CLI or boot menu prompt before reset work.</div>
+                <div class="netapp-facts">
+                    <div class="netapp-fact"><span>Console port</span><strong>{{ has_console or 'not selected' }}</strong></div>
+                    <div class="netapp-fact"><span>Baud</span><strong>{{ console.get('baud') or 115200 }}</strong></div>
+                    <div class="netapp-fact"><span>Prompt</span><strong>{{ console_probe.get('prompt_type') or 'not tested' }}</strong></div>
+                    <div class="netapp-fact"><span>Last reset</span><strong>{{ console_reset.get('status', 'not run') | replace('_', ' ') }}</strong></div>
+                </div>
+                <div class="netapp-compact-grid">
+                    <div class="netapp-field">
+                        <label>Console USB port</label>
                         <select class="input" name="netapp_console_port">
                             {% if not console.get('port') %}<option value="">Select after detect</option>{% endif %}
                             {% for item in console_candidates %}
@@ -203,60 +424,115 @@
                             {% if console.get('port') and not console_candidates %}<option value="{{ console.get('port') }}" selected>{{ console.get('port') }}</option>{% endif %}
                         </select>
                     </div>
-                    <div>
-                        <label class="block text-sm font-bold text-slate-300 mb-2">Console baud</label>
+                    <div class="netapp-field">
+                        <label>Console baud</label>
                         {% set console_baud = console.get('baud', 115200) | int %}
                         <select class="input" name="netapp_console_baud">
                             <option value="115200" {% if console_baud == 115200 %}selected{% endif %}>115200</option>
                             <option value="9600" {% if console_baud == 9600 %}selected{% endif %}>9600</option>
                         </select>
                     </div>
-                    <div>
-                        <label class="block text-sm font-bold text-slate-300 mb-2">Console username</label>
+                    <div class="netapp-field">
+                        <label>Console username</label>
                         <input class="input" name="netapp_console_username" value="{{ console.get('username') or cfg.get('netapp', {}).get('username', 'admin') }}" placeholder="admin">
                     </div>
-                    <div>
-                        <label class="block text-sm font-bold text-slate-300 mb-2">Console password</label>
-                        <input class="input" type="password" name="netapp_console_password" value="" placeholder="{{ 'Saved' if console.get('password') else 'Enter password' }}" autocomplete="current-password">
+                    <div class="netapp-field">
+                        <label>Console password</label>
+                        <input class="input" type="password" name="netapp_console_password" value="" placeholder="{{ 'Saved - leave blank to keep' if console.get('password') else 'Enter password' }}" autocomplete="current-password">
                     </div>
                 </div>
-                <div class="actions mt-4">
-                    <button class="btn" formaction="/modules/netapp/console-discover" formmethod="post" type="submit">Detect NetApp console USB</button>
-                    <button class="btn" formaction="/modules/netapp/console-probe" formmethod="post" type="submit">Probe console login</button>
+                <div class="netapp-actions">
+                    <button class="btn action-button" formaction="/modules/netapp/console-discover" formmethod="post" type="submit" data-action-title="Detecting NetApp console" data-action-start="Scanning USB serial ports for a NetApp console prompt." data-action-complete="NetApp console scan finished.">Detect NetApp console USB</button>
+                    <button class="btn action-button" formaction="/modules/netapp/console-probe" formmethod="post" type="submit" data-action-title="Testing NetApp console access" data-action-start="Checking the selected console login without changing ONTAP configuration." data-action-complete="NetApp console access test finished.">Test console access</button>
                 </div>
+                {% if action_feedback and feedback_area == 'console' %}
+                {{ netapp_inline_feedback(action_feedback) }}
+                {% endif %}
                 {% if console_probe or console_diag.get('ordered_ports') %}
-                <details class="raw-output-wrap mt-4">
+                <details class="raw-output-wrap">
                     <summary>Console probes and diagnostics</summary>
                     {% if console_probe %}<pre class="raw-output">{{ console_probe | tojson(indent=2) }}</pre>{% endif %}
                     {% if console_diag %}<pre class="raw-output">{{ console_diag | tojson(indent=2) }}</pre>{% endif %}
                     {% if console.get('last_raw_output') %}<pre class="raw-output">{{ console.get('last_raw_output') }}</pre>{% endif %}
                 </details>
                 {% endif %}
-            </div>
-            <div class="actions mt-4">
-                <button class="btn" formaction="/modules/netapp/test-connection" formmethod="post" type="submit">Test ONTAP API connection</button>
-                {% if bootstrap_complete %}
-                <button class="btn action-button" formaction="/modules/netapp/discover-page" formmethod="post" type="submit">Read current NetApp</button>
-                <button class="btn" formaction="/modules/netapp/validate-page" formmethod="post" type="submit">Validate plan</button>
-                <button class="btn" formaction="/modules/netapp/export-plan" formmethod="post" type="submit">Export plan</button>
-                <button class="btn" formaction="/modules/netapp/apply-page" formmethod="post" type="submit">Apply safe NetApp changes</button>
+            </article>
+
+            <article class="netapp-step">
+                <div class="netapp-step-header">
+                    <div class="netapp-step-title">Current ONTAP access</div>
+                    <span class="status {{ 'ready' if api_auth_ready else 'pending' }}">{{ 'Ready' if api_auth_ready else 'Check needed' }}</span>
+                </div>
+                <div class="netapp-step-copy">Test API credentials, read current cluster state, then copy discovered cluster and LIF values into the kit when they are correct.</div>
+                <div class="netapp-facts">
+                    <div class="netapp-fact"><span>API target</span><strong>{{ connection_target_ip or 'not set' }}</strong></div>
+                    <div class="netapp-fact"><span>Cluster</span><strong>{{ discovered_cluster_name or planned_cluster_name or 'not read' }}</strong></div>
+                    <div class="netapp-fact"><span>ONTAP</span><strong>{{ current_ontap_release or 'unknown' }}</strong></div>
+                    <div class="netapp-fact"><span>Protocol</span><strong>{{ selected_protocol | upper }}</strong></div>
+                </div>
+                <div class="netapp-actions">
+                    <button class="btn action-button" formaction="/modules/netapp/test-connection" formmethod="post" type="submit" data-action-title="Testing NetApp API access" data-action-start="Connecting to the saved ONTAP cluster management IP with saved credentials." data-action-complete="NetApp API access test finished.">Test ONTAP API connection</button>
+                    {% if bootstrap_complete %}
+                    <button class="btn action-button" formaction="/modules/netapp/discover-page" formmethod="post" type="submit" data-action-title="Reading current NetApp" data-action-start="Reading ONTAP cluster, node, disk, LIF, and protocol state." data-action-complete="NetApp current-state read finished.">Read current NetApp</button>
+                    <button class="btn action-button" formaction="/modules/netapp/use-discovered-values" formmethod="post" type="submit" data-action-title="Saving NetApp discovered values" data-action-start="Copying the latest ONTAP-discovered values into this kit." data-action-complete="NetApp discovered value save finished." {% if not has_snapshot %}disabled{% endif %}>Use discovered values</button>
+                    {% endif %}
+                </div>
+                {% if action_feedback and feedback_area == 'current' %}
+                {{ netapp_inline_feedback(action_feedback) }}
                 {% endif %}
+                {% if connection_test %}
+                <div class="result">
+                    <div class="font-semibold">API connection test</div>
+                    <div class="text-sm text-slate-400 mt-1">Target {{ connection_test.get('target_host') or 'not set' }} | Auth {{ 'ok' if connection_test.get('api_auth_ok') else 'failed' }}{% if connection_test.get('cluster_name') %} | Cluster {{ connection_test.get('cluster_name') }}{% endif %}</div>
+                </div>
+                {% endif %}
+            </article>
+        </section>
+
+        <section class="card identity-soft-card" data-action-panel>
+            <div class="flex flex-wrap items-start justify-between gap-3 mb-4">
+                <div>
+                    <div class="font-semibold text-lg">Access settings</div>
+                    <div class="text-sm text-slate-400 mt-1">Credentials and target details used for API tests, discovery, safe apply, ONTAP upgrade checks, and Run Center. Passwords are entered here, not hardcoded.</div>
+                </div>
+                <span class="status {{ 'ready' if connection_target_ip and cfg.get('netapp', {}).get('username') else 'pending' }}">editable</span>
             </div>
-            {% if connection_test %}
-            <div class="result mt-4">
-                <div class="font-semibold">API connection test</div>
-                <div class="text-sm text-slate-400 mt-1">Target {{ connection_test.get('target_host') or 'not set' }} | Auth {{ 'ok' if connection_test.get('api_auth_ok') else 'failed' }}{% if connection_test.get('cluster_name') %} | Cluster {{ connection_test.get('cluster_name') }}{% endif %}</div>
+            <div class="netapp-compact-grid">
+                <div class="netapp-field">
+                    <label>ONTAP API / Cluster management IP</label>
+                    <input class="input" name="netapp_host" value="{{ cfg.get('netapp', {}).get('host', '') }}" placeholder="10.10.10.45">
+                </div>
+                <div class="netapp-field">
+                    <label>Username</label>
+                    <input class="input" name="netapp_username" value="{{ cfg.get('netapp', {}).get('username', 'admin') }}" placeholder="admin">
+                </div>
+                <div class="netapp-field">
+                    <label>Password</label>
+                    <input class="input" type="password" name="netapp_password" value="" placeholder="{{ 'Saved - leave blank to keep' if cfg.get('netapp', {}).get('password') else 'Enter password' }}" autocomplete="current-password">
+                </div>
+                <div class="netapp-field">
+                    <label>Storage protocol</label>
+                    <select class="input" name="netapp_storage_protocol">
+                        <option value="nfs" {% if selected_protocol == 'nfs' %}selected{% endif %}>NFS</option>
+                        <option value="iscsi" {% if selected_protocol == 'iscsi' %}selected{% endif %}>iSCSI</option>
+                    </select>
+                </div>
             </div>
+            <div class="netapp-actions mt-4">
+                <button class="btn btn-primary action-button" formaction="/modules/netapp/save-settings" formmethod="post" type="submit" data-action-title="Saving NetApp settings" data-action-start="Saving NetApp access, bootstrap, and storage target settings." data-action-complete="NetApp settings save finished.">Save settings</button>
+            </div>
+            {% if action_feedback and feedback_area == 'status' %}
+            {{ netapp_inline_feedback(action_feedback) }}
             {% endif %}
         </section>
 
-        <section class="compact-panel">
+        <section class="card identity-soft-card" data-action-panel>
             <div class="flex items-start justify-between gap-4 mb-3">
                 <div>
-                    <div class="compact-title">NFS storage quick start</div>
-                    <div class="text-sm text-slate-500">Prepare ONTAP as an NFS datastore target, then read, validate, safely apply, and probe ESXi reachability.</div>
+                    <div class="font-semibold text-lg">Plan and execute storage</div>
+                    <div class="text-sm text-slate-400 mt-1">Prepare ONTAP as an NFS datastore target, then read, validate, safely apply, and probe ESXi reachability.</div>
                 </div>
-                <span class="status-badge status-badge--{{ 'completed' if selected_protocol == 'nfs' else 'waiting' }}">{{ 'NFS selected' if selected_protocol == 'nfs' else 'Select NFS' }}</span>
+                <span class="status {{ 'ready' if selected_protocol == 'nfs' else 'pending' }}">{{ 'NFS selected' if selected_protocol == 'nfs' else 'Select NFS' }}</span>
             </div>
             <div class="kv-grid">
                 <div class="kv-item">
@@ -308,15 +584,18 @@
                     <div class="kv-value">{{ nfs_lifs_for_ui | length }}</div>
                 </div>
             </div>
-            <div class="actions mt-4">
-                <button class="btn action-button" formaction="/modules/netapp/prepare-nfs-storage" formmethod="post" type="submit">Prepare NFS defaults</button>
+            <div class="netapp-actions mt-4">
+                <button class="btn action-button" formaction="/modules/netapp/prepare-nfs-storage" formmethod="post" type="submit" data-action-title="Preparing NetApp NFS defaults" data-action-start="Saving NFS datastore, export policy, ESXi target, and LIF defaults." data-action-complete="NetApp NFS default preparation finished.">Prepare NFS defaults</button>
                 {% if bootstrap_complete %}
-                <button class="btn action-button" formaction="/modules/netapp/discover-page" formmethod="post" type="submit">Read current NetApp</button>
-                <button class="btn" formaction="/modules/netapp/validate-page" formmethod="post" type="submit">Validate NFS plan</button>
-                <button class="btn" formaction="/modules/netapp/apply-page" formmethod="post" type="submit">Apply safe NFS changes</button>
-                <button class="btn" formaction="/modules/netapp/probe-vmware-nfs" formmethod="post" type="submit">Probe ESXi and NFS targets</button>
+                <button class="btn action-button" formaction="/modules/netapp/discover-page" formmethod="post" type="submit" data-action-title="Reading current NetApp" data-action-start="Reading ONTAP cluster and storage state before planning." data-action-complete="NetApp current-state read finished.">Read current NetApp</button>
+                <button class="btn action-button" formaction="/modules/netapp/validate-page" formmethod="post" type="submit" data-action-title="Validating NetApp plan" data-action-start="Comparing saved intent with discovered ONTAP state." data-action-complete="NetApp plan validation finished.">Validate NFS plan</button>
+                <button class="btn action-button" formaction="/modules/netapp/apply-page" formmethod="post" type="submit" data-action-title="Applying safe NetApp changes" data-action-start="Applying only supported create/update/skip NetApp actions." data-action-complete="NetApp safe apply finished.">Apply safe NFS changes</button>
+                <button class="btn action-button" formaction="/modules/netapp/probe-vmware-nfs" formmethod="post" type="submit" data-action-title="Probing NetApp NFS from ESXi" data-action-start="Checking ESXi management and NFS target reachability." data-action-complete="NetApp NFS probe finished.">Probe ESXi and NFS targets</button>
                 {% endif %}
             </div>
+            {% if action_feedback and feedback_area in ['plan', 'execute'] %}
+            <div class="mt-4">{{ netapp_inline_feedback(action_feedback) }}</div>
+            {% endif %}
         </section>
 
         {% if cfg.get('included', {}).get('netapp') %}
@@ -361,14 +640,17 @@
                 <div><div class="dashboard-kicker">Admin password</div><div class="font-semibold">{{ bootstrap.get('admin_password_masked') or 'Not set' }}</div></div>
             </div>
             <div class="actions mt-4">
-                <button class="btn" formaction="/modules/netapp/bootstrap-test/sp_a" formmethod="post" type="submit">Ping planned SP A</button>
-                <button class="btn" formaction="/modules/netapp/bootstrap-test/sp_b" formmethod="post" type="submit">Ping planned SP B</button>
-                <button class="btn" formaction="/modules/netapp/bootstrap-test/node_01_mgmt" formmethod="post" type="submit">Ping planned Node 1 management</button>
-                <button class="btn" formaction="/modules/netapp/bootstrap-test/node_02_mgmt" formmethod="post" type="submit">Ping planned Node 2 management</button>
+                <button class="btn action-button" formaction="/modules/netapp/bootstrap-test/sp_a" formmethod="post" type="submit" data-action-title="Testing NetApp SP A" data-action-start="Checking planned SP A reachability." data-action-complete="NetApp SP A check finished.">Ping planned SP A</button>
+                <button class="btn action-button" formaction="/modules/netapp/bootstrap-test/sp_b" formmethod="post" type="submit" data-action-title="Testing NetApp SP B" data-action-start="Checking planned SP B reachability." data-action-complete="NetApp SP B check finished.">Ping planned SP B</button>
+                <button class="btn action-button" formaction="/modules/netapp/bootstrap-test/node_01_mgmt" formmethod="post" type="submit" data-action-title="Testing NetApp node 1 management" data-action-start="Checking planned node 1 management reachability." data-action-complete="NetApp node 1 management check finished.">Ping planned Node 1 management</button>
+                <button class="btn action-button" formaction="/modules/netapp/bootstrap-test/node_02_mgmt" formmethod="post" type="submit" data-action-title="Testing NetApp node 2 management" data-action-start="Checking planned node 2 management reachability." data-action-complete="NetApp node 2 management check finished.">Ping planned Node 2 management</button>
             </div>
             <div class="actions mt-3">
-                <button class="btn" formaction="/modules/netapp/bootstrap-complete" formmethod="post" name="bootstrap_complete" value="{{ 'false' if bootstrap_complete else 'true' }}" type="submit">{{ 'Mark bootstrap incomplete' if bootstrap_complete else 'Mark bootstrap complete' }}</button>
+                <button class="btn action-button" formaction="/modules/netapp/bootstrap-complete" formmethod="post" name="bootstrap_complete" value="{{ 'false' if bootstrap_complete else 'true' }}" type="submit" data-action-title="Updating NetApp bootstrap state" data-action-start="Saving whether NetApp bootstrap is complete for this kit." data-action-complete="NetApp bootstrap state update finished.">{{ 'Mark bootstrap incomplete' if bootstrap_complete else 'Mark bootstrap complete' }}</button>
             </div>
+            {% if action_feedback and feedback_area == 'bootstrap' %}
+            <div class="mt-4">{{ netapp_inline_feedback(action_feedback) }}</div>
+            {% endif %}
             {% if legacy_convention_warning %}
             <div class="result mt-4" style="border-color: rgba(251, 191, 36, 0.35);">
                 <div class="font-semibold">Legacy NetApp convention</div>
@@ -402,22 +684,42 @@
         </section>
         {% endif %}
 
-        <details class="card identity-soft-card" style="border-color: color-mix(in srgb, var(--bad) 50%, var(--border));">
-            <summary class="summary-row"><span class="font-semibold">Factory reset NetApp</span><span class="status danger">destructive</span></summary>
-            <div class="text-sm text-slate-300 mt-3">This is a manual ONTAP boot-menu wipe workflow. It erases configuration and data on the selected node disks and should only be used for a lab rebuild.</div>
-            <div class="ops-detail-grid mt-4">
-                <div class="card card-compact">
-                    <div class="font-semibold">What the app will do</div>
-                    <div class="text-sm text-slate-400 mt-2">Build a reset runbook, discover/probe USB console access, and only start a serial reset sequence after the console-specific destructive confirmation is entered.</div>
+        <section class="card identity-soft-card netapp-danger-panel" data-action-panel>
+            <div class="flex flex-wrap items-start justify-between gap-3">
+                <div>
+                    <div class="font-semibold text-lg">Factory reset NetApp</div>
+                    <div class="text-sm text-slate-300 mt-1">This is the destructive ONTAP boot-menu wipe workflow. It erases configuration and data on the selected controller disks and should only be used for a lab rebuild.</div>
                 </div>
-                <div class="card card-compact">
-                    <div class="font-semibold">What stays manual</div>
-                    <div class="text-sm text-slate-400 mt-2">Do not automate force giveback or HA takeover/giveback decisions. Reset one controller only when the serial console and HA state are understood.</div>
-                </div>
+                <span class="status danger">destructive</span>
             </div>
-            <div class="actions mt-4">
-                <button class="btn" formaction="/modules/netapp/factory-reset-plan" formmethod="post" type="submit">Build factory reset runbook</button>
+            <div class="netapp-console-row mt-4">
+                <article class="netapp-step">
+                    <div class="netapp-step-header">
+                        <div class="netapp-step-title">Manual reset runbook</div>
+                        <span class="status {{ 'ready' if factory_reset.get('manual_steps') else 'pending' }}">{{ 'Prepared' if factory_reset.get('manual_steps') else 'Build first' }}</span>
+                    </div>
+                    <div class="netapp-step-copy">Build the same kind of operator evidence Cisco shows: target, nodes, manual wipe steps, blockers, and cached-state decision.</div>
+                    <div class="netapp-actions">
+                        <button class="btn action-button" formaction="/modules/netapp/factory-reset-plan" formmethod="post" type="submit" data-action-title="Building NetApp factory reset runbook" data-action-start="Preparing the manual ONTAP boot-menu wipe runbook. No wipe command is sent." data-action-complete="NetApp factory reset runbook finished.">Build factory reset runbook</button>
+                    </div>
+                </article>
+                <article class="netapp-step">
+                    <div class="netapp-step-header">
+                        <div class="netapp-step-title">Console reset execution</div>
+                        <span class="status {{ 'danger' if console_reset.get('status') == 'running' else ('ready' if console_reset.get('status') else 'pending') }}">{{ console_reset.get('status', 'not run') | replace('_', ' ') }}</span>
+                    </div>
+                    <div class="netapp-step-copy">Start the serial worker only after the selected console is proven and the console-specific destructive phrase is entered.</div>
+                    <div class="netapp-facts">
+                        <div class="netapp-fact"><span>Console</span><strong>{{ has_console or 'not selected' }}</strong></div>
+                        <div class="netapp-fact"><span>Boot menu</span><strong>{{ console.get('boot_menu_option', '4') }}</strong></div>
+                        <div class="netapp-fact"><span>Node</span><strong>{{ console.get('reset_node_name') or 'not set' }}</strong></div>
+                        <div class="netapp-fact"><span>Partner</span><strong>{{ console.get('partner_node_name') or 'not set' }}</strong></div>
+                    </div>
+                </article>
             </div>
+            {% if action_feedback and feedback_area == 'factory' %}
+            <div class="mt-4">{{ netapp_inline_feedback(action_feedback) }}</div>
+            {% endif %}
             <div class="grid grid-cols-1 md:grid-cols-[minmax(0,1fr)_auto] gap-3 mt-4 items-end">
                 <div>
                     <label class="check card card-compact"><input type="checkbox" name="netapp_factory_reset_ack"> I understand this is destructive and the console wipe is manual.</label>
@@ -425,7 +727,7 @@
                     <label class="block text-sm font-bold text-slate-300 mt-3 mb-2">Type FACTORY RESET NETAPP to record approval</label>
                     <input class="input" name="netapp_factory_reset_confirm" value="" autocomplete="off">
                 </div>
-                <button class="btn btn-danger" formaction="/modules/netapp/factory-reset-record" formmethod="post" type="submit" data-action-title="Recording NetApp factory reset approval" data-action-start="Recording destructive manual reset approval. No ONTAP wipe command is selected automatically.">Record reset approval</button>
+                <button class="btn btn-danger action-button" formaction="/modules/netapp/factory-reset-record" formmethod="post" type="submit" data-action-title="Recording NetApp factory reset approval" data-action-start="Recording destructive manual reset approval. No ONTAP wipe command is selected automatically." data-action-complete="NetApp factory reset approval record finished.">Record reset approval</button>
             </div>
             <div class="compact-panel mt-4" style="border-color: color-mix(in srgb, var(--bad) 45%, var(--border));">
                 <div class="compact-title">Console factory reset execution</div>
@@ -476,7 +778,7 @@
                         <label class="block text-sm font-bold text-slate-300 mt-3 mb-2">Type FACTORY RESET NETAPP CONSOLE to start console reset</label>
                         <input class="input" name="netapp_console_factory_reset_confirm" value="" autocomplete="off">
                     </div>
-                    <button class="btn btn-danger" formaction="/modules/netapp/console-factory-reset" formmethod="post" type="submit" data-action-title="Starting NetApp console factory reset" data-action-start="Starting the serial console reset worker.">Start console factory reset</button>
+                    <button class="btn btn-danger action-button" formaction="/modules/netapp/console-factory-reset" formmethod="post" type="submit" data-action-title="Starting NetApp console factory reset" data-action-start="Starting the serial console reset worker." data-action-complete="NetApp console factory reset request finished.">Start console factory reset</button>
                 </div>
                 {% if console_reset %}
                 <div class="result mt-4" style="border-color: color-mix(in srgb, var(--bad) 35%, var(--border));">
@@ -503,7 +805,7 @@
                 {% endif %}
             </div>
             {% endif %}
-        </details>
+        </section>
 
         {% if bootstrap_complete and has_snapshot %}
         <section class="card identity-soft-card ops-card-tight">

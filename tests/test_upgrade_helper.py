@@ -154,6 +154,13 @@ def test_upgrade_helper_generated_plan_actions_have_specific_action_feedback(upg
         ),
         (
             cisco_response.text,
+            "Test Cisco SSH",
+            "/modules/cisco/test-ssh?upgrade_tab=cisco",
+            "Testing Cisco SSH",
+            "Cisco SSH test finished.",
+        ),
+        (
+            cisco_response.text,
             "Read Cisco version",
             "/modules/cisco/discover-version?upgrade_tab=cisco",
             "Reading Cisco version",
@@ -174,6 +181,7 @@ def test_upgrade_helper_generated_tab_actions_use_shared_action_button_class(upg
     for label, route, expected_class in [
         ("Review Cisco upgrade plan", "/modules/cisco/plan-upgrade?upgrade_tab=cisco", 'class="btn action-button"'),
         ("Run Cisco upgrade", "/modules/cisco/run-upgrade?upgrade_tab=cisco", 'class="btn btn-primary action-button"'),
+        ("Test Cisco SSH", "/modules/cisco/test-ssh?upgrade_tab=cisco", 'class="btn action-button"'),
         ("Read Cisco version", "/modules/cisco/discover-version?upgrade_tab=cisco", 'class="btn action-button"'),
     ]:
         markup = _button_markup(response.text, label)

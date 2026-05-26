@@ -1356,7 +1356,22 @@ async def netapp_test_connection(
     main.save_kit_config(cfg)
     context = _module_context(request)
     payload = service.test_connection(context)
-    return _render_netapp_page(request, context, payload)
+    if payload.get("connection_test"):
+        _set_bootstrap_check(cfg, "api_readiness", payload["connection_test"])
+        main.save_kit_config(cfg)
+    test = dict(payload.get("connection_test") or {})
+    feedback = main.build_action_feedback(
+        "NetApp API connection verified" if test.get("api_auth_ok") else "NetApp API connection failed",
+        "The app reached ONTAP with the saved cluster management target and credentials." if test.get("api_auth_ok") else str(payload.get("error") or "The app could not authenticate to ONTAP."),
+        tone="ready" if test.get("api_auth_ok") else "danger",
+        status_label="Ready" if test.get("api_auth_ok") else "Needs attention",
+        outcomes=[
+            f"Target: {test.get('target_host') or netapp_host or 'Not set'}",
+            f"Cluster: {test.get('cluster_name') or 'Unknown'}",
+        ],
+        details=list(payload.get("warnings") or []),
+    )
+    return _render_netapp_page(request, context, payload, action_feedback=feedback)
 
 
 @router.post("/modules/netapp/discover-page", response_class=HTMLResponse)
@@ -1436,7 +1451,19 @@ async def netapp_discover_page(
         cfg.setdefault("netapp", {})["nfs_capacity"] = service.nfs_capacity_context(context, payload["discovery"])
         main.save_kit_config(cfg)
         context = _module_context(request)
-    return _render_netapp_page(request, context, payload)
+    discovery = dict(payload.get("discovery") or {})
+    feedback = main.build_action_feedback(
+        "Current NetApp state read" if payload.get("ok") and discovery else "Current NetApp read failed",
+        "Read ONTAP cluster, node, disk, LIF, and protocol state from the saved API target." if payload.get("ok") and discovery else str(payload.get("error") or "Discovery did not return usable ONTAP state."),
+        tone="ready" if payload.get("ok") and discovery else "danger",
+        status_label="Discovered" if payload.get("ok") and discovery else "Needs attention",
+        outcomes=[
+            f"Cluster: {discovery.get('cluster_name') or 'Unknown'}",
+            f"ONTAP: {discovery.get('ontap_version') or 'Unknown'}",
+        ],
+        details=list(payload.get("warnings") or []),
+    )
+    return _render_netapp_page(request, context, payload, action_feedback=feedback)
 
 
 @router.post("/modules/netapp/bootstrap-complete", response_class=HTMLResponse)
@@ -1452,7 +1479,14 @@ async def netapp_bootstrap_complete(request: Request, bootstrap_complete: str = 
     main.save_kit_config(cfg)
     context = _module_context(request)
     payload = service.plan(context) if cfg["netapp"]["bootstrap_complete"] else service._response(context, "bootstrap")
-    return _render_netapp_page(request, context, payload, saved=True)
+    complete = bool(cfg["netapp"]["bootstrap_complete"])
+    feedback = main.build_action_feedback(
+        "NetApp bootstrap marked complete" if complete else "NetApp bootstrap marked incomplete",
+        "ONTAP API actions are now available after bootstrap completion." if complete else "NetApp API actions are held until bootstrap is marked complete again.",
+        tone="ready" if complete else "pending",
+        outcomes=[f"Cluster management IP: {((cfg.get('netapp') or {}).get('host') or 'Not set')}"],
+    )
+    return _render_netapp_page(request, context, payload, saved=True, action_feedback=feedback)
 
 
 @router.post("/modules/netapp/bootstrap-test/{target}", response_class=HTMLResponse)
@@ -1472,7 +1506,18 @@ async def netapp_bootstrap_test(request: Request, target: str):
         context = _module_context(request)
         payload = service._response(context, f"bootstrap_{target}")
         payload["bootstrap_test"] = cfg["netapp"]["bootstrap_checks"].get(target)
-    return _render_netapp_page(request, context, payload)
+    test = dict(payload.get("bootstrap_test") or {})
+    feedback = main.build_action_feedback(
+        "NetApp bootstrap target reachable" if test.get("reachable") else "NetApp bootstrap target did not respond",
+        "The planned bootstrap address responded on one of the tested management ports." if test.get("reachable") else f"{target.replace('_', ' ').title()} did not respond on the tested ports.",
+        tone="ready" if test.get("reachable") else "danger",
+        outcomes=[
+            f"Target: {test.get('host') or 'Not set'}",
+            f"Ports: {', '.join(str(item) for item in list(test.get('ports_tested') or [])) or 'not tested'}",
+        ],
+        details=list(payload.get("warnings") or []),
+    )
+    return _render_netapp_page(request, context, payload, action_feedback=feedback)
 
 
 @router.post("/modules/netapp/use-discovered-values", response_class=HTMLResponse)
@@ -1530,7 +1575,18 @@ async def netapp_probe_vmware_nfs(request: Request):
         context = _module_context(request)
         payload = service.plan(context)
         payload["vmware_probe"] = cfg["netapp"]["vmware_checks"].get("nfs_mount")
-    return _render_netapp_page(request, context, payload)
+    probe = dict(payload.get("vmware_probe") or cfg.get("netapp", {}).get("vmware_checks", {}).get("nfs_mount") or {})
+    feedback = main.build_action_feedback(
+        "NetApp NFS probe ready" if probe.get("ready") else "NetApp NFS probe needs review",
+        "ESXi management and discovered NFS target reachability checks passed." if probe.get("ready") else "Review the ESXi and NFS reachability results before mounting the datastore.",
+        tone="ready" if probe.get("ready") else "pending",
+        outcomes=[
+            f"Datastore: {probe.get('datastore_name') or 'Not set'}",
+            f"NFS servers: {', '.join(list(probe.get('server_ips') or [])) or 'None'}",
+        ],
+        details=list(payload.get("warnings") or []),
+    )
+    return _render_netapp_page(request, context, payload, action_feedback=feedback)
 
 
 @router.post("/modules/netapp/update-convention", response_class=HTMLResponse)
@@ -1842,7 +1898,19 @@ async def netapp_api_readiness(request: Request):
     if payload.get("connection_test"):
         _set_bootstrap_check(cfg, "api_readiness", payload["connection_test"])
         main.save_kit_config(cfg)
-    return _render_netapp_page(request, context, payload)
+    test = dict(payload.get("connection_test") or {})
+    feedback = main.build_action_feedback(
+        "NetApp API connection verified" if test.get("api_auth_ok") else "NetApp API connection failed",
+        "The app reached ONTAP with the saved cluster management target and credentials." if test.get("api_auth_ok") else str(payload.get("error") or "The app could not authenticate to ONTAP."),
+        tone="ready" if test.get("api_auth_ok") else "danger",
+        status_label="Ready" if test.get("api_auth_ok") else "Needs attention",
+        outcomes=[
+            f"Target: {test.get('target_host') or 'Not set'}",
+            f"Cluster: {test.get('cluster_name') or 'Unknown'}",
+        ],
+        details=list(payload.get("warnings") or []),
+    )
+    return _render_netapp_page(request, context, payload, action_feedback=feedback)
 
 
 @router.post("/modules/netapp/validate-page", response_class=HTMLResponse)
@@ -1855,7 +1923,15 @@ async def netapp_validate_page(request: Request):
     _apply_live_netapp_form_state(cfg, form)
     main.save_kit_config(cfg)
     context = _module_context(request)
-    return _render_netapp_page(request, context, service.validate(context))
+    payload = service.validate(context)
+    feedback = main.build_action_feedback(
+        "NetApp plan validated" if payload.get("ok") else "NetApp plan needs review",
+        "Saved intent was compared with discovered ONTAP state." if payload.get("ok") else str(payload.get("error") or "Resolve validation findings before safe apply."),
+        tone="ready" if payload.get("ok") else "pending",
+        outcomes=[f"Checks: {len(list(payload.get('validation_checks') or []))}"],
+        details=list(payload.get("warnings") or []),
+    )
+    return _render_netapp_page(request, context, payload, action_feedback=feedback)
 
 
 @router.post("/modules/netapp/export-plan", response_class=HTMLResponse)
@@ -1886,7 +1962,13 @@ async def netapp_export_plan(request: Request):
         "command_preview": command_preview,
     }
     payload["export_paths"] = write_plan_artifacts(artifact_dir, prefix, export_payload)
-    return _render_netapp_page(request, context, payload, saved=True)
+    feedback = main.build_action_feedback(
+        "NetApp plan exported",
+        "Generated the NetApp plan artifacts for review and evidence.",
+        tone="ready",
+        outcomes=[f"{label.upper()}: {path}" for label, path in payload["export_paths"].items()],
+    )
+    return _render_netapp_page(request, context, payload, saved=True, action_feedback=feedback)
 
 
 @router.post("/modules/netapp/apply-page", response_class=HTMLResponse)
@@ -1900,7 +1982,19 @@ async def netapp_apply_page(request: Request):
     main.save_kit_config(cfg)
     context = _module_context(request)
     payload = service.apply(context, {"job_id": "job-netapp-safe-apply-001", "scope": "netapp.apply", "confirm": True})
-    return _render_netapp_page(request, context, payload, saved=True)
+    apply_stage = dict(payload.get("apply") or {})
+    feedback = main.build_action_feedback(
+        "NetApp safe apply completed" if payload.get("ok") else "NetApp safe apply needs review",
+        "Supported NetApp create/update/skip actions were applied or verified." if payload.get("ok") else str(payload.get("error") or "Safe apply stopped before all planned actions completed."),
+        tone="ready" if payload.get("ok") else "danger",
+        status_label=str(payload.get("result") or apply_stage.get("result") or ("complete" if payload.get("ok") else "Needs attention")).replace("_", " ").title(),
+        outcomes=[
+            f"Execution mode: {apply_stage.get('execution_mode') or 'safe_apply'}",
+            f"Job: {payload.get('job_id') or 'job-netapp-safe-apply-001'}",
+        ],
+        details=list(payload.get("warnings") or []),
+    )
+    return _render_netapp_page(request, context, payload, saved=True, action_feedback=feedback)
 
 
 @router.post("/modules/netapp/plan-upgrade", response_class=HTMLResponse)

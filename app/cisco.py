@@ -273,9 +273,27 @@ PROMPT_PATTERNS: list[tuple[str, re.Pattern[str], int]] = [
     ("user_exec", re.compile(r"(?im)(?:^|\r|\n)\s*(?:Switch|Router|[\w.-]+)>\s*$"), 90),
     ("username", re.compile(r"(?im)(?:^|\r|\n)\s*Username:\s*$"), 80),
     ("login", re.compile(r"(?im)(?:^|\r|\n)\s*Login:\s*$"), 80),
+    (
+        "setup_password_policy_failure",
+        re.compile(
+            r"(?is)(?:password|secret).{0,120}(?:too short|too weak|not strong|must contain|must be|"
+            r"does not (?:satisfy|meet|pass)|invalid|rejected|failed|failure)"
+        ),
+        79,
+    ),
     ("setup_final_menu", re.compile(r"(?is)0\s*[.)-]?\s*Go to the IOS command prompt without saving this config|Enter your selection\s*(?:\[[0-2]\])?\s*:\s*$"), 78),
-    ("setup_enable_secret", re.compile(r"(?im)(?:^|\r|\n)\s*(?:(?:Enter|Confirm|Please enter)\s+(?:the\s+)?)?enable\s+(?:secret|password):\s*$"), 76),
-    ("setup_password", re.compile(r"(?im)(?:^|\r|\n)\s*(?:(?:Enter|Confirm|Please enter)\s+(?:the\s+)?)?(?:virtual terminal|console|user|login|line vty)\s+password:\s*$"), 76),
+    ("setup_enable_secret", re.compile(r"(?im)(?:^|\r|\n)\s*(?:(?:Enter|Confirm|Re-enter|Reenter|Verify|Please enter)\s+(?:the\s+)?)?enable\s+(?:secret|password):\s*$"), 76),
+    (
+        "setup_password",
+        re.compile(
+            r"(?im)(?:^|\r|\n)\s*(?:"
+            r"(?:(?:Enter|Confirm|Re-enter|Reenter|Verify|Please enter)\s+(?:the\s+)?)?"
+            r"(?:virtual terminal|console|user|login|line vty)\s+password|"
+            r"(?:Enter|Confirm|Re-enter|Reenter|Verify|Please enter)\s+(?:the\s+)?password"
+            r"):\s*$"
+        ),
+        76,
+    ),
     ("password", re.compile(r"(?im)(?:^|\r|\n)\s*Password:\s*$"), 75),
     ("rommon", re.compile(r"(?im)(?:^|\r|\n)\s*rommon\s*>\s*$"), 70),
     ("initial_dialog", re.compile(r"(?is)initial configuration dialog|would you like to enter the initial configuration dialog|continue with configuration dialog"), 65),
@@ -283,6 +301,28 @@ PROMPT_PATTERNS: list[tuple[str, re.Pattern[str], int]] = [
     ("setup_yes_no", re.compile(r"(?is)(?:would you like|do you want|configure|continue).+\[(?:yes/no|no|yes)\]\s*:\s*$"), 62),
     ("press_return", re.compile(r"(?is)press\s+return\s+to\s+get\s+started!?"), 60),
 ]
+
+CISCO_PROMPT_LABELS = {
+    "autoinstall_terminate": "autoinstall termination prompt",
+    "config": "global configuration prompt",
+    "enable_password_required": "Password prompt after enable",
+    "initial_dialog": "initial configuration dialog",
+    "interface_config": "interface configuration prompt",
+    "login": "login prompt",
+    "password": "password prompt",
+    "press_return": "Press RETURN prompt",
+    "privileged": "privileged EXEC prompt",
+    "rommon": "ROMMON prompt",
+    "setup_enable_secret": "setup enable secret/password prompt",
+    "setup_final_menu": "setup wizard final menu",
+    "setup_password": "setup wizard password prompt",
+    "setup_password_policy_failure": "setup wizard password policy failure",
+    "setup_yes_no": "setup wizard yes/no prompt",
+    "timeout": "console read timeout",
+    "unknown": "unrecognized console output",
+    "user_exec": "user EXEC prompt",
+    "username": "username prompt",
+}
 
 CISCO_IDENTITY_PATTERN = re.compile(
     r"(?is)\b(?:Cisco IOS|Cisco IOS XE|Cisco NX-OS|Cisco Adaptive Security Appliance|Catalyst|Nexus|"
@@ -338,10 +378,10 @@ def mask_secrets(value: str, secrets: list[str] | None = None) -> str:
     masked = str(value or "")
     for secret in [item for item in (secrets or []) if item]:
         masked = masked.replace(str(secret), SECRET_MASK)
-    masked = re.sub(r"(?im)^(\s*username\s+\S+\s+privilege\s+\d+\s+secret\s+).*$", rf"\1{SECRET_MASK}", masked)
+    masked = re.sub(r"(?im)^(\s*username\s+\S+\s+privilege\s+\d+\s+(?:algorithm-type\s+\S+\s+)?secret\s+).*$", rf"\1{SECRET_MASK}", masked)
     masked = re.sub(r"(?im)^(\s*enable\s+secret\s+).*$", rf"\1{SECRET_MASK}", masked)
+    masked = re.sub(r"(?im)^(\s*enable\s+password\s+).*$", rf"\1{SECRET_MASK}", masked)
     masked = re.sub(r"(?im)^(\s*Password:\s*).*$", rf"\1{SECRET_MASK}", masked)
-    masked = re.sub(r"(?i)(password\s+)(\S+)", rf"\1{SECRET_MASK}", masked)
     return masked
 
 
@@ -635,15 +675,81 @@ class CiscoConsoleBootstrapStateMachine:
     """Advance common Cisco console states to privileged EXEC without applying config."""
 
     max_transitions = 12
+    forced_setup_prompt_types = {
+        "setup_enable_secret",
+        "setup_final_menu",
+        "setup_password",
+        "setup_password_policy_failure",
+        "setup_yes_no",
+    }
 
     def __init__(self, client: Any):
         self.client = client
         self.steps: list[str] = []
+        self.last_prompt_type = ""
+        self.last_safe_action = "pressed RETURN to read console output"
+        self.initial_dialog_answered_no = False
+        self.forced_setup_wizard_detected = False
+        self.final_menu_seen = False
+        self.user_exec_reached = False
+        self.enable_password_prompt_reached = False
+        self.password_policy_failure_detected = False
+
+    def _record_prompt(self, prompt_type: str) -> None:
+        if not prompt_type:
+            return
+        self.last_prompt_type = prompt_type
+        if prompt_type in self.forced_setup_prompt_types:
+            self.forced_setup_wizard_detected = True
+        if prompt_type == "setup_final_menu":
+            self.final_menu_seen = True
+        elif prompt_type == "user_exec":
+            self.user_exec_reached = True
+        elif prompt_type in {"enable_password_required", "password_after_enable"}:
+            self.enable_password_prompt_reached = True
+        elif prompt_type == "setup_password_policy_failure":
+            self.password_policy_failure_detected = True
+
+    def _set_action(self, action: str, step: str) -> None:
+        self.last_safe_action = action
+        self.steps.append(step)
+
+    def diagnostics(self, prompt_type: str) -> dict[str, Any]:
+        state = prompt_type or self.last_prompt_type or "unknown"
+        label = CISCO_PROMPT_LABELS.get(state, state)
+        return {
+            "last_detected_state": f"{state} ({label})",
+            "last_prompt_type": state,
+            "last_safe_action": self.last_safe_action,
+            "initial_dialog_answered_no": self.initial_dialog_answered_no,
+            "forced_setup_wizard_detected": self.forced_setup_wizard_detected,
+            "final_menu_seen": self.final_menu_seen,
+            "switch_user_exec_reached": self.user_exec_reached,
+            "enable_password_prompt_reached": self.enable_password_prompt_reached,
+            "password_policy_failure_detected": self.password_policy_failure_detected,
+            "next_manual_recovery_step": self._manual_recovery_step(state),
+        }
+
+    def _manual_recovery_step(self, prompt_type: str) -> str:
+        if self.password_policy_failure_detected:
+            return "Set a policy-compliant Cisco password and enable secret in Access settings, then rerun Setup Console."
+        if self.enable_password_prompt_reached:
+            return "Verify the saved enable secret, manually confirm enable reaches Switch#, then rerun Setup Console."
+        if self.final_menu_seen:
+            return "On the console, choose 0 at the setup final menu, wait for an IOS CLI prompt, then rerun Setup Console."
+        if self.forced_setup_wizard_detected:
+            return "On the console, complete the remaining setup prompts without saving the wizard config, choose 0 at the final menu, then rerun Setup Console."
+        if self.initial_dialog_answered_no:
+            return "Press RETURN on the console until the IOS CLI prompt appears; if setup prompts continue, use a policy-compliant enable secret and choose 0 at the final menu."
+        if prompt_type == "rommon":
+            return "Boot IOS from ROMMON or recover the switch image, then rerun Setup Console after an IOS prompt appears."
+        return "Connect to the console, press RETURN, note the visible prompt, and rerun Setup Console after the switch shows Switch#."
 
     def reach_privileged_exec(self, config: dict[str, Any]) -> tuple[str, str, list[str]]:
         latest = self.client.read_prompt()
         output = latest
         prompt_type, _score = detect_cisco_prompt(latest)
+        self._record_prompt(prompt_type)
         if not output.strip():
             self.steps.append("No console output was received after pressing RETURN.")
 
@@ -654,48 +760,78 @@ class CiscoConsoleBootstrapStateMachine:
         wizard_password = str(config.get("wizard_password") or enable_password or password)
 
         for _ in range(self.max_transitions):
+            self._record_prompt(prompt_type)
             if prompt_type == "privileged":
                 break
             if prompt_type == "press_return":
-                self.steps.append("Detected Cisco start prompt; pressed RETURN.")
+                self._set_action("pressed RETURN at Cisco start prompt", "Detected Cisco start prompt; pressed RETURN.")
                 latest = self.client.run_command("")
             elif prompt_type == "initial_dialog":
-                self.steps.append("Detected Cisco initial configuration dialog; answered no.")
+                self.initial_dialog_answered_no = True
+                self._set_action("answered initial configuration dialog no", "Detected Cisco initial configuration dialog; answered no.")
                 latest = self.client.run_command("no")
             elif prompt_type == "autoinstall_terminate":
-                self.steps.append("Detected Cisco autoinstall prompt; accepted termination.")
+                self._set_action("accepted autoinstall termination", "Detected Cisco autoinstall prompt; accepted termination.")
                 latest = self.client.run_command("yes")
             elif prompt_type == "setup_yes_no":
-                self.steps.append("Detected Cisco setup wizard yes/no prompt; answered no.")
+                self._set_action("answered setup wizard yes/no prompt no", "Detected Cisco setup wizard yes/no prompt; answered no.")
                 latest = self.client.run_command("no")
+            elif prompt_type == "setup_password_policy_failure":
+                self._set_action(
+                    "stopped after Cisco reported a password policy failure",
+                    "Detected Cisco setup wizard password policy failure; stopped before retrying the same secret.",
+                )
+                break
             elif prompt_type in {"setup_enable_secret", "setup_password"} and wizard_password:
-                self.steps.append("Detected Cisco setup wizard password prompt; sent fallback wizard secret.")
+                self._set_action("sent fallback wizard secret", "Detected Cisco setup wizard password prompt; sent fallback wizard secret.")
                 latest = self.client.run_command(wizard_password, redact=True)
             elif prompt_type == "setup_final_menu":
-                self.steps.append("Detected Cisco setup wizard final menu; selected IOS command prompt without saving wizard config.")
+                self._set_action(
+                    "selected 0 at setup wizard final menu",
+                    "Detected Cisco setup wizard final menu; selected IOS command prompt without saving wizard config.",
+                )
                 latest = self.client.run_command("0")
             elif prompt_type in {"config", "interface_config"}:
-                self.steps.append("Detected Cisco configuration prompt; returned to privileged EXEC.")
+                self._set_action("sent end from configuration prompt", "Detected Cisco configuration prompt; returned to privileged EXEC.")
                 latest = self.client.run_command("end")
             elif prompt_type in {"username", "login"} and username:
-                self.steps.append("Detected Cisco login prompt; sent configured username.")
+                self._set_action("sent configured username", "Detected Cisco login prompt; sent configured username.")
                 latest = self.client.run_command(username, redact=False)
             elif prompt_type == "password" and console_password:
-                self.steps.append("Detected Cisco password prompt; sent configured console password.")
+                self._set_action("sent configured console password", "Detected Cisco password prompt; sent configured console password.")
                 latest = self.client.run_command(console_password, redact=True)
             elif prompt_type == "user_exec":
-                self.steps.append("Detected Cisco user EXEC prompt; entered enable mode.")
+                self.user_exec_reached = True
+                self._set_action("sent enable from user EXEC prompt", "Detected Cisco user EXEC prompt; entered enable mode.")
                 latest = self.client.run_command("enable")
                 if re.search(r"(?im)Password:\s*$", latest) and enable_password:
-                    self.steps.append("Detected enable password prompt; sent configured enable secret.")
+                    self.enable_password_prompt_reached = True
+                    self._set_action("sent configured enable secret", "Detected enable password prompt; sent configured enable secret.")
                     output += latest
                     latest = self.client.run_command(enable_password, redact=True)
+                elif re.search(r"(?im)Password:\s*$", latest):
+                    self.enable_password_prompt_reached = True
+                    self.last_prompt_type = "enable_password_required"
+                    self._set_action(
+                        "stopped at enable password prompt",
+                        "Detected enable password prompt, but no enable secret was available.",
+                    )
+                    output += latest
+                    prompt_type = "enable_password_required"
+                    break
             else:
                 break
             output += latest
             prompt_type, _score = detect_cisco_prompt(latest)
             if not prompt_type and not latest.strip():
-                prompt_type, _score = detect_cisco_prompt(output)
+                self._set_action(
+                    "pressed RETURN to continue reading console output",
+                    "No console output followed the last action; pressed RETURN to continue reading.",
+                )
+                latest = self.client.run_command("")
+                output += latest
+                prompt_type, _score = detect_cisco_prompt(latest)
+            self._record_prompt(prompt_type)
         else:
             self.steps.append("Console bootstrap reached the state transition limit before privileged EXEC.")
 
@@ -705,7 +841,26 @@ class CiscoConsoleBootstrapStateMachine:
                 self.steps.append("Console state is timeout: no prompt was readable.")
             else:
                 self.steps.append("Console state is unknown: output did not match a supported Cisco prompt.")
+        self._record_prompt(prompt_type)
         return prompt_type, output, list(self.steps)
+
+
+def format_cisco_privileged_exec_failure(diagnostics: dict[str, Any]) -> str:
+    def yes_no(value: Any) -> str:
+        return "yes" if bool(value) else "no"
+
+    return (
+        "Cisco console did not reach privileged EXEC mode. "
+        f"Last detected state: {diagnostics.get('last_detected_state') or 'unknown'}. "
+        f"Last safe action: {diagnostics.get('last_safe_action') or 'none'}. "
+        f"Initial dialog answered no: {yes_no(diagnostics.get('initial_dialog_answered_no'))}. "
+        f"Forced setup wizard detected: {yes_no(diagnostics.get('forced_setup_wizard_detected'))}. "
+        f"Final wizard menu seen: {yes_no(diagnostics.get('final_menu_seen'))}. "
+        f"Switch> reached: {yes_no(diagnostics.get('switch_user_exec_reached'))}. "
+        f"Password after enable reached: {yes_no(diagnostics.get('enable_password_prompt_reached'))}. "
+        f"Password policy failure detected: {yes_no(diagnostics.get('password_policy_failure_detected'))}. "
+        f"Next manual recovery step: {diagnostics.get('next_manual_recovery_step') or 'Connect to the console and recover the switch prompt manually.'}"
+    )
 
 
 class CiscoSerialClient:
@@ -740,23 +895,27 @@ class CiscoSerialClient:
         self._write("\r\n")
         return self._read_for(1.5)
 
-    def _reach_privileged_exec(self, config: dict[str, Any]) -> tuple[str, str, list[str]]:
-        return CiscoConsoleBootstrapStateMachine(self).reach_privileged_exec(config)
+    def _reach_privileged_exec(self, config: dict[str, Any]) -> tuple[str, str, list[str], dict[str, Any]]:
+        state_machine = CiscoConsoleBootstrapStateMachine(self)
+        prompt_type, output, steps = state_machine.reach_privileged_exec(config)
+        return prompt_type, output, steps, state_machine.diagnostics(prompt_type)
 
     def apply_management_config(self, config: dict[str, Any]) -> CiscoBootstrapResult:
         append_cisco_log("serial.bootstrap.start", port=self.port, baud=self.baud, management_ip=str(config.get("management_ip") or ""))
-        prompt_type, output, steps = self._reach_privileged_exec(config)
+        prompt_type, output, steps, diagnostics = self._reach_privileged_exec(config)
         password = str(config.get("password") or "")
         console_password = str(config.get("console_password") or password)
         enable_password = str(config.get("enable_secret") or config.get("enable_password") or "")
         if prompt_type != "privileged":
-            append_cisco_log("serial.bootstrap.no_prompt", port=self.port, baud=self.baud, output=output)
+            safe_output = mask_secrets(output, [password, console_password, enable_password])
+            error = format_cisco_privileged_exec_failure(diagnostics)
+            append_cisco_log("serial.bootstrap.no_prompt", port=self.port, baud=self.baud, output=safe_output, diagnostics=diagnostics)
             return CiscoBootstrapResult(
                 ok=False,
                 port=self.port,
                 baud=self.baud,
-                error="Cisco console did not reach privileged EXEC mode. Check enable password, login prompts, or initial setup dialog state.",
-                output=output,
+                error=error,
+                output=safe_output,
                 steps=steps,
             )
 
@@ -799,18 +958,20 @@ class CiscoSerialClient:
 
     def factory_reset(self, config: dict[str, Any]) -> CiscoBootstrapResult:
         append_cisco_log("serial.factory_reset.start", port=self.port, baud=self.baud)
-        prompt_type, output, steps = self._reach_privileged_exec(config)
+        prompt_type, output, steps, diagnostics = self._reach_privileged_exec(config)
         password = str(config.get("password") or "")
         console_password = str(config.get("console_password") or password)
         enable_password = str(config.get("enable_secret") or config.get("enable_password") or "")
         if prompt_type != "privileged":
-            append_cisco_log("serial.factory_reset.not_privileged", port=self.port, baud=self.baud, prompt_type=prompt_type, output=output)
+            safe_output = mask_secrets(output, [password, console_password, enable_password])
+            error = format_cisco_privileged_exec_failure(diagnostics)
+            append_cisco_log("serial.factory_reset.not_privileged", port=self.port, baud=self.baud, prompt_type=prompt_type, output=safe_output, diagnostics=diagnostics)
             return CiscoBootstrapResult(
                 ok=False,
                 port=self.port,
                 baud=self.baud,
-                error="Cisco console did not reach privileged EXEC mode. Check enable secret, login prompts, or console state.",
-                output=output,
+                error=error,
+                output=safe_output,
                 steps=steps,
             )
 
@@ -1049,6 +1210,11 @@ class CiscoSSHClient:
                 time.sleep(0.2)
                 if shell.recv_ready():
                     output_chunks.append(shell.recv(65535).decode("utf-8", errors="replace"))
+                if str(command).strip().lower() in {"copy run start", "copy running-config startup-config"}:
+                    shell.send("\n")
+                    time.sleep(0.5)
+                    if shell.recv_ready():
+                        output_chunks.append(shell.recv(65535).decode("utf-8", errors="replace"))
             return {"ok": True, "host": self.host, "output": mask_secrets("\n".join(output_chunks), [self.password])}
         except Exception as exc:
             raise CiscoSSHError(str(exc).splitlines()[0]) from exc
@@ -1306,6 +1472,50 @@ def _vlan_list(value: Any) -> str:
     return ",".join(str(item) for item in list(value or []) if str(item).strip())
 
 
+def _first_nonempty(*values: Any) -> str:
+    for value in values:
+        if isinstance(value, list):
+            for item in value:
+                text = str(item or "").strip()
+                if text:
+                    return text
+        else:
+            text = str(value or "").strip()
+            if text:
+                return text
+    return ""
+
+
+def _primary_snmp_user(cisco_cfg: dict[str, Any]) -> dict[str, Any]:
+    snmp_cfg = dict(cisco_cfg.get("snmp") or {})
+    users = list(snmp_cfg.get("users") or [])
+    if users and isinstance(users[0], dict):
+        primary = dict(users[0])
+        primary.setdefault("v3_username", primary.get("username"))
+        primary.setdefault("v3_auth_protocol", primary.get("auth_protocol"))
+        primary.setdefault("v3_auth_password", primary.get("auth_password"))
+        primary.setdefault("v3_priv_protocol", primary.get("priv_protocol"))
+        primary.setdefault("v3_priv_password", primary.get("priv_password"))
+        return {**snmp_cfg, **primary}
+    return snmp_cfg
+
+
+def _snmp_priv_keyword(protocol: str) -> str:
+    text = str(protocol or "AES").strip().lower()
+    return "aes 128" if text == "aes" else text
+
+
+def _management_vlan_name(cisco_cfg: dict[str, Any]) -> str:
+    management_vlan = int(cisco_cfg.get("management_vlan") or 0)
+    for vlan in list(cisco_cfg.get("vlans") or []):
+        try:
+            if int(dict(vlan).get("id") or 0) == management_vlan:
+                return str(dict(vlan).get("name") or "DWAN").strip() or "DWAN"
+        except (TypeError, ValueError):
+            continue
+    return "DWAN"
+
+
 def _port_body_commands(cisco_cfg: dict[str, Any], interface: str) -> list[str]:
     cfg = normalize_cisco_switch_config(cisco_cfg)
     resolved = resolve_port_config(cfg, interface)
@@ -1346,58 +1556,172 @@ def _port_body_commands(cisco_cfg: dict[str, Any], interface: str) -> list[str]:
 
 def render_cisco_baseline_config(cfg: dict[str, Any], *, mask: bool = True) -> str:
     cisco_cfg = normalize_cisco_switch_config(cfg)
+    hostname = str(cisco_cfg.get("hostname") or "sw01").strip()
+    domain_name = str(cisco_cfg.get("domain_name") or "example.local").strip()
+    management_vlan = int(cisco_cfg.get("management_vlan") or 10)
+    username = str(cisco_cfg.get("username") or "admin").strip()
+    password = str(cisco_cfg.get("password") or "").strip()
+    secret_value = SECRET_MASK if mask and password else password
     lines = [
         "terminal length 0",
         "configure terminal",
-        f"hostname {cisco_cfg.get('hostname') or 'sw01'}",
-        f"ip domain name {cisco_cfg.get('domain_name') or 'example.local'}",
+        f"hostname {hostname}",
+        "lldp run",
+        "no ip domain lookup",
     ]
     for server in cisco_cfg.get("dns_servers") or []:
         lines.append(f"ip name-server {server}")
-    for server in cisco_cfg.get("ntp_servers") or []:
-        lines.append(f"ntp server {server}")
+    lines.extend(
+        [
+            f"ip domain name {domain_name}",
+            "crypto key generate rsa modulus 4096",
+            "ip ssh version 2",
+        ]
+    )
+    if username and password:
+        lines.append(f"username {username} privilege 15 algorithm-type sha256 secret {secret_value}")
+    for extra_user in list(cisco_cfg.get("additional_local_users") or ["ESBAccess", "LocalTech"]):
+        extra_username = str(dict(extra_user).get("username") if isinstance(extra_user, dict) else extra_user or "").strip()
+        extra_password = str(dict(extra_user).get("password") if isinstance(extra_user, dict) else password or "").strip()
+        if extra_username and extra_password:
+            lines.append(f"username {extra_username} privilege 15 algorithm-type sha256 secret {SECRET_MASK if mask else extra_password}")
     if cisco_cfg.get("gateway"):
         lines.append(f"ip default-gateway {cisco_cfg.get('gateway')}")
-    username = str(cisco_cfg.get("username") or "admin").strip()
-    password = str(cisco_cfg.get("password") or "").strip()
-    if username and password:
-        lines.append(f"username {username} privilege 15 secret {SECRET_MASK if mask else password}")
-    snmp_cfg = dict(cisco_cfg.get("snmp") or {})
+    lines.extend(
+        [
+            "no ip http server",
+            "no ip http secure-server",
+            "line con 0",
+            "logging synchronous",
+            "login local",
+            "length 100",
+            "stopbits 1",
+            "line vty 0 15",
+            "logging synchronous",
+            "login local",
+            "length 100",
+            "transport preferred ssh",
+            "transport input ssh",
+        ]
+    )
+    for server in cisco_cfg.get("ntp_servers") or []:
+        lines.append(f"ntp server {server}")
+    lines.extend(
+        [
+            "service sequence-numbers",
+            "service timestamps debug datetime localtime show-timezone msec",
+            "service timestamps log datetime localtime show-timezone msec",
+        ]
+    )
+    logging_host = _first_nonempty(cisco_cfg.get("logging_hosts"), cisco_cfg.get("logging_host"), cisco_cfg.get("syslog_host"), cisco_cfg.get("gateway"))
+    if logging_host:
+        lines.append(f"logging host {logging_host}")
+    lines.extend(
+        [
+            "logging trap informational",
+            "logging history informational",
+            "logging monitor informational",
+            "logging origin-id hostname",
+            "logging origin-id ip",
+            f"logging source-interface vlan {management_vlan}",
+            "logging userinfo",
+            "logging on",
+        ]
+    )
+    snmp_cfg = _primary_snmp_user(cisco_cfg)
     snmp_user = str(snmp_cfg.get("v3_username") or "").strip()
     snmp_auth_protocol = str(snmp_cfg.get("v3_auth_protocol") or "SHA").strip().lower() or "sha"
     snmp_auth_password = str(snmp_cfg.get("v3_auth_password") or "").strip()
-    snmp_priv_protocol = str(snmp_cfg.get("v3_priv_protocol") or "AES").strip().lower() or "aes"
-    snmp_priv_keyword = "aes 128" if snmp_priv_protocol == "aes" else snmp_priv_protocol
+    snmp_priv_keyword = _snmp_priv_keyword(str(snmp_cfg.get("v3_priv_protocol") or "AES"))
     snmp_priv_password = str(snmp_cfg.get("v3_priv_password") or "").strip()
+    snmp_view = str(snmp_cfg.get("view") or snmp_cfg.get("v3_view") or snmp_user or "").strip()
+    snmp_group = str(snmp_cfg.get("group") or snmp_cfg.get("v3_group") or snmp_user or "").strip()
+    snmp_host = _first_nonempty(snmp_cfg.get("host"), snmp_cfg.get("hosts"), snmp_cfg.get("alert_destinations"), cisco_cfg.get("snmp_hosts"), logging_host)
     if snmp_user:
-        lines.append(f"snmp-server group {snmp_user} v3 priv")
+        lines.append(f"snmp-server view {snmp_view} iso included")
+        lines.append(f"snmp-server group {snmp_group} v3 priv write {snmp_view}")
         if snmp_auth_password and snmp_priv_password:
             lines.append(
                 "snmp-server user "
-                f"{snmp_user} {snmp_user} v3 auth {snmp_auth_protocol} "
+                f"{snmp_user} {snmp_group} v3 auth {snmp_auth_protocol} "
                 f"{SECRET_MASK if mask else snmp_auth_password} priv {snmp_priv_keyword} "
                 f"{SECRET_MASK if mask else snmp_priv_password}"
             )
+        if snmp_host:
+            lines.append(f"snmp-server host {snmp_host} informs version 3 priv {snmp_user}")
+        lines.extend(["snmp-server inform retries 3", "snmp-server inform timeout 180 pending 100"])
+    banner_description = str(cisco_cfg.get("banner_description") or cisco_cfg.get("description") or "").strip()
+    banner_location = str(cisco_cfg.get("banner_location") or cisco_cfg.get("location") or "Deployed").strip()
+    banner_serial = str(cisco_cfg.get("serial_number") or cisco_cfg.get("last_discovered_serial") or "Serial number of device").strip()
+    banner_asset = str(cisco_cfg.get("asset_number") or "N/A").strip()
+    lines.extend(
+        [
+            "banner motd $",
+            "",
+            f"    Hostname: {hostname}",
+            f"    Description: {banner_description}",
+            f"    Location: {banner_location}",
+            f"    Serial Number:  {banner_serial}",
+            f"    Asset Number: {banner_asset}",
+            "",
+            "$",
+            "banner login $",
+            "#########################################################################",
+            "#                                                                       #",
+            "#     This equipment is the property of the Canadian Government         #",
+            "#                   Department of National Defence                      #",
+            "#     Cette equipement est la propriete du Gouvernement Canadien        #",
+            "#                 Departement de la Defense Nationale                   #",
+            "#                                                                       #",
+            "#               Unauthorized access is NOT permitted.                   #",
+            "#            Utilisation NON permise n'est pas permise.                #",
+            "#                                                                       #",
+            "#        Any questions or problems / Questions ou problemes:            #",
+            "#        Network Admin/Admin Reseau          tel-613-943-6345           #",
+            "#        DEFSOC Service Desk/Centre d'Aide    tel-613-945-7777           #",
+            "#                                                                       #",
+            "#########################################################################",
+            "$",
+        ]
+    )
     for command in cisco_cfg.get("custom_global_commands") or []:
         lines.append(str(command))
     rendered = "\n".join(lines).strip()
-    return mask_secrets(rendered, [password, snmp_auth_password, snmp_priv_password]) if mask else rendered
+    secrets = [password, snmp_auth_password, snmp_priv_password]
+    for extra_user in list(cisco_cfg.get("additional_local_users") or []):
+        if isinstance(extra_user, dict):
+            secrets.append(str(extra_user.get("password") or ""))
+    return mask_secrets(rendered, secrets) if mask else rendered
 
 
 def render_cisco_vlan_config(cfg: dict[str, Any]) -> str:
     cisco_cfg = normalize_cisco_switch_config(cfg)
-    lines: list[str] = []
+    management_vlan = int(cisco_cfg.get("management_vlan") or 0)
+    management_name = _management_vlan_name(cisco_cfg)
+    lines: list[str] = [
+        "interface vlan1",
+        "description VLAN1 - DO NOT USE",
+        "shutdown",
+        "exit",
+    ]
+    rendered_vlans: set[int] = set()
     for vlan in sorted(list(cisco_cfg.get("vlans") or []), key=lambda item: int(item.get("id") or 0)):
         vlan_id = int(vlan.get("id") or 0)
-        if not vlan_id:
+        if not vlan_id or vlan_id in {1, 999} or vlan_id == management_vlan:
             continue
         lines.extend([f"vlan {vlan_id}", f" name {vlan.get('name') or f'VLAN{vlan_id}'}"])
-    management_vlan = int(cisco_cfg.get("management_vlan") or 0)
+        rendered_vlans.add(vlan_id)
     if management_vlan:
-        lines.append(f"interface Vlan{management_vlan}")
+        lines.extend([f"vlan {management_vlan}", f"name {management_name}", "exit", f"interface vlan{management_vlan}"])
+        description = str(cisco_cfg.get("management_svi_description") or f"VLAN{management_vlan} - {management_name}").strip()
+        if description:
+            lines.append(f"description {description}")
         if cisco_cfg.get("management_ip") and cisco_cfg.get("subnet_mask"):
-            lines.append(f" ip address {cisco_cfg.get('management_ip')} {cisco_cfg.get('subnet_mask')}")
-        lines.append(" no shutdown")
+            lines.append(f"ip address {cisco_cfg.get('management_ip')} {cisco_cfg.get('subnet_mask')}")
+        lines.extend(["no shutdown", "exit"])
+    if 999 not in rendered_vlans:
+        lines.extend(["vlan 999", "name BLACK-HOLE", "shutdown", "exit"])
+    lines.extend(["interface vlan999", "description VLAN999 - Black Hole VLAN", "shutdown"])
     return "\n".join(lines).strip()
 
 
@@ -1431,8 +1755,96 @@ def render_cisco_port_config(cfg: dict[str, Any], *, selected_ports: list[str] |
     return "\n!\n".join(blocks).strip()
 
 
+def render_cisco_standard_access_config(cfg: dict[str, Any]) -> str:
+    cisco_cfg = normalize_cisco_switch_config(cfg)
+    access_vlan = int(cisco_cfg.get("management_vlan") or 10)
+    return "\n!\n".join(
+        [
+            _render_interface_block(
+                "interface range GigabitEthernet1/0/2 - 24",
+                [
+                    "description UNUSED",
+                    f"switchport access vlan {access_vlan}",
+                    "switchport mode access",
+                    "no snmp trap link-status",
+                    "no cdp enable",
+                    "spanning-tree portfast",
+                    "spanning-tree bpduguard enable",
+                    "shutdown",
+                    "exit",
+                ],
+            ),
+            _render_interface_block(
+                "interface range GigabitEthernet1/1/1 - 4",
+                [
+                    "description UNUSED",
+                    "switchport access vlan 999",
+                    "switchport mode access",
+                    "no snmp trap link-status",
+                    "no cdp enable",
+                    "spanning-tree portfast",
+                    "spanning-tree bpduguard enable",
+                    "shutdown",
+                    "exit",
+                ],
+            ),
+            _render_interface_block(
+                "interface range TenGigabitEthernet1/1/1 - 4",
+                [
+                    "description UNUSED",
+                    "switchport access vlan 999",
+                    "switchport mode access",
+                    "no snmp trap link-status",
+                    "no cdp enable",
+                    "spanning-tree portfast",
+                    "spanning-tree bpduguard enable",
+                    "shutdown",
+                    "exit",
+                ],
+            ),
+            _render_interface_block(
+                "interface GigabitEthernet1/0/1",
+                [
+                    "switchport",
+                    "switchport mode access",
+                    f"switchport access vlan {access_vlan}",
+                    "description Client Device",
+                    "snmp trap link-status",
+                    "cdp enable",
+                    "no spanning-tree portfast",
+                    "no spanning-tree bpduguard enable",
+                    "no shutdown",
+                    "exit",
+                ],
+            ),
+            _render_interface_block(
+                "interface range GigabitEthernet1/0/2-24",
+                [
+                    "switchport",
+                    "switchport mode access",
+                    f"switchport access vlan {access_vlan}",
+                    "description Client Device",
+                    "snmp trap link-status",
+                    "no cdp enable",
+                    "spanning-tree portfast",
+                    "spanning-tree bpduguard enable",
+                    "no shutdown",
+                    "exit",
+                ],
+            ),
+        ]
+    )
+
+
 def render_cisco_full_config(cfg: dict[str, Any], *, mask: bool = True) -> str:
-    sections = [render_cisco_baseline_config(cfg, mask=mask), render_cisco_vlan_config(cfg), render_cisco_port_config(cfg), "end", "write memory"]
+    sections = [
+        render_cisco_baseline_config(cfg, mask=mask),
+        render_cisco_vlan_config(cfg),
+        render_cisco_standard_access_config(cfg),
+        render_cisco_port_config(cfg) if str(normalize_cisco_switch_config(cfg).get("apply_mode") or "").strip() != "initial_install" else "",
+        "end",
+        "copy run start",
+    ]
     rendered = "\n!\n".join(section for section in sections if section.strip())
     return mask_secrets(rendered) if mask else rendered
 

@@ -663,6 +663,14 @@ def _cisco_actions(cfg: dict[str, Any], upgrade_helper_summary: dict[str, Any] |
             action_complete="Cisco upgrade worker started. Watch the status panel.",
         ),
         _action(
+            "Test Cisco SSH",
+            hx_post="/modules/cisco/test-ssh?upgrade_tab=cisco",
+            hx_vals=cisco_vals,
+            action_title="Testing Cisco SSH",
+            action_start="Checking the saved Cisco management IP and credentials before upgrade.",
+            action_complete="Cisco SSH test finished.",
+        ),
+        _action(
             "Read Cisco version",
             hx_post="/modules/cisco/discover-version?upgrade_tab=cisco",
             hx_vals=cisco_vals,

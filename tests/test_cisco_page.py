@@ -137,6 +137,8 @@ def test_cisco_run_approval_actions_use_shared_feedback_metadata(cisco_client):
     assert 'data-action-title="Saving Cisco config"' in response.text
     assert "Saving the desired Cisco switch config and SNMP values." in response.text
     assert 'data-action-complete="Cisco config save finished."' in response.text
+    assert 'data-action-title="Testing Cisco SSH for approval"' in response.text
+    assert "Checking SSH with the saved Cisco management IP and credentials before approval." in response.text
     assert 'data-action-title="Approving Cisco config"' in response.text
     assert "Validating SSH, version, upgrade gate, and saved config before Run Center approval." in response.text
     assert 'data-action-complete="Cisco config approval check finished."' in response.text
@@ -214,7 +216,7 @@ def test_cisco_page_missing_saved_config_does_not_contradict_discovered_values(c
     assert "192.168.1.50" in response.text
     assert "Saved Lab Builder kit config" in response.text
     assert "Not saved yet" in response.text
-    assert "Discovered on the switch, but not saved in this kit yet." in response.text
+    assert "Discovered, not saved to this kit yet." in response.text
     assert "Current IP</span><strong>192.168.1.50" in response.text
     assert "Saved IP</span><strong>Not saved yet" in response.text
 
@@ -267,3 +269,74 @@ def test_cisco_setup_console_rejects_weak_password_before_serial(cisco_client, m
     assert response.status_code == 200
     assert "Cisco password must satisfy the Cisco setup wizard password policy" in response.text
     assert "short1A" not in response.text
+
+
+def test_cisco_setup_console_success_shows_completed_access_settings(cisco_client, monkeypatch):
+    import app.modules.cisco.routes as cisco_routes
+    from app.modules.cisco.service import CiscoModuleService
+
+    real_service = CiscoModuleService()
+
+    class FakeCiscoRouteService:
+        def status(self, context):
+            return real_service.status(context)
+
+        def bootstrap_management(self, context, *, trunk_review_ack=False):
+            return {
+                "module": "cisco",
+                "action": "bootstrap_management",
+                "ok": True,
+                "management_ip": "192.168.1.2",
+                "steps": ["Detected Cisco initial configuration dialog; answered no."],
+                "warnings": [],
+                "output": "Switch#",
+            }
+
+        def verify_console_bootstrap(self, context):
+            return {
+                "module": "cisco",
+                "action": "verify_console_bootstrap",
+                "ok": True,
+                "management_vlan": 10,
+                "current_management_ip": "192.168.1.2",
+                "current_subnet_mask": "255.255.255.0",
+                "default_gateway": "192.168.1.1",
+                "ssh_enabled": True,
+                "scp_enabled": True,
+                "warnings": [],
+                "raw_output": "Switch#",
+            }
+
+    monkeypatch.setattr(cisco_routes, "service", FakeCiscoRouteService())
+    cfg = main.default_config()
+    cfg["site"]["name"] = "Cisco Access Settings Complete Test Kit"
+    main.save_kit_config(cfg)
+
+    response = cisco_client.post(
+        "/modules/cisco/setup-console",
+        data={
+            "cisco_switch_hostname": "sw01",
+            "cisco_switch_username": "admin",
+            "cisco_switch_password": "ValidSecret123",
+            "cisco_enable_secret": "ValidSecret123",
+            "cisco_management_ip": "192.168.1.2",
+            "cisco_subnet_mask": "255.255.255.0",
+            "cisco_gateway": "192.168.1.1",
+            "cisco_domain_name": "lab.local",
+            "cisco_management_vlan": "10",
+            "cisco_console_port": "/dev/ttyUSB0",
+            "cisco_console_baud": "9600",
+            "cisco_management_port": "GigabitEthernet1/0/1",
+            "cisco_management_port_mode": "do_not_touch",
+        },
+    )
+
+    assert response.status_code == 200
+    assert "Cisco Access Settings complete" in response.text
+    assert "Access Settings completed through the console" in response.text
+    assert "Management IP: 192.168.1.2" in response.text
+    assert "Access settings" in response.text
+    assert "ValidSecret123" not in response.text
+
+    saved = main.load_kit_config()
+    assert saved["cisco_switch"]["last_cisco_action"]["ok"] is True

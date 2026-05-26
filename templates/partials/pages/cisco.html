@@ -75,7 +75,7 @@
         {% set feedback_area = 'factory' %}
     {% elif 'approved' in feedback_title or 'preview' in feedback_title or 'plan' in feedback_title or 'config needs attention' in feedback_title %}
         {% set feedback_area = 'run' %}
-    {% elif 'management ip configured' in feedback_title or 'management config failed' in feedback_title or 'console setup' in feedback_title or 'trunk review' in feedback_title %}
+    {% elif 'management ip configured' in feedback_title or 'management config failed' in feedback_title or 'console setup' in feedback_title or 'access settings' in feedback_title or 'trunk review' in feedback_title %}
         {% set feedback_area = 'access' %}
     {% elif 'discovered values' in feedback_title or 'ssh' in feedback_title or 'management' in feedback_title or 'console bootstrap' in feedback_title %}
         {% set feedback_area = 'console_config' %}
@@ -644,10 +644,13 @@
                     <div class="cisco-fact"><span>Target</span><strong>{{ upgrade_target or 'not selected' }}</strong></div>
                 </div>
                 <div class="cisco-actions">
+                    <button class="btn action-button" type="submit" hx-post="/modules/cisco/test-ssh" data-action-title="Testing Cisco SSH" data-action-start="Checking the saved Cisco management IP and credentials before upgrade." data-action-complete="Cisco SSH test finished.">Test SSH</button>
                     <button class="btn action-button" type="submit" hx-post="/modules/cisco/discover-version" data-action-title="Reading Cisco version" data-action-start="Reading the current switch software version for Upgrade Helper and Run Center approval." data-action-complete="Cisco version check finished.">Check version</button>
                     <a class="btn" href="/upgrade-helper">Upgrade helper</a>
                 </div>
                 {% if action_feedback and feedback_area == 'upgrade' %}
+                {{ cisco_inline_feedback(action_feedback) }}
+                {% elif action_feedback and 'ssh' in feedback_title %}
                 {{ cisco_inline_feedback(action_feedback) }}
                 {% endif %}
             </article>
@@ -789,9 +792,12 @@
             </div>
             <div class="cisco-actions mt-4">
                 <button class="btn action-button" type="submit" hx-post="/modules/cisco/save-port-map" data-action-title="Saving Cisco config" data-action-start="Saving the desired Cisco switch config and SNMP values." data-action-complete="Cisco config save finished.">Save to config</button>
+                <button class="btn action-button" type="submit" hx-post="/modules/cisco/test-ssh" data-action-title="Testing Cisco SSH for approval" data-action-start="Checking SSH with the saved Cisco management IP and credentials before approval." data-action-complete="Cisco SSH test finished.">Test SSH</button>
                 <button class="btn btn-primary action-button" type="submit" hx-post="/modules/cisco/approve-config-plan" hx-vals='{"mode":"full"}' data-action-title="Approving Cisco config" data-action-start="Validating SSH, version, upgrade gate, and saved config before Run Center approval." data-action-complete="Cisco config approval check finished.">Approve config</button>
             </div>
             {% if action_feedback and feedback_area in ['run', 'advanced'] %}
+            {{ cisco_inline_feedback(action_feedback) }}
+            {% elif action_feedback and 'ssh' in feedback_title %}
             {{ cisco_inline_feedback(action_feedback) }}
             {% endif %}
             {% if approval.get('state') in ['approved', 'blocked'] %}

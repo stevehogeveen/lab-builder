@@ -74,6 +74,7 @@ def test_cisco_status_distinguishes_discovered_saved_and_ready_values():
 
     assert status["discovered_current"]["management_ip"] == "192.168.1.50"
     assert status["discovered_current"]["not_saved"] is True
+    assert status["discovered_current"]["note"] == "Discovered, not saved to this kit yet."
     assert status["saved_kit_config"]["state_label"] == "Not saved yet"
     assert status["ready_to_apply"]["management_ip"] == "192.168.1.2"
     assert status["ready_to_apply"]["source"] == "Generated kit IP plan until Cisco values are saved"

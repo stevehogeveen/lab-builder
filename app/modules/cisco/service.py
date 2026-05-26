@@ -191,7 +191,7 @@ class CiscoModuleService:
         )
         note = "Run Check current config to read the switch over the selected console."
         if current_management_ip and not saved_management_ip:
-            note = "Discovered on the switch, but not saved in this kit yet."
+            note = "Discovered, not saved to this kit yet."
         elif current_management_ip and saved_management_ip and current_management_ip != saved_management_ip:
             note = f"Discovered IP differs from saved kit config ({saved_management_ip})."
         elif current_management_ip:

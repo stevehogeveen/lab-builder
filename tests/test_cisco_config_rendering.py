@@ -58,7 +58,51 @@ def test_password_masking_in_baseline_rendering():
     rendered = cisco.render_cisco_baseline_config(_cfg())
 
     assert "Secret123!" not in rendered
-    assert "username admin privilege 15 secret ********" in rendered
+    assert "username admin privilege 15 algorithm-type sha256 secret ********" in rendered
+
+
+def test_full_config_includes_required_switch_run_baseline():
+    cfg = _cfg()
+    cfg["management_vlan"] = 80
+    cfg["snmp"] = {
+        "v3_username": "Private011",
+        "v3_auth_protocol": "SHA",
+        "v3_auth_password": "SnmpAuth123!",
+        "v3_priv_protocol": "AES",
+        "v3_priv_password": "SnmpPriv123!",
+        "host": "10.10.8.50",
+    }
+    cfg["logging_host"] = "10.10.8.60"
+    rendered = cisco.render_cisco_full_config(cfg)
+
+    assert "lldp run" in rendered
+    assert "no ip domain lookup" in rendered
+    assert "username ESBAccess privilege 15 algorithm-type sha256 secret ********" in rendered
+    assert "username LocalTech privilege 15 algorithm-type sha256 secret ********" in rendered
+    assert "no ip http server" in rendered
+    assert "transport preferred ssh" in rendered
+    assert "interface vlan1" in rendered
+    assert "vlan 80" in rendered
+    assert "name DWAN" in rendered
+    assert "interface vlan80" in rendered
+    assert "ip address 10.10.8.2 255.255.255.0" in rendered
+    assert "vlan 999" in rendered
+    assert "name BLACK-HOLE" in rendered
+    assert "interface range GigabitEthernet1/0/2 - 24" in rendered
+    assert "interface range TenGigabitEthernet1/1/1 - 4" in rendered
+    assert "interface range GigabitEthernet1/0/2-24" in rendered
+    assert "ntp server 10.10.8.1" in rendered
+    assert "logging host 10.10.8.60" in rendered
+    assert "logging source-interface vlan 80" in rendered
+    assert "snmp-server view Private011 iso included" in rendered
+    assert "snmp-server group Private011 v3 priv write Private011" in rendered
+    assert "snmp-server user Private011 Private011 v3 auth sha ******** priv aes 128 ********" in rendered
+    assert "snmp-server host 10.10.8.50 informs version 3 priv Private011" in rendered
+    assert "banner motd $" in rendered
+    assert "banner login $" in rendered
+    assert "copy run start" in rendered
+    assert "SnmpAuth123!" not in rendered
+    assert "SnmpPriv123!" not in rendered
 
 
 def test_management_vlan_validation():

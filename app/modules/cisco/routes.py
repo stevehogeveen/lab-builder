@@ -622,8 +622,12 @@ async def cisco_bootstrap_management(
     }
     main.save_kit_config(cfg)
     feedback = main.build_action_feedback(
-        "Cisco console setup complete" if result.get("ok") else ("Cisco trunk review needed" if result.get("requires_trunk_review") else "Cisco console setup failed"),
-        "Console bootstrap completed. Use Test SSH before running version discovery or upgrades." if result.get("ok") and bootstrap_check.get("ok") else str(result.get("error") or bootstrap_check.get("error") or "Console bootstrap needs attention."),
+        (
+            "Cisco Access Settings complete"
+            if action_ok
+            else ("Cisco Access Settings needs verification" if result.get("ok") else ("Cisco trunk review needed" if result.get("requires_trunk_review") else "Cisco console setup failed"))
+        ),
+        "Access Settings completed through the console. Use Test SSH before running version discovery or upgrades." if action_ok else str(result.get("error") or bootstrap_check.get("error") or "Console bootstrap needs attention."),
         tone="ready" if result.get("ok") and bootstrap_check.get("ok") else ("pending" if result.get("ok") or result.get("requires_trunk_review") else "danger"),
         outcomes=[f"Management IP: {cisco_cfg.get('management_ip') or cisco_cfg.get('ip') or 'Not set'}", f"Console: {cisco_cfg.get('console_port') or 'Not selected'}"],
         details=list(result.get("steps") or []) + list(result.get("warnings") or []) + list(bootstrap_check.get("warnings") or []),
@@ -759,6 +763,8 @@ async def cisco_test_ssh(
         tone="ready" if result.get("ok") else "pending",
         outcomes=[f"Target: {result.get('host') or 'Not set'}"],
     )
+    if str(return_page or "").strip().lower() == "upgrade_helper":
+        return main.render_page(request, cfg, active_page="upgrade_helper", action_feedback=feedback)
     return _render_cisco_page(request, cfg, action_feedback=feedback)
 
 

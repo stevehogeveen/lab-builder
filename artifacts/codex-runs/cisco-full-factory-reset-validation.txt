@@ -1,0 +1,15 @@
+Implemented and validated the Cisco-only updates. No commit was made.
+
+Changed:
+- Updated the missing saved-config state to the required copy: `Discovered, not saved to this kit yet.` in [service.py](/home/administrator/lab-builder/app/modules/cisco/service.py:194).
+- Added fake-console coverage for the IOS XE forced enable-secret path after answering `no`, including final menu `0`, never `2`, and normal CLI bootstrap afterward in [test_cisco_serial.py](/home/administrator/lab-builder/tests/test_cisco_serial.py:325).
+- Updated page/status tests for the separated discovered vs saved state.
+- Added the real-switch manual checklist at [cisco-factory-reset-onboarding-checklist.md](/home/administrator/lab-builder/docs/cisco-factory-reset-onboarding-checklist.md:1).
+
+Validation:
+- `.venv/bin/python -m pytest -q tests/test_cisco_*.py` passed: `51 passed`
+- `.venv/bin/python -m pytest -q` passed: `509 passed`
+- `python -m compileall app` could not run because `python` is not installed in this shell.
+- `.venv/bin/python -m compileall app` passed.
+
+Workspace note: the untracked `.codex/prompts/cisco-full-factory-reset-validation.md` and `artifacts/codex-runs/cisco-full-factory-reset-validation.txt` were already present and left untouched.
