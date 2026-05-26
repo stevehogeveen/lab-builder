@@ -59,6 +59,7 @@ def test_ilo_page_wires_actions_and_visible_last_status(ilo_client):
     assert 'data-action-title="Saving iLO setup"' in response.text
     assert 'data-action-complete="iLO setup saved."' in response.text
     assert 'hx-post="/export-ilo-inventory"' in response.text
+    assert 'data-action-complete="Current iLO read finished."' in response.text
     assert 'href="/storage"' in response.text
     assert 'href="/execution"' in response.text
     assert '<details class="card identity-soft-card" open>' in response.text

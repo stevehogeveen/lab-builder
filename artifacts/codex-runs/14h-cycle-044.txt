@@ -1,0 +1,20 @@
+**Task chosen:** iLO setup page read-current action feedback consistency.
+
+**Files inspected:** [AGENTS.md](/home/administrator/lab-builder/AGENTS.md), coordination/docs/backlog files, [templates/index.html](/home/administrator/lab-builder/templates/index.html), [templates/partials/pages/ilo.html](/home/administrator/lab-builder/templates/partials/pages/ilo.html), [tests/test_ilo_page.py](/home/administrator/lab-builder/tests/test_ilo_page.py), plus a route-surface audit.
+
+**Files changed:** [SESSION_COORDINATION.md](/home/administrator/lab-builder/SESSION_COORDINATION.md), [templates/partials/pages/ilo.html](/home/administrator/lab-builder/templates/partials/pages/ilo.html), [tests/test_ilo_page.py](/home/administrator/lab-builder/tests/test_ilo_page.py).
+
+**Verified:** the two `Read current iLO` forms posting to `/export-ilo-inventory` now include explicit `data-action-complete="Current iLO read finished."`; the focused render test asserts that metadata. Existing save/navigation coverage remains in the same test.
+
+**Tests/checks run:**
+- `.venv/bin/python -m pytest tests/test_ilo_page.py` - passed, 2 tests
+- `.venv/bin/python -m pytest tests/test_operator_flow_contract.py` - passed, 6 tests
+- `.venv/bin/python -m compileall app` - passed
+
+**Hardware:** no real hardware used. This was route/template inspection only; no iLO connection was attempted.
+
+**Mocked/dry-run only:** existing tests mock media scanning and disable live Run Center checks. `/export-ilo-inventory` was not executed because it can contact hardware.
+
+**Remaining risks:** this verifies rendered wiring and local feedback metadata, not live iLO response behavior.
+
+**Recommended next task:** another unclaimed setup-page read action-feedback gap or route audit. I did not commit or push.
