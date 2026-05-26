@@ -1,0 +1,35 @@
+**Task Chosen**
+iLO setup page last-action/log visibility audit.
+
+**Files Inspected**
+`SESSION_COORDINATION.md`, required docs, `.codex/*`, iLO template/routes, `app/main.py`, and nearby page/test patterns.
+
+**Files Changed**
+- [templates/partials/pages/ilo.html](/home/administrator/lab-builder/templates/partials/pages/ilo.html:333): opens “What happened last” by default.
+- [tests/test_ilo_page.py](/home/administrator/lab-builder/tests/test_ilo_page.py:54): added focused iLO page route/render guards.
+- [SESSION_COORDINATION.md](/home/administrator/lab-builder/SESSION_COORDINATION.md:40): claimed and closed the slice.
+
+**Buttons/Routes/Forms Verified**
+- `/ilo` renders successfully.
+- `Save iLO setup` posts to `/save-ilo-settings`.
+- `Read current iLO` posts to `/export-ilo-inventory`.
+- Latest run `Open log` posts to `/view-report`, not `/view-run-summary`.
+- Navigation links to `/storage` and `/execution` render.
+- Alpine tab/user controls were inspected only; not browser-click tested.
+
+**Tests/Checks Run**
+- `.venv/bin/python -m pytest tests/test_ilo_page.py` passed.
+- `.venv/bin/python -m pytest tests/test_operator_flow_contract.py` passed.
+- `.venv/bin/python -m compileall app` passed.
+
+**Hardware**
+No real hardware was used.
+
+**Mocked/Dry-Run Only**
+Used FastAPI `TestClient`, temp artifact/config dirs, mocked `scan_upgrade_media`, and a local fake report file for `/view-report`.
+
+**Remaining Risks**
+No Playwright/browser interaction test was run, so Alpine-only tab/add/remove behavior remains static-inspected. Existing untracked `artifacts/codex-runs/*` files were left untouched.
+
+**Recommended Next Task**
+A focused ESXi last-action visibility audit, since its latest-run section is still collapsed by default.

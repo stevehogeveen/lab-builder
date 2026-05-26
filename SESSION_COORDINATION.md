@@ -38,6 +38,24 @@ Copy this block and update it in place.
 
 ## Active Sessions
 
+### Session: ilo-quality-cycle
+- Status: done
+- Branch: codex/14h-quality-run
+- Scope owner: iLO setup page last-action/log visibility audit
+- Working on: Completed iLO latest action/log visibility and focused route/template coverage without hardware access.
+- Blocked by: none
+- Ready to hand off: iLO page now keeps the latest action/log section visible by default; focused iLO page tests, operator-flow contract tests, and compile check pass.
+- Files claimed:
+  - templates/partials/pages/ilo.html
+  - tests/test_ilo_page.py
+- Shared files touched with caution:
+  - SESSION_COORDINATION.md
+- Last changed:
+  - 2026-05-25 23:19 EDT - Claimed narrow iLO setup latest-action/log visibility slice for the 14-hour quality run.
+  - 2026-05-25 23:20 EDT - Opened the iLO latest-action section by default and verified iLO action/log routes with focused tests.
+- Next intended change:
+  - Continue with a separate backlog cycle; suggested next target is a focused ESXi last-action visibility or another unclaimed page action-route audit.
+
 ### Session: upgrade-helper-quality-cycle
 - Status: done
 - Branch: codex/14h-quality-run
