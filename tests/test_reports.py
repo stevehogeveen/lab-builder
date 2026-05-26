@@ -86,6 +86,7 @@ def test_reports_page_wires_visible_controls_to_report_routes(reports_client):
     assert 'data-action-title="Opening saved report"' in response.text
     assert '<button class="btn action-button" type="submit">Open bundle</button>' in response.text
     assert '<button class="btn action-button" type="submit">View</button>' in response.text
+    assert '<button class="btn action-button" type="submit">Download</button>' in response.text
     assert str(report_path) in response.text
     assert str(run_summary_path) in response.text
     assert 'href="/configs?report_query=192.168.1.11"' in response.text
@@ -113,3 +114,7 @@ def test_reports_page_wires_visible_controls_to_report_routes(reports_client):
 
     assert download_response.status_code == 200
     assert report_path.name in download_response.headers["content-disposition"]
+    assert any(
+        route.path == "/download-report" and "POST" in route.methods
+        for route in main.app.routes
+    )

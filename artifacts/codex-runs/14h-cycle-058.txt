@@ -1,0 +1,25 @@
+Task chosen: Reports saved-file Download button consistency from the UI button/flow audit backlog.
+
+Changed:
+- [reports.html](/home/administrator/lab-builder/templates/partials/pages/reports.html:243): added shared `action-button` treatment to saved-file `Download` buttons in both recent and expanded report lists.
+- [test_reports.py](/home/administrator/lab-builder/tests/test_reports.py:89): added coverage that `Download` renders as a shared action button and that `/download-report` is a POST route.
+- [SESSION_COORDINATION.md](/home/administrator/lab-builder/SESSION_COORDINATION.md:40): claimed and closed the slice.
+
+Inspected:
+- Required session docs, `.codex/mission.md`, `.codex/rules.md`, `.codex/backlog.md`
+- Reports template/test, `/download-report` route in `app/main.py`, and shared action-button behavior in `templates/index.html`
+
+Verified:
+- Buttons/forms/routes: Reports `View`, `Download`, `Open bundle`, `/configs`, `/view-report`, `/download-report`
+- Native download behavior was preserved. No HTMX conversion was made.
+
+Checks run:
+- `.venv/bin/python -m pytest tests/test_reports.py` passed
+- `.venv/bin/python -m pytest tests/test_operator_flow_contract.py` passed
+- `.venv/bin/python -m compileall app` passed
+
+No real hardware was used. This was template/route inspection with TestClient temp config/artifact directories only.
+
+Remaining risk: `Download` is still a native browser file download, so it does not show the HTMX local action-status panel. That is intentional to avoid breaking file downloads.
+
+Recommended next task: audit another unclaimed visible control, preferably the Reports search form or another saved-artifact action, and keep it to one route/template test slice. No commit or push was made.

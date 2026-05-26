@@ -38,6 +38,24 @@ Copy this block and update it in place.
 
 ## Active Sessions
 
+### Session: reports-download-action-feedback-quality-cycle
+- Status: done
+- Branch: codex/14h-quality-run
+- Scope owner: Reports saved-file download button consistency
+- Working on: Completed shared action-button treatment and focused render coverage for existing Reports saved-file Download controls without changing download routing.
+- Blocked by: none
+- Ready to hand off: Reports saved-file Download controls now use the shared action-button class; focused Reports render/route coverage, operator-flow contract tests, and compile check pass.
+- Files claimed:
+  - templates/partials/pages/reports.html
+  - tests/test_reports.py
+- Shared files touched with caution:
+  - SESSION_COORDINATION.md
+- Last changed:
+  - 2026-05-26 05:34 EDT - Claimed narrow Reports saved-file download button consistency slice for the 14-hour quality run.
+  - 2026-05-26 05:35 EDT - Added shared action-button treatment to Reports Download controls and verified focused route/template coverage.
+- Next intended change:
+  - Continue with a separate backlog cycle; suggested next target is another unclaimed visible-control audit or setup-page status placement guard.
+
 ### Session: cisco-version-feedback-quality-cycle
 - Status: done
 - Branch: codex/14h-quality-run
