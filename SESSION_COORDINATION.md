@@ -38,6 +38,25 @@ Copy this block and update it in place.
 
 ## Active Sessions
 
+### Session: upgrade-helper-quality-cycle
+- Status: done
+- Branch: codex/14h-quality-run
+- Scope owner: Upgrade Helper Cisco-tab secret-safe button/route audit
+- Working on: Completed Upgrade Helper Cisco-tab action payload safety cleanup without hardware access.
+- Blocked by: none
+- Ready to hand off: Upgrade Helper Cisco tab no longer renders saved Cisco credentials in HTMX values; focused tests and compile check pass.
+- Files claimed:
+  - app/upgrade_panels.py
+  - tests/test_app.py
+- Shared files touched with caution:
+  - SESSION_COORDINATION.md
+  - tests/test_app.py
+- Last changed:
+  - 2026-05-25 23:11 EDT - Claimed narrow Upgrade Helper Cisco-tab action payload safety slice for the 14-hour quality run.
+  - 2026-05-25 23:12 EDT - Removed rendered Cisco credentials from the Upgrade Helper version-read action and verified focused tests.
+- Next intended change:
+  - Continue with a separate backlog cycle; suggested next target is another unclaimed setup page action-payload and log/status placement audit.
+
 ### Session: history-quality-cycle
 - Status: done
 - Branch: codex/14h-quality-run

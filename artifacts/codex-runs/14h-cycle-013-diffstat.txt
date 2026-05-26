@@ -1,0 +1,4 @@
+ SESSION_COORDINATION.md | 19 +++++++++++++++++++
+ app/upgrade_panels.py   |  9 +--------
+ tests/test_app.py       | 12 ++++++++++++
+ 3 files changed, 32 insertions(+), 8 deletions(-)

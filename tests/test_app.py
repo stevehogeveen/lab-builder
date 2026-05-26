@@ -323,6 +323,14 @@ def test_upgrade_helper_shows_netapp_and_cisco_upgrade_actions(client):
         "netapp": {"current_version": "9.9.1P2", "source": "Last NetApp discovery"},
         "cisco_switch": {"current_version": "17.03.01", "source": "Last Cisco discovery"},
     }
+    cfg["cisco_switch"].update(
+        {
+            "hostname": "lab-switch",
+            "username": "operator-user",
+            "password": "DoNotRender123!",
+            "management_ip": "192.168.1.24",
+        }
+    )
     main.save_kit_config(cfg)
 
     response = client.get("/upgrade-helper")
@@ -350,6 +358,10 @@ def test_upgrade_helper_shows_netapp_and_cisco_upgrade_actions(client):
     assert "Review Cisco upgrade plan" in response.text
     assert "Run Cisco upgrade" in response.text
     assert "Upgrade Helper" in response.text
+    assert 'hx-vals=\'{"return_page": "upgrade_helper"}\'' in response.text
+    assert "cisco_switch_password" not in response.text
+    assert "DoNotRender123!" not in response.text
+    assert "operator-user" not in response.text
 
 
 def test_upgrade_helper_tabs_render_one_module_and_status_badges(client):

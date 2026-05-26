@@ -620,14 +620,7 @@ def _netapp_actions(cfg: dict[str, Any], upgrade_helper_summary: dict[str, Any] 
 
 
 def _cisco_actions(cfg: dict[str, Any], upgrade_helper_summary: dict[str, Any] | None) -> list[dict[str, Any]]:
-    cisco_cfg = dict((cfg.get("cisco_switch") or {}))
-    cisco_vals = {
-        "return_page": "upgrade_helper",
-        "cisco_switch_hostname": str(cisco_cfg.get("hostname") or "sw01"),
-        "cisco_switch_username": str(cisco_cfg.get("username") or "admin"),
-        "cisco_switch_password": str(cisco_cfg.get("password") or ""),
-        "cisco_management_ip": str(cisco_cfg.get("management_ip") or cisco_cfg.get("ip") or ""),
-    }
+    cisco_vals = {"return_page": "upgrade_helper"}
     return [
         _action("Review Cisco upgrade plan", hx_post="/modules/cisco/plan-upgrade?upgrade_tab=cisco"),
         _action(

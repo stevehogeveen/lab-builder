@@ -1,0 +1,25 @@
+Task chosen: Priority 1/6 Upgrade Helper Cisco-tab button/route safety audit.
+
+Changed the Upgrade Helper Cisco “Read Cisco version” action so it no longer renders saved Cisco hostname, username, password, or management IP in `hx-vals`. It now posts only `return_page=upgrade_helper`; the existing server-side route continues using saved kit config. Added render coverage to prove the saved password and username do not appear in the Cisco tab HTML.
+
+Files inspected:
+`SESSION_COORDINATION.md`, required docs, `.codex/*`, [templates/partials/pages/upgrade_helper.html](/home/administrator/lab-builder/templates/partials/pages/upgrade_helper.html), [templates/partials/components/upgrade_tab_shell.html](/home/administrator/lab-builder/templates/partials/components/upgrade_tab_shell.html), [templates/partials/components/upgrade_components.html](/home/administrator/lab-builder/templates/partials/components/upgrade_components.html), [app/main.py](/home/administrator/lab-builder/app/main.py), [app/modules/cisco/routes.py](/home/administrator/lab-builder/app/modules/cisco/routes.py), [app/upgrade_panels.py](/home/administrator/lab-builder/app/upgrade_panels.py), [tests/test_app.py](/home/administrator/lab-builder/tests/test_app.py), [tests/test_upgrade_helper.py](/home/administrator/lab-builder/tests/test_upgrade_helper.py).
+
+Files changed:
+[SESSION_COORDINATION.md](/home/administrator/lab-builder/SESSION_COORDINATION.md:41), [app/upgrade_panels.py](/home/administrator/lab-builder/app/upgrade_panels.py:623), [tests/test_app.py](/home/administrator/lab-builder/tests/test_app.py:330).
+
+Buttons/routes/forms verified:
+`GET /upgrade-helper?tab=cisco`, `GET /upgrade-helper/tab/cisco`, `POST /modules/cisco/discover-version?upgrade_tab=cisco`, `POST /modules/cisco/plan-upgrade?upgrade_tab=cisco`, `POST /modules/cisco/run-upgrade?upgrade_tab=cisco`, `POST /save-upgrade-override?upgrade_tab=cisco`, `GET /modules/cisco`.
+
+Tests/checks run:
+`.venv/bin/python -m pytest tests/test_app.py -k "upgrade_helper"`: 7 passed.
+`.venv/bin/python -m pytest tests/test_upgrade_helper.py`: 14 passed.
+`.venv/bin/python -m compileall app`: passed.
+
+Real hardware used: none.
+
+Mocked/dry-run only: route/template rendering with saved dummy kit config; no Cisco, NetApp, QNAP, vCenter, ESXi, or server calls.
+
+Remaining risks: I did not live-test Cisco version discovery. The behavior is verified by route inspection and render tests: the handler can use saved config, and the page no longer exposes the saved secret.
+
+Recommended next task: audit another unclaimed setup page action payload and log/status placement, with special attention to whether any button renders saved secrets or sends unnecessary technical detail through browser markup.
