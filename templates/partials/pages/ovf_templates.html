@@ -12,7 +12,7 @@
         <div class="card workflow-hero-card">
             <div class="text-lg font-semibold mb-3">Register local template directory</div>
             <div class="text-sm text-slate-400 mb-4">Point at the folder that contains the `.ovf` descriptor and its referenced files. ESXi/VMware needs the whole directory, not just one picked file.</div>
-            <form hx-post="/modules/ovf-templates/register-directory" hx-target="#main-content" hx-swap="outerHTML" class="space-y-3" data-action-title="Registering OVF directory" data-action-start="Scanning the directory, descriptor, VMDK, NVRAM, and other referenced files.">
+            <form hx-post="/modules/ovf-templates/register-directory" hx-target="#main-content" hx-swap="outerHTML" class="space-y-3" data-action-title="Registering OVF directory" data-action-start="Scanning the directory, descriptor, VMDK, NVRAM, and other referenced files." data-action-complete="OVF directory registration finished.">
                 <input type="hidden" name="return_page" value="ovf_templates">
                 <div>
                     <label class="block text-sm font-bold text-slate-300 mb-2">Source location</label>

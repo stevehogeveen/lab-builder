@@ -70,8 +70,9 @@ def test_ovf_templates_page_wires_registration_and_empty_status(ovf_templates_cl
 
     assert response.status_code == 200
     assert 'hx-post="/modules/ovf-templates/register-directory"' in response.text
+    assert 'data-action-complete="OVF directory registration finished."' in response.text
     assert 'name="ovf_template_directory"' in response.text
-    assert ">Register directory</button>" in response.text
+    assert '<button class="btn btn-primary action-button" type="submit">Register directory</button>' in response.text
     assert "What happened last" in response.text
     assert "No OVF template action recorded yet" in response.text
     assert "Register a full OVF directory once" in response.text

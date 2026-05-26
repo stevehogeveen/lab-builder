@@ -1,0 +1,4 @@
+ SESSION_COORDINATION.md                     | 18 ++++++++++++++++++
+ templates/partials/pages/ovf_templates.html |  2 +-
+ tests/test_ovf_templates_page.py            |  3 ++-
+ 3 files changed, 21 insertions(+), 2 deletions(-)

@@ -38,6 +38,24 @@ Copy this block and update it in place.
 
 ## Active Sessions
 
+### Session: ovf-template-registration-feedback-quality-cycle
+- Status: done
+- Branch: codex/14h-quality-run
+- Scope owner: OVF Templates registration action feedback consistency
+- Working on: Completed explicit completion feedback metadata for the OVF Templates register-directory action and focused render coverage.
+- Blocked by: none
+- Ready to hand off: OVF Templates register-directory action now has explicit completion feedback; focused OVF page tests, operator-flow contract tests, and compile check pass.
+- Files claimed:
+  - templates/partials/pages/ovf_templates.html
+  - tests/test_ovf_templates_page.py
+- Shared files touched with caution:
+  - SESSION_COORDINATION.md
+- Last changed:
+  - 2026-05-26 02:48 EDT - Claimed narrow OVF Templates register-directory action-feedback slice for the 14-hour quality run.
+  - 2026-05-26 02:48 EDT - Added completion metadata to the OVF register-directory form and verified focused coverage.
+- Next intended change:
+  - Continue with a separate backlog cycle; suggested next target is another setup-page action-feedback completion gap or button/route audit.
+
 ### Session: qnap-save-feedback-quality-cycle
 - Status: done
 - Branch: codex/14h-quality-run
