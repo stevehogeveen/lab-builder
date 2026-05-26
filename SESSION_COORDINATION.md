@@ -38,6 +38,24 @@ Copy this block and update it in place.
 
 ## Active Sessions
 
+### Session: storage-repair-feedback-quality-cycle
+- Status: done
+- Branch: codex/14h-quality-run
+- Scope owner: Storage repair-selection action feedback consistency
+- Working on: Completed explicit completion feedback for the existing Storage repair invalid selections action without changing route or hardware behavior.
+- Blocked by: none
+- Ready to hand off: Storage repair action now has specific completion feedback; focused Storage tests, operator-flow contract tests, and compile check pass.
+- Files claimed:
+  - templates/partials/pages/storage.html
+  - tests/test_storage.py
+- Shared files touched with caution:
+  - SESSION_COORDINATION.md
+- Last changed:
+  - 2026-05-26 04:38 EDT - Claimed narrow Storage repair-selection action-feedback slice for the 14-hour quality run.
+  - 2026-05-26 04:39 EDT - Added repair-action completion metadata and verified mocked mismatch route rendering.
+- Next intended change:
+  - Continue with a separate backlog cycle; suggested next target is another unclaimed action-feedback gap or route audit.
+
 ### Session: kits-action-complete-feedback-quality-cycle
 - Status: done
 - Branch: codex/14h-quality-run

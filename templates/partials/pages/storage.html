@@ -67,7 +67,7 @@
         <div class="card" style="border-color: color-mix(in srgb, var(--bad) 35%, var(--border));">
             <div class="text-lg font-semibold mb-2">Repair invalid storage selections</div>
             <div class="text-sm text-slate-400 mb-3">The saved drive/controller selection no longer matches current inventory. Clear the invalid plan selections and reload inventory before building a new plan.</div>
-            <form hx-post="/repair-storage-selection" hx-target="#main-content" hx-swap="outerHTML" data-action-title="Repairing storage selections" data-action-start="Clearing invalid storage selections and loading fresh inventory.">
+            <form hx-post="/repair-storage-selection" hx-target="#main-content" hx-swap="outerHTML" data-action-title="Repairing storage selections" data-action-start="Clearing invalid storage selections and loading fresh inventory." data-action-complete="Invalid storage selections cleared.">
                 <input type="hidden" name="return_page" value="{{ storage_repair_action.return_page or 'storage' }}">
                 <button class="btn btn-danger action-button" type="submit">Clear invalid selections and reload inventory</button>
             </form>

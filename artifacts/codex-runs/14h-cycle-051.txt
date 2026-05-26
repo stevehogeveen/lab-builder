@@ -1,0 +1,30 @@
+**Task Chosen**
+Storage setup repair-action feedback consistency.
+
+**Changed**
+Added explicit completion feedback to the Storage “Clear invalid selections and reload inventory” action in [storage.html](/home/administrator/lab-builder/templates/partials/pages/storage.html:70), and added a mocked mismatch route-render test in [test_storage.py](/home/administrator/lab-builder/tests/test_storage.py:197). Updated coordination in [SESSION_COORDINATION.md](/home/administrator/lab-builder/SESSION_COORDINATION.md:38).
+
+**Inspected**
+`.codex/mission.md`, `.codex/rules.md`, `.codex/backlog.md`, `AGENTS.md`, session/operator-flow docs, Storage template, Storage route handlers, `app/main.py`, and focused Storage tests.
+
+**Verified Buttons/Routes/Forms**
+- Button: `Clear invalid selections and reload inventory`
+- Form: `hx-post="/repair-storage-selection"`
+- Route wrapper: `/repair-storage-selection`
+- Related handler: `repair_storage_selection_handler`
+- Trigger path tested: `/approve-storage-plan` mismatch path rendering the repair card
+
+**Tests/Checks Run**
+- `.venv/bin/python -m pytest tests/test_storage.py -k "repair_control or target_save or clear_approval or read_current"`: 4 passed
+- `.venv/bin/python -m pytest tests/test_storage.py`: 6 passed
+- `.venv/bin/python -m pytest tests/test_operator_flow_contract.py`: 6 passed
+- `.venv/bin/python -m compileall app`: passed
+
+**Hardware**
+No real hardware used. The storage mismatch path was mocked; artifact creation used temp test files only. The actual repair action’s iLO hardware call was not executed.
+
+**Remaining Risks**
+This confirms the repair card and client feedback metadata render correctly. It does not validate a live repair against the available server, by design for this small UI cycle.
+
+**Recommended Next Task**
+Audit an unclaimed Reports/History button or download route, since those flows are non-hardware and can be covered with route/template tests. Untracked `artifacts/codex-runs/14h-cycle-051*` files were already present and left untouched.

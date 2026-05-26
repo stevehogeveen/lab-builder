@@ -194,6 +194,48 @@ def test_storage_target_save_controls_use_specific_completion_feedback(storage_c
     )
 
 
+def test_storage_repair_control_uses_specific_completion_feedback(storage_client, monkeypatch):
+    cfg = main.default_config()
+    cfg["site"]["name"] = "Storage Repair Kit"
+    cfg["ilo"]["current_ip"] = "192.168.1.50"
+    cfg["ilo"]["host"] = "192.168.1.50"
+    cfg["ilo"]["target_ip"] = "192.168.1.51"
+    cfg["ilo"]["username"] = "Administrator"
+    cfg["ilo"]["password"] = "kit-password"
+    main.save_kit_config(cfg)
+
+    discovery = _storage_artifact_discovery()
+    export_paths = main.export_storage_discovery_snapshot(cfg, discovery, host="192.168.1.50")
+    plan = main.build_raid_plan(discovery, export_paths)
+    plan_paths = main.export_raid_plan_snapshot(cfg, plan, export_paths)
+
+    def raise_controller_mismatch(*_args, **_kwargs):
+        raise ValueError("controller mismatch: selected drive resolved to the wrong controller")
+
+    monkeypatch.setattr(main, "validate_storage_plan_drive_paths", raise_controller_mismatch)
+
+    response = storage_client.post(
+        "/approve-storage-plan",
+        data={
+            "return_page": "storage",
+            "discovery_raw_path": str(export_paths["raw"]),
+            "raid_plan_path": str(plan_paths["plan"]),
+            "include_in_ilo_run": "on",
+        },
+    )
+
+    assert response.status_code == 200
+    assert "Repair invalid storage selections" in response.text
+    assert 'hx-post="/repair-storage-selection"' in response.text
+    assert 'data-action-title="Repairing storage selections"' in response.text
+    assert 'data-action-start="Clearing invalid storage selections and loading fresh inventory."' in response.text
+    assert 'data-action-complete="Invalid storage selections cleared."' in response.text
+    assert (
+        '<button class="btn btn-danger action-button" type="submit">Clear invalid selections and reload inventory</button>'
+        in response.text
+    )
+
+
 def test_storage_clear_approval_control_uses_specific_completion_feedback(storage_client):
     cfg = main.default_config()
     cfg["site"]["name"] = "Storage Clear Approval Kit"
