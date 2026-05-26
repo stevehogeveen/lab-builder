@@ -38,6 +38,24 @@ Copy this block and update it in place.
 
 ## Active Sessions
 
+### Session: storage-artifact-view-feedback-quality-cycle
+- Status: done
+- Branch: codex/14h-quality-run
+- Scope owner: Storage advanced artifact viewer action feedback consistency
+- Working on: Completed shared action-feedback treatment for Storage artifact viewer controls without changing artifact routes or payloads.
+- Blocked by: none
+- Ready to hand off: Storage artifact viewer controls now use shared action feedback metadata; focused Storage route/template coverage and compile check pass.
+- Files claimed:
+  - templates/partials/pages/storage.html
+  - tests/test_storage.py
+- Shared files touched with caution:
+  - SESSION_COORDINATION.md
+- Last changed:
+  - 2026-05-26 02:02 EDT - Claimed narrow Storage artifact viewer action-feedback slice for the 14-hour quality run.
+  - 2026-05-26 02:05 EDT - Added shared action metadata/classes to Storage artifact viewer controls and verified focused coverage.
+- Next intended change:
+  - Continue with a separate backlog cycle; suggested next target is another unclaimed advanced/details control audit or a setup-page status placement guard.
+
 ### Session: storage-open-log-feedback-quality-cycle
 - Status: done
 - Branch: codex/14h-quality-run

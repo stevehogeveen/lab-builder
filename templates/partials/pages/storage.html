@@ -714,23 +714,23 @@
                     <span class="status progress">files</span>
                 </summary>
                 <div class="mt-4 actions">
-                    <form hx-post="/view-storage-artifact" hx-target="#main-content" hx-swap="outerHTML">
+                    <form hx-post="/view-storage-artifact" hx-target="#main-content" hx-swap="outerHTML" data-action-title="Opening storage apply log" data-action-start="Loading the selected storage apply log into this page." data-action-complete="Storage apply log opened.">
                         <input type="hidden" name="return_page" value="storage">
                         <input type="hidden" name="discovery_raw_path" value="{{ storage_export_paths.raw if storage_export_paths else '' }}">
                         <input type="hidden" name="raid_plan_path" value="{{ storage_plan_paths.plan if storage_plan_paths else '' }}">
                         <input type="hidden" name="apply_artifact_dir" value="{{ storage_apply_paths.directory }}">
                         <input type="hidden" name="artifact_path" value="{{ storage_apply_paths.apply_log }}">
                         <input type="hidden" name="artifact_title" value="Storage Apply Log">
-                        <button class="btn" type="submit">View Apply Log</button>
+                        <button class="btn action-button" type="submit">View Apply Log</button>
                     </form>
-                    <form hx-post="/view-storage-artifact" hx-target="#main-content" hx-swap="outerHTML">
+                    <form hx-post="/view-storage-artifact" hx-target="#main-content" hx-swap="outerHTML" data-action-title="Opening storage apply results" data-action-start="Loading the selected storage apply results into this page." data-action-complete="Storage apply results opened.">
                         <input type="hidden" name="return_page" value="storage">
                         <input type="hidden" name="discovery_raw_path" value="{{ storage_export_paths.raw if storage_export_paths else '' }}">
                         <input type="hidden" name="raid_plan_path" value="{{ storage_plan_paths.plan if storage_plan_paths else '' }}">
                         <input type="hidden" name="apply_artifact_dir" value="{{ storage_apply_paths.directory }}">
                         <input type="hidden" name="artifact_path" value="{{ storage_apply_paths.apply_results }}">
                         <input type="hidden" name="artifact_title" value="Storage Apply Results">
-                        <button class="btn" type="submit">View Apply Results</button>
+                        <button class="btn action-button" type="submit">View Apply Results</button>
                     </form>
                 </div>
             </details>
@@ -1014,27 +1014,27 @@
                 </div>
                 <div class="actions">
                     {% if storage_plan_paths %}
-                    <form hx-post="/view-storage-artifact" hx-target="#main-content" hx-swap="outerHTML">
+                    <form hx-post="/view-storage-artifact" hx-target="#main-content" hx-swap="outerHTML" data-action-title="Opening storage plan details" data-action-start="Loading the saved storage RAID plan into this page." data-action-complete="Storage plan details opened.">
                         <input type="hidden" name="return_page" value="storage">
                         <input type="hidden" name="discovery_raw_path" value="{{ storage_export_paths.raw }}">
                         <input type="hidden" name="raid_plan_path" value="{{ storage_plan_paths.plan }}">
                         <input type="hidden" name="artifact_kind" value="raid_plan">
-                        <button class="btn" type="submit">View details</button>
+                        <button class="btn action-button" type="submit">View details</button>
                     </form>
                     {% endif %}
-                    <form hx-post="/view-storage-artifact" hx-target="#main-content" hx-swap="outerHTML">
+                    <form hx-post="/view-storage-artifact" hx-target="#main-content" hx-swap="outerHTML" data-action-title="Opening storage discovery summary" data-action-start="Loading the saved storage discovery summary into this page." data-action-complete="Storage discovery summary opened.">
                         <input type="hidden" name="return_page" value="storage">
                         <input type="hidden" name="discovery_raw_path" value="{{ storage_export_paths.raw }}">
                         <input type="hidden" name="raid_plan_path" value="{{ storage_plan_paths.plan if storage_plan_paths else '' }}">
                         <input type="hidden" name="artifact_kind" value="discovery_summary">
-                        <button class="btn" type="submit">View discovery summary</button>
+                        <button class="btn action-button" type="submit">View discovery summary</button>
                     </form>
-                    <form hx-post="/view-storage-artifact" hx-target="#main-content" hx-swap="outerHTML">
+                    <form hx-post="/view-storage-artifact" hx-target="#main-content" hx-swap="outerHTML" data-action-title="Opening raw storage discovery" data-action-start="Loading the saved raw storage discovery JSON into this page." data-action-complete="Raw storage discovery opened.">
                         <input type="hidden" name="return_page" value="storage">
                         <input type="hidden" name="discovery_raw_path" value="{{ storage_export_paths.raw }}">
                         <input type="hidden" name="raid_plan_path" value="{{ storage_plan_paths.plan if storage_plan_paths else '' }}">
                         <input type="hidden" name="artifact_kind" value="discovery_raw">
-                        <button class="btn" type="submit">View raw discovery</button>
+                        <button class="btn action-button" type="submit">View raw discovery</button>
                     </form>
                     <a class="btn" href="/configs">Open reports</a>
                     <a class="btn" href="/configs">Open build files</a>

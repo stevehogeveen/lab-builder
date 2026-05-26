@@ -51,6 +51,60 @@ def storage_client(tmp_path: Path, monkeypatch):
         yield test_client
 
 
+def _storage_artifact_discovery() -> dict:
+    controller_path = "/redfish/v1/Systems/1/Storage/DE009000"
+    drives = []
+    for bay in range(1, 9):
+        is_os_drive = bay <= 2
+        drives.append(
+            {
+                "id": str(bay),
+                "bay": str(bay),
+                "model": "SSD-480" if is_os_drive else "HDD-1200",
+                "serial_number": f"DRIVE{bay:02d}",
+                "size_gib": 480 if is_os_drive else 1200,
+                "media_type": "SSD" if is_os_drive else "HDD",
+                "protocol": "SAS",
+                "status": "OK / Enabled",
+                "path": f"{controller_path}/Drives/{bay}",
+                "controller_path": controller_path,
+            }
+        )
+    return {
+        "summary": {
+            "server": {
+                "model": "ProLiant DL380 Gen11",
+                "product_name": "DL380",
+                "generation": "Gen11",
+                "serial_number": "STORAGEARTIFACT01",
+            },
+            "ilo": {"model": "iLO 6", "version": "iLO 6", "firmware": "3.00"},
+            "capabilities": {
+                "standard_redfish_storage": True,
+                "hpe_smart_storage": False,
+                "standard_storage_path": controller_path,
+                "hpe_smart_storage_paths": [],
+            },
+            "standard_redfish_storage": {
+                "controllers": [
+                    {
+                        "path": controller_path,
+                        "name": "Smart Array MR416i-o",
+                        "model": "MR416i-o",
+                        "firmware_version": "1.98",
+                        "manufacturer": "HPE",
+                        "status": "OK / Enabled",
+                    }
+                ],
+                "volumes": [],
+                "drives": drives,
+            },
+            "hpe_smart_storage": {"controllers": [], "volumes": [], "drives": []},
+        },
+        "raw": {"source_host": "192.168.1.50"},
+    }
+
+
 def test_storage_page_latest_receipt_open_log_uses_report_route(storage_client):
     cfg = main.default_config()
     cfg["site"]["name"] = "Storage Log Kit"
@@ -89,3 +143,40 @@ def test_storage_page_latest_receipt_open_log_uses_report_route(storage_client):
     assert open_response.status_code == 200
     assert "Report: storage-open-log-summary.yml" in open_response.text
     assert "scope: storage-apply:create_only" in open_response.text
+
+
+def test_storage_artifact_view_controls_use_shared_action_feedback(storage_client):
+    cfg = main.default_config()
+    cfg["site"]["name"] = "Storage Artifact Kit"
+    cfg["ilo"]["current_ip"] = "192.168.1.50"
+    cfg["ilo"]["host"] = "192.168.1.50"
+    main.save_kit_config(cfg)
+    discovery = _storage_artifact_discovery()
+    export_paths = main.export_storage_discovery_snapshot(cfg, discovery, host="192.168.1.50")
+    plan = main.build_raid_plan(discovery, export_paths)
+    plan_paths = main.export_raid_plan_snapshot(cfg, plan, export_paths)
+    apply_dir = export_paths["directory"] / "apply-attempt"
+    apply_dir.mkdir()
+
+    response = storage_client.post(
+        "/view-storage-artifact",
+        data={
+            "return_page": "storage",
+            "discovery_raw_path": str(export_paths["raw"]),
+            "raid_plan_path": str(plan_paths["plan"]),
+            "artifact_kind": "discovery_summary",
+            "apply_artifact_dir": str(apply_dir),
+        },
+    )
+
+    assert response.status_code == 200
+    assert 'hx-post="/view-storage-artifact"' in response.text
+    for title, button in [
+        ("Opening storage apply log", '<button class="btn action-button" type="submit">View Apply Log</button>'),
+        ("Opening storage apply results", '<button class="btn action-button" type="submit">View Apply Results</button>'),
+        ("Opening storage plan details", '<button class="btn action-button" type="submit">View details</button>'),
+        ("Opening storage discovery summary", '<button class="btn action-button" type="submit">View discovery summary</button>'),
+        ("Opening raw storage discovery", '<button class="btn action-button" type="submit">View raw discovery</button>'),
+    ]:
+        assert f'data-action-title="{title}"' in response.text
+        assert button in response.text
