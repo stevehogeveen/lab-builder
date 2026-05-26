@@ -70,6 +70,22 @@ def test_qnap_page_wires_save_form_and_navigation(qnap_client):
     assert "No QNAP action recorded yet" in response.text
 
 
+def test_qnap_navigation_targets_render(qnap_client):
+    response = qnap_client.get("/qnap")
+
+    assert response.status_code == 200
+    assert response.text.count('href="/global-settings"') >= 2
+    assert 'href="/execution"' in response.text
+
+    global_settings_response = qnap_client.get("/global-settings")
+    run_center_response = qnap_client.get("/execution")
+
+    assert global_settings_response.status_code == 200
+    assert "Global Settings" in global_settings_response.text
+    assert run_center_response.status_code == 200
+    assert "Run Center" in run_center_response.text
+
+
 def test_save_qnap_settings_receipt_reports_inclusion_and_preserves_secret(qnap_client):
     cfg = main.default_config()
     cfg["site"]["name"] = "QNAP Receipt Kit"

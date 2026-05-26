@@ -38,6 +38,23 @@ Copy this block and update it in place.
 
 ## Active Sessions
 
+### Session: qnap-navigation-route-quality-cycle
+- Status: done
+- Branch: codex/14h-quality-run
+- Scope owner: QNAP setup navigation route verification
+- Working on: Completed focused QNAP page navigation coverage for the existing Global Settings and Run Center links without changing production behavior.
+- Blocked by: none
+- Ready to hand off: QNAP navigation target rendering is covered; focused QNAP tests, operator-flow contract tests, and compile check pass.
+- Files claimed:
+  - tests/test_qnap.py
+- Shared files touched with caution:
+  - SESSION_COORDINATION.md
+- Last changed:
+  - 2026-05-26 06:16 EDT - Claimed narrow QNAP navigation route verification slice for the 14-hour quality run.
+  - 2026-05-26 06:16 EDT - Added QNAP navigation target rendering coverage and verified focused checks.
+- Next intended change:
+  - Continue with a separate backlog cycle; suggested next target is another unclaimed navigation/download route audit.
+
 ### Session: vcenter-start-button-readiness-quality-cycle
 - Status: done
 - Branch: codex/14h-quality-run
