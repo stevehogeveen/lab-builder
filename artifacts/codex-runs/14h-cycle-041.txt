@@ -1,0 +1,34 @@
+Task chosen: iLO setup save action-feedback consistency from Priority 1/2.
+
+Files inspected:
+- `SESSION_COORDINATION.md`
+- `.codex/mission.md`, `.codex/rules.md`, `.codex/backlog.md`
+- `docs/*` required session docs
+- [ilo.html](/home/administrator/lab-builder/templates/partials/pages/ilo.html:43)
+- [test_ilo_page.py](/home/administrator/lab-builder/tests/test_ilo_page.py:54)
+- `app/modules/ilo/routes.py`
+- comparable QNAP/ESXi/vCenter templates/tests
+
+Files changed:
+- [templates/partials/pages/ilo.html](/home/administrator/lab-builder/templates/partials/pages/ilo.html:44): added `data-action-complete="iLO setup saved."` to the save form.
+- [tests/test_ilo_page.py](/home/administrator/lab-builder/tests/test_ilo_page.py:58): added render assertions for iLO save action metadata.
+- `SESSION_COORDINATION.md`: claimed and marked the slice done.
+
+Buttons/routes/forms verified:
+- `Save iLO setup` button
+- `/save-ilo-settings` HTMX form
+- Existing `/storage` and `/execution` links remained covered by the focused render test.
+- Confirmed handler path through `save_ilo_settings_handler`; no handler change was needed.
+
+Tests/checks run:
+- `.venv/bin/python -m pytest tests/test_ilo_page.py` - 2 passed
+- `.venv/bin/python -m pytest tests/test_operator_flow_contract.py` - 6 passed
+- `.venv/bin/python -m compileall app` - passed
+
+Real hardware used: no.
+
+Mocked/dry-run only: FastAPI `TestClient` route/template rendering only; no iLO/server calls.
+
+Remaining risks: this verifies rendered metadata and route wiring, not browser-side HTMX timing behavior.
+
+Recommended next task: another unclaimed setup-page action-feedback or status-placement guard. I did not commit or push.

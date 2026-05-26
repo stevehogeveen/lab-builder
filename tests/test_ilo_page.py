@@ -56,6 +56,8 @@ def test_ilo_page_wires_actions_and_visible_last_status(ilo_client):
 
     assert response.status_code == 200
     assert 'hx-post="/save-ilo-settings"' in response.text
+    assert 'data-action-title="Saving iLO setup"' in response.text
+    assert 'data-action-complete="iLO setup saved."' in response.text
     assert 'hx-post="/export-ilo-inventory"' in response.text
     assert 'href="/storage"' in response.text
     assert 'href="/execution"' in response.text

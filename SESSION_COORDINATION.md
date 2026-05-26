@@ -38,6 +38,24 @@ Copy this block and update it in place.
 
 ## Active Sessions
 
+### Session: ilo-save-feedback-quality-cycle
+- Status: done
+- Branch: codex/14h-quality-run
+- Scope owner: iLO setup save action feedback consistency
+- Working on: Completed explicit shared completion feedback metadata for the iLO setup save form without changing save behavior.
+- Blocked by: none
+- Ready to hand off: iLO save action now has explicit completion feedback; focused iLO render tests, operator-flow contract tests, and compile check pass.
+- Files claimed:
+  - templates/partials/pages/ilo.html
+  - tests/test_ilo_page.py
+- Shared files touched with caution:
+  - SESSION_COORDINATION.md
+- Last changed:
+  - 2026-05-26 03:02 EDT - Claimed narrow iLO save action-feedback slice for the 14-hour quality run.
+  - 2026-05-26 03:02 EDT - Added iLO save completion metadata and verified focused render coverage.
+- Next intended change:
+  - Continue with a separate backlog cycle; suggested next target is another unclaimed setup-page action-feedback or status-placement guard.
+
 ### Session: esxi-save-feedback-quality-cycle
 - Status: done
 - Branch: codex/14h-quality-run

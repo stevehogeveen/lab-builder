@@ -1,0 +1,4 @@
+ SESSION_COORDINATION.md           | 18 ++++++++++++++++++
+ templates/partials/pages/ilo.html |  2 +-
+ tests/test_ilo_page.py            |  2 ++
+ 3 files changed, 21 insertions(+), 1 deletion(-)
