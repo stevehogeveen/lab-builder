@@ -11643,6 +11643,14 @@ def test_dashboard_shows_recommended_next_step_and_workflow_cards(client):
     assert 'action="/download-current-kit-config"' in response.text
     assert 'data-action-title="Opening active kit config"' in response.text
     assert 'data-action-complete="Kit config opened."' in response.text
+    assert 'data-action-title="Creating kit"' in response.text
+    assert 'data-action-start="Creating a clean kit workspace."' in response.text
+    assert 'data-action-complete="New kit request finished."' in response.text
+    assert 'data-action-title="Loading kit"' in response.text
+    assert 'data-action-start="Switching the active kit."' in response.text
+    assert 'data-action-complete="Kit load request finished."' in response.text
+    drawer_load_section = response.text.split("Use an existing kit", 1)[1]
+    assert '<button class="btn action-button" type="submit" disabled>Load existing kit</button>' in drawer_load_section
     assert "Recommended next step" in response.text
     assert "Open next step" in response.text
     assert "Build path" in response.text
@@ -11683,7 +11691,12 @@ def test_dashboard_load_previous_kit_uses_saved_kit_dropdown(client):
     assert 'hx-post="/load-kit"' in response.text
     assert 'data-action-title="Switching active kit"' in response.text
     assert 'data-action-complete="Kit switch request finished."' in response.text
+    assert 'data-action-title="Loading kit"' in response.text
+    assert 'data-action-complete="Kit load request finished."' in response.text
     assert 'class="btn action-button" type="submit"' in response.text
+    drawer_load_section = response.text.split("Use an existing kit", 1)[1]
+    assert 'class="btn action-button" type="submit"' in drawer_load_section
+    assert "disabled>Load existing kit" not in drawer_load_section
     assert "Switch active kit" in response.text
     selector_section = response.text.split('name="selected_kit"', 1)[1]
     assert ">Older-Dash-Kit<" in selector_section

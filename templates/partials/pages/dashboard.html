@@ -223,7 +223,7 @@
                     <span class="status progress">Choose a kit</span>
                 </summary>
                 <div class="dashboard-kit-forms">
-                    <form hx-post="/new-kit" hx-target="#main-content" hx-swap="outerHTML" class="space-y-3">
+                    <form hx-post="/new-kit" hx-target="#main-content" hx-swap="outerHTML" class="space-y-3" data-action-title="Creating kit" data-action-start="Creating a clean kit workspace." data-action-complete="New kit request finished.">
                         <input type="hidden" name="return_page" value="dashboard">
                         <label>
                             <div class="dashboard-kicker">Create a new kit</div>
@@ -231,7 +231,7 @@
                         </label>
                         <button class="btn btn-primary action-button" type="submit">Create new kit</button>
                     </form>
-                    <form hx-post="/load-kit" hx-target="#main-content" hx-swap="outerHTML" class="space-y-3">
+                    <form hx-post="/load-kit" hx-target="#main-content" hx-swap="outerHTML" class="space-y-3" data-action-title="Loading kit" data-action-start="Switching the active kit." data-action-complete="Kit load request finished.">
                         <input type="hidden" name="return_page" value="dashboard">
                         <label>
                             <div class="dashboard-kicker">Use an existing kit</div>
@@ -248,7 +248,7 @@
                                 {% endif %}
                             </select>
                         </label>
-                        <button class="btn" type="submit" {% if not other_kits %}disabled{% endif %}>Load existing kit</button>
+                        <button class="btn action-button" type="submit" {% if not other_kits %}disabled{% endif %}>Load existing kit</button>
                     </form>
                 </div>
                 <div class="actions mt-3">
