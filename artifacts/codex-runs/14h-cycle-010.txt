@@ -1,0 +1,22 @@
+**Task chosen:** Reports page button/route audit and technical-label cleanup.
+
+**Files inspected:** `AGENTS.md`, session/docs rules, `.codex/*`, [reports.html](/home/administrator/lab-builder/templates/partials/pages/reports.html), [history.html](/home/administrator/lab-builder/templates/partials/pages/history.html), [app/main.py](/home/administrator/lab-builder/app/main.py), [routes.py](/home/administrator/lab-builder/app/modules/configs/routes.py), existing report tests.
+
+**Files changed:** [reports.html](/home/administrator/lab-builder/templates/partials/pages/reports.html:54), [test_reports.py](/home/administrator/lab-builder/tests/test_reports.py:1), [SESSION_COORDINATION.md](/home/administrator/lab-builder/SESSION_COORDINATION.md:41).
+
+**Buttons/routes/forms verified:** `/history` link, `/configs` search form, `/view-report` HTMX view/open-bundle forms, `/configs?report_query=...` related reports link, `/download-report` download form.
+
+**Change made:** renamed the Reports technical section from “Technical output” to “Technical details” and added a focused Reports page route/render test using temporary artifacts.
+
+**Tests/checks run:**  
+` .venv/bin/python -m pytest tests/test_reports.py`  
+` .venv/bin/python -m pytest tests/test_app.py::test_reports_page_hides_live_jobs_and_config_capture_blocks tests/test_app.py::test_report_center_lists_storage_reports_and_view_report tests/test_app.py::test_history_and_report_center_show_run_bundle_links tests/test_app.py::test_report_center_collapses_large_raw_file_list_by_default tests/test_app.py::test_report_center_collapses_older_bundles_by_stage tests/test_app.py::test_report_center_shows_human_friendly_bundle_summary`  
+` .venv/bin/python -m compileall app`
+
+All passed. No commit, no push.
+
+**Hardware:** no real hardware used. Everything was route/template testing with mocked temp config/artifact paths.
+
+**Remaining risks:** no browser visual pass was run, and this only covers Reports page controls, not the full app-wide button audit.
+
+**Recommended next task:** focused History page audit to move noisy details/logs behind consistent detail sections and verify its report links.

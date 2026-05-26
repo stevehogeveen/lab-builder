@@ -38,6 +38,24 @@ Copy this block and update it in place.
 
 ## Active Sessions
 
+### Session: reports-quality-cycle
+- Status: done
+- Branch: codex/14h-quality-run
+- Scope owner: Reports page button/route rendering guard
+- Working on: Completed focused Reports page controls and technical details label guard without hardware access.
+- Blocked by: none
+- Ready to hand off: Reports page controls are covered by focused route/template assertions; focused tests and compile check pass.
+- Files claimed:
+  - templates/partials/pages/reports.html
+  - tests/test_reports.py
+- Shared files touched with caution:
+  - SESSION_COORDINATION.md
+- Last changed:
+  - 2026-05-25 22:48 EDT - Claimed narrow Reports page controls and technical details label slice for the 14-hour quality run.
+  - 2026-05-25 22:52 EDT - Added Reports page control route guard, aligned the technical details heading, and verified focused tests.
+- Next intended change:
+  - Continue with a separate backlog cycle; suggested next target is a focused History page detail/log clutter audit.
+
 ### Session: windows-quality-cycle
 - Status: done
 - Branch: codex/14h-quality-run
