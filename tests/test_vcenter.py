@@ -129,8 +129,54 @@ def test_vcenter_page_wires_visible_form_actions(vcenter_client):
     assert "Network Time Protocol (NTP) servers" in response.text
     assert "Domain Name System (DNS) servers" in response.text
     assert "Enable Secure Shell (SSH) on the appliance" in response.text
+    assert 'data-action-complete="vCenter setup saved."' in response.text
+    assert 'data-action-complete="vCenter deployment spec generated."' in response.text
+    assert 'data-action-complete="vCenter appliance deployment request submitted."' in response.text
     assert "Generate deployment spec" in response.text
     assert "Start vCenter appliance deployment" in response.text
+
+
+def test_save_vcenter_settings_persists_visible_form_values(vcenter_client):
+    cfg = main.default_config()
+    cfg["site"]["name"] = "VCenter Save Kit"
+    main.save_kit_config(cfg)
+
+    response = vcenter_client.post(
+        "/save-vcenter-settings",
+        data={
+            "return_page": "vcenter",
+            "vcenter_target_ip": "192.168.1.55",
+            "vcenter_system_name": "vcenter-save.lab.local",
+            "vcenter_vm_name": "SVCNTR-SAVE",
+            "vcenter_iso_path": "/media/VMware-VCSA-all-8.0.3.iso",
+            "vcenter_esxi_host": "192.168.1.20",
+            "vcenter_esxi_username": "root",
+            "vcenter_esxi_password": "ValidPass1!",
+            "vcenter_datastore": "datastore1",
+            "vcenter_deployment_network": "VM Network",
+            "vcenter_deployment_option": "tiny",
+            "vcenter_root_password": "ValidPass1!",
+            "vcenter_sso_domain": "vsphere.local",
+            "vcenter_sso_password": "ValidPass1!",
+            "vcenter_ntp_servers": "192.168.1.1",
+            "vcenter_dns_servers": "192.168.1.1, 1.1.1.1",
+            "vcenter_ssh_enable": "on",
+        },
+    )
+
+    assert response.status_code == 200
+    assert "vCenter settings saved" in response.text
+    assert "ValidPass1!" not in response.text
+    saved = main.load_kit_config("VCenter-Save-Kit")
+    install = saved["vmware"]["vcenter_install"]
+    assert saved["included"]["vcenter"] is True
+    assert install["target_ip"] == "192.168.1.55"
+    assert install["system_name"] == "vcenter-save.lab.local"
+    assert install["vm_name"] == "SVCNTR-SAVE"
+    assert install["esxi_host"] == "192.168.1.20"
+    assert install["datastore"] == "datastore1"
+    assert install["dns_servers"] == ["192.168.1.1", "1.1.1.1"]
+    assert install["ssh_enable"] is True
 
 
 def test_plan_vcenter_install_uses_posted_form_values(vcenter_client):

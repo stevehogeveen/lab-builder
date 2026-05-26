@@ -1,0 +1,26 @@
+**Task chosen:** vCenter setup action completion feedback consistency.
+
+**Files inspected:** session rules/docs, `.codex` mission/rules/backlog, `vcenter.html`, `tests/test_vcenter.py`, vCenter route handlers in `app/main.py`, and shared action-feedback JS in `templates/index.html`.
+
+**Files changed:**
+- [templates/partials/pages/vcenter.html](/home/administrator/lab-builder/templates/partials/pages/vcenter.html:27): added explicit `data-action-complete` text for save, plan, and deployment request actions.
+- [tests/test_vcenter.py](/home/administrator/lab-builder/tests/test_vcenter.py:119): asserted completion metadata and added direct save-route coverage.
+- [SESSION_COORDINATION.md](/home/administrator/lab-builder/SESSION_COORDINATION.md:41): claimed and closed the cycle.
+
+**Buttons/routes/forms verified:**
+- `Save vCenter setup` -> `POST /save-vcenter-settings`
+- `Generate deployment spec` -> `POST /plan-vcenter-install`
+- `Start vCenter appliance deployment` -> `POST /run-vcenter-install`
+
+**Tests/checks run:**
+- `.venv/bin/python -m pytest tests/test_vcenter.py` -> 6 passed
+- `.venv/bin/python -m pytest tests/test_operator_flow_contract.py` -> 6 passed
+- `.venv/bin/python -m compileall app` -> passed
+
+No real hardware was used. vCenter was covered with `TestClient`, temporary config/media/artifact paths, route tests, and the blocked no-hardware deployment path.
+
+Remaining risk: browser-level inline completion behavior was not Playwright-tested, and no real vCenter deployment was attempted due the hardware constraints.
+
+Recommended next task: audit `templates/partials/components/upgrade_gate_panel.html` action buttons for shared `action-button` styling and completion feedback consistency.
+
+No commit or push was performed. The pre-existing untracked `artifacts/codex-runs/14h-cycle-036*` files were left untouched.

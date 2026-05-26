@@ -24,7 +24,7 @@
     <div class="grid grid-cols-1 xl:grid-cols-2 gap-4">
         <section class="card workflow-hero-card">
             <div class="text-lg font-semibold mb-3">vCenter Server Appliance settings</div>
-            <form id="vcenter-settings-form" hx-post="/save-vcenter-settings" hx-target="#main-content" hx-swap="outerHTML" class="space-y-4" data-action-title="Saving vCenter setup" data-action-start="Saving vCenter Server Appliance deployment settings.">
+            <form id="vcenter-settings-form" hx-post="/save-vcenter-settings" hx-target="#main-content" hx-swap="outerHTML" class="space-y-4" data-action-title="Saving vCenter setup" data-action-start="Saving vCenter Server Appliance deployment settings." data-action-complete="vCenter setup saved.">
                 <input type="hidden" name="return_page" value="vcenter">
                 <div class="grid grid-cols-1 md:grid-cols-2 gap-3">
                     <div>
@@ -102,8 +102,8 @@
                 <label class="check"><input type="checkbox" name="vcenter_ssh_enable" {% if vcenter_install.ssh_enable %}checked{% endif %}> Enable Secure Shell (SSH) on the appliance</label>
                 <div class="actions">
                     <button class="btn btn-primary action-button" type="submit">Save vCenter setup</button>
-                    <button class="btn action-button" type="button" hx-post="/plan-vcenter-install" hx-include="#vcenter-settings-form" hx-target="#main-content" hx-swap="outerHTML" data-action-title="Planning vCenter install" data-action-start="Generating the vCenter Server Appliance installer spec.">Generate deployment spec</button>
-                    <button class="btn btn-primary action-button" type="button" hx-post="/run-vcenter-install" hx-include="#vcenter-settings-form" hx-target="#main-content" hx-swap="outerHTML" data-action-title="Starting vCenter appliance deployment" data-action-start="Launching VMware vcsa-deploy.">Start vCenter appliance deployment</button>
+                    <button class="btn action-button" type="button" hx-post="/plan-vcenter-install" hx-include="#vcenter-settings-form" hx-target="#main-content" hx-swap="outerHTML" data-action-title="Planning vCenter install" data-action-start="Generating the vCenter Server Appliance installer spec." data-action-complete="vCenter deployment spec generated.">Generate deployment spec</button>
+                    <button class="btn btn-primary action-button" type="button" hx-post="/run-vcenter-install" hx-include="#vcenter-settings-form" hx-target="#main-content" hx-swap="outerHTML" data-action-title="Starting vCenter appliance deployment" data-action-start="Launching VMware vcsa-deploy." data-action-complete="vCenter appliance deployment request submitted.">Start vCenter appliance deployment</button>
                 </div>
             </form>
         </section>
