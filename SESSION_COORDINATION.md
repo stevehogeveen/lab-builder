@@ -38,6 +38,26 @@ Copy this block and update it in place.
 
 ## Active Sessions
 
+### Session: upgrade-helper-override-feedback-quality-cycle
+- Status: done
+- Branch: codex/14h-quality-run
+- Scope owner: Upgrade Helper gate override toggle feedback consistency
+- Working on: Completed shared action feedback metadata for the Upgrade Helper override toggle without changing override behavior.
+- Blocked by: none
+- Ready to hand off: Upgrade Helper override toggle now has specific local action feedback; focused Upgrade Helper tests, operator-flow contract tests, and compile check pass.
+- Files claimed:
+  - app/upgrade_panels.py
+  - templates/partials/components/upgrade_components.html
+  - tests/test_upgrade_helper.py
+- Shared files touched with caution:
+  - SESSION_COORDINATION.md
+  - templates/partials/components/upgrade_components.html
+- Last changed:
+  - 2026-05-26 02:12 EDT - Claimed narrow Upgrade Helper override-toggle feedback slice for the 14-hour quality run.
+  - 2026-05-26 02:12 EDT - Added specific action metadata to the generated override toggle and verified focused coverage.
+- Next intended change:
+  - Continue with a separate backlog cycle; suggested next target is a focused audit of the older upgrade gate panel override checkbox.
+
 ### Session: storage-artifact-view-feedback-quality-cycle
 - Status: done
 - Branch: codex/14h-quality-run

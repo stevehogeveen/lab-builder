@@ -216,6 +216,13 @@ def _status_action(label: str, status: str = "completed") -> dict[str, Any]:
 
 
 def _override_control(tab: str, device_key: str, checked: bool) -> dict[str, Any]:
+    device_label = UPGRADE_TAB_LABELS.get(
+        normalize_upgrade_tab(tab),
+        device_key.replace("_", " ").title(),
+    )
+    action_start = (
+        f"Updating whether {device_label} can continue setup while its upgrade gate is unresolved."
+    )
     return {
         "type": "checkbox",
         "label": "Override gate for config setup",
@@ -226,6 +233,9 @@ def _override_control(tab: str, device_key: str, checked: bool) -> dict[str, Any
         "hx_vals": {"return_page": "upgrade_helper", "device_key": device_key},
         "hx_target": "#main-content",
         "hx_swap": "outerHTML",
+        "action_title": f"Saving {device_label} upgrade override",
+        "action_start": action_start,
+        "action_complete": f"{device_label} upgrade override saved.",
     }
 
 

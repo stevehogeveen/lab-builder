@@ -57,7 +57,12 @@
             {% set action_status = (action.get('status') or 'completed') | replace('_', '-') %}
             <span class="upgrade-panel__action-status status-badge status-badge--{{ action_status }}">{{ action.get('label') or 'Ready' }}</span>
             {% elif action_type == 'checkbox' %}
-            <label class="upgrade-panel__check">
+            <label
+                class="upgrade-panel__check"
+                {% if action.get('action_title') %}data-action-title="{{ action.get('action_title') }}"{% endif %}
+                {% if action.get('action_start') %}data-action-start="{{ action.get('action_start') }}"{% endif %}
+                {% if action.get('action_complete') %}data-action-complete="{{ action.get('action_complete') }}"{% endif %}
+            >
                 <input
                     type="checkbox"
                     name="{{ action.get('name') or 'enabled' }}"

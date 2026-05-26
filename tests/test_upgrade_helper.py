@@ -87,6 +87,21 @@ def test_upgrade_helper_generated_tab_actions_use_shared_action_button_class(upg
         assert f'hx-post="{route}"' in markup
 
 
+def test_upgrade_helper_override_toggle_has_specific_action_feedback(upgrade_helper_client):
+    response = upgrade_helper_client.get("/upgrade-helper?tab=ilo")
+
+    assert response.status_code == 200
+    assert 'hx-post="/save-upgrade-override?upgrade_tab=ilo"' in response.text
+    assert 'hx-trigger="change"' in response.text
+    assert "Override gate for config setup" in response.text
+    assert 'data-action-title="Saving iLO upgrade override"' in response.text
+    assert (
+        'data-action-start="Updating whether iLO can continue setup while its upgrade gate is unresolved."'
+        in response.text
+    )
+    assert 'data-action-complete="iLO upgrade override saved."' in response.text
+
+
 def test_save_upgrade_policies_keeps_selected_helper_tab(upgrade_helper_client):
     response = upgrade_helper_client.post(
         "/save-upgrade-policies?upgrade_tab=cisco",
