@@ -56,6 +56,10 @@ def test_qnap_page_wires_save_form_and_navigation(qnap_client):
 
     assert response.status_code == 200
     assert 'hx-post="/save-qnap-settings"' in response.text
+    assert 'data-action-title="Saving QNAP setup"' in response.text
+    assert 'data-action-start="Saving the QNAP host details and inclusion settings."' in response.text
+    assert 'data-action-complete="QNAP setup saved."' in response.text
+    assert '<button class="btn btn-primary action-button" type="submit">Save QNAP setup</button>' in response.text
     assert 'name="qnap_hostname"' in response.text
     assert 'name="qnap_username"' in response.text
     assert 'name="qnap_password"' in response.text

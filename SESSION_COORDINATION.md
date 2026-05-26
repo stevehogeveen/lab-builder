@@ -38,6 +38,24 @@ Copy this block and update it in place.
 
 ## Active Sessions
 
+### Session: qnap-save-feedback-quality-cycle
+- Status: done
+- Branch: codex/14h-quality-run
+- Scope owner: QNAP setup save action feedback consistency
+- Working on: Completed explicit shared completion feedback for the QNAP setup save action without changing save behavior.
+- Blocked by: none
+- Ready to hand off: QNAP save action now has explicit completion feedback; focused QNAP tests, operator-flow contract tests, and compile check pass.
+- Files claimed:
+  - templates/partials/pages/qnap.html
+  - tests/test_qnap.py
+- Shared files touched with caution:
+  - SESSION_COORDINATION.md
+- Last changed:
+  - 2026-05-26 02:39 EDT - Claimed narrow QNAP save action-feedback slice for the 14-hour quality run.
+  - 2026-05-26 02:41 EDT - Added QNAP save completion metadata and verified focused QNAP/operator-flow coverage.
+- Next intended change:
+  - Continue with a separate backlog cycle; suggested next target is another unclaimed setup-page action-feedback or status-placement gap.
+
 ### Session: dashboard-job-log-feedback-quality-cycle
 - Status: done
 - Branch: codex/14h-quality-run

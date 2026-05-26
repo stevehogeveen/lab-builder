@@ -42,7 +42,7 @@
 
         <div class="card workflow-hero-card">
             <div class="text-lg font-semibold mb-3">Local QNAP setup</div>
-            <form hx-post="/save-qnap-settings" hx-target="#main-content" hx-swap="outerHTML" class="space-y-4" data-action-title="Saving QNAP setup" data-action-start="Saving the QNAP host details and inclusion settings.">
+            <form hx-post="/save-qnap-settings" hx-target="#main-content" hx-swap="outerHTML" class="space-y-4" data-action-title="Saving QNAP setup" data-action-start="Saving the QNAP host details and inclusion settings." data-action-complete="QNAP setup saved.">
                 <input type="hidden" name="return_page" value="qnap">
                 <div>
                     <label class="block text-sm font-bold text-slate-300 mb-2">Hostname</label>

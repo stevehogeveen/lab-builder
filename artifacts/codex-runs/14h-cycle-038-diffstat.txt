@@ -1,0 +1,4 @@
+ SESSION_COORDINATION.md            | 18 ++++++++++++++++++
+ templates/partials/pages/qnap.html |  2 +-
+ tests/test_qnap.py                 |  4 ++++
+ 3 files changed, 23 insertions(+), 1 deletion(-)
