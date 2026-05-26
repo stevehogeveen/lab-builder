@@ -1,0 +1,30 @@
+**Task Chosen**
+iLO setup page latest-run `Open log` action feedback consistency.
+
+**Changed**
+- [templates/partials/pages/ilo.html](/home/administrator/lab-builder/templates/partials/pages/ilo.html:358): added shared `data-action-*` metadata and `action-button` class to the existing `/view-report` form.
+- [tests/test_ilo_page.py](/home/administrator/lab-builder/tests/test_ilo_page.py:91): added assertions for the action metadata and button class.
+- [SESSION_COORDINATION.md](/home/administrator/lab-builder/SESSION_COORDINATION.md:41): claimed and closed the cycle.
+
+**Inspected**
+Required session docs, `.codex/mission.md`, `.codex/rules.md`, `.codex/backlog.md`, iLO template/test, and the existing `/view-report` handler references in `app/main.py`.
+
+**Verified**
+- iLO `Open log` form still posts to `/view-report`.
+- Hidden fields remain `return_page=ilo` and `report_path`.
+- The report route still opens the saved iLO run log.
+- No route or hardware behavior changed.
+
+**Checks Run**
+- `.venv/bin/python -m pytest tests/test_ilo_page.py` passed, 2 tests.
+- `.venv/bin/python -m pytest tests/test_operator_flow_contract.py` passed, 6 tests.
+- `.venv/bin/python -m compileall app` passed.
+
+**Hardware**
+No real hardware was used. This was route/template validation only with `TestClient`, temp kit paths, and mocked upgrade media scanning.
+
+**Remaining Risks**
+The browser-side action feedback animation was not manually tested in a live browser; the rendered metadata and route behavior are covered.
+
+**Recommended Next Task**
+Audit the ESXi latest-run `Open log` control for the same shared action feedback consistency.

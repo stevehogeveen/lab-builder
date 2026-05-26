@@ -355,10 +355,10 @@
             {% endif %}
             <div class="actions mt-4">
                 {% if ilo_latest_receipt.run_summary_path %}
-                <form hx-post="/view-report" hx-target="#main-content" hx-swap="outerHTML">
+                <form hx-post="/view-report" hx-target="#main-content" hx-swap="outerHTML" data-action-title="Opening iLO run log" data-action-start="Loading the saved iLO run log into this page." data-action-complete="iLO run log opened.">
                     <input type="hidden" name="return_page" value="ilo">
                     <input type="hidden" name="report_path" value="{{ ilo_latest_receipt.run_summary_path }}">
-                    <button class="btn" type="submit">Open log</button>
+                    <button class="btn action-button" type="submit">Open log</button>
                 </form>
                 {% endif %}
                 <a class="btn" href="/execution">Open Run Center</a>

@@ -89,6 +89,8 @@ def test_ilo_page_latest_receipt_open_log_uses_report_route(ilo_client):
     assert "Last iLO run" in response.text
     assert '<details class="card identity-soft-card" open>' in response.text
     assert 'hx-post="/view-report"' in response.text
+    assert 'data-action-title="Opening iLO run log"' in response.text
+    assert '<button class="btn action-button" type="submit">Open log</button>' in response.text
     assert 'name="return_page" value="ilo"' in response.text
     assert 'name="report_path"' in response.text
     assert str(summary_path) in response.text
