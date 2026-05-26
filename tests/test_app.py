@@ -4061,6 +4061,10 @@ def test_prepare_execute_shows_combined_storage_review_using_exact_approved_arti
     assert "Approved plan path:" in response.text
     assert "Open summary in Reports" in response.text
     assert '<input type="hidden" name="return_page" value="configs">' in response.text
+    assert 'data-action-title="Opening run summary"' in response.text
+    assert 'data-action-start="Building the selected run summary for Reports."' in response.text
+    assert 'data-action-complete="Run summary opened in Reports."' in response.text
+    assert '<button class="btn action-button" type="submit">Open summary in Reports</button>' in response.text
     assert "Open Reports" in response.text
 
 

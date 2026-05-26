@@ -38,6 +38,26 @@ Copy this block and update it in place.
 
 ## Active Sessions
 
+### Session: run-center-summary-feedback-quality-cycle
+- Status: done
+- Branch: codex/14h-quality-run
+- Scope owner: Run Center saved run-summary action feedback consistency
+- Working on: Completed explicit shared local feedback metadata for the existing Run Center Open summary in Reports control without changing summary routes or download behavior.
+- Blocked by: none
+- Ready to hand off: Run Center saved summary opening now has specific local action feedback; focused render, operator-flow contract, and compile checks pass.
+- Files claimed:
+  - templates/partials/pages/execution.html
+  - tests/test_app.py
+- Shared files touched with caution:
+  - SESSION_COORDINATION.md
+  - templates/partials/pages/execution.html
+  - tests/test_app.py
+- Last changed:
+  - 2026-05-26 05:11 EDT - Claimed narrow Run Center saved-summary feedback slice for the 14-hour quality run.
+  - 2026-05-26 05:11 EDT - Added specific saved-summary action metadata and verified focused Run Center render coverage.
+- Next intended change:
+  - Continue with a separate backlog cycle; suggested next target is another unclaimed Reports/Run Center download or saved-artifact action-feedback gap.
+
 ### Session: upgrade-gate-override-feedback-quality-cycle
 - Status: done
 - Branch: codex/14h-quality-run
