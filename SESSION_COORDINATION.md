@@ -38,6 +38,25 @@ Copy this block and update it in place.
 
 ## Active Sessions
 
+### Session: kits-destructive-controls-quality-cycle
+- Status: done
+- Branch: codex/14h-quality-run
+- Scope owner: Kits page destructive clean/delete control clarity
+- Working on: Completed Kits cleanup/delete destructive-control clarity without hardware access.
+- Blocked by: none
+- Ready to hand off: Kits cleanup/delete controls are now visibly destructive; focused Kits render test, operator-flow contract tests, and compile check pass.
+- Files claimed:
+  - templates/partials/pages/kits.html
+  - tests/test_app.py
+- Shared files touched with caution:
+  - SESSION_COORDINATION.md
+  - tests/test_app.py
+- Last changed:
+  - 2026-05-25 23:52 EDT - Claimed narrow Kits destructive-control clarity slice for the 14-hour quality run.
+  - 2026-05-25 23:52 EDT - Marked Kits cleanup/delete submit buttons as destructive controls and verified focused coverage.
+- Next intended change:
+  - Continue with a separate backlog cycle; suggested next target is another unclaimed setup page clutter/status placement audit.
+
 ### Session: upgrade-helper-controls-quality-cycle
 - Status: done
 - Branch: codex/14h-quality-run

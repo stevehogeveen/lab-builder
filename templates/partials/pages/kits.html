@@ -107,7 +107,7 @@
                             <input type="hidden" name="kit_name" value="{{ kit.name }}">
                             <div class="text-sm text-slate-400">Keeps the kit config. Type <strong>{{ kit.cleanup_confirm }}</strong> to remove job state, run logs, generated reports, and exports.</div>
                             <input class="input" type="text" name="confirm_text" placeholder="{{ kit.cleanup_confirm }}" required>
-                            <button class="btn" type="submit">Clean artifacts</button>
+                            <button class="btn btn-danger action-button" type="submit">Clean artifacts</button>
                         </form>
                     </details>
 
@@ -120,7 +120,7 @@
                             <input type="hidden" name="kit_name" value="{{ kit.name }}">
                             <div class="text-sm text-slate-400">Deletes the kit YAML and generated files. Type <strong>{{ kit.delete_confirm }}</strong> to continue.</div>
                             <input class="input" type="text" name="confirm_text" placeholder="{{ kit.delete_confirm }}" required>
-                            <button class="btn" type="submit">Delete kit</button>
+                            <button class="btn btn-danger action-button" type="submit">Delete kit</button>
                         </form>
                         {% endif %}
                     </details>

@@ -1,0 +1,29 @@
+Task chosen: Kits page destructive-action clarity.
+
+Files inspected: `AGENTS.md`, session/mission docs, `.codex/*`, [kits.html](/home/administrator/lab-builder/templates/partials/pages/kits.html), [app/main.py](/home/administrator/lab-builder/app/main.py), [tests/test_app.py](/home/administrator/lab-builder/tests/test_app.py), shared action feedback UI.
+
+Files changed:
+- [kits.html](/home/administrator/lab-builder/templates/partials/pages/kits.html:110): `Clean artifacts` and `Delete kit` buttons now use `btn-danger action-button`.
+- [tests/test_app.py](/home/administrator/lab-builder/tests/test_app.py:12184): added render guards for those destructive button classes.
+- [SESSION_COORDINATION.md](/home/administrator/lab-builder/SESSION_COORDINATION.md:38): claimed and closed the cycle.
+
+Buttons/routes/forms verified:
+- `POST /new-kit`
+- `POST /load-kit`
+- `POST /clean-kit-artifacts`
+- `POST /delete-kit`
+- Confirmed cleanup/delete still use typed confirmations and shared action feedback.
+
+Tests/checks run:
+- `.venv/bin/python -m pytest tests/test_app.py::test_kits_page_wires_visible_actions_to_expected_routes`
+- `.venv/bin/python -m pytest tests/test_operator_flow_contract.py`
+- `.venv/bin/python -m compileall app`
+- `git diff --check`
+
+Real hardware used: none.
+
+Mocked/dry-run only: no hardware mocks were needed; this was template/route inspection and render-test coverage only.
+
+Remaining risks: no browser visual screenshot was taken, and the full suite was not run because this was a tiny template-only safety cue change.
+
+Recommended next task: another unclaimed setup page clutter/status placement audit, preferably a page that has not yet had its “what happened last” placement verified.
