@@ -38,6 +38,27 @@ Copy this block and update it in place.
 
 ## Active Sessions
 
+### Session: storage-quality-cycle
+- Status: done
+- Branch: codex/14h-quality-run
+- Scope owner: Storage setup page latest-run log button audit
+- Working on: Completed Storage latest-run Open log route fix without hardware access.
+- Blocked by: none
+- Ready to hand off: Storage latest-run receipts now find mode-specific apply scopes and Open log opens the saved report; focused tests and compile check pass.
+- Files claimed:
+  - app/main.py
+  - templates/partials/pages/storage.html
+  - tests/test_storage.py
+- Shared files touched with caution:
+  - SESSION_COORDINATION.md
+  - app/main.py
+- Last changed:
+  - 2026-05-25 22:07 EDT - Claimed narrow Storage Open log route/template slice for the 14-hour quality run.
+  - 2026-05-25 22:08 EDT - Expanded the same Storage log-button slice to include the shared latest receipt scope matcher.
+  - 2026-05-25 22:09 EDT - Routed Storage Open log to the saved-report handler, matched mode-specific storage apply scopes, and verified focused tests.
+- Next intended change:
+  - Continue with a separate backlog cycle; suggested next target is the ESXi latest receipt Open log route/template audit.
+
 ### Session: qnap-quality-cycle
 - Status: done
 - Branch: codex/14h-quality-run

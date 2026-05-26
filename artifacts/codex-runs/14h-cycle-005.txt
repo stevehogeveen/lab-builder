@@ -1,0 +1,29 @@
+Task chosen: Storage setup page latest-run `Open log` button audit.
+
+Files inspected: required session docs, `.codex/mission.md`, `.codex/rules.md`, `.codex/backlog.md`, Storage template/routes/service, `app/main.py`, and nearby tests.
+
+Files changed:
+- [app/main.py](/home/administrator/lab-builder/app/main.py:2862): latest receipt lookup now matches mode-specific storage scopes like `storage-apply:create_only`.
+- [storage.html](/home/administrator/lab-builder/templates/partials/pages/storage.html:178): Storage receipt `Open log` now posts to `/view-report` with `return_page=storage`.
+- [test_storage.py](/home/administrator/lab-builder/tests/test_storage.py:54): added focused route/template coverage.
+- [SESSION_COORDINATION.md](/home/administrator/lab-builder/SESSION_COORDINATION.md): claimed and completed the slice.
+
+Buttons/routes/forms verified:
+- Storage latest verified result `Open log` form.
+- `/view-report` saved report route.
+- Existing iLO saved-log route regression test.
+- Mode-specific storage history scope receipt lookup.
+
+Tests/checks run:
+- `.venv/bin/python -m pytest tests/test_storage.py::test_storage_page_latest_receipt_open_log_uses_report_route`
+- `.venv/bin/python -m pytest tests/test_app.py::test_ilo_page_latest_receipt_open_log_uses_report_route`
+- `.venv/bin/python -m pytest tests/test_operator_flow_contract.py`
+- `.venv/bin/python -m compileall app`
+
+Real hardware used: none.
+
+Mocked/dry-run only: FastAPI `TestClient` with synthetic saved history and a local fake run summary file. No hardware calls.
+
+Remaining risks: full pytest suite was not run. Existing untracked `artifacts/codex-runs/...` files were left untouched.
+
+Recommended next task: audit the ESXi latest receipt `Open log` route, since it appears to use the same saved-report mismatch pattern.

@@ -2862,7 +2862,8 @@ def build_live_stage_cards(job: dict[str, Any]) -> list[dict[str, Any]]:
 def latest_scope_receipt(cfg: dict[str, Any], history: list[dict[str, Any]], scopes: list[str]) -> dict[str, Any] | None:
     scope_set = set(scopes)
     for bundle in build_run_bundles(cfg, history):
-        if str(bundle.get("scope") or "") in scope_set:
+        bundle_scope = str(bundle.get("scope") or "")
+        if bundle_scope in scope_set or any(bundle_scope.startswith(f"{scope}:") for scope in scope_set):
             return {
                 **bundle,
                 "cta_label": "Open log" if bundle.get("run_summary_path") else "",
