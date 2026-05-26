@@ -38,6 +38,24 @@ Copy this block and update it in place.
 
 ## Active Sessions
 
+### Session: qnap-save-resilience-quality-cycle
+- Status: done
+- Branch: codex/14h-quality-run
+- Scope owner: QNAP setup save-route resilience and focused button/route audit
+- Working on: Completed QNAP save handler resilience for older or partial kit configs without changing normal save behavior.
+- Blocked by: none
+- Ready to hand off: QNAP setup save route now tolerates missing/non-dict QNAP and inclusion config blocks; focused QNAP, operator-flow, and compile checks pass.
+- Files claimed:
+  - app/modules/qnap/routes.py
+  - tests/test_qnap.py
+- Shared files touched with caution:
+  - SESSION_COORDINATION.md
+- Last changed:
+  - 2026-05-26 00:32 EDT - Claimed narrow QNAP save-route resilience slice for the 14-hour quality run.
+  - 2026-05-26 00:32 EDT - Added QNAP save-route config normalization and focused regression coverage.
+- Next intended change:
+  - Continue with a separate backlog cycle; suggested next target is another unclaimed setup page button/route audit or status placement guard.
+
 ### Session: cisco-console-actions-quality-cycle
 - Status: done
 - Branch: codex/14h-quality-run

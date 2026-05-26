@@ -20,10 +20,19 @@ async def save_qnap_settings_handler(
     included_qnap: str | None = Form(None),
 ):
     cfg = runtime["load_kit_config"]()
-    cfg["qnap"]["hostname"] = qnap_hostname
-    cfg["qnap"]["username"] = qnap_username
-    cfg["qnap"]["password"] = preserve_secret(qnap_password, cfg["qnap"].get("password"))
-    cfg["included"]["qnap"] = included_qnap == "on"
+    qnap_cfg = cfg.get("qnap")
+    if not isinstance(qnap_cfg, dict):
+        qnap_cfg = {}
+        cfg["qnap"] = qnap_cfg
+    included_cfg = cfg.get("included")
+    if not isinstance(included_cfg, dict):
+        included_cfg = {}
+        cfg["included"] = included_cfg
+
+    qnap_cfg["hostname"] = qnap_hostname
+    qnap_cfg["username"] = qnap_username
+    qnap_cfg["password"] = preserve_secret(qnap_password, qnap_cfg.get("password"))
+    included_cfg["qnap"] = included_qnap == "on"
     cfg = runtime["apply_ip_plan"](cfg)
     runtime["save_kit_config"](cfg)
     runtime["append_activity_event"](

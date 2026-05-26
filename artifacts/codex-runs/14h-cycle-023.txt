@@ -1,0 +1,42 @@
+Completed one controlled cycle only.
+
+**Task Chosen**
+- QNAP setup save-route resilience and focused button/route audit.
+
+**Files Inspected**
+- `.codex/mission.md`, `.codex/rules.md`, `.codex/backlog.md`
+- `SESSION_COORDINATION.md`
+- `docs/workflow-session-scopes.md`, `docs/operator-flow-contract.md`, `docs/automation-principles.md`, `docs/ux-product-principles.md`, `docs/validation.md`
+- `templates/partials/pages/qnap.html`
+- `app/modules/qnap/routes.py`
+- `app/modules/qnap/service.py`
+- `tests/test_qnap.py`
+- Relevant route/context snippets in `app/main.py`
+
+**Files Changed**
+- [app/modules/qnap/routes.py](/home/administrator/lab-builder/app/modules/qnap/routes.py:22): QNAP save handler now normalizes missing or non-dict `qnap` and `included` config blocks before writing.
+- [tests/test_qnap.py](/home/administrator/lab-builder/tests/test_qnap.py:120): Added regression coverage for saving from a partial/stale kit config.
+- `SESSION_COORDINATION.md`: Claimed and closed the narrow QNAP quality-cycle entry.
+
+**Buttons / Routes / Forms Verified**
+- QNAP page render includes `Save QNAP setup` form posting to `/save-qnap-settings`.
+- Save route preserves existing secrets when password is blank.
+- Save route does not expose submitted password in response.
+- Save route now works when saved kit config has `qnap: null` and `included: null`.
+- Existing QNAP navigation links to `/global-settings` and `/execution` remain covered by focused page test.
+
+**Tests / Checks Run**
+- `.venv/bin/python -m pytest tests/test_qnap.py` passed: 3 passed.
+- `.venv/bin/python -m pytest tests/test_operator_flow_contract.py` passed: 6 passed.
+- `.venv/bin/python -m compileall app` passed.
+
+**Hardware**
+- Real hardware used: no.
+- Mocked/dry-run only: FastAPI `TestClient` route tests with temporary kit/config directories. No QNAP, switch, server, NetApp, vCenter, or ESXi hardware calls.
+
+**Remaining Risks**
+- QNAP automation is still manual-only; this only hardens the visible save flow.
+- Browser-level HTMX behavior was not exercised in Playwright.
+
+**Recommended Next Task**
+- Another unclaimed setup page button/route audit, preferably a page with visible HTMX actions and no active coordination owner. No commit or push was made.

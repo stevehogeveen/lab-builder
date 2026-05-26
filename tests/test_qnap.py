@@ -115,3 +115,31 @@ def test_save_qnap_settings_receipt_reports_inclusion_and_preserves_secret(qnap_
     assert "QNAP setup saved" in page_response.text
     assert "Saved the QNAP setup values for this kit." in page_response.text
     assert "ExistingQnapSecret1!" not in page_response.text
+
+
+def test_save_qnap_settings_handles_partial_kit_config(qnap_client):
+    cfg = main.default_config()
+    cfg["site"]["name"] = "QNAP Partial Kit"
+    cfg["qnap"] = None
+    cfg["included"] = None
+    main.save_kit_config(cfg)
+
+    response = qnap_client.post(
+        "/save-qnap-settings",
+        data={
+            "return_page": "qnap",
+            "qnap_hostname": "qnap-partial",
+            "qnap_username": "admin",
+            "qnap_password": "NewQnapSecret1!",
+            "included_qnap": "on",
+        },
+    )
+
+    saved = main.load_kit_config("QNAP-Partial-Kit")
+    assert response.status_code == 200
+    assert saved["qnap"]["hostname"] == "qnap-partial"
+    assert saved["qnap"]["username"] == "admin"
+    assert saved["qnap"]["password"] == "NewQnapSecret1!"
+    assert saved["included"]["qnap"] is True
+    assert "QNAP setup saved" in response.text
+    assert "NewQnapSecret1!" not in response.text
