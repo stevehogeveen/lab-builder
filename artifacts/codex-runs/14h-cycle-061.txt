@@ -1,0 +1,23 @@
+**Task Chosen**
+Cisco setup page Run Center approval action-feedback consistency.
+
+**Changed**
+- [templates/partials/pages/cisco.html](/home/administrator/lab-builder/templates/partials/pages/cisco.html:690): added shared `action-button` styling and completion messages to `Save to config` and `Approve config`.
+- [tests/test_cisco_page.py](/home/administrator/lab-builder/tests/test_cisco_page.py:115): added focused render/route assertions.
+- [SESSION_COORDINATION.md](/home/administrator/lab-builder/SESSION_COORDINATION.md:38): claimed and closed the narrow cycle.
+
+**Verified**
+- Form/control block: Cisco “Switch Config and Run Approval”.
+- Buttons/routes: `Save to config` -> `/modules/cisco/save-port-map`; `Approve config` -> `/modules/cisco/approve-config-plan`.
+- Handlers inspected: `cisco_save_port_map`, `cisco_approve_config_plan`.
+
+**Checks Run**
+- `.venv/bin/python -m pytest tests/test_cisco_page.py` -> 2 passed
+- `.venv/bin/python -m pytest tests/test_operator_flow_contract.py` -> 6 passed
+- `.venv/bin/python -m compileall app` -> passed
+
+No real hardware was used. This was template rendering, route-table verification, and mocked/temp TestClient config only. I did not commit or push.
+
+Remaining risk: I did not run the actual Cisco save/approval flow against the available switch; backend behavior was preserved and only UI feedback metadata was changed.
+
+Recommended next task: another narrow Cisco action-feedback gap, such as `Setup Console` or `Fix serial access`.

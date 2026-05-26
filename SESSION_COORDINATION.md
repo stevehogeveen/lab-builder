@@ -38,6 +38,24 @@ Copy this block and update it in place.
 
 ## Active Sessions
 
+### Session: cisco-run-approval-feedback-quality-cycle
+- Status: done
+- Branch: codex/14h-quality-run
+- Scope owner: Cisco Run Center approval action feedback consistency
+- Working on: Completed shared action-button treatment and completion metadata for the existing Cisco Save to config and Approve config controls without changing routes or hardware behavior.
+- Blocked by: none
+- Ready to hand off: Cisco Run Center approval controls now use shared action feedback; focused Cisco render tests, operator-flow contract tests, and compile check pass.
+- Files claimed:
+  - templates/partials/pages/cisco.html
+  - tests/test_cisco_page.py
+- Shared files touched with caution:
+  - SESSION_COORDINATION.md
+- Last changed:
+  - 2026-05-26 06:00 EDT - Claimed narrow Cisco Run Center approval action-feedback slice for the 14-hour quality run.
+  - 2026-05-26 06:01 EDT - Added Run Approval action metadata and verified focused route/template coverage.
+- Next intended change:
+  - Continue with a separate backlog cycle; suggested next target is another unclaimed Cisco setup action-feedback gap such as Setup Console or Fix serial access.
+
 ### Session: dashboard-kit-drawer-feedback-quality-cycle
 - Status: done
 - Branch: codex/14h-quality-run

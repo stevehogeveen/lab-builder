@@ -112,3 +112,32 @@ def test_cisco_console_current_config_and_version_actions_use_shared_feedback_me
         route.path == "/modules/cisco/discover-version" and "POST" in route.methods
         for route in main.app.routes
     )
+
+
+def test_cisco_run_approval_actions_use_shared_feedback_metadata(cisco_client):
+    cfg = main.default_config()
+    cfg["site"]["name"] = "Cisco Run Approval Test Kit"
+    main.save_kit_config(cfg)
+
+    response = cisco_client.get("/cisco")
+
+    assert response.status_code == 200
+    assert 'hx-post="/modules/cisco/save-port-map"' in response.text
+    assert 'hx-post="/modules/cisco/approve-config-plan"' in response.text
+    assert 'class="btn action-button" type="submit" hx-post="/modules/cisco/save-port-map"' in response.text
+    assert 'class="btn btn-primary action-button" type="submit" hx-post="/modules/cisco/approve-config-plan"' in response.text
+    assert 'data-action-title="Saving Cisco config"' in response.text
+    assert "Saving the desired Cisco switch config and SNMP values." in response.text
+    assert 'data-action-complete="Cisco config save finished."' in response.text
+    assert 'data-action-title="Approving Cisco config"' in response.text
+    assert "Validating SSH, version, upgrade gate, and saved config before Run Center approval." in response.text
+    assert 'data-action-complete="Cisco config approval check finished."' in response.text
+
+    assert any(
+        route.path == "/modules/cisco/save-port-map" and "POST" in route.methods
+        for route in main.app.routes
+    )
+    assert any(
+        route.path == "/modules/cisco/approve-config-plan" and "POST" in route.methods
+        for route in main.app.routes
+    )

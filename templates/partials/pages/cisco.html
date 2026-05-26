@@ -690,8 +690,8 @@
                 {% endif %}
             </div>
             <div class="cisco-actions mt-4">
-                <button class="btn" type="submit" hx-post="/modules/cisco/save-port-map" data-action-title="Saving Cisco config" data-action-start="Saving the desired Cisco switch config and SNMP values.">Save to config</button>
-                <button class="btn btn-primary" type="submit" hx-post="/modules/cisco/approve-config-plan" hx-vals='{"mode":"full"}' data-action-title="Approving Cisco config" data-action-start="Validating SSH, version, upgrade gate, and saved config before Run Center approval.">Approve config</button>
+                <button class="btn action-button" type="submit" hx-post="/modules/cisco/save-port-map" data-action-title="Saving Cisco config" data-action-start="Saving the desired Cisco switch config and SNMP values." data-action-complete="Cisco config save finished.">Save to config</button>
+                <button class="btn btn-primary action-button" type="submit" hx-post="/modules/cisco/approve-config-plan" hx-vals='{"mode":"full"}' data-action-title="Approving Cisco config" data-action-start="Validating SSH, version, upgrade gate, and saved config before Run Center approval." data-action-complete="Cisco config approval check finished.">Approve config</button>
             </div>
             {% if action_feedback and feedback_area in ['run', 'advanced'] %}
             {{ cisco_inline_feedback(action_feedback) }}
