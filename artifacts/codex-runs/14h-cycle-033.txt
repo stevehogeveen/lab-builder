@@ -1,0 +1,43 @@
+Completed one controlled cycle.
+
+**Task Chosen**
+- Storage page: make the “Latest verified storage result” `Open log` action use the shared action-feedback pattern.
+
+**Files Inspected**
+- Required session docs and `.codex/*`
+- [storage.html](/home/administrator/lab-builder/templates/partials/pages/storage.html:175)
+- [test_storage.py](/home/administrator/lab-builder/tests/test_storage.py:54)
+- `app/main.py` `/view-report` handler
+- iLO/ESXi templates as the matching pattern
+
+**Files Changed**
+- [SESSION_COORDINATION.md](/home/administrator/lab-builder/SESSION_COORDINATION.md:40)
+- [storage.html](/home/administrator/lab-builder/templates/partials/pages/storage.html:178)
+- [test_storage.py](/home/administrator/lab-builder/tests/test_storage.py:78)
+
+**Buttons/Routes/Forms Verified**
+- Storage `Open log` button
+- HTMX form posting to `/view-report`
+- Hidden `return_page=storage`
+- Hidden `report_path`
+- `/view-report` still opens the saved report
+- Adjacent `Related reports` link was inspected but not changed
+
+**What Changed**
+- Added `action-button` class and `data-action-title/start/complete` metadata to the Storage `Open log` form.
+- Added focused assertions so this button stays aligned with iLO/ESXi behavior.
+
+**Tests/Checks Run**
+- `.venv/bin/python -m pytest tests/test_storage.py::test_storage_page_latest_receipt_open_log_uses_report_route` passed
+- `.venv/bin/python -m compileall app` passed
+- `git diff --check` passed
+
+**Hardware**
+- Real hardware used: no
+- Mocked/dry-run only: route/template rendering with temporary kit config/history; no hardware calls
+
+**Remaining Risks**
+- I did not run a browser/HTMX visual smoke test, so this verifies rendered markup and route behavior rather than the live overlay animation.
+
+**Recommended Next Task**
+- Dashboard job status `Open log` buttons still appear to use plain `btn` treatment; audit that unclaimed action-feedback path next.

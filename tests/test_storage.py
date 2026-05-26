@@ -75,6 +75,8 @@ def test_storage_page_latest_receipt_open_log_uses_report_route(storage_client):
     assert response.status_code == 200
     assert "Latest verified storage result" in response.text
     assert 'hx-post="/view-report"' in response.text
+    assert 'data-action-title="Opening storage run log"' in response.text
+    assert '<button class="btn action-button" type="submit">Open log</button>' in response.text
     assert 'name="return_page" value="storage"' in response.text
     assert 'name="report_path"' in response.text
     assert str(summary_path) in response.text
