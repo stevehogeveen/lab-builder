@@ -1,0 +1,29 @@
+Task chosen: Cisco setup page console access button/status consistency.
+
+Files inspected: `.codex/mission.md`, `.codex/rules.md`, `.codex/backlog.md`, required session/operator docs, `SESSION_COORDINATION.md`, Cisco template/routes/tests, and shared action-feedback JS.
+
+Files changed:
+- [templates/partials/pages/cisco.html](/home/administrator/lab-builder/templates/partials/pages/cisco.html:407)
+- [tests/test_cisco_page.py](/home/administrator/lab-builder/tests/test_cisco_page.py:1)
+- [SESSION_COORDINATION.md](/home/administrator/lab-builder/SESSION_COORDINATION.md:40)
+
+Buttons/routes/forms verified:
+- Cisco parent setup form with `hx-target="#main-content"`.
+- `Test console access` -> `POST /modules/cisco/test-console-access`.
+- `Trust selected adapter` -> `POST /modules/cisco/trust-console-adapter`.
+- Added shared `action-button` class and action metadata to both console controls.
+- Added render assertions that the routes exist and saved Cisco passwords are not rendered.
+
+Tests/checks run:
+- `.venv/bin/python -m pytest tests/test_cisco_page.py` passed.
+- `.venv/bin/python -m pytest tests/test_operator_flow_contract.py` passed.
+- `.venv/bin/python -m compileall app` passed.
+- `git diff --check` passed.
+
+Real hardware used: no.
+
+Mocked/dry-run only: route/template rendering with isolated temp config; upgrade media scan mocked empty. No serial console or switch call was made.
+
+Remaining risks: browser-level HTMX busy-state behavior was not exercised in a real browser, and the actual serial console handlers were not invoked against hardware in this cycle.
+
+Recommended next task: a small NetApp setup page action-control audit, focusing on visible `formaction` buttons that lack shared action feedback metadata.

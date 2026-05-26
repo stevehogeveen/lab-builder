@@ -404,8 +404,8 @@
                     <div class="cisco-fact"><span>Trusted</span><strong>{{ 'yes' if cisco.trusted_console_adapter or cisco_cfg.get('trusted_console_adapter') else 'no' }}</strong></div>
                 </div>
                 <div class="cisco-actions">
-                    <button class="btn" type="button" hx-post="/modules/cisco/test-console-access">Test console access</button>
-                    <button class="btn" type="submit" hx-post="/modules/cisco/trust-console-adapter">Trust selected adapter</button>
+                    <button class="btn action-button" type="button" hx-post="/modules/cisco/test-console-access" data-action-title="Testing Cisco console access" data-action-start="Checking the selected serial console adapter without changing switch configuration." data-action-complete="Cisco console access check finished.">Test console access</button>
+                    <button class="btn action-button" type="submit" hx-post="/modules/cisco/trust-console-adapter" data-action-title="Trusting Cisco console adapter" data-action-start="Saving the selected serial console adapter for this kit." data-action-complete="Cisco console adapter trust update finished.">Trust selected adapter</button>
                 </div>
                 {% if action_feedback and feedback_area == 'console' %}
                 {{ cisco_inline_feedback(action_feedback) }}
