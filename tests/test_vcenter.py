@@ -124,6 +124,13 @@ def test_vcenter_page_wires_visible_form_actions(vcenter_client):
     assert 'hx-post="/save-vcenter-settings"' in response.text
     assert 'hx-post="/plan-vcenter-install" hx-include="#vcenter-settings-form"' in response.text
     assert 'hx-post="/run-vcenter-install" hx-include="#vcenter-settings-form"' in response.text
+    assert "VMware vCenter Server Appliance (VCSA)" in response.text
+    assert "Single Sign-On (SSO) domain" in response.text
+    assert "Network Time Protocol (NTP) servers" in response.text
+    assert "Domain Name System (DNS) servers" in response.text
+    assert "Enable Secure Shell (SSH) on the appliance" in response.text
+    assert "Generate deployment spec" in response.text
+    assert "Start vCenter appliance deployment" in response.text
 
 
 def test_plan_vcenter_install_uses_posted_form_values(vcenter_client):

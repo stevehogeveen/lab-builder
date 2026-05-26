@@ -3,7 +3,7 @@
     <div class="flex items-center justify-between mb-4">
         <div>
             <h2 class="text-2xl font-bold title-with-icon"><span class="page-icon icon-tone-{{ 'ready' if vcenter_install.ready else 'pending' }}" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="5" width="16" height="14" rx="2"/><path d="M8 9h8"/><path d="M8 13h5"/><path d="M9 19v2"/><path d="M15 19v2"/></svg></span><span>vCenter</span></h2>
-            <div class="text-sm text-slate-400">Deploy the VCSA VM onto the prepared ESXi host and NetApp datastore.</div>
+            <div class="text-sm text-slate-400">Deploy the VMware vCenter Server Appliance (VCSA) virtual machine onto the prepared ESXi host and NetApp datastore.</div>
         </div>
         <span class="status {{ 'ready' if vcenter_install.ready else 'pending' }}">{{ 'Ready' if vcenter_install.ready else 'Needs input' }}</span>
     </div>
@@ -13,9 +13,9 @@
 
     {% set setup_strip = [
         {"label": "Appliance IP", "value": vcenter_install.target_ip or 'Not set', "note": "Defaults to .50 on the lab subnet"},
-        {"label": "ESXi target", "value": vcenter_install.esxi_host or 'Not set', "note": "VCSA deploy destination"},
+        {"label": "ESXi target", "value": vcenter_install.esxi_host or 'Not set', "note": "Appliance deploy destination"},
         {"label": "Datastore", "value": vcenter_install.datastore or 'Not set', "note": "Prefer NetApp NFS"},
-        {"label": "Media", "value": (vcenter_install.iso_path.split('/')[-1] if vcenter_install.iso_path else 'No VCSA ISO'), "note": "VMware CLI installer source"},
+        {"label": "Media", "value": (vcenter_install.iso_path.split('/')[-1] if vcenter_install.iso_path else 'No VCSA ISO'), "note": "VMware command-line installer source"},
     ] %}
     {% include "partials/components/setup_strip.html" %}
 
@@ -23,12 +23,12 @@
 
     <div class="grid grid-cols-1 xl:grid-cols-2 gap-4">
         <section class="card workflow-hero-card">
-            <div class="text-lg font-semibold mb-3">VCSA deployment settings</div>
-            <form id="vcenter-settings-form" hx-post="/save-vcenter-settings" hx-target="#main-content" hx-swap="outerHTML" class="space-y-4" data-action-title="Saving vCenter setup" data-action-start="Saving VCSA deployment settings.">
+            <div class="text-lg font-semibold mb-3">vCenter Server Appliance settings</div>
+            <form id="vcenter-settings-form" hx-post="/save-vcenter-settings" hx-target="#main-content" hx-swap="outerHTML" class="space-y-4" data-action-title="Saving vCenter setup" data-action-start="Saving vCenter Server Appliance deployment settings.">
                 <input type="hidden" name="return_page" value="vcenter">
                 <div class="grid grid-cols-1 md:grid-cols-2 gap-3">
                     <div>
-                        <label class="block text-sm font-bold text-slate-300 mb-2">VCSA appliance IP</label>
+                        <label class="block text-sm font-bold text-slate-300 mb-2">vCenter Server Appliance IP</label>
                         <input type="text" name="vcenter_target_ip" value="{{ vcenter_install.target_ip }}" class="input">
                     </div>
                     <div>
@@ -40,7 +40,7 @@
                         <input type="text" name="vcenter_vm_name" value="{{ vcenter_install.vm_name }}" class="input">
                     </div>
                     <div>
-                        <label class="block text-sm font-bold text-slate-300 mb-2">VCSA ISO</label>
+                        <label class="block text-sm font-bold text-slate-300 mb-2">vCenter Server Appliance ISO</label>
                         <select name="vcenter_iso_path" class="input">
                             {% if not vcenter_install.media_choices %}
                             <option value="{{ vcenter_install.iso_path }}">{{ vcenter_install.iso_path or 'No VCSA ISO found' }}</option>
@@ -79,31 +79,31 @@
                         </select>
                     </div>
                     <div>
-                        <label class="block text-sm font-bold text-slate-300 mb-2">VCSA root password</label>
+                        <label class="block text-sm font-bold text-slate-300 mb-2">Appliance root password</label>
                         <input type="password" name="vcenter_root_password" value="" placeholder="Leave blank to keep saved value" class="input">
                     </div>
                     <div>
-                        <label class="block text-sm font-bold text-slate-300 mb-2">SSO domain</label>
+                        <label class="block text-sm font-bold text-slate-300 mb-2">Single Sign-On (SSO) domain</label>
                         <input type="text" name="vcenter_sso_domain" value="{{ vcenter_install.sso_domain }}" class="input">
                     </div>
                     <div>
-                        <label class="block text-sm font-bold text-slate-300 mb-2">SSO administrator password</label>
+                        <label class="block text-sm font-bold text-slate-300 mb-2">Single Sign-On administrator password</label>
                         <input type="password" name="vcenter_sso_password" value="" placeholder="Leave blank to keep saved value" class="input">
                     </div>
                     <div>
-                        <label class="block text-sm font-bold text-slate-300 mb-2">NTP servers</label>
+                        <label class="block text-sm font-bold text-slate-300 mb-2">Network Time Protocol (NTP) servers</label>
                         <input type="text" name="vcenter_ntp_servers" value="{{ vcenter_install.ntp_servers }}" class="input">
                     </div>
                     <div>
-                        <label class="block text-sm font-bold text-slate-300 mb-2">DNS servers</label>
+                        <label class="block text-sm font-bold text-slate-300 mb-2">Domain Name System (DNS) servers</label>
                         <input type="text" name="vcenter_dns_servers" value="{{ ', '.join(vcenter_install.dns_servers or []) }}" class="input">
                     </div>
                 </div>
-                <label class="check"><input type="checkbox" name="vcenter_ssh_enable" {% if vcenter_install.ssh_enable %}checked{% endif %}> Enable SSH on the VCSA appliance</label>
+                <label class="check"><input type="checkbox" name="vcenter_ssh_enable" {% if vcenter_install.ssh_enable %}checked{% endif %}> Enable Secure Shell (SSH) on the appliance</label>
                 <div class="actions">
                     <button class="btn btn-primary action-button" type="submit">Save vCenter setup</button>
-                    <button class="btn action-button" type="button" hx-post="/plan-vcenter-install" hx-include="#vcenter-settings-form" hx-target="#main-content" hx-swap="outerHTML" data-action-title="Planning vCenter install" data-action-start="Generating the VCSA CLI installer spec.">Generate install spec</button>
-                    <button class="btn btn-primary action-button" type="button" hx-post="/run-vcenter-install" hx-include="#vcenter-settings-form" hx-target="#main-content" hx-swap="outerHTML" data-action-title="Starting vCenter install" data-action-start="Launching VMware vcsa-deploy.">Run vCenter install</button>
+                    <button class="btn action-button" type="button" hx-post="/plan-vcenter-install" hx-include="#vcenter-settings-form" hx-target="#main-content" hx-swap="outerHTML" data-action-title="Planning vCenter install" data-action-start="Generating the vCenter Server Appliance installer spec.">Generate deployment spec</button>
+                    <button class="btn btn-primary action-button" type="button" hx-post="/run-vcenter-install" hx-include="#vcenter-settings-form" hx-target="#main-content" hx-swap="outerHTML" data-action-title="Starting vCenter appliance deployment" data-action-start="Launching VMware vcsa-deploy.">Start vCenter appliance deployment</button>
                 </div>
             </form>
         </section>

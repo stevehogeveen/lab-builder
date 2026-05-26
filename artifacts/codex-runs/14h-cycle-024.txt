@@ -1,0 +1,29 @@
+Task chosen: vCenter setup page label/action clarity.
+
+Files inspected: required session docs, `.codex/*`, [vcenter.html](/home/administrator/lab-builder/templates/partials/pages/vcenter.html:1), [app/main.py](/home/administrator/lab-builder/app/main.py:15866), [app/vcenter.py](/home/administrator/lab-builder/app/vcenter.py:143), and [test_vcenter.py](/home/administrator/lab-builder/tests/test_vcenter.py:119).
+
+Files changed:
+- [SESSION_COORDINATION.md](/home/administrator/lab-builder/SESSION_COORDINATION.md:41)
+- [vcenter.html](/home/administrator/lab-builder/templates/partials/pages/vcenter.html:6)
+- [test_vcenter.py](/home/administrator/lab-builder/tests/test_vcenter.py:119)
+
+Verified buttons/routes/forms:
+- `#vcenter-settings-form` -> `/save-vcenter-settings`
+- `Generate deployment spec` -> `/plan-vcenter-install`
+- `Start vCenter appliance deployment` -> `/run-vcenter-install`
+- vCenter status poll -> `/vcenter/install-panel`
+
+Changed only operator-facing copy: expanded first-use acronyms and made the real deployment button label clearer. Routes, form field names, handlers, and behavior were preserved.
+
+Checks run:
+- `.venv/bin/python -m pytest tests/test_vcenter.py` -> 5 passed
+- `.venv/bin/python -m pytest tests/test_operator_flow_contract.py` -> 6 passed
+- `.venv/bin/python -m compileall app` -> passed
+
+Real hardware used: none.
+
+Mocked/dry-run only: FastAPI `TestClient` route/template checks with temporary config/media directories; no vCenter, NetApp, QNAP, or extra ESXi access assumed.
+
+Remaining risks: no browser screenshot pass was run, and no live vCenter deployment was tested due the hardware constraints.
+
+Recommended next task: a separate focused audit of vCenter’s status/raw-output placement, especially whether the generated spec path belongs on the setup page or a technical/details surface.
