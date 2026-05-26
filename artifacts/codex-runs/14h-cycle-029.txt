@@ -1,0 +1,16 @@
+Completed one controlled backlog task: History page report-opening action feedback consistency.
+
+- Files inspected: `AGENTS.md`, session/workflow docs, `.codex/*`, [history.html](/home/administrator/lab-builder/templates/partials/pages/history.html:85), [test_app.py](/home/administrator/lab-builder/tests/test_app.py:12907), and the `/view-report` route wiring in `app/main.py`.
+- Files changed: [history.html](/home/administrator/lab-builder/templates/partials/pages/history.html:85), [test_app.py](/home/administrator/lab-builder/tests/test_app.py:12907), `SESSION_COORDINATION.md`.
+- Buttons/forms/routes verified: History `Open run summary` in Run bundles, History `Open run summary` in Recent runs, and `Open storage plan used`; all still post to `/view-report` and render into `#main-content`.
+- Improvement made: added shared `action-button` treatment plus `data-action-*` feedback metadata to those report-opening forms.
+- Tests/checks run:
+  - `.venv/bin/python -m pytest tests/test_app.py -k "history_report_opening_controls_use_action_feedback or history_and_report_center_show_run_bundle_links"`: passed
+  - `.venv/bin/python -m pytest tests/test_operator_flow_contract.py`: passed
+  - `.venv/bin/python -m compileall app`: passed
+- Real hardware used: none.
+- Mocked/dry-run only: saved-history route/template rendering through the test client.
+- Remaining risks: no browser-level HTMX click test was run; coverage verifies rendered wiring and uses the existing shared action feedback contract.
+- Recommended next task: another unclaimed page button/route audit or setup-page status placement guard, avoiding the actively claimed Cisco and NetApp files.
+
+No commit or push was made. Existing untracked `artifacts/codex-runs/...` files were left untouched.

@@ -82,10 +82,10 @@
                     </div>
                     <div class="actions justify-end">
                         {% if bundle.run_summary_path %}
-                        <form hx-post="/view-report" hx-target="#main-content" hx-swap="outerHTML">
+                        <form hx-post="/view-report" hx-target="#main-content" hx-swap="outerHTML" data-action-title="Opening run summary" data-action-start="Loading the saved run summary into Reports." data-action-complete="Run summary opened.">
                             <input type="hidden" name="return_page" value="configs">
                             <input type="hidden" name="report_path" value="{{ bundle.run_summary_path }}">
-                            <button class="btn" type="submit">Open run summary</button>
+                            <button class="btn action-button" type="submit">Open run summary</button>
                         </form>
                         {% endif %}
                         <a class="btn" href="/configs?report_query={{ bundle.related_reports_query | urlencode }}">Related reports</a>
@@ -125,18 +125,18 @@
                     {% endif %}
                     <div class="actions">
                         {% if item.get('run_summary_path') %}
-                        <form hx-post="/view-report" hx-target="#main-content" hx-swap="outerHTML">
+                        <form hx-post="/view-report" hx-target="#main-content" hx-swap="outerHTML" data-action-title="Opening run summary" data-action-start="Loading the saved run summary into Reports." data-action-complete="Run summary opened.">
                             <input type="hidden" name="return_page" value="configs">
                             <input type="hidden" name="report_path" value="{{ item.get('run_summary_path') }}">
-                            <button class="btn" type="submit">Open run summary</button>
+                            <button class="btn action-button" type="submit">Open run summary</button>
                         </form>
                         {% endif %}
                         <a class="btn" href="/configs?report_query={{ (item.get('config_summary', {}).get('storage_plan_path') or item.get('scope', '')) | urlencode }}">Related reports</a>
                         {% if item.get('config_summary', {}).get('storage_plan_path') %}
-                        <form hx-post="/view-report" hx-target="#main-content" hx-swap="outerHTML">
+                        <form hx-post="/view-report" hx-target="#main-content" hx-swap="outerHTML" data-action-title="Opening storage plan" data-action-start="Loading the storage plan artifact into Reports." data-action-complete="Storage plan opened.">
                             <input type="hidden" name="return_page" value="configs">
                             <input type="hidden" name="report_path" value="{{ item.get('config_summary', {}).get('storage_plan_path') }}">
-                            <button class="btn" type="submit">Open storage plan used</button>
+                            <button class="btn action-button" type="submit">Open storage plan used</button>
                         </form>
                         {% endif %}
                     </div>

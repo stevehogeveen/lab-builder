@@ -12904,6 +12904,36 @@ def test_history_and_report_center_show_run_bundle_links(client):
     assert "Find saved files" in configs_response.text
 
 
+def test_history_report_opening_controls_use_action_feedback(client):
+    cfg = main.default_config()
+    cfg["site"]["name"] = "History Report Actions Kit"
+    main.save_kit_config(cfg)
+    main.save_history(
+        "History Report Actions Kit",
+        [
+            {
+                "time": "2026-04-24 10:30:00",
+                "scope": "storage",
+                "status": "Completed",
+                "current_stage": "Storage finished",
+                "run_summary_path": "/tmp/history-report-actions-summary.yml",
+                "config_summary": {
+                    "storage_plan_path": "/tmp/history-report-actions-storage-plan.yml",
+                },
+            }
+        ],
+    )
+
+    response = client.get("/history")
+
+    assert response.status_code == 200
+    assert 'hx-post="/view-report"' in response.text
+    assert response.text.count('data-action-title="Opening run summary"') >= 2
+    assert 'data-action-title="Opening storage plan"' in response.text
+    assert '<button class="btn action-button" type="submit">Open run summary</button>' in response.text
+    assert '<button class="btn action-button" type="submit">Open storage plan used</button>' in response.text
+
+
 def test_report_center_collapses_large_raw_file_list_by_default(client):
     cfg = main.default_config()
     cfg["site"]["name"] = "Large Reports Kit"

@@ -38,6 +38,25 @@ Copy this block and update it in place.
 
 ## Active Sessions
 
+### Session: history-report-action-feedback-quality-cycle
+- Status: done
+- Branch: codex/14h-quality-run
+- Scope owner: History report-opening action feedback consistency
+- Working on: Completed History report-opening action feedback consistency without changing report routes.
+- Blocked by: none
+- Ready to hand off: History report-opening controls now use shared action metadata and focused route/template checks pass.
+- Files claimed:
+  - templates/partials/pages/history.html
+  - tests/test_app.py
+- Shared files touched with caution:
+  - SESSION_COORDINATION.md
+  - tests/test_app.py
+- Last changed:
+  - 2026-05-26 01:21 EDT - Claimed narrow History report-opening action-feedback slice for the 14-hour quality run.
+  - 2026-05-26 01:22 EDT - Added shared action metadata/classes to History report-opening controls and verified focused coverage.
+- Next intended change:
+  - Continue with a separate backlog cycle; suggested next target is another unclaimed page button/route audit or setup-page status placement guard.
+
 ### Session: storage-restart-action-feedback-quality-cycle
 - Status: done
 - Branch: codex/14h-quality-run
