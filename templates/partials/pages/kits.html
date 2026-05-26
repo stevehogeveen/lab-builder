@@ -35,7 +35,7 @@
             <span class="status ready">Available</span>
         </div>
         <div class="grid grid-cols-1 xl:grid-cols-2 gap-4">
-            <form hx-post="/new-kit" hx-target="#main-content" hx-swap="outerHTML" class="space-y-3" data-action-title="Creating kit" data-action-start="Creating a clean kit workspace.">
+            <form hx-post="/new-kit" hx-target="#main-content" hx-swap="outerHTML" class="space-y-3" data-action-title="Creating kit" data-action-start="Creating a clean kit workspace." data-action-complete="New kit request finished.">
                 <input type="hidden" name="return_page" value="kits">
                 <label>
                     <div class="dashboard-kicker">New kit name</div>
@@ -43,7 +43,7 @@
                 </label>
                 <button class="btn btn-primary action-button" type="submit">Create new kit</button>
             </form>
-            <form hx-post="/load-kit" hx-target="#main-content" hx-swap="outerHTML" class="space-y-3" data-action-title="Loading kit" data-action-start="Switching the active kit.">
+            <form hx-post="/load-kit" hx-target="#main-content" hx-swap="outerHTML" class="space-y-3" data-action-title="Loading kit" data-action-start="Switching the active kit." data-action-complete="Kit load request finished.">
                 <input type="hidden" name="return_page" value="kits">
                 <label>
                     <div class="dashboard-kicker">Existing kit</div>
@@ -81,7 +81,7 @@
                     </div>
                     <div class="actions" style="margin-top: 0;">
                         {% if not kit.current %}
-                        <form hx-post="/load-kit" hx-target="#main-content" hx-swap="outerHTML" data-action-title="Loading kit" data-action-start="Switching the active kit.">
+                        <form hx-post="/load-kit" hx-target="#main-content" hx-swap="outerHTML" data-action-title="Loading kit" data-action-start="Switching the active kit." data-action-complete="Kit load request finished.">
                             <input type="hidden" name="return_page" value="kits">
                             <input type="hidden" name="selected_kit" value="{{ kit.name }}">
                             <button class="btn action-button" type="submit">Load</button>
@@ -103,7 +103,7 @@
                 <div class="grid grid-cols-1 xl:grid-cols-2 gap-3 mt-3">
                     <details class="raw-output-wrap">
                         <summary>Clean generated artifacts</summary>
-                        <form hx-post="/clean-kit-artifacts" hx-target="#main-content" hx-swap="outerHTML" class="space-y-3 p-3" data-action-title="Cleaning kit artifacts" data-action-start="Removing generated files for this kit.">
+                        <form hx-post="/clean-kit-artifacts" hx-target="#main-content" hx-swap="outerHTML" class="space-y-3 p-3" data-action-title="Cleaning kit artifacts" data-action-start="Removing generated files for this kit." data-action-complete="Kit cleanup request finished.">
                             <input type="hidden" name="kit_name" value="{{ kit.name }}">
                             <div class="text-sm text-slate-400">Keeps the kit config. Type <strong>{{ kit.cleanup_confirm }}</strong> to remove job state, run logs, generated reports, and exports.</div>
                             <input class="input" type="text" name="confirm_text" placeholder="{{ kit.cleanup_confirm }}" required>
@@ -116,7 +116,7 @@
                         {% if kit.current %}
                         <div class="p-3 text-sm text-slate-400">Load a different kit before deleting this active kit.</div>
                         {% else %}
-                        <form hx-post="/delete-kit" hx-target="#main-content" hx-swap="outerHTML" class="space-y-3 p-3" data-action-title="Deleting kit" data-action-start="Deleting this kit and its generated files.">
+                        <form hx-post="/delete-kit" hx-target="#main-content" hx-swap="outerHTML" class="space-y-3 p-3" data-action-title="Deleting kit" data-action-start="Deleting this kit and its generated files." data-action-complete="Kit delete request finished.">
                             <input type="hidden" name="kit_name" value="{{ kit.name }}">
                             <div class="text-sm text-slate-400">Deletes the kit YAML and generated files. Type <strong>{{ kit.delete_confirm }}</strong> to continue.</div>
                             <input class="input" type="text" name="confirm_text" placeholder="{{ kit.delete_confirm }}" required>

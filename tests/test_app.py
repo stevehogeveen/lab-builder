@@ -12205,6 +12205,10 @@ def test_kits_page_wires_visible_actions_to_expected_routes(client):
     assert '<button class="btn action-button" type="submit">Load</button>' in response.text
     assert '<button class="btn btn-danger action-button" type="submit">Clean artifacts</button>' in response.text
     assert '<button class="btn btn-danger action-button" type="submit">Delete kit</button>' in response.text
+    assert 'data-action-complete="New kit request finished."' in response.text
+    assert response.text.count('data-action-complete="Kit load request finished."') >= 2
+    assert 'data-action-complete="Kit cleanup request finished."' in response.text
+    assert 'data-action-complete="Kit delete request finished."' in response.text
     assert "Type <strong>CLEAN Old-Kit</strong>" in response.text
     assert "Type <strong>DELETE Old-Kit</strong>" in response.text
     assert "Load a different kit before deleting this active kit." in response.text

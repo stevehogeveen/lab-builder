@@ -1,0 +1,29 @@
+Task chosen: Kits page action completion feedback consistency.
+
+Files inspected: `.codex/mission.md`, `.codex/rules.md`, `.codex/backlog.md`, the required session/operator docs, [kits.html](/home/administrator/lab-builder/templates/partials/pages/kits.html:35), [app/main.py](/home/administrator/lab-builder/app/main.py:16142), [routes.py](/home/administrator/lab-builder/app/modules/configs/routes.py:58), and [test_app.py](/home/administrator/lab-builder/tests/test_app.py:12187).
+
+Files changed:
+- [SESSION_COORDINATION.md](/home/administrator/lab-builder/SESSION_COORDINATION.md:41)
+- [templates/partials/pages/kits.html](/home/administrator/lab-builder/templates/partials/pages/kits.html:35)
+- [tests/test_app.py](/home/administrator/lab-builder/tests/test_app.py:12187)
+
+Buttons/routes/forms verified:
+- `Create new kit` -> `/new-kit`
+- `Load selected kit` and row `Load` -> `/load-kit`
+- `Clean artifacts` -> `/clean-kit-artifacts`
+- `Delete kit` -> `/delete-kit`
+
+Change made: added explicit `data-action-complete` messages to the existing Kits forms so shared action feedback has consistent completion text. No route behavior, destructive confirmations, kit persistence, or hardware behavior changed.
+
+Tests/checks run:
+- `.venv/bin/python -m pytest tests/test_app.py::test_kits_page_wires_visible_actions_to_expected_routes` passed
+- `.venv/bin/python -m pytest tests/test_operator_flow_contract.py` passed
+- `.venv/bin/python -m compileall app` passed
+
+Real hardware used: none.
+
+Mocked/dry-run only: isolated pytest route/template rendering through the test client; no hardware calls.
+
+Remaining risks: I did not run a browser/HTMX interaction test or the full pytest suite. The focused render test verifies the form metadata and routes are present.
+
+Recommended next task: audit another unclaimed page for missing explicit action-completion metadata or inconsistent status placement, avoiding the active Cisco and NetApp scopes.

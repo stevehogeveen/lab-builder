@@ -1,0 +1,4 @@
+ SESSION_COORDINATION.md            | 19 +++++++++++++++++++
+ templates/partials/pages/kits.html | 10 +++++-----
+ tests/test_app.py                  |  4 ++++
+ 3 files changed, 28 insertions(+), 5 deletions(-)
