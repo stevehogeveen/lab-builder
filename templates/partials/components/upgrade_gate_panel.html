@@ -45,7 +45,7 @@
         <button class="btn btn-primary" type="button" hx-post="/modules/netapp/plan-upgrade" hx-vals='{"return_page":"{{ upgrade_return_page }}"}' hx-target="#main-content" hx-swap="outerHTML" data-action-title="Reading current ONTAP release" data-action-start="Connecting to ONTAP and reading the current cluster release." data-action-complete="Current ONTAP release check finished.">Read current ONTAP release</button>
         {% endif %}
         {% if upgrade_device_key == 'ilo' and not gate_entry.get('current_version') %}
-        <button class="btn btn-primary" type="button" hx-post="/export-ilo-inventory" hx-vals='{"return_page":"{{ upgrade_return_page }}"}' hx-target="#main-content" hx-swap="outerHTML" data-action-title="Reading current iLO" data-action-start="Connecting to iLO and reading the current firmware version.">Read current iLO</button>
+        <button class="btn btn-primary" type="button" hx-post="/export-ilo-inventory" hx-vals='{"return_page":"{{ upgrade_return_page }}"}' hx-target="#main-content" hx-swap="outerHTML" data-action-title="Reading current iLO" data-action-start="Connecting to iLO and reading the current firmware version." data-action-complete="Current iLO read finished.">Read current iLO</button>
         {% endif %}
         <label class="check card card-compact">
             <input type="checkbox" name="override_upgrade_gate" value="true" {% if gate_override %}checked{% endif %} hx-post="/save-upgrade-override" hx-target="#main-content" hx-swap="outerHTML" hx-vals='{"return_page":"{{ upgrade_return_page }}","device_key":"{{ upgrade_device_key }}"}' hx-trigger="change">

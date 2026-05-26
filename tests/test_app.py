@@ -245,6 +245,7 @@ def test_ilo_page_gate_can_read_current_ilo_when_version_unknown(client, monkeyp
     assert "Read the current iLO version before prebuild." in response.text
     assert 'hx-post="/export-ilo-inventory"' in response.text
     assert 'data-action-start="Connecting to iLO and reading the current firmware version."' in response.text
+    assert 'data-action-complete="Current iLO read finished."' in response.text
     assert "Run iLO upgrade" not in response.text
     assert "Plan iLO upgrade" not in response.text
 

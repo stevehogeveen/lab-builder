@@ -1,0 +1,21 @@
+Task chosen: Priority 1/2 button feedback audit for the iLO Upgrade Gate “Read current iLO” action.
+
+Files inspected: `.codex/mission.md`, `.codex/rules.md`, `.codex/backlog.md`, required session docs, [upgrade_gate_panel.html](/home/administrator/lab-builder/templates/partials/components/upgrade_gate_panel.html:48), [tests/test_app.py](/home/administrator/lab-builder/tests/test_app.py:245), and `/export-ilo-inventory` route references.
+
+Files changed:
+- [templates/partials/components/upgrade_gate_panel.html](/home/administrator/lab-builder/templates/partials/components/upgrade_gate_panel.html:48): added `data-action-complete="Current iLO read finished."`
+- [tests/test_app.py](/home/administrator/lab-builder/tests/test_app.py:248): added render assertion
+- [SESSION_COORDINATION.md](/home/administrator/lab-builder/SESSION_COORDINATION.md:40): claimed and closed the narrow session
+
+Buttons/routes/forms verified: iLO Upgrade Gate `Read current iLO` button, `hx-post="/export-ilo-inventory"`, `return_page` HTMX value, and existing iLO page render behavior.
+
+Tests/checks run:
+- `.venv/bin/python -m pytest tests/test_app.py::test_ilo_page_gate_can_read_current_ilo_when_version_unknown`
+- `.venv/bin/python -m pytest tests/test_operator_flow_contract.py`
+- `.venv/bin/python -m compileall app`
+
+All passed. No real hardware was used. Validation was template/render only with mocked upgrade media scanning; no iLO call was made.
+
+Remaining risk: this verifies rendered metadata, not a live browser HTMX cycle. Route behavior was intentionally unchanged.
+
+Recommended next task: another small setup-page action-feedback completion gap or saved-log route audit.
