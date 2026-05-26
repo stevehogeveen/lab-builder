@@ -38,6 +38,24 @@ Copy this block and update it in place.
 
 ## Active Sessions
 
+### Session: reports-search-button-consistency-quality-cycle
+- Status: done
+- Branch: codex/14h-quality-run
+- Scope owner: Reports saved-file search button consistency
+- Working on: Completed Reports search submit shared button styling and focused render coverage without changing route behavior.
+- Blocked by: none
+- Ready to hand off: Reports search control remains a native GET to `/configs`; focused Reports, operator-flow contract, and compile checks pass.
+- Files claimed:
+  - templates/partials/pages/reports.html
+  - tests/test_reports.py
+- Shared files touched with caution:
+  - SESSION_COORDINATION.md
+- Last changed:
+  - 2026-05-26 06:23 EDT - Claimed narrow Reports search button consistency slice for the 14-hour quality run.
+  - 2026-05-26 06:23 EDT - Added shared action-button styling to the Reports search submit and verified focused checks.
+- Next intended change:
+  - Continue with a separate backlog cycle; suggested next target is another unclaimed Reports/History native action styling or download-flow audit.
+
 ### Session: qnap-navigation-route-quality-cycle
 - Status: done
 - Branch: codex/14h-quality-run

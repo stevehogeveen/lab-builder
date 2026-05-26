@@ -79,6 +79,7 @@ def test_reports_page_wires_visible_controls_to_report_routes(reports_client):
     assert 'action="/configs" method="get"' in response.text
     assert 'name="report_query"' in response.text
     assert 'name="report_type"' in response.text
+    assert '<button class="btn action-button w-full" type="submit">Search reports</button>' in response.text
     assert 'hx-post="/view-report"' in response.text
     assert 'action="/download-report" method="post"' in response.text
     assert 'name="return_page" value="configs"' in response.text
