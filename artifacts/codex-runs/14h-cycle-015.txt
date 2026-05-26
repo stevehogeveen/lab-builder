@@ -1,0 +1,39 @@
+Task chosen: Run Center summary-open destination cleanup from the logs/status placement backlog.
+
+Changed [execution.html](/home/administrator/lab-builder/templates/partials/pages/execution.html:596) so `Open summary` is now `Open summary in Reports` and posts `return_page=configs`, keeping raw run-summary YAML on Reports instead of the operational Run Center page.
+
+Updated [test_app.py](/home/administrator/lab-builder/tests/test_app.py:4061) and [test_app.py](/home/administrator/lab-builder/tests/test_app.py:12835) to verify the visible form target and that `/view-run-summary` renders the Reports technical details area.
+
+Files inspected:
+- `.codex/mission.md`, `.codex/rules.md`, `.codex/backlog.md`
+- `SESSION_COORDINATION.md`, required workflow/UX/validation docs
+- `templates/partials/pages/execution.html`
+- `templates/partials/pages/reports.html`
+- `templates/partials/main_content.html`
+- `app/modules/execution/routes.py`
+- `app/main.py`
+- `tests/test_app.py`
+
+Files changed:
+- [SESSION_COORDINATION.md](/home/administrator/lab-builder/SESSION_COORDINATION.md:41)
+- [templates/partials/pages/execution.html](/home/administrator/lab-builder/templates/partials/pages/execution.html:596)
+- [tests/test_app.py](/home/administrator/lab-builder/tests/test_app.py:4061)
+
+Buttons/routes/forms verified:
+- `Open summary in Reports` -> `/view-run-summary` with `return_page=configs`
+- `/view-run-summary` renders Reports technical details
+- `Download summary` -> `/download-run-summary` inspected, unchanged
+- `Open Reports` -> `/configs` inspected, unchanged
+
+Tests/checks run:
+- `.venv/bin/python -m pytest tests/test_app.py::test_prepare_execute_shows_combined_storage_review_using_exact_approved_artifact tests/test_app.py::test_view_run_summary_builds_exportable_review`
+- `.venv/bin/python -m pytest tests/test_operator_flow_contract.py`
+- `.venv/bin/python -m compileall app`
+
+Real hardware used: none.
+
+Mocked/dry-run only: FastAPI route/template rendering with test kit data.
+
+Remaining risks: no browser screenshot or full pytest run in this cycle; the change is covered by focused route/template tests only.
+
+Recommended next task: Configuration page button/route rendering guard, especially `Save shared defaults` and `Populate setup sections from IP plan`. No commit or push was made.

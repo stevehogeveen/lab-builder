@@ -595,8 +595,8 @@
                 <div class="actions">
                     <form hx-post="/view-run-summary" hx-target="#main-content" hx-swap="outerHTML">
                         <input type="hidden" name="scope" value="{{ confirm_scope }}">
-                        <input type="hidden" name="return_page" value="execution">
-                        <button class="btn" type="submit">Open summary</button>
+                        <input type="hidden" name="return_page" value="configs">
+                        <button class="btn" type="submit">Open summary in Reports</button>
                     </form>
                     <form action="/download-run-summary" method="post">
                         <input type="hidden" name="scope" value="{{ confirm_scope }}">

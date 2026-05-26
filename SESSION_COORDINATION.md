@@ -38,6 +38,26 @@ Copy this block and update it in place.
 
 ## Active Sessions
 
+### Session: execution-summary-quality-cycle
+- Status: done
+- Branch: codex/14h-quality-run
+- Scope owner: Run Center summary-open destination cleanup
+- Working on: Completed Run Center summary-open destination cleanup without hardware access.
+- Blocked by: none
+- Ready to hand off: Run Center opened summaries now render on Reports; focused Run Center tests, operator-flow contract tests, and compile check pass.
+- Files claimed:
+  - templates/partials/pages/execution.html
+  - tests/test_app.py
+- Shared files touched with caution:
+  - SESSION_COORDINATION.md
+  - templates/partials/pages/execution.html
+  - tests/test_app.py
+- Last changed:
+  - 2026-05-26 00:00 EDT - Claimed narrow Run Center summary destination cleanup for the 14-hour quality run.
+  - 2026-05-26 00:04 EDT - Routed Run Center opened summaries to Reports and verified focused route/template coverage.
+- Next intended change:
+  - Continue with a separate backlog cycle; suggested next target is a focused Configuration page button/route rendering guard or another unclaimed Run Center control audit.
+
 ### Session: ilo-quality-cycle
 - Status: done
 - Branch: codex/14h-quality-run

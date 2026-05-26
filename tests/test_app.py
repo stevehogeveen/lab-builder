@@ -4058,7 +4058,8 @@ def test_prepare_execute_shows_combined_storage_review_using_exact_approved_arti
     assert "Settings that will be used" in response.text
     assert "Storage run values" in response.text
     assert "Approved plan path:" in response.text
-    assert "Open summary" in response.text
+    assert "Open summary in Reports" in response.text
+    assert '<input type="hidden" name="return_page" value="configs">' in response.text
     assert "Open Reports" in response.text
 
 
@@ -12833,10 +12834,12 @@ def test_view_run_summary_builds_exportable_review(client):
 
     response = client.post(
         "/view-run-summary",
-        data={"scope": "ilo", "return_page": "execution"},
+        data={"scope": "ilo", "return_page": "configs"},
     )
 
     assert response.status_code == 200
+    assert "Reports" in response.text
+    assert "Technical details" in response.text
     assert "Run Summary: ilo" in response.text
     assert "Run summary ready" in response.text
     assert "validation_checks" in response.text
