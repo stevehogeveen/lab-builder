@@ -546,7 +546,7 @@
                     <div class="cisco-fact"><span>Target</span><strong>{{ upgrade_target or 'not selected' }}</strong></div>
                 </div>
                 <div class="cisco-actions">
-                    <button class="btn" type="submit" hx-post="/modules/cisco/discover-version">Check version</button>
+                    <button class="btn action-button" type="submit" hx-post="/modules/cisco/discover-version" data-action-title="Reading Cisco version" data-action-start="Reading the current switch software version for Upgrade Helper and Run Center approval." data-action-complete="Cisco version check finished.">Check version</button>
                     <a class="btn" href="/upgrade-helper">Upgrade helper</a>
                 </div>
                 {% if action_feedback and feedback_area == 'upgrade' %}

@@ -1,0 +1,4 @@
+ SESSION_COORDINATION.md             | 18 ++++++++++++++++++
+ templates/partials/pages/cisco.html |  2 +-
+ tests/test_cisco_page.py            | 11 ++++++++++-
+ 3 files changed, 29 insertions(+), 2 deletions(-)

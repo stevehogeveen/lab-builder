@@ -51,7 +51,7 @@ def cisco_client(tmp_path: Path, monkeypatch):
         yield test_client
 
 
-def test_cisco_console_and_current_config_actions_use_shared_feedback_metadata(cisco_client):
+def test_cisco_console_current_config_and_version_actions_use_shared_feedback_metadata(cisco_client):
     cfg = main.default_config()
     cfg["site"]["name"] = "Cisco Page Test Kit"
     cfg["cisco_switch"].update(
@@ -71,10 +71,12 @@ def test_cisco_console_and_current_config_actions_use_shared_feedback_metadata(c
     assert 'hx-post="/modules/cisco/trust-console-adapter"' in response.text
     assert 'hx-post="/modules/cisco/check-current-config"' in response.text
     assert 'hx-post="/modules/cisco/test-ssh"' in response.text
+    assert 'hx-post="/modules/cisco/discover-version"' in response.text
     assert 'class="btn action-button" type="button" hx-post="/modules/cisco/test-console-access"' in response.text
     assert 'class="btn action-button" type="submit" hx-post="/modules/cisco/trust-console-adapter"' in response.text
     assert 'class="btn action-button" type="submit" hx-post="/modules/cisco/check-current-config"' in response.text
     assert 'class="btn action-button" type="submit" hx-post="/modules/cisco/test-ssh"' in response.text
+    assert 'class="btn action-button" type="submit" hx-post="/modules/cisco/discover-version"' in response.text
     assert 'data-action-title="Testing Cisco console access"' in response.text
     assert "Checking the selected serial console adapter without changing switch configuration." in response.text
     assert 'data-action-title="Trusting Cisco console adapter"' in response.text
@@ -85,6 +87,9 @@ def test_cisco_console_and_current_config_actions_use_shared_feedback_metadata(c
     assert 'data-action-title="Testing Cisco SSH"' in response.text
     assert "Connecting to the saved Cisco management IP with the saved switch credentials." in response.text
     assert 'data-action-complete="Cisco SSH test finished."' in response.text
+    assert 'data-action-title="Reading Cisco version"' in response.text
+    assert "Reading the current switch software version for Upgrade Helper and Run Center approval." in response.text
+    assert 'data-action-complete="Cisco version check finished."' in response.text
     assert "CiscoSecret123!" not in response.text
 
     assert any(
@@ -101,5 +106,9 @@ def test_cisco_console_and_current_config_actions_use_shared_feedback_metadata(c
     )
     assert any(
         route.path == "/modules/cisco/test-ssh" and "POST" in route.methods
+        for route in main.app.routes
+    )
+    assert any(
+        route.path == "/modules/cisco/discover-version" and "POST" in route.methods
         for route in main.app.routes
     )
