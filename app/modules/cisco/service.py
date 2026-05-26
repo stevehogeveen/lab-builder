@@ -16,6 +16,7 @@ from app.cisco import (
     CiscoSSHClient,
     apply_serial_permission_fix,
     append_cisco_log,
+    cisco_wizard_password_policy_error,
     discovery_candidates_payload,
     mask_secrets,
     normalize_cisco_switch_config,
@@ -169,6 +170,121 @@ class CiscoModuleService:
                 return str(port), mode or "trunk"
         return "GigabitEthernet1/0/1", configured_mode or "do_not_touch"
 
+    def _discovered_current_state(self, cisco_cfg: dict[str, Any]) -> dict[str, Any]:
+        check = dict(cisco_cfg.get("last_console_bootstrap_check") or {})
+        current_management_ip = str(check.get("current_management_ip") or "").strip()
+        current_subnet_mask = str(check.get("current_subnet_mask") or "").strip()
+        current_gateway = str(check.get("default_gateway") or "").strip()
+        current_domain_name = str(check.get("domain_name") or "").strip()
+        current_vlan = check.get("management_vlan")
+        saved_management_ip = str(cisco_cfg.get("management_ip") or cisco_cfg.get("ip") or "").strip()
+        has_values = any(
+            [
+                current_management_ip,
+                current_subnet_mask,
+                current_gateway,
+                current_domain_name,
+                current_vlan,
+                check.get("ssh_enabled") is not None,
+                check.get("scp_enabled") is not None,
+            ]
+        )
+        note = "Run Check current config to read the switch over the selected console."
+        if current_management_ip and not saved_management_ip:
+            note = "Discovered on the switch, but not saved in this kit yet."
+        elif current_management_ip and saved_management_ip and current_management_ip != saved_management_ip:
+            note = f"Discovered IP differs from saved kit config ({saved_management_ip})."
+        elif current_management_ip:
+            note = "Discovered IP matches the saved kit config."
+        return {
+            "has_values": has_values,
+            "source": "Console check" if check else "Not checked",
+            "management_ip": current_management_ip,
+            "subnet_mask": current_subnet_mask,
+            "gateway": current_gateway,
+            "domain_name": current_domain_name,
+            "management_vlan": current_vlan,
+            "ssh_enabled": check.get("ssh_enabled"),
+            "scp_enabled": check.get("scp_enabled"),
+            "host_reachable": check.get("host_reachable"),
+            "checked_at": str(cisco_cfg.get("last_bootstrap_at") or check.get("checked_at") or ""),
+            "note": note,
+            "differs_from_saved": bool(current_management_ip and saved_management_ip and current_management_ip != saved_management_ip),
+            "not_saved": bool(current_management_ip and not saved_management_ip),
+        }
+
+    def _saved_kit_config(self, cfg: dict[str, Any], cisco_cfg: dict[str, Any]) -> dict[str, Any]:
+        ip_plan = dict(cfg.get("ip_plan") or {})
+        saved_management_ip = str(cisco_cfg.get("management_ip") or cisco_cfg.get("ip") or "").strip()
+        saved_subnet_mask = str(cisco_cfg.get("subnet_mask") or "").strip()
+        saved_gateway = str(cisco_cfg.get("gateway") or "").strip()
+        saved_vlan = cisco_cfg.get("management_vlan")
+        has_network = bool(saved_management_ip)
+        return {
+            "has_network": has_network,
+            "hostname": str(cisco_cfg.get("hostname") or "").strip(),
+            "management_ip": saved_management_ip,
+            "subnet_mask": saved_subnet_mask,
+            "gateway": saved_gateway,
+            "management_vlan": saved_vlan,
+            "domain_name": str(cisco_cfg.get("domain_name") or "").strip(),
+            "username": str(cisco_cfg.get("username") or "").strip(),
+            "console_port": str(cisco_cfg.get("console_port") or "").strip(),
+            "state_label": "Saved" if has_network else "Not saved yet",
+            "source": "Lab Builder kit config" if has_network else "No Cisco network values are saved in this kit",
+            "planned_ip": str(ip_plan.get("switch") or "").strip(),
+        }
+
+    def _ready_to_apply_values(self, cfg: dict[str, Any], cisco_cfg: dict[str, Any]) -> dict[str, Any]:
+        ip_plan = dict(cfg.get("ip_plan") or {})
+        saved = self._saved_kit_config(cfg, cisco_cfg)
+        management_ip = str(saved.get("management_ip") or ip_plan.get("switch") or "").strip()
+        subnet_mask = str(saved.get("subnet_mask") or ip_plan.get("netmask") or "").strip()
+        gateway = str(saved.get("gateway") or ip_plan.get("gateway") or "").strip()
+        return {
+            "hostname": str(saved.get("hostname") or "sw01").strip(),
+            "management_vlan": saved.get("management_vlan") or 10,
+            "management_ip": management_ip,
+            "subnet_mask": subnet_mask,
+            "gateway": gateway,
+            "domain_name": str(saved.get("domain_name") or "lab.local").strip(),
+            "username": str(saved.get("username") or "admin").strip(),
+            "ssh": bool(management_ip and str(cisco_cfg.get("username") or "").strip()),
+            "scp": True,
+            "source": "Saved Lab Builder kit config" if saved.get("has_network") else "Generated kit IP plan until Cisco values are saved",
+            "ready": bool(management_ip and subnet_mask and gateway),
+        }
+
+    def _last_action_result(self, cisco_cfg: dict[str, Any]) -> dict[str, Any]:
+        action = dict(cisco_cfg.get("last_cisco_action") or {})
+        if not action:
+            return {
+                "has_action": False,
+                "mode": "not_run",
+                "status_label": "Not run",
+                "tone": "pending",
+                "summary": "No Cisco action has run in this kit yet.",
+                "completed_at": "",
+                "log_excerpt": "",
+            }
+        ok = bool(action.get("ok"))
+        error = str(action.get("error") or "").strip()
+        mode = str(action.get("mode") or "cisco_action").strip()
+        if "log_excerpt" in action:
+            raw_output = str(action.get("log_excerpt") or "").strip()
+        else:
+            raw_output = str(cisco_cfg.get("last_serial_output") or cisco_cfg.get("last_console_management_state") or "").strip()
+        excerpt = "\n".join(raw_output.splitlines()[-18:]) if raw_output else ""
+        return {
+            "has_action": True,
+            "mode": mode,
+            "status_label": "Succeeded" if ok else "Needs attention",
+            "tone": "ready" if ok else "pending",
+            "summary": error or mode.replace("_", " ").capitalize(),
+            "completed_at": str(action.get("completed_at") or ""),
+            "log_excerpt": excerpt,
+        }
+
     def _status_payload(self, context: dict[str, Any]) -> dict[str, Any]:
         cfg = dict(context.get("cfg") or {})
         cisco_cfg = dict(cfg.get("cisco_switch") or {})
@@ -185,6 +301,10 @@ class CiscoModuleService:
         if stale_initial_dialog_bootstrap and not bool(dict(cisco_cfg.get("last_ssh_test") or {}).get("ok")):
             connection_method = "console"
         effective_bootstrap_port, effective_bootstrap_mode = self._bootstrap_network_path(cisco_cfg)
+        discovered_current = self._discovered_current_state(cisco_cfg)
+        saved_kit_config = self._saved_kit_config(cfg, cisco_cfg)
+        ready_to_apply = self._ready_to_apply_values(cfg, cisco_cfg)
+        last_action_result = self._last_action_result(cisco_cfg)
         return {
             "target": self._target(context),
             "management_ip": self._management_ip(context),
@@ -244,6 +364,10 @@ class CiscoModuleService:
             "last_host_fix": dict(cisco_cfg.get("last_host_fix") or {}),
             "last_console_bootstrap_check": dict(cisco_cfg.get("last_console_bootstrap_check") or {}),
             "config_approval": dict(cisco_cfg.get("config_approval") or {}),
+            "discovered_current": discovered_current,
+            "saved_kit_config": saved_kit_config,
+            "ready_to_apply": ready_to_apply,
+            "last_action_result": last_action_result,
             "operator_findings": self._operator_findings(cfg, cisco_cfg),
         }
 
@@ -880,10 +1004,23 @@ class CiscoModuleService:
             return {"module": "cisco", "action": "bootstrap_management", "ok": False, "error": "Cisco management gateway is not set.", "status": self._status_payload(context)}
         if not self._username(context):
             return {"module": "cisco", "action": "bootstrap_management", "ok": False, "error": "Cisco username is not set.", "status": self._status_payload(context)}
-        if not self._password(context):
+        switch_password = self._password(context)
+        enable_secret = self._enable_secret(cisco_cfg)
+        if not switch_password:
             return {"module": "cisco", "action": "bootstrap_management", "ok": False, "error": "Cisco password is not set.", "status": self._status_payload(context)}
-        if not self._enable_secret(cisco_cfg):
+        if not enable_secret:
             return {"module": "cisco", "action": "bootstrap_management", "ok": False, "error": "Cisco enable secret is not set.", "status": self._status_payload(context)}
+        for label, secret in (("Cisco password", switch_password), ("Cisco enable secret", enable_secret)):
+            policy_error = cisco_wizard_password_policy_error(label, secret)
+            if policy_error:
+                return {
+                    "module": "cisco",
+                    "action": "bootstrap_management",
+                    "ok": False,
+                    "error": policy_error,
+                    "validation_errors": [policy_error],
+                    "status": self._status_payload(context),
+                }
         management_config = {
             "hostname": str(cisco_cfg.get("hostname") or "sw01").strip(),
             "management_vlan": int(cisco_cfg.get("management_vlan") or 10),
@@ -893,10 +1030,11 @@ class CiscoModuleService:
             "domain_name": str(cisco_cfg.get("domain_name") or "lab.local").strip(),
             "dns_servers": list(cisco_cfg.get("dns_servers") or []),
             "username": self._username(context),
-            "password": self._password(context),
+            "password": switch_password,
             "console_password": str(cisco_cfg.get("console_password") or ""),
-            "enable_secret": self._enable_secret(cisco_cfg),
-            "enable_password": self._enable_secret(cisco_cfg),
+            "enable_secret": enable_secret,
+            "enable_password": enable_secret,
+            "wizard_password": enable_secret,
             "management_port": management_port,
             "management_port_mode": management_port_mode,
             "trunk_review_ack": bool(trunk_review_ack),
@@ -1111,6 +1249,7 @@ class CiscoModuleService:
                 "port": port,
                 "baud": baud,
                 "commands": list(payload.get("commands") or []),
+                "steps": list(payload.get("steps") or []),
                 "output": str(payload.get("output") or ""),
                 "output_excerpt": "\n".join(str(payload.get("output") or "").splitlines()[-80:]),
                 "error": str(payload.get("error") or ""),

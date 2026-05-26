@@ -138,15 +138,40 @@ def _ports(*devices):
     )
 
 
+def _speed_up_serial_client_reads(monkeypatch):
+    def fast_read_for(self, _seconds):
+        if self._conn is None:
+            raise cisco.CiscoSerialError("Serial connection is not open.")
+        waiting = int(getattr(self._conn, "in_waiting", 0) or 0)
+        chunk = self._conn.read(waiting or 256)
+        return chunk.decode("utf-8", errors="replace") if chunk else ""
+
+    monkeypatch.setattr(cisco.CiscoSerialClient, "_read_for", fast_read_for)
+
+
 def test_detect_cisco_prompt_patterns():
     assert cisco.detect_cisco_prompt("Switch#")[0] == "privileged"
     assert cisco.detect_cisco_prompt("Router>")[0] == "user_exec"
+    assert cisco.detect_cisco_prompt("Switch(config)#")[0] == "config"
+    assert cisco.detect_cisco_prompt("Switch(config-if)#")[0] == "interface_config"
     assert cisco.detect_cisco_prompt("Username:")[0] == "username"
+    assert cisco.detect_cisco_prompt("Login:")[0] == "login"
     assert cisco.detect_cisco_prompt("Password:")[0] == "password"
     assert cisco.detect_cisco_prompt("rommon >")[0] == "rommon"
     assert cisco.detect_cisco_prompt("Enter enable secret:")[0] == "setup_enable_secret"
     assert cisco.detect_cisco_prompt("Confirm enable secret:")[0] == "setup_enable_secret"
     assert cisco.detect_cisco_prompt("Would you like to enter the initial configuration dialog?")[0] == "initial_dialog"
+    assert cisco.detect_cisco_prompt("Would you like to terminate autoinstall? [yes]:")[0] == "autoinstall_terminate"
+    assert cisco.detect_cisco_prompt("Press RETURN to get started!")[0] == "press_return"
+    assert cisco.detect_cisco_prompt("0  Go to the IOS command prompt without saving this config\nEnter your selection [2]:")[0] == "setup_final_menu"
+
+
+def test_cisco_wizard_password_policy_validation():
+    assert "at least 10 characters" in cisco.validate_cisco_wizard_password_policy("Short1")
+    assert "one uppercase letter" in cisco.validate_cisco_wizard_password_policy("lowercase12")
+    assert "one lowercase letter" in cisco.validate_cisco_wizard_password_policy("UPPERCASE12")
+    assert "one digit" in cisco.validate_cisco_wizard_password_policy("NoDigitsHere")
+    assert cisco.validate_cisco_wizard_password_policy("ValidSecret123") == []
 
 
 def test_serial_discovery_no_console_found(monkeypatch):
@@ -249,6 +274,7 @@ def test_serial_discovery_deduplicates_by_id_alias(monkeypatch):
 
 
 def test_bootstrap_exits_initial_dialog_before_config(monkeypatch):
+    _speed_up_serial_client_reads(monkeypatch)
     commands = cisco.CiscoSerialClient.build_management_commands(
         {
             "hostname": "sw01",
@@ -294,6 +320,194 @@ def test_bootstrap_exits_initial_dialog_before_config(monkeypatch):
     assert "configure terminal" in writes
     assert writes.index("no") < writes.index("configure terminal")
     assert "Secret123" not in result.output
+
+
+def test_bootstrap_terminates_autoinstall_after_initial_dialog(monkeypatch):
+    _speed_up_serial_client_reads(monkeypatch)
+    commands = cisco.CiscoSerialClient.build_management_commands(
+        {
+            "hostname": "sw01",
+            "management_vlan": 10,
+            "management_ip": "192.168.1.2",
+            "subnet_mask": "255.255.255.0",
+            "gateway": "192.168.1.1",
+            "domain_name": "example.local",
+            "username": "admin",
+            "password": "Secret123",
+            "enable_secret": "Enable123!",
+        },
+        mask=False,
+    )
+    outputs = [
+        b"Would you like to enter the initial configuration dialog? [yes/no]: ",
+        b"\r\nWould you like to terminate autoinstall? [yes]: ",
+        b"\r\nSwitch#",
+    ] + [b"\r\nSwitch#" for _ in commands]
+    connection = SequencedSerialConnection(outputs)
+    monkeypatch.setattr(cisco, "serial", SequencedSerialModule(connection))
+    monkeypatch.setattr(cisco, "list_ports", _ports("/dev/ttyUSB0"))
+    monkeypatch.setattr(cisco, "append_cisco_log", lambda *args, **kwargs: None)
+
+    with cisco.CiscoSerialClient("/dev/ttyUSB0", 9600, timeout=0.01) as client:
+        result = client.apply_management_config(
+            {
+                "hostname": "sw01",
+                "management_vlan": 10,
+                "management_ip": "192.168.1.2",
+                "subnet_mask": "255.255.255.0",
+                "gateway": "192.168.1.1",
+                "domain_name": "example.local",
+                "username": "admin",
+                "password": "Secret123",
+                "enable_secret": "Enable123!",
+            }
+        )
+
+    writes = [item.decode("utf-8").strip() for item in connection.writes]
+
+    assert result.ok is True
+    assert writes[1] == "no"
+    assert writes[2] == "yes"
+    assert writes.index("no") < writes.index("yes") < writes.index("configure terminal")
+    assert any("initial configuration dialog" in step for step in result.steps)
+    assert any("autoinstall" in step for step in result.steps)
+
+
+def test_bootstrap_returns_from_config_prompt_before_apply(monkeypatch):
+    _speed_up_serial_client_reads(monkeypatch)
+    commands = cisco.CiscoSerialClient.build_management_commands(
+        {
+            "hostname": "sw01",
+            "management_vlan": 10,
+            "management_ip": "192.168.1.2",
+            "subnet_mask": "255.255.255.0",
+            "gateway": "192.168.1.1",
+            "domain_name": "example.local",
+            "username": "admin",
+            "password": "Secret123",
+            "enable_secret": "Enable123!",
+        },
+        mask=False,
+    )
+    outputs = [b"\r\nSwitch(config-if)#", b"\r\nSwitch#"] + [b"\r\nSwitch#" for _ in commands]
+    connection = SequencedSerialConnection(outputs)
+    monkeypatch.setattr(cisco, "serial", SequencedSerialModule(connection))
+    monkeypatch.setattr(cisco, "list_ports", _ports("/dev/ttyUSB0"))
+    monkeypatch.setattr(cisco, "append_cisco_log", lambda *args, **kwargs: None)
+
+    with cisco.CiscoSerialClient("/dev/ttyUSB0", 9600, timeout=0.01) as client:
+        result = client.apply_management_config(
+            {
+                "hostname": "sw01",
+                "management_vlan": 10,
+                "management_ip": "192.168.1.2",
+                "subnet_mask": "255.255.255.0",
+                "gateway": "192.168.1.1",
+                "domain_name": "example.local",
+                "username": "admin",
+                "password": "Secret123",
+                "enable_secret": "Enable123!",
+            }
+        )
+
+    writes = [item.decode("utf-8").strip() for item in connection.writes]
+
+    assert result.ok is True
+    assert writes[1] == "end"
+    assert writes.index("end") < writes.index("configure terminal")
+    assert any("configuration prompt" in step for step in result.steps)
+
+
+def test_bootstrap_setup_wizard_final_menu_chooses_ios_prompt_without_saving(monkeypatch):
+    _speed_up_serial_client_reads(monkeypatch)
+    commands = cisco.CiscoSerialClient.build_management_commands(
+        {
+            "hostname": "sw01",
+            "management_vlan": 10,
+            "management_ip": "192.168.1.2",
+            "subnet_mask": "255.255.255.0",
+            "gateway": "192.168.1.1",
+            "domain_name": "example.local",
+            "username": "admin",
+            "password": "ValidSecret123",
+            "enable_secret": "ValidSecret123",
+        },
+        mask=False,
+    )
+    outputs = [
+        b"Enter enable secret: ",
+        b"\r\nConfirm enable secret: ",
+        b"\r\n0  Go to the IOS command prompt without saving this config\r\n1  Return back to the setup without saving this config\r\n2  Save this configuration to NVRAM and exit\r\nEnter your selection [2]: ",
+        b"\r\nSwitch>",
+        b"\r\nPassword: ",
+        b"\r\nSwitch#",
+    ] + [b"\r\nSwitch#" for _ in commands]
+    connection = SequencedSerialConnection(outputs)
+    monkeypatch.setattr(cisco, "serial", SequencedSerialModule(connection))
+    monkeypatch.setattr(cisco, "list_ports", _ports("/dev/ttyUSB0"))
+    monkeypatch.setattr(cisco, "append_cisco_log", lambda *args, **kwargs: None)
+
+    with cisco.CiscoSerialClient("/dev/ttyUSB0", 9600, timeout=0.01) as client:
+        result = client.apply_management_config(
+            {
+                "hostname": "sw01",
+                "management_vlan": 10,
+                "management_ip": "192.168.1.2",
+                "subnet_mask": "255.255.255.0",
+                "gateway": "192.168.1.1",
+                "domain_name": "example.local",
+                "username": "admin",
+                "password": "ValidSecret123",
+                "enable_secret": "ValidSecret123",
+                "wizard_password": "ValidSecret123",
+            }
+        )
+
+    writes = [item.decode("utf-8").strip() for item in connection.writes]
+
+    assert result.ok is True
+    assert "0" in writes
+    assert "2" not in writes
+    assert writes.index("0") < writes.index("configure terminal")
+    assert writes.index("configure terminal") < writes.index("write memory")
+    assert any("final menu" in step for step in result.steps)
+    assert "ValidSecret123" not in result.output
+
+
+def test_bootstrap_does_not_save_when_cli_config_is_rejected(monkeypatch):
+    _speed_up_serial_client_reads(monkeypatch)
+    connection = CommandAwareSerialConnection(
+        b"\r\nSwitch#",
+        {
+            "": b"\r\nSwitch#",
+            "ip address 192.168.1.2 255.255.255.0": b"\r\n% Invalid input detected at '^' marker.\r\nSwitch(config-if)#",
+        },
+    )
+    monkeypatch.setattr(cisco, "serial", CommandAwareSerialModule({"/dev/ttyUSB0": connection}))
+    monkeypatch.setattr(cisco, "list_ports", _ports("/dev/ttyUSB0"))
+    monkeypatch.setattr(cisco, "append_cisco_log", lambda *args, **kwargs: None)
+
+    with cisco.CiscoSerialClient("/dev/ttyUSB0", 9600, timeout=0.01) as client:
+        result = client.apply_management_config(
+            {
+                "hostname": "sw01",
+                "management_vlan": 10,
+                "management_ip": "192.168.1.2",
+                "subnet_mask": "255.255.255.0",
+                "gateway": "192.168.1.1",
+                "domain_name": "example.local",
+                "username": "admin",
+                "password": "ValidSecret123",
+                "enable_secret": "ValidSecret123",
+            }
+        )
+
+    writes = [item.decode("utf-8").strip() for item in connection.writes]
+
+    assert result.ok is False
+    assert "write memory" not in writes
+    assert "write memory" not in result.commands
+    assert "rejected" in result.error
 
 
 def test_password_masking():
@@ -378,6 +592,7 @@ def test_management_bootstrap_requires_trunk_review_ack_for_trunk_port():
 
 
 def test_console_factory_reset_declines_save_prompt(monkeypatch):
+    _speed_up_serial_client_reads(monkeypatch)
     outputs = [
         b"\r\nSwitch#",
         b"\r\nSwitch#",

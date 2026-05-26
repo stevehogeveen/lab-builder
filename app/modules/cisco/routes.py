@@ -600,7 +600,9 @@ async def cisco_bootstrap_management(
     result = service.bootstrap_management({"cfg": cfg}, trunk_review_ack=trunk_review_ack)
     cisco_cfg["last_bootstrap"] = {key: value for key, value in result.items() if key not in {"status", "output"}}
     cisco_cfg["last_serial_output"] = str(result.get("output") or cisco_cfg.get("last_serial_output") or "")
-    cisco_cfg["last_bootstrap_at"] = datetime.now(timezone.utc).isoformat()
+    completed_at = datetime.now(timezone.utc).isoformat()
+    cisco_cfg["last_bootstrap_at"] = completed_at
+    bootstrap_check: dict[str, Any] = {}
     if result.get("ok"):
         check = service.verify_console_bootstrap({"cfg": cfg})
         cisco_cfg["last_console_bootstrap_check"] = {key: value for key, value in check.items() if key not in {"status", "raw_output"}}
@@ -608,14 +610,23 @@ async def cisco_bootstrap_management(
         if check.get("raw_output"):
             cisco_cfg["last_console_management_state"] = str(check.get("raw_output") or "")
         cisco_cfg["connection_method"] = "ssh" if check.get("ok") else "console"
+        bootstrap_check = dict(cisco_cfg.get("last_console_bootstrap_check") or {})
+    action_error = str(result.get("error") or bootstrap_check.get("error") or "")
+    action_ok = bool(result.get("ok")) and bool(bootstrap_check.get("ok"))
+    cisco_cfg["last_cisco_action"] = {
+        "mode": "bootstrap_management",
+        "ok": action_ok,
+        "error": action_error,
+        "completed_at": completed_at,
+        "log_excerpt": "\n".join(str(result.get("output") or "").splitlines()[-18:]),
+    }
     main.save_kit_config(cfg)
-    bootstrap_check = dict(cisco_cfg.get("last_console_bootstrap_check") or {})
     feedback = main.build_action_feedback(
         "Cisco console setup complete" if result.get("ok") else ("Cisco trunk review needed" if result.get("requires_trunk_review") else "Cisco console setup failed"),
         "Console bootstrap completed. Use Test SSH before running version discovery or upgrades." if result.get("ok") and bootstrap_check.get("ok") else str(result.get("error") or bootstrap_check.get("error") or "Console bootstrap needs attention."),
         tone="ready" if result.get("ok") and bootstrap_check.get("ok") else ("pending" if result.get("ok") or result.get("requires_trunk_review") else "danger"),
         outcomes=[f"Management IP: {cisco_cfg.get('management_ip') or cisco_cfg.get('ip') or 'Not set'}", f"Console: {cisco_cfg.get('console_port') or 'Not selected'}"],
-        details=list(result.get("warnings") or []) + list(bootstrap_check.get("warnings") or []),
+        details=list(result.get("steps") or []) + list(result.get("warnings") or []) + list(bootstrap_check.get("warnings") or []),
     )
     return _render_cisco_page(request, cfg, action_feedback=feedback)
 
@@ -631,6 +642,7 @@ async def cisco_verify_console_bootstrap(request: Request):
     _update_cisco_access_from_form(cisco_cfg, form)
     result = service.verify_console_bootstrap({"cfg": cfg})
     cisco_cfg["last_console_bootstrap_check"] = {key: value for key, value in result.items() if key not in {"status", "raw_output"}}
+    cisco_cfg["last_console_bootstrap_check"]["checked_at"] = datetime.now(timezone.utc).isoformat()
     cisco_cfg["last_raw_console_bootstrap_check"] = str(result.get("raw_output") or "")
     if result.get("raw_output"):
         cisco_cfg["last_console_management_state"] = str(result.get("raw_output") or "")
@@ -654,6 +666,73 @@ async def cisco_verify_console_bootstrap(request: Request):
         ],
         details=list(result.get("warnings") or []),
     )
+    return _render_cisco_page(request, cfg, action_feedback=feedback)
+
+
+@router.post("/modules/cisco/use-discovered-values", response_class=HTMLResponse)
+async def cisco_use_discovered_values(request: Request):
+    from app import main
+
+    cfg = main.load_kit_config()
+    cisco_cfg = cfg.setdefault("cisco_switch", {})
+    check = dict(cisco_cfg.get("last_console_bootstrap_check") or {})
+    applied: list[str] = []
+
+    discovered_ip = str(check.get("current_management_ip") or "").strip()
+    if discovered_ip:
+        cisco_cfg["management_ip"] = discovered_ip
+        cisco_cfg["ip"] = discovered_ip
+        applied.append(f"Management IP {discovered_ip}")
+    discovered_mask = str(check.get("current_subnet_mask") or "").strip()
+    if discovered_mask:
+        cisco_cfg["subnet_mask"] = discovered_mask
+        applied.append(f"Subnet mask {discovered_mask}")
+    discovered_gateway = str(check.get("default_gateway") or "").strip()
+    if discovered_gateway:
+        cisco_cfg["gateway"] = discovered_gateway
+        applied.append(f"Gateway {discovered_gateway}")
+    discovered_domain = str(check.get("domain_name") or "").strip()
+    if discovered_domain:
+        cisco_cfg["domain_name"] = discovered_domain
+        applied.append(f"Domain {discovered_domain}")
+    if check.get("management_vlan") not in (None, ""):
+        try:
+            cisco_cfg["management_vlan"] = int(check.get("management_vlan"))
+            applied.append(f"VLAN {cisco_cfg['management_vlan']}")
+        except (TypeError, ValueError):
+            pass
+    discovered_name_servers = [str(item).strip() for item in list(check.get("name_servers") or []) if str(item).strip()]
+    if discovered_name_servers:
+        cisco_cfg["dns_servers"] = discovered_name_servers
+        applied.append("DNS servers from switch")
+
+    if applied:
+        completed_at = datetime.now(timezone.utc).isoformat()
+        cisco_cfg["last_cisco_action"] = {
+            "mode": "use_discovered_values",
+            "ok": True,
+            "completed_at": completed_at,
+        }
+        main.save_kit_config(cfg)
+        feedback = main.build_action_feedback(
+            "Cisco discovered values saved",
+            "Saved the latest console-discovered switch values into this Lab Builder kit.",
+            tone="ready",
+            outcomes=applied,
+        )
+    else:
+        cisco_cfg["last_cisco_action"] = {
+            "mode": "use_discovered_values",
+            "ok": False,
+            "error": "No discovered Cisco management values are available. Run Check current config first.",
+            "completed_at": datetime.now(timezone.utc).isoformat(),
+        }
+        main.save_kit_config(cfg)
+        feedback = main.build_action_feedback(
+            "Cisco discovered values not saved",
+            "No discovered Cisco management values are available. Run Check current config first.",
+            tone="pending",
+        )
     return _render_cisco_page(request, cfg, action_feedback=feedback)
 
 
@@ -1007,6 +1086,7 @@ async def cisco_factory_reset(request: Request):
         "Startup config and vlan.dat deletion were issued and the switch is reloading." if result.get("status") == "reload_issued" else str(result.get("error") or "Factory reset was not started."),
         tone=tone,
         outcomes=[f"Source: {source}", f"Console: {cisco_cfg.get('console_port') or 'not selected'}"],
+        details=list(result.get("steps") or []),
     )
     return _render_cisco_page(request, cfg, action_feedback=feedback)
 

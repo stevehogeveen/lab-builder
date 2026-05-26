@@ -21,6 +21,14 @@
 {% set current_management_ip = console_check.get('current_management_ip') or '' %}
 {% set current_gateway = console_check.get('default_gateway') or '' %}
 {% set current_domain_name = console_check.get('domain_name') or '' %}
+{% set discovered_current = cisco.discovered_current or {} %}
+{% set saved_kit_config = cisco.saved_kit_config or {} %}
+{% set ready_to_apply = cisco.ready_to_apply or {} %}
+{% set last_action_result = cisco.last_action_result or {} %}
+{% set discovered_management_ip = discovered_current.get('management_ip') or current_management_ip or '' %}
+{% set saved_management_ip = saved_kit_config.get('management_ip') or '' %}
+{% set ready_management_ip = ready_to_apply.get('management_ip') or has_management_ip or cfg.get('ip_plan', {}).get('switch', '') %}
+{% set discovered_needs_save = discovered_management_ip and (not saved_management_ip or saved_management_ip != discovered_management_ip) %}
 {% set management_port_mode = cisco.management_port_mode or cisco_cfg.get('management_port_mode', 'do_not_touch') %}
 {% set upgrade_current = cisco_gate_entry.get('current_version') or upgrade_plan.get('current_version') or cisco.last_discovered_version %}
 {% set upgrade_target = cisco_gate_entry.get('media_version') or upgrade_plan.get('media_version') %}
@@ -69,7 +77,7 @@
         {% set feedback_area = 'run' %}
     {% elif 'management ip configured' in feedback_title or 'management config failed' in feedback_title or 'console setup' in feedback_title or 'trunk review' in feedback_title %}
         {% set feedback_area = 'access' %}
-    {% elif 'ssh' in feedback_title or 'management' in feedback_title or 'console bootstrap' in feedback_title %}
+    {% elif 'discovered values' in feedback_title or 'ssh' in feedback_title or 'management' in feedback_title or 'console bootstrap' in feedback_title %}
         {% set feedback_area = 'console_config' %}
     {% elif 'warning' in feedback_title or 'console' in feedback_title %}
         {% set feedback_area = 'warnings' %}
@@ -177,6 +185,47 @@
             display: grid;
             grid-template-columns: repeat(2, minmax(0, 1fr));
             gap: .45rem;
+        }
+
+        .cisco-state-grid {
+            display: grid;
+            grid-template-columns: repeat(4, minmax(0, 1fr));
+            gap: .85rem;
+        }
+
+        .cisco-state-card {
+            min-width: 0;
+            padding: .85rem;
+            border: 1px solid var(--border);
+            border-radius: .9rem;
+            background: color-mix(in srgb, var(--panel) 88%, transparent);
+        }
+
+        .cisco-state-card-title {
+            display: flex;
+            justify-content: space-between;
+            gap: .65rem;
+            align-items: center;
+            color: var(--text);
+            font-size: .88rem;
+            font-weight: 800;
+        }
+
+        .cisco-state-card-value {
+            margin-top: .45rem;
+            overflow: hidden;
+            color: var(--text);
+            font-size: 1rem;
+            font-weight: 800;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+
+        .cisco-state-card-note {
+            margin-top: .25rem;
+            color: var(--muted);
+            font-size: .78rem;
+            line-height: 1.35;
         }
 
         .cisco-fact {
@@ -331,6 +380,7 @@
 
         @container (max-width: 1180px) {
             .cisco-workflow,
+            .cisco-state-grid,
             .cisco-compact-grid,
             .cisco-advanced-grid {
                 grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -345,6 +395,7 @@
             .cisco-hero,
             .cisco-console-row,
             .cisco-workflow,
+            .cisco-state-grid,
             .cisco-compact-grid,
             .cisco-advanced-grid,
             .cisco-findings,
@@ -368,12 +419,57 @@
         {% include "partials/components/precheck_summary.html" %}
 
         {% set setup_strip = [
-            {"label": "Management IP", "value": has_management_ip or cfg.get('ip_plan', {}).get('switch', '') or 'Not set', "note": "SSH and Run Center target"},
+            {"label": "Discovered reality", "value": discovered_management_ip or 'Not checked', "note": discovered_current.get('source') or 'Console check'},
+            {"label": "Saved kit config", "value": saved_management_ip or 'Not saved yet', "note": saved_kit_config.get('source') or 'Lab Builder kit config'},
+            {"label": "Ready to apply", "value": ready_management_ip or 'Needs IP', "note": ready_to_apply.get('source') or 'Console setup input'},
             {"label": "Console", "value": has_console or 'Not selected', "note": "Serial bootstrap path"},
-            {"label": "SSH", "value": 'Test passed' if has_ssh else 'Needs test', "note": "Required before config apply"},
-            {"label": "Approval", "value": approval.get('state') or 'Not approved', "note": "Saved config plan state"},
         ] %}
         {% include "partials/components/setup_strip.html" %}
+
+        <section class="cisco-state-grid" aria-label="Cisco state summary">
+            <article class="cisco-state-card">
+                <div class="cisco-state-card-title">
+                    <span>Discovered/current switch state</span>
+                    <span class="status {{ 'ready' if discovered_management_ip else 'pending' }}">{{ discovered_current.get('source') or 'Not checked' }}</span>
+                </div>
+                <div class="cisco-state-card-value">{{ discovered_management_ip or 'Not checked yet' }}</div>
+                <div class="cisco-state-card-note">{{ discovered_current.get('note') or 'Run Check current config to read the switch over console.' }}</div>
+            </article>
+            <article class="cisco-state-card">
+                <div class="cisco-state-card-title">
+                    <span>Saved Lab Builder kit config</span>
+                    <span class="status {{ 'ready' if saved_management_ip else 'pending' }}">{{ saved_kit_config.get('state_label') or 'Not saved yet' }}</span>
+                </div>
+                <div class="cisco-state-card-value">{{ saved_management_ip or 'Not saved yet' }}</div>
+                <div class="cisco-state-card-note">
+                    VLAN {{ saved_kit_config.get('management_vlan') or 'not saved' }} · Gateway {{ saved_kit_config.get('gateway') or 'not saved' }}
+                </div>
+            </article>
+            <article class="cisco-state-card">
+                <div class="cisco-state-card-title">
+                    <span>Values ready to apply</span>
+                    <span class="status {{ 'ready' if ready_to_apply.get('ready') else 'pending' }}">{{ 'Ready' if ready_to_apply.get('ready') else 'Needs values' }}</span>
+                </div>
+                <div class="cisco-state-card-value">{{ ready_management_ip or 'Needs IP' }}</div>
+                <div class="cisco-state-card-note">
+                    VLAN {{ ready_to_apply.get('management_vlan') or 10 }} · {{ ready_to_apply.get('source') or 'Console setup input' }}
+                </div>
+            </article>
+            <article class="cisco-state-card">
+                <div class="cisco-state-card-title">
+                    <span>Last action result/log</span>
+                    <span class="status {{ last_action_result.get('tone') or 'pending' }}">{{ last_action_result.get('status_label') or 'Not run' }}</span>
+                </div>
+                <div class="cisco-state-card-value">{{ (last_action_result.get('mode') or 'not_run') | replace('_', ' ') }}</div>
+                <div class="cisco-state-card-note">{{ last_action_result.get('summary') or 'No Cisco action has run in this kit yet.' }}</div>
+                {% if last_action_result.get('log_excerpt') %}
+                <details class="mt-2">
+                    <summary class="text-xs text-slate-400">Last log excerpt</summary>
+                    <pre class="raw-output mt-2">{{ last_action_result.get('log_excerpt') }}</pre>
+                </details>
+                {% endif %}
+            </article>
+        </section>
 
         <section class="card identity-soft-card" data-action-panel>
             <div class="cisco-hero">
@@ -422,13 +518,15 @@
                 <div class="cisco-step-copy">Read the switch-side VLAN, management IP, SSH, SCP, and gateway state from console, then test SSH from this app host.</div>
                 <div class="cisco-facts">
                     <div class="cisco-fact"><span>VLAN</span><strong>{{ console_check.get('management_vlan') or cisco.management_vlan or 10 }}{% if console_check %} {{ 'exists' if console_check.get('vlan_exists') else 'missing' }}{% endif %}</strong></div>
-                    <div class="cisco-fact"><span>Current IP</span><strong>{{ current_management_ip or has_management_ip or 'not set' }}</strong></div>
-                    <div class="cisco-fact"><span>Gateway</span><strong>{{ current_gateway or cisco.gateway or cfg.get('ip_plan', {}).get('gateway', 'not set') }}</strong></div>
+                    <div class="cisco-fact"><span>Current IP</span><strong>{{ discovered_management_ip or 'not discovered' }}</strong></div>
+                    <div class="cisco-fact"><span>Saved IP</span><strong>{{ saved_management_ip or 'Not saved yet' }}</strong></div>
+                    <div class="cisco-fact"><span>Gateway</span><strong>{{ current_gateway or 'not discovered' }}</strong></div>
                     <div class="cisco-fact"><span>SSH</span><strong>{{ 'enabled' if ssh_ready else 'disabled' }}</strong></div>
                     <div class="cisco-fact"><span>SCP</span><strong>{{ 'enabled' if scp_ready else 'disabled' }}</strong></div>
                 </div>
                 <div class="cisco-actions">
                     <button class="btn action-button" type="submit" hx-post="/modules/cisco/check-current-config" data-action-title="Checking Cisco current config" data-action-start="Reading VLAN, management IP, gateway, SSH, and SCP from the selected console path." data-action-complete="Cisco current config check finished.">Check current config</button>
+                    <button class="btn action-button" type="submit" hx-post="/modules/cisco/use-discovered-values" data-action-title="Saving Cisco discovered values" data-action-start="Copying the latest console-discovered values into this kit." data-action-complete="Cisco discovered value save finished." {% if not discovered_management_ip %}disabled{% endif %}>Use discovered values in this kit</button>
                     <button class="btn action-button" type="submit" hx-post="/modules/cisco/test-ssh" data-action-title="Testing Cisco SSH" data-action-start="Connecting to the saved Cisco management IP with the saved switch credentials." data-action-complete="Cisco SSH test finished.">Test SSH</button>
                 </div>
                 {% if action_feedback and feedback_area == 'console_config' %}
@@ -456,7 +554,7 @@
                 </div>
                 <div class="cisco-field">
                     <label>Password</label>
-                    <input type="password" name="cisco_switch_password" value="" placeholder="Saved - leave blank to keep" class="input" autocomplete="current-password">
+                    <input type="password" name="cisco_switch_password" value="" placeholder="Saved - leave blank to keep" class="input" autocomplete="current-password" minlength="10" pattern="(?=.*[a-z])(?=.*[A-Z])(?=.*\d).{10,}" title="Use at least 10 characters with uppercase, lowercase, and a digit.">
                 </div>
                 <div class="cisco-field">
                     <label>Console password</label>
@@ -464,7 +562,7 @@
                 </div>
                 <div class="cisco-field">
                     <label>Enable secret</label>
-                    <input type="password" name="cisco_enable_secret" value="" placeholder="Saved - leave blank to keep" class="input" autocomplete="current-password">
+                    <input type="password" name="cisco_enable_secret" value="" placeholder="Saved - leave blank to keep" class="input" autocomplete="current-password" minlength="10" pattern="(?=.*[a-z])(?=.*[A-Z])(?=.*\d).{10,}" title="Use at least 10 characters with uppercase, lowercase, and a digit.">
                 </div>
                 <div class="cisco-field">
                     <label>VLAN</label>

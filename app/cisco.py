@@ -247,6 +247,7 @@ class CiscoBootstrapResult:
     output: str = ""
     error: str = ""
     warnings: list[str] = field(default_factory=list)
+    steps: list[str] = field(default_factory=list)
 
     def as_dict(self, *, include_raw: bool = False) -> dict[str, Any]:
         payload = {
@@ -258,6 +259,7 @@ class CiscoBootstrapResult:
             "commands": [mask_secrets(item) for item in self.commands],
             "error": mask_secrets(self.error),
             "warnings": [mask_secrets(item) for item in self.warnings],
+            "steps": [mask_secrets(item) for item in self.steps],
         }
         if include_raw:
             payload["output"] = mask_secrets(self.output)
@@ -265,13 +267,21 @@ class CiscoBootstrapResult:
 
 
 PROMPT_PATTERNS: list[tuple[str, re.Pattern[str], int]] = [
+    ("interface_config", re.compile(r"(?im)(?:^|\r|\n)\s*(?:Switch|Router|[\w.-]+)\(config-[^)]+\)#\s*$"), 98),
+    ("config", re.compile(r"(?im)(?:^|\r|\n)\s*(?:Switch|Router|[\w.-]+)\(config\)#\s*$"), 97),
     ("privileged", re.compile(r"(?im)(?:^|\r|\n)\s*(?:Switch|Router|[\w.-]+)#\s*$"), 100),
     ("user_exec", re.compile(r"(?im)(?:^|\r|\n)\s*(?:Switch|Router|[\w.-]+)>\s*$"), 90),
     ("username", re.compile(r"(?im)(?:^|\r|\n)\s*Username:\s*$"), 80),
+    ("login", re.compile(r"(?im)(?:^|\r|\n)\s*Login:\s*$"), 80),
+    ("setup_final_menu", re.compile(r"(?is)0\s*[.)-]?\s*Go to the IOS command prompt without saving this config|Enter your selection\s*(?:\[[0-2]\])?\s*:\s*$"), 78),
+    ("setup_enable_secret", re.compile(r"(?im)(?:^|\r|\n)\s*(?:(?:Enter|Confirm|Please enter)\s+(?:the\s+)?)?enable\s+(?:secret|password):\s*$"), 76),
+    ("setup_password", re.compile(r"(?im)(?:^|\r|\n)\s*(?:(?:Enter|Confirm|Please enter)\s+(?:the\s+)?)?(?:virtual terminal|console|user|login|line vty)\s+password:\s*$"), 76),
     ("password", re.compile(r"(?im)(?:^|\r|\n)\s*Password:\s*$"), 75),
     ("rommon", re.compile(r"(?im)(?:^|\r|\n)\s*rommon\s*>\s*$"), 70),
-    ("setup_enable_secret", re.compile(r"(?im)(?:^|\r|\n)\s*(?:(?:Enter|Confirm)\s+)?enable secret:\s*$"), 68),
-    ("initial_dialog", re.compile(r"(?is)initial configuration dialog|would you like to enter the initial configuration dialog"), 65),
+    ("initial_dialog", re.compile(r"(?is)initial configuration dialog|would you like to enter the initial configuration dialog|continue with configuration dialog"), 65),
+    ("autoinstall_terminate", re.compile(r"(?is)would you like to terminate autoinstall|terminate autoinstall\?\s*\[yes\]"), 64),
+    ("setup_yes_no", re.compile(r"(?is)(?:would you like|do you want|configure|continue).+\[(?:yes/no|no|yes)\]\s*:\s*$"), 62),
+    ("press_return", re.compile(r"(?is)press\s+return\s+to\s+get\s+started!?"), 60),
 ]
 
 CISCO_IDENTITY_PATTERN = re.compile(
@@ -301,6 +311,27 @@ def is_generic_console_prompt(output: str) -> bool:
         return False
     hostname = match.group(1).strip().lower()
     return hostname not in {"switch", "router"}
+
+
+def validate_cisco_wizard_password_policy(password: str) -> list[str]:
+    secret = str(password or "")
+    failures: list[str] = []
+    if len(secret) < 10:
+        failures.append("at least 10 characters")
+    if not re.search(r"[A-Z]", secret):
+        failures.append("one uppercase letter")
+    if not re.search(r"[a-z]", secret):
+        failures.append("one lowercase letter")
+    if not re.search(r"\d", secret):
+        failures.append("one digit")
+    return failures
+
+
+def cisco_wizard_password_policy_error(label: str, password: str) -> str:
+    failures = validate_cisco_wizard_password_policy(password)
+    if not failures:
+        return ""
+    return f"{label} must satisfy the Cisco setup wizard password policy: use " + ", ".join(failures) + "."
 
 
 def mask_secrets(value: str, secrets: list[str] | None = None) -> str:
@@ -600,6 +631,83 @@ class CiscoSerialDiscovery:
         return b"".join(chunks).decode("utf-8", errors="replace")
 
 
+class CiscoConsoleBootstrapStateMachine:
+    """Advance common Cisco console states to privileged EXEC without applying config."""
+
+    max_transitions = 12
+
+    def __init__(self, client: Any):
+        self.client = client
+        self.steps: list[str] = []
+
+    def reach_privileged_exec(self, config: dict[str, Any]) -> tuple[str, str, list[str]]:
+        latest = self.client.read_prompt()
+        output = latest
+        prompt_type, _score = detect_cisco_prompt(latest)
+        if not output.strip():
+            self.steps.append("No console output was received after pressing RETURN.")
+
+        username = str(config.get("username") or "admin").strip()
+        password = str(config.get("password") or "")
+        console_password = str(config.get("console_password") or password)
+        enable_password = str(config.get("enable_secret") or config.get("enable_password") or "")
+        wizard_password = str(config.get("wizard_password") or enable_password or password)
+
+        for _ in range(self.max_transitions):
+            if prompt_type == "privileged":
+                break
+            if prompt_type == "press_return":
+                self.steps.append("Detected Cisco start prompt; pressed RETURN.")
+                latest = self.client.run_command("")
+            elif prompt_type == "initial_dialog":
+                self.steps.append("Detected Cisco initial configuration dialog; answered no.")
+                latest = self.client.run_command("no")
+            elif prompt_type == "autoinstall_terminate":
+                self.steps.append("Detected Cisco autoinstall prompt; accepted termination.")
+                latest = self.client.run_command("yes")
+            elif prompt_type == "setup_yes_no":
+                self.steps.append("Detected Cisco setup wizard yes/no prompt; answered no.")
+                latest = self.client.run_command("no")
+            elif prompt_type in {"setup_enable_secret", "setup_password"} and wizard_password:
+                self.steps.append("Detected Cisco setup wizard password prompt; sent fallback wizard secret.")
+                latest = self.client.run_command(wizard_password, redact=True)
+            elif prompt_type == "setup_final_menu":
+                self.steps.append("Detected Cisco setup wizard final menu; selected IOS command prompt without saving wizard config.")
+                latest = self.client.run_command("0")
+            elif prompt_type in {"config", "interface_config"}:
+                self.steps.append("Detected Cisco configuration prompt; returned to privileged EXEC.")
+                latest = self.client.run_command("end")
+            elif prompt_type in {"username", "login"} and username:
+                self.steps.append("Detected Cisco login prompt; sent configured username.")
+                latest = self.client.run_command(username, redact=False)
+            elif prompt_type == "password" and console_password:
+                self.steps.append("Detected Cisco password prompt; sent configured console password.")
+                latest = self.client.run_command(console_password, redact=True)
+            elif prompt_type == "user_exec":
+                self.steps.append("Detected Cisco user EXEC prompt; entered enable mode.")
+                latest = self.client.run_command("enable")
+                if re.search(r"(?im)Password:\s*$", latest) and enable_password:
+                    self.steps.append("Detected enable password prompt; sent configured enable secret.")
+                    output += latest
+                    latest = self.client.run_command(enable_password, redact=True)
+            else:
+                break
+            output += latest
+            prompt_type, _score = detect_cisco_prompt(latest)
+            if not prompt_type and not latest.strip():
+                prompt_type, _score = detect_cisco_prompt(output)
+        else:
+            self.steps.append("Console bootstrap reached the state transition limit before privileged EXEC.")
+
+        if not prompt_type:
+            prompt_type = "timeout" if not output.strip() else "unknown"
+            if prompt_type == "timeout":
+                self.steps.append("Console state is timeout: no prompt was readable.")
+            else:
+                self.steps.append("Console state is unknown: output did not match a supported Cisco prompt.")
+        return prompt_type, output, list(self.steps)
+
+
 class CiscoSerialClient:
     def __init__(self, port: str, baud: int = 9600, *, timeout: float = 1.0):
         serial_module, _port_tools = _load_serial_modules()
@@ -632,85 +740,79 @@ class CiscoSerialClient:
         self._write("\r\n")
         return self._read_for(1.5)
 
-    def _reach_privileged_exec(self, config: dict[str, Any]) -> tuple[str, str]:
-        output = self.read_prompt()
-        prompt_type, _score = detect_cisco_prompt(output)
-        if prompt_type not in {"privileged", "user_exec", "username", "password", "initial_dialog"}:
-            return prompt_type, output
-
-        username = str(config.get("username") or "admin").strip()
-        password = str(config.get("password") or "")
-        console_password = str(config.get("console_password") or password)
-        enable_password = str(config.get("enable_secret") or config.get("enable_password") or "")
-        if prompt_type == "initial_dialog":
-            output += self.run_command("no")
-            if re.search(r"(?is)terminate autoinstall|continue with configuration dialog", output):
-                output += self.run_command("yes")
-            output += self.read_prompt()
-            prompt_type, _score = detect_cisco_prompt(output)
-        if prompt_type == "username" and username:
-            output += self.run_command(username, redact=False)
-            prompt_type, _score = detect_cisco_prompt(output)
-        if prompt_type == "password" and console_password:
-            output += self.run_command(console_password, redact=True)
-            prompt_type, _score = detect_cisco_prompt(output)
-        if prompt_type == "user_exec":
-            output += self.run_command("enable")
-            if re.search(r"(?im)Password:\s*$", output) and enable_password:
-                output += self.run_command(enable_password, redact=True)
-            prompt_type, _score = detect_cisco_prompt(output)
-        return prompt_type, output
+    def _reach_privileged_exec(self, config: dict[str, Any]) -> tuple[str, str, list[str]]:
+        return CiscoConsoleBootstrapStateMachine(self).reach_privileged_exec(config)
 
     def apply_management_config(self, config: dict[str, Any]) -> CiscoBootstrapResult:
         append_cisco_log("serial.bootstrap.start", port=self.port, baud=self.baud, management_ip=str(config.get("management_ip") or ""))
-        prompt_type, output = self._reach_privileged_exec(config)
+        prompt_type, output, steps = self._reach_privileged_exec(config)
         password = str(config.get("password") or "")
         console_password = str(config.get("console_password") or password)
         enable_password = str(config.get("enable_secret") or config.get("enable_password") or "")
-        if prompt_type not in {"privileged", "user_exec", "username", "password", "initial_dialog"}:
-            append_cisco_log("serial.bootstrap.no_prompt", port=self.port, baud=self.baud, output=output)
-            return CiscoBootstrapResult(ok=False, port=self.port, baud=self.baud, error="No Cisco console prompt is available.", output=output)
-
         if prompt_type != "privileged":
-            append_cisco_log("serial.bootstrap.not_privileged", port=self.port, baud=self.baud, prompt_type=prompt_type, output=output)
-            return CiscoBootstrapResult(ok=False, port=self.port, baud=self.baud, error="Cisco console did not reach privileged EXEC mode. Check enable password or initial setup dialog state.", output=output)
+            append_cisco_log("serial.bootstrap.no_prompt", port=self.port, baud=self.baud, output=output)
+            return CiscoBootstrapResult(
+                ok=False,
+                port=self.port,
+                baud=self.baud,
+                error="Cisco console did not reach privileged EXEC mode. Check enable password, login prompts, or initial setup dialog state.",
+                output=output,
+                steps=steps,
+            )
 
         commands = self.build_management_commands(config, mask=False)
-        for command in commands:
-            wait_seconds = 8.0 if command.startswith("crypto key generate") or command == "write memory" else 2.0
-            output += self.run_command(command, redact="secret" in command.lower() or command == password, wait_seconds=wait_seconds)
-        prompt_type, _score = detect_cisco_prompt(output)
-        ok = prompt_type == "privileged" or bool(re.search(r"(?im)(?:^|\r|\n)\s*(?:Switch|Router|[\w.-]+)#\s*$", output))
+        attempted_commands: list[str] = []
         command_error = ""
-        if re.search(r"(?im)^% ?(?:Invalid|Incomplete|Ambiguous|Error)", output):
-            ok = False
-            command_error = "Cisco rejected one or more bootstrap commands. Review raw serial output in technical details."
-        if re.search(r"(?im)^% Please define a domain-name first", output):
-            ok = False
-            command_error = "Cisco SSH key generation failed because the domain name was not accepted before crypto key generation."
+        ok = True
+        save_commands = [command for command in commands if command == "write memory"]
+        config_commands = [command for command in commands if command != "write memory"]
+        for command in config_commands:
+            wait_seconds = 8.0 if command.startswith("crypto key generate") else 2.0
+            command_output = self.run_command(command, redact="secret" in command.lower() or command == password, wait_seconds=wait_seconds)
+            output += command_output
+            attempted_commands.append(command)
+            if re.search(r"(?im)^% ?(?:Invalid|Incomplete|Ambiguous|Error)", command_output):
+                ok = False
+                command_error = "Cisco rejected one or more bootstrap commands. Review raw serial output in technical details."
+                break
+            if re.search(r"(?im)^% Please define a domain-name first", command_output):
+                ok = False
+                command_error = "Cisco SSH key generation failed because the domain name was not accepted before crypto key generation."
+                break
+        if ok:
+            for command in save_commands:
+                output += self.run_command(command, redact=False, wait_seconds=8.0)
+                attempted_commands.append(command)
+        prompt_type, _score = detect_cisco_prompt(output)
+        ok = ok and (prompt_type == "privileged" or bool(re.search(r"(?im)(?:^|\r|\n)\s*(?:Switch|Router|[\w.-]+)#\s*$", output)))
         append_cisco_log("serial.bootstrap.complete", port=self.port, baud=self.baud, ok=ok, output=output)
         return CiscoBootstrapResult(
             ok=ok,
             port=self.port,
             baud=self.baud,
             management_ip=str(config.get("management_ip") or ""),
-            commands=commands,
+            commands=attempted_commands,
             error="" if ok else command_error or "Cisco management bootstrap did not complete cleanly. Review raw serial output in technical details.",
             output=mask_secrets(output, [password, console_password, enable_password]),
+            steps=steps,
         )
 
     def factory_reset(self, config: dict[str, Any]) -> CiscoBootstrapResult:
         append_cisco_log("serial.factory_reset.start", port=self.port, baud=self.baud)
-        prompt_type, output = self._reach_privileged_exec(config)
+        prompt_type, output, steps = self._reach_privileged_exec(config)
         password = str(config.get("password") or "")
         console_password = str(config.get("console_password") or password)
         enable_password = str(config.get("enable_secret") or config.get("enable_password") or "")
-        if prompt_type not in {"privileged", "user_exec", "username", "password", "initial_dialog"}:
-            append_cisco_log("serial.factory_reset.no_prompt", port=self.port, baud=self.baud, output=output)
-            return CiscoBootstrapResult(ok=False, port=self.port, baud=self.baud, error="No Cisco console prompt is available.", output=output)
         if prompt_type != "privileged":
             append_cisco_log("serial.factory_reset.not_privileged", port=self.port, baud=self.baud, prompt_type=prompt_type, output=output)
-            return CiscoBootstrapResult(ok=False, port=self.port, baud=self.baud, error="Cisco console did not reach privileged EXEC mode. Check enable secret or console login state.", output=output)
+            return CiscoBootstrapResult(
+                ok=False,
+                port=self.port,
+                baud=self.baud,
+                error="Cisco console did not reach privileged EXEC mode. Check enable secret, login prompts, or console state.",
+                output=output,
+                steps=steps,
+            )
 
         commands = ["terminal length 0", "write erase", "delete /force flash:vlan.dat", "reload"]
         output += self.run_command("terminal length 0", wait_seconds=1.0)
@@ -749,6 +851,7 @@ class CiscoSerialClient:
             commands=commands,
             error="" if ok else command_error or "Cisco factory reset did not complete cleanly. Review raw serial output in technical details.",
             output=mask_secrets(output, [password, console_password, enable_password]),
+            steps=steps,
         )
 
     def run_command(self, command: str, *, redact: bool = False, wait_seconds: float = 2.0) -> str:

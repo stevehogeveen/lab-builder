@@ -1,0 +1,23 @@
+Implemented the Cisco onboarding fixes without committing.
+
+Files controlling the Cisco flow:
+- Page/status UI: [cisco.html](/home/administrator/lab-builder/templates/partials/pages/cisco.html:421)
+- Routes/actions: [routes.py](/home/administrator/lab-builder/app/modules/cisco/routes.py:600)
+- Status/service logic: [service.py](/home/administrator/lab-builder/app/modules/cisco/service.py:258)
+- Console/SSH/bootstrap helpers: [cisco.py](/home/administrator/lab-builder/app/cisco.py:269)
+
+What changed:
+- Cisco page now separates discovered/current state, saved kit config, ready-to-apply values, and last action/log.
+- Added/kept “Use discovered values in this kit” and “Not saved yet” behavior for missing saved config.
+- Console bootstrap now handles assisted setup prompts, autoinstall, setup password prompts, and the final wizard menu by sending `0`, never `2`.
+- Setup Console validates Cisco password and enable secret policy before opening serial hardware.
+- `write memory` now runs only after normal CLI config commands succeed.
+- Added fake-console/service/page tests for prompt detection, password policy, no real serial calls, final menu handling, and UI state separation.
+
+Validation passed:
+- Focused Cisco tests: `50 passed`
+- `python -m pytest -q`: `508 passed`
+- `python -m compileall app`: passed
+- `git diff --check`: passed
+
+No commit was made.

@@ -70,11 +70,13 @@ def test_cisco_console_current_config_and_version_actions_use_shared_feedback_me
     assert 'hx-post="/modules/cisco/test-console-access"' in response.text
     assert 'hx-post="/modules/cisco/trust-console-adapter"' in response.text
     assert 'hx-post="/modules/cisco/check-current-config"' in response.text
+    assert 'hx-post="/modules/cisco/use-discovered-values"' in response.text
     assert 'hx-post="/modules/cisco/test-ssh"' in response.text
     assert 'hx-post="/modules/cisco/discover-version"' in response.text
     assert 'class="btn action-button" type="button" hx-post="/modules/cisco/test-console-access"' in response.text
     assert 'class="btn action-button" type="submit" hx-post="/modules/cisco/trust-console-adapter"' in response.text
     assert 'class="btn action-button" type="submit" hx-post="/modules/cisco/check-current-config"' in response.text
+    assert 'class="btn action-button" type="submit" hx-post="/modules/cisco/use-discovered-values"' in response.text
     assert 'class="btn action-button" type="submit" hx-post="/modules/cisco/test-ssh"' in response.text
     assert 'class="btn action-button" type="submit" hx-post="/modules/cisco/discover-version"' in response.text
     assert 'data-action-title="Testing Cisco console access"' in response.text
@@ -84,6 +86,8 @@ def test_cisco_console_current_config_and_version_actions_use_shared_feedback_me
     assert 'data-action-title="Checking Cisco current config"' in response.text
     assert "Reading VLAN, management IP, gateway, SSH, and SCP from the selected console path." in response.text
     assert 'data-action-complete="Cisco current config check finished."' in response.text
+    assert 'data-action-title="Saving Cisco discovered values"' in response.text
+    assert "Copying the latest console-discovered values into this kit." in response.text
     assert 'data-action-title="Testing Cisco SSH"' in response.text
     assert "Connecting to the saved Cisco management IP with the saved switch credentials." in response.text
     assert 'data-action-complete="Cisco SSH test finished."' in response.text
@@ -102,6 +106,10 @@ def test_cisco_console_current_config_and_version_actions_use_shared_feedback_me
     )
     assert any(
         route.path == "/modules/cisco/check-current-config" and "POST" in route.methods
+        for route in main.app.routes
+    )
+    assert any(
+        route.path == "/modules/cisco/use-discovered-values" and "POST" in route.methods
         for route in main.app.routes
     )
     assert any(
@@ -141,3 +149,121 @@ def test_cisco_run_approval_actions_use_shared_feedback_metadata(cisco_client):
         route.path == "/modules/cisco/approve-config-plan" and "POST" in route.methods
         for route in main.app.routes
     )
+
+
+def test_cisco_page_shows_discovered_ip_separately_from_saved_config(cisco_client):
+    cfg = main.default_config()
+    cfg["site"]["name"] = "Cisco Discovered Separate Test Kit"
+    cfg["ip_plan"] = {"switch": "192.168.1.2", "gateway": "192.168.1.1", "netmask": "255.255.255.0"}
+    cfg["cisco_switch"].update(
+        {
+            "management_ip": "192.168.1.2",
+            "ip": "192.168.1.2",
+            "gateway": "192.168.1.1",
+            "subnet_mask": "255.255.255.0",
+            "last_console_bootstrap_check": {
+                "management_vlan": 10,
+                "current_management_ip": "192.168.1.50",
+                "current_subnet_mask": "255.255.255.0",
+                "default_gateway": "192.168.1.1",
+                "ssh_enabled": True,
+                "scp_enabled": False,
+            },
+        }
+    )
+    main.save_kit_config(cfg)
+
+    response = cisco_client.get("/cisco")
+
+    assert response.status_code == 200
+    assert "Discovered/current switch state" in response.text
+    assert "Saved Lab Builder kit config" in response.text
+    assert "Values ready to apply" in response.text
+    assert "Last action result/log" in response.text
+    assert "192.168.1.50" in response.text
+    assert "192.168.1.2" in response.text
+    assert "Discovered IP differs from saved kit config" in response.text
+    assert "Use discovered values in this kit" in response.text
+
+
+def test_cisco_page_missing_saved_config_does_not_contradict_discovered_values(cisco_client, monkeypatch):
+    cfg = main.default_config()
+    cfg["site"]["name"] = "Cisco Missing Saved Config Test Kit"
+    cfg["ip_plan"] = {"switch": "192.168.1.2", "gateway": "192.168.1.1", "netmask": "255.255.255.0"}
+    cfg["cisco_switch"].update(
+        {
+            "management_ip": "",
+            "ip": "",
+            "gateway": "",
+            "last_console_bootstrap_check": {
+                "management_vlan": 10,
+                "current_management_ip": "192.168.1.50",
+                "current_subnet_mask": "255.255.255.0",
+                "default_gateway": "192.168.1.1",
+                "ssh_enabled": True,
+                "scp_enabled": True,
+            },
+        }
+    )
+    monkeypatch.setattr(main, "load_kit_config", lambda kit_name=None: cfg)
+
+    response = cisco_client.get("/cisco")
+
+    assert response.status_code == 200
+    assert "Discovered/current switch state" in response.text
+    assert "192.168.1.50" in response.text
+    assert "Saved Lab Builder kit config" in response.text
+    assert "Not saved yet" in response.text
+    assert "Discovered on the switch, but not saved in this kit yet." in response.text
+    assert "Current IP</span><strong>192.168.1.50" in response.text
+    assert "Saved IP</span><strong>Not saved yet" in response.text
+
+
+def test_cisco_page_render_does_not_touch_serial_or_ssh(cisco_client, monkeypatch):
+    import app.modules.cisco.service as cisco_service
+
+    def fail_if_called(*_args, **_kwargs):
+        raise AssertionError("Cisco page render must not open real hardware clients")
+
+    monkeypatch.setattr(cisco_service, "CiscoSerialClient", fail_if_called)
+    monkeypatch.setattr(cisco_service, "CiscoSSHClient", fail_if_called)
+    monkeypatch.setattr(cisco_service, "CiscoSerialDiscovery", fail_if_called)
+
+    response = cisco_client.get("/cisco")
+
+    assert response.status_code == 200
+
+
+def test_cisco_setup_console_rejects_weak_password_before_serial(cisco_client, monkeypatch):
+    import app.modules.cisco.service as cisco_service
+
+    def fail_if_called(*_args, **_kwargs):
+        raise AssertionError("Setup Console must validate password policy before opening serial hardware")
+
+    monkeypatch.setattr(cisco_service, "CiscoSerialClient", fail_if_called)
+    cfg = main.default_config()
+    cfg["site"]["name"] = "Cisco Weak Password Test Kit"
+    main.save_kit_config(cfg)
+
+    response = cisco_client.post(
+        "/modules/cisco/setup-console",
+        data={
+            "cisco_switch_hostname": "sw01",
+            "cisco_switch_username": "admin",
+            "cisco_switch_password": "short1A",
+            "cisco_enable_secret": "ValidSecret123",
+            "cisco_management_ip": "192.168.1.2",
+            "cisco_subnet_mask": "255.255.255.0",
+            "cisco_gateway": "192.168.1.1",
+            "cisco_domain_name": "lab.local",
+            "cisco_management_vlan": "10",
+            "cisco_console_port": "/dev/ttyUSB0",
+            "cisco_console_baud": "9600",
+            "cisco_management_port": "GigabitEthernet1/0/1",
+            "cisco_management_port_mode": "do_not_touch",
+        },
+    )
+
+    assert response.status_code == 200
+    assert "Cisco password must satisfy the Cisco setup wizard password policy" in response.text
+    assert "short1A" not in response.text

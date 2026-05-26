@@ -47,6 +47,38 @@ def test_cisco_status_distinguishes_live_and_desired_ports():
     assert status["last_running_config_backup"] == "interface GigabitEthernet1/0/24"
 
 
+def test_cisco_status_distinguishes_discovered_saved_and_ready_values():
+    service = CiscoModuleService()
+
+    result = service.status(
+        {
+            "cfg": {
+                "ip_plan": {"switch": "192.168.1.2", "gateway": "192.168.1.1", "netmask": "255.255.255.0"},
+                "cisco_switch": {
+                    "management_ip": "",
+                    "ip": "",
+                    "last_console_bootstrap_check": {
+                        "management_vlan": 10,
+                        "current_management_ip": "192.168.1.50",
+                        "current_subnet_mask": "255.255.255.0",
+                        "default_gateway": "192.168.1.1",
+                        "ssh_enabled": True,
+                        "scp_enabled": True,
+                    },
+                },
+            }
+        }
+    )
+
+    status = result["status"]
+
+    assert status["discovered_current"]["management_ip"] == "192.168.1.50"
+    assert status["discovered_current"]["not_saved"] is True
+    assert status["saved_kit_config"]["state_label"] == "Not saved yet"
+    assert status["ready_to_apply"]["management_ip"] == "192.168.1.2"
+    assert status["ready_to_apply"]["source"] == "Generated kit IP plan until Cisco values are saved"
+
+
 def test_cisco_status_marks_stale_initial_dialog_bootstrap_failed():
     service = CiscoModuleService()
 
@@ -68,6 +100,38 @@ def test_cisco_status_marks_stale_initial_dialog_bootstrap_failed():
     assert status["connection_method"] == "console"
     assert status["last_bootstrap"]["ok"] is False
     assert "initial setup dialog" in status["last_bootstrap"]["error"]
+
+
+def test_bootstrap_password_policy_blocks_before_serial(monkeypatch):
+    service = CiscoModuleService()
+
+    class FailIfOpened:
+        def __init__(self, *_args, **_kwargs):
+            raise AssertionError("CiscoSerialClient must not open when password policy fails")
+
+    monkeypatch.setattr("app.modules.cisco.service.CiscoSerialClient", FailIfOpened)
+
+    result = service.bootstrap_management(
+        {
+            "cfg": {
+                "ip_plan": {"gateway": "192.168.1.1"},
+                "cisco_switch": {
+                    "console_port": "/dev/ttyUSB0",
+                    "console_baud": 9600,
+                    "management_ip": "192.168.1.2",
+                    "subnet_mask": "255.255.255.0",
+                    "gateway": "192.168.1.1",
+                    "username": "admin",
+                    "password": "short1A",
+                    "enable_secret": "ValidSecret123",
+                },
+            }
+        }
+    )
+
+    assert result["ok"] is False
+    assert "Cisco password must satisfy the Cisco setup wizard password policy" in result["error"]
+    assert "short1A" not in result["error"]
 
 
 def test_verify_console_bootstrap_reports_down_management_svi(monkeypatch):

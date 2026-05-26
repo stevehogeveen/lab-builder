@@ -38,6 +38,33 @@ Copy this block and update it in place.
 
 ## Active Sessions
 
+### Session: cisco-factory-onboarding-fix
+- Status: done
+- Branch: codex/14h-quality-run
+- Scope owner: Cisco onboarding UX, saved/discovered status clarity, and console bootstrap state handling
+- Working on: Completed forced setup wizard final-menu handling, password policy validation, and post-bootstrap log/result clarity without touching real hardware from tests.
+- Blocked by: none
+- Ready to hand off: Cisco page separates discovered/current, saved kit config, values ready to apply, and last action/log; manual Setup Console validates strong Cisco password and enable secret before serial access; fake-console tests cover assisted setup and final-menu behavior; focused Cisco tests, full pytest, and compileall pass.
+- Files claimed:
+  - app/cisco.py
+  - app/modules/cisco/routes.py
+  - app/modules/cisco/service.py
+  - templates/partials/pages/cisco.html
+  - tests/test_cisco_page.py
+  - tests/test_cisco_serial.py
+  - tests/test_cisco_module.py
+  - tests/test_cisco_console_feedback.py
+- Shared files touched with caution:
+  - SESSION_COORDINATION.md
+- Last changed:
+  - 2026-05-26 08:42 EDT - Claimed current-branch Cisco onboarding fix after comparing the companion branch; companion Cisco session is retained as handoff reference.
+  - 2026-05-26 09:01 EDT - Added Cisco discovered/saved/ready/last-action status separation, manual discovered-value save action, and expanded fake-console bootstrap prompt coverage.
+  - 2026-05-26 09:04 EDT - Revalidated focused Cisco tests, full pytest, and compileall after the final setup-dialog prompt regex tightening.
+  - 2026-05-26 09:30 EDT - Reopened Cisco onboarding fix to add forced wizard final-menu handling and strong fallback password validation requested by the operator.
+  - 2026-05-26 09:42 EDT - Added setup wizard final-menu selection 0, strong password validation before serial opens, delayed write-memory until CLI config succeeds, and fake-console/page/service coverage; final focused Cisco tests, full pytest, and compileall pass.
+- Next intended change:
+  - none
+
 ### Session: reports-related-links-consistency-quality-cycle
 - Status: done
 - Branch: codex/14h-quality-run
@@ -1191,7 +1218,7 @@ Copy this block and update it in place.
   - Continue with a separate backlog cycle; suggested next target is another unclaimed setup page button/route audit.
 
 ### Session: cisco
-- Status: active
+- Status: paused
 - Branch: experience/operator-companion
 - Scope owner: Cisco workflow, Cisco setup UI, serial-console bootstrap, and Cisco validation
 - Working on: Cisco operator-flow setup round after serial-console bootstrap changes
@@ -1215,6 +1242,7 @@ Copy this block and update it in place.
   - tests/test_operator_flow_contract.py
 - Last changed:
   - 2026-05-25 America/Toronto - Read operator-flow session docs, claimed Cisco workflow scope, and prepared current Cisco bootstrap/operator-contract changes for commit.
+  - 2026-05-26 08:42 EDT - Paused as a companion-branch handoff reference while `cisco-factory-onboarding-fix` owns the current `codex/14h-quality-run` Cisco files.
 - Next intended change:
   - Align Cisco page sections explicitly to Context, Targets, Credentials, Current State, Preflight, Plan, Execute, Monitor, Evidence, and Next Step.
 
