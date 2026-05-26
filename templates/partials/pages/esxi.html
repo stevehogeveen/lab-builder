@@ -345,7 +345,8 @@
             {% endif %}
             <div class="actions mt-4">
                 {% if esxi_latest_receipt.run_summary_path %}
-                <form hx-post="/view-run-summary" hx-target="#main-content" hx-swap="outerHTML">
+                <form hx-post="/view-report" hx-target="#main-content" hx-swap="outerHTML">
+                    <input type="hidden" name="return_page" value="esxi">
                     <input type="hidden" name="report_path" value="{{ esxi_latest_receipt.run_summary_path }}">
                     <button class="btn" type="submit">Open log</button>
                 </form>

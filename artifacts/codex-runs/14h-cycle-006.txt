@@ -1,0 +1,22 @@
+Task chosen: ESXi setup page latest-run `Open log` button audit.
+
+Changed [templates/partials/pages/esxi.html](/home/administrator/lab-builder/templates/partials/pages/esxi.html:345) so the ESXi latest receipt posts to `/view-report` with `return_page=esxi`, matching iLO and Storage. Added [tests/test_esxi.py](/home/administrator/lab-builder/tests/test_esxi.py:1) to verify the rendered button and saved report viewer response. Updated [SESSION_COORDINATION.md](/home/administrator/lab-builder/SESSION_COORDINATION.md:38) for the claimed/completed slice.
+
+Files inspected: required session docs, `.codex/mission.md`, `.codex/rules.md`, `.codex/backlog.md`, ESXi/iLO/Storage templates, `app/main.py`, and related tests.
+
+Buttons/routes/forms verified:
+- ESXi `Open log` form now renders `hx-post="/view-report"`.
+- Hidden `return_page=esxi` and `report_path` are included.
+- `/view-report` opens the saved ESXi summary file.
+- Confirmed the stale `/view-run-summary` form is gone from the ESXi page.
+
+Tests/checks run:
+- `.venv/bin/python -m pytest tests/test_esxi.py` passed.
+- `.venv/bin/python -m pytest tests/test_operator_flow_contract.py` passed.
+- `.venv/bin/python -m compileall app` passed.
+
+No real hardware was used. This was route/template validation only, with TestClient, temporary config/artifact directories, and mocked media scanning. I did not commit or push.
+
+Remaining risk: I did not run the full suite or browser-click the UI, but the focused rendered-template and route coverage hits the broken flow.
+
+Recommended next task: audit another unclaimed setup-page button/route flow, such as the OVF Templates `Register directory` form.

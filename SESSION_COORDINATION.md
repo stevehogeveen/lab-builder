@@ -38,6 +38,24 @@ Copy this block and update it in place.
 
 ## Active Sessions
 
+### Session: esxi-quality-cycle
+- Status: done
+- Branch: codex/14h-quality-run
+- Scope owner: ESXi setup page latest-run log button audit
+- Working on: Completed ESXi latest-run Open log route fix without hardware access.
+- Blocked by: none
+- Ready to hand off: ESXi latest-run Open log now opens the saved report; focused test, operator-flow contract test, and compile check pass.
+- Files claimed:
+  - templates/partials/pages/esxi.html
+  - tests/test_esxi.py
+- Shared files touched with caution:
+  - SESSION_COORDINATION.md
+- Last changed:
+  - 2026-05-25 22:16 EDT - Claimed narrow ESXi Open log route/template slice for the 14-hour quality run.
+  - 2026-05-25 22:18 EDT - Routed ESXi latest-run Open log to the saved-report handler and verified focused tests.
+- Next intended change:
+  - Continue with a separate backlog cycle; suggested next target is another unclaimed setup page button/route audit.
+
 ### Session: storage-quality-cycle
 - Status: done
 - Branch: codex/14h-quality-run
