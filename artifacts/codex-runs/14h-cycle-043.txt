@@ -1,0 +1,40 @@
+**Task Chosen**
+Windows setup action completion-feedback consistency.
+
+**Files Inspected**
+- `.codex/mission.md`, `.codex/rules.md`, `.codex/backlog.md`
+- `AGENTS.md`, `SESSION_COORDINATION.md`
+- `docs/workflow-session-scopes.md`, `docs/operator-flow-contract.md`, `docs/automation-principles.md`, `docs/ux-product-principles.md`, `docs/validation.md`
+- [windows.html](/home/administrator/lab-builder/templates/partials/pages/windows.html)
+- [routes.py](/home/administrator/lab-builder/app/modules/windows/routes.py)
+- [test_windows_page.py](/home/administrator/lab-builder/tests/test_windows_page.py)
+- `app/main.py`, `templates/index.html`
+
+**Files Changed**
+- [SESSION_COORDINATION.md](/home/administrator/lab-builder/SESSION_COORDINATION.md)
+- [windows.html](/home/administrator/lab-builder/templates/partials/pages/windows.html)
+- [test_windows_page.py](/home/administrator/lab-builder/tests/test_windows_page.py)
+
+**Buttons/Routes/Forms Verified**
+- `Save Windows setup` -> `/save-windows-settings`
+- `Probe vSphere` -> `/probe-windows-vsphere`
+- `Probe WinRM` -> `/probe-windows-winrm`
+- `Use selected template` -> `/select-windows-ovf-template`
+- `Plan Windows install (dry-run)` -> `/plan-windows-install`
+
+Added explicit `data-action-complete` messages for those existing HTMX actions. No route logic or hardware behavior changed.
+
+**Tests/Checks Run**
+- `.venv/bin/python -m pytest tests/test_windows_page.py` passed, 3 tests
+- `.venv/bin/python -m pytest tests/test_operator_flow_contract.py` passed, 6 tests
+- `.venv/bin/python -m compileall app` passed
+
+**Hardware**
+- Real hardware used: no
+- Mocked/dry-run only: Windows page rendering and route/template wiring only. No vSphere, WinRM, server, switch, NetApp, QNAP, or vCenter calls.
+
+**Remaining Risks**
+Browser-level HTMX behavior was not exercised in a real browser; this cycle covered rendered markup and existing route wiring.
+
+**Recommended Next Task**
+Audit another unclaimed setup page or Run Center action for missing explicit completion feedback on existing `action-button` controls.

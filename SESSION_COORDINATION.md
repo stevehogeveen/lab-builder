@@ -38,6 +38,24 @@ Copy this block and update it in place.
 
 ## Active Sessions
 
+### Session: windows-action-complete-feedback-quality-cycle
+- Status: done
+- Branch: codex/14h-quality-run
+- Scope owner: Windows setup action completion feedback consistency
+- Working on: Completed explicit shared completion feedback metadata for existing Windows setup actions without changing route or hardware behavior.
+- Blocked by: none
+- Ready to hand off: Windows setup actions now have specific completion feedback; focused Windows page tests, operator-flow contract tests, and compile check pass.
+- Files claimed:
+  - templates/partials/pages/windows.html
+  - tests/test_windows_page.py
+- Shared files touched with caution:
+  - SESSION_COORDINATION.md
+- Last changed:
+  - 2026-05-26 03:17 EDT - Claimed narrow Windows action completion-feedback slice for the 14-hour quality run.
+  - 2026-05-26 03:18 EDT - Added Windows action completion metadata and verified focused route/template coverage.
+- Next intended change:
+  - Continue with a separate backlog cycle; suggested next target is another unclaimed setup-page action-feedback completion gap or route audit.
+
 ### Session: ilo-upgrade-gate-feedback-quality-cycle
 - Status: done
 - Branch: codex/14h-quality-run

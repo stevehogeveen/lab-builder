@@ -1,0 +1,4 @@
+ SESSION_COORDINATION.md               | 18 ++++++++++++++++++
+ templates/partials/pages/windows.html | 10 +++++-----
+ tests/test_windows_page.py            |  5 +++++
+ 3 files changed, 28 insertions(+), 5 deletions(-)

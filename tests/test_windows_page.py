@@ -61,6 +61,11 @@ def test_windows_page_wires_actions_and_empty_last_status(windows_client):
     assert 'hx-post="/probe-windows-winrm" hx-include="#windows-settings-form"' in response.text
     assert 'hx-post="/select-windows-ovf-template" hx-include="#windows-settings-form"' in response.text
     assert 'hx-post="/plan-windows-install" hx-include="#windows-settings-form"' in response.text
+    assert 'data-action-complete="Windows setup saved."' in response.text
+    assert 'data-action-complete="vSphere probe finished."' in response.text
+    assert 'data-action-complete="WinRM probe finished."' in response.text
+    assert 'data-action-complete="Windows OVF template selection finished."' in response.text
+    assert 'data-action-complete="Windows dry-run plan finished."' in response.text
     assert 'href="/global-settings"' in response.text
     assert 'href="/modules/ovf-templates"' in response.text
     assert 'href="/execution"' in response.text
