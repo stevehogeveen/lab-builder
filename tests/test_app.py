@@ -11638,6 +11638,7 @@ def test_dashboard_shows_recommended_next_step_and_workflow_cards(client):
     assert 'hx-post="/view-current-kit-config"' in response.text
     assert 'action="/download-current-kit-config"' in response.text
     assert 'data-action-title="Opening active kit config"' in response.text
+    assert 'data-action-complete="Kit config opened."' in response.text
     assert "Recommended next step" in response.text
     assert "Open next step" in response.text
     assert "Build path" in response.text
@@ -11677,6 +11678,7 @@ def test_dashboard_load_previous_kit_uses_saved_kit_dropdown(client):
     assert 'name="selected_kit"' in response.text
     assert 'hx-post="/load-kit"' in response.text
     assert 'data-action-title="Switching active kit"' in response.text
+    assert 'data-action-complete="Kit switch request finished."' in response.text
     assert 'class="btn action-button" type="submit"' in response.text
     assert "Switch active kit" in response.text
     selector_section = response.text.split('name="selected_kit"', 1)[1]
