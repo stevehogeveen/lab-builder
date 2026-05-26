@@ -1,0 +1,23 @@
+Task chosen: Priority 1, vCenter setup page button/flow audit.
+
+Changed:
+- [app/main.py](/home/administrator/lab-builder/app/main.py:15876): added shared vCenter form-state handling for save, plan, and run routes.
+- [vcenter.html](/home/administrator/lab-builder/templates/partials/pages/vcenter.html:105): made Generate/Run include `#vcenter-settings-form`.
+- [test_vcenter.py](/home/administrator/lab-builder/tests/test_vcenter.py:119): added route/template tests.
+- [SESSION_COORDINATION.md](/home/administrator/lab-builder/SESSION_COORDINATION.md:107): claimed and closed the slice.
+
+Verified buttons/routes/forms:
+- `Save vCenter setup` -> `/save-vcenter-settings`
+- `Generate install spec` -> `/plan-vcenter-install`, now uses visible form values.
+- `Run vCenter install` -> `/run-vcenter-install`, now uses visible form values before blocking/starting.
+- `/vcenter/install-panel` inspected; unchanged.
+
+Checks run:
+- `.venv/bin/python -m pytest tests/test_vcenter.py` -> 5 passed
+- `.venv/bin/python -m pytest tests/test_operator_flow_contract.py` -> 6 passed
+- `.venv/bin/python -m compileall app` -> passed
+- `git diff --check` -> passed
+
+No real hardware was used. vCenter/ESXi behavior was route-tested only; the run route test used missing required inputs so no `vcsa-deploy` worker or hardware call could start. Remaining risk: no browser-level HTMX test and no real vCenter deployment validation.
+
+Recommended next task: audit another unclaimed setup page’s visible buttons and route handlers, preferably Windows or QNAP.

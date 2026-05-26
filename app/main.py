@@ -15873,6 +15873,75 @@ async def vcenter_install_panel_partial(request: Request):
     )
 
 
+def _apply_vcenter_settings_form(cfg: dict[str, Any], form: dict[str, Any]) -> dict[str, Any]:
+    vcenter_form_keys = {
+        "vcenter_target_ip",
+        "vcenter_system_name",
+        "vcenter_vm_name",
+        "vcenter_iso_path",
+        "vcenter_esxi_host",
+        "vcenter_esxi_username",
+        "vcenter_esxi_password",
+        "vcenter_datastore",
+        "vcenter_deployment_network",
+        "vcenter_deployment_option",
+        "vcenter_root_password",
+        "vcenter_sso_domain",
+        "vcenter_sso_password",
+        "vcenter_ntp_servers",
+        "vcenter_dns_servers",
+        "vcenter_ssh_enable",
+    }
+    if not any(key in form for key in vcenter_form_keys):
+        return cfg.setdefault("vmware", {}).setdefault("vcenter_install", {})
+
+    set_workflow_included(cfg, "vcenter", True)
+    cfg.setdefault("vmware", {})
+    vmware = cfg["vmware"]
+    install = vmware.setdefault("vcenter_install", {})
+
+    if "vcenter_target_ip" in form:
+        target_ip = str(form.get("vcenter_target_ip") or "").strip()
+        vmware["vcenter_ip"] = target_ip or str(vmware.get("vcenter_ip") or "").strip()
+        install["target_ip"] = target_ip
+    for form_key, config_key, default in (
+        ("vcenter_system_name", "system_name", ""),
+        ("vcenter_vm_name", "vm_name", ""),
+        ("vcenter_iso_path", "iso_path", ""),
+        ("vcenter_esxi_host", "esxi_host", ""),
+        ("vcenter_esxi_username", "esxi_username", "root"),
+        ("vcenter_datastore", "datastore", ""),
+        ("vcenter_deployment_network", "deployment_network", "VM Network"),
+        ("vcenter_deployment_option", "deployment_option", "tiny"),
+        ("vcenter_sso_domain", "sso_domain", "vsphere.local"),
+        ("vcenter_ntp_servers", "ntp_servers", ""),
+    ):
+        if form_key in form:
+            install[config_key] = str(form.get(form_key) or default).strip()
+    if "vcenter_dns_servers" in form:
+        install["dns_servers"] = [
+            item.strip()
+            for item in str(form.get("vcenter_dns_servers") or "").replace(";", ",").split(",")
+            if item.strip()
+        ]
+    full_settings_form = all(
+        key in form
+        for key in vcenter_form_keys
+        if key not in {"vcenter_ssh_enable"}
+    )
+    if "vcenter_ssh_enable" in form or full_settings_form:
+        install["ssh_enable"] = bool(form.get("vcenter_ssh_enable"))
+    if form.get("vcenter_esxi_password"):
+        install["esxi_password"] = str(form.get("vcenter_esxi_password") or "")
+        vmware["esxi_root_password"] = str(form.get("vcenter_esxi_password") or "")
+    if form.get("vcenter_root_password"):
+        install["root_password"] = str(form.get("vcenter_root_password") or "")
+    if form.get("vcenter_sso_password"):
+        install["sso_password"] = str(form.get("vcenter_sso_password") or "")
+        vmware["password"] = str(form.get("vcenter_sso_password") or "")
+    return install
+
+
 @app.post("/save-vcenter-settings", response_class=HTMLResponse)
 async def save_vcenter_settings_route(
     request: Request,
@@ -15895,39 +15964,27 @@ async def save_vcenter_settings_route(
     vcenter_ssh_enable: str | None = Form(None),
 ):
     cfg = load_kit_config()
-    set_workflow_included(cfg, "vcenter", True)
-    cfg.setdefault("vmware", {})
-    cfg["vmware"]["vcenter_ip"] = str(vcenter_target_ip or cfg["vmware"].get("vcenter_ip") or "").strip()
-    install = cfg["vmware"].setdefault("vcenter_install", {})
-    install.update(
+    install = _apply_vcenter_settings_form(
+        cfg,
         {
-            "target_ip": str(vcenter_target_ip or "").strip(),
-            "system_name": str(vcenter_system_name or "").strip(),
-            "vm_name": str(vcenter_vm_name or "").strip(),
-            "iso_path": str(vcenter_iso_path or "").strip(),
-            "esxi_host": str(vcenter_esxi_host or "").strip(),
-            "esxi_username": str(vcenter_esxi_username or "root").strip(),
-            "datastore": str(vcenter_datastore or "").strip(),
-            "deployment_network": str(vcenter_deployment_network or "VM Network").strip(),
-            "deployment_option": str(vcenter_deployment_option or "tiny").strip(),
-            "sso_domain": str(vcenter_sso_domain or "vsphere.local").strip(),
-            "ntp_servers": str(vcenter_ntp_servers or "").strip(),
-            "dns_servers": [
-                item.strip()
-                for item in str(vcenter_dns_servers or "").replace(";", ",").split(",")
-                if item.strip()
-            ],
-            "ssh_enable": bool(vcenter_ssh_enable),
-        }
+            "vcenter_target_ip": vcenter_target_ip,
+            "vcenter_system_name": vcenter_system_name,
+            "vcenter_vm_name": vcenter_vm_name,
+            "vcenter_iso_path": vcenter_iso_path,
+            "vcenter_esxi_host": vcenter_esxi_host,
+            "vcenter_esxi_username": vcenter_esxi_username,
+            "vcenter_esxi_password": vcenter_esxi_password,
+            "vcenter_datastore": vcenter_datastore,
+            "vcenter_deployment_network": vcenter_deployment_network,
+            "vcenter_deployment_option": vcenter_deployment_option,
+            "vcenter_root_password": vcenter_root_password,
+            "vcenter_sso_domain": vcenter_sso_domain,
+            "vcenter_sso_password": vcenter_sso_password,
+            "vcenter_ntp_servers": vcenter_ntp_servers,
+            "vcenter_dns_servers": vcenter_dns_servers,
+            "vcenter_ssh_enable": vcenter_ssh_enable or "",
+        },
     )
-    if vcenter_esxi_password:
-        install["esxi_password"] = vcenter_esxi_password
-        cfg["vmware"]["esxi_root_password"] = vcenter_esxi_password
-    if vcenter_root_password:
-        install["root_password"] = vcenter_root_password
-    if vcenter_sso_password:
-        install["sso_password"] = vcenter_sso_password
-        cfg["vmware"]["password"] = vcenter_sso_password
     save_kit_config(cfg)
     return render_page(
         request,
@@ -15949,6 +16006,7 @@ async def save_vcenter_settings_route(
 @app.post("/plan-vcenter-install", response_class=HTMLResponse)
 async def plan_vcenter_install_route(request: Request, return_page: str = Form("vcenter")):
     cfg = load_kit_config()
+    _apply_vcenter_settings_form(cfg, {key: value for key, value in dict(await request.form()).items()})
     context = build_vcenter_context(cfg)
     work_dir = Path(str(context.get("work_dir") or GENERATED_DIR / "vcenter" / sanitize_kit_name(cfg.get("site", {}).get("name", DEFAULT_KIT_NAME)))) / time.strftime("%Y%m%d-%H%M%S")
     spec_paths = write_vcenter_install_specs(context, work_dir)
@@ -15980,6 +16038,10 @@ async def plan_vcenter_install_route(request: Request, return_page: str = Form("
 @app.post("/run-vcenter-install", response_class=HTMLResponse)
 async def run_vcenter_install_route(request: Request, return_page: str = Form("vcenter")):
     cfg = load_kit_config()
+    form = {key: value for key, value in dict(await request.form()).items()}
+    if form:
+        _apply_vcenter_settings_form(cfg, form)
+        save_kit_config(cfg)
     started, blockers = _start_vcenter_install_worker(cfg)
     cfg = load_kit_config()
     return render_page(

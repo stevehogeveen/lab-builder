@@ -102,8 +102,8 @@
                 <label class="check"><input type="checkbox" name="vcenter_ssh_enable" {% if vcenter_install.ssh_enable %}checked{% endif %}> Enable SSH on the VCSA appliance</label>
                 <div class="actions">
                     <button class="btn btn-primary action-button" type="submit">Save vCenter setup</button>
-                    <button class="btn action-button" type="button" hx-post="/plan-vcenter-install" hx-target="#main-content" hx-swap="outerHTML" data-action-title="Planning vCenter install" data-action-start="Generating the VCSA CLI installer spec.">Generate install spec</button>
-                    <button class="btn btn-primary action-button" type="button" hx-post="/run-vcenter-install" hx-target="#main-content" hx-swap="outerHTML" data-action-title="Starting vCenter install" data-action-start="Launching VMware vcsa-deploy.">Run vCenter install</button>
+                    <button class="btn action-button" type="button" hx-post="/plan-vcenter-install" hx-include="#vcenter-settings-form" hx-target="#main-content" hx-swap="outerHTML" data-action-title="Planning vCenter install" data-action-start="Generating the VCSA CLI installer spec.">Generate install spec</button>
+                    <button class="btn btn-primary action-button" type="button" hx-post="/run-vcenter-install" hx-include="#vcenter-settings-form" hx-target="#main-content" hx-swap="outerHTML" data-action-title="Starting vCenter install" data-action-start="Launching VMware vcsa-deploy.">Run vCenter install</button>
                 </div>
             </form>
         </section>

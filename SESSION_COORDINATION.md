@@ -106,6 +106,25 @@ Copy this block and update it in place.
 - Next intended change:
   - Use operator feedback from the next manual test pass to tighten layout, wording, and any remaining protocol-detail validations.
 
+### Session: vcenter-quality-cycle
+- Status: done
+- Branch: codex/14h-quality-run
+- Scope owner: vCenter setup page button/route audit
+- Working on: Completed vCenter visible-form action fix for Generate install spec and Run vCenter install
+- Blocked by: none
+- Ready to hand off: vCenter form actions include current visible values; focused tests and operator-flow contract tests pass
+- Files claimed:
+  - templates/partials/pages/vcenter.html
+  - tests/test_vcenter.py
+- Shared files touched with caution:
+  - SESSION_COORDINATION.md
+  - app/main.py
+- Last changed:
+  - 2026-05-25 19:34 EDT - Claimed narrow vCenter form-action route slice for the 14-hour quality run.
+  - 2026-05-25 19:34 EDT - Added shared vCenter form-state application, wired generate/run buttons to include the form, and verified focused tests.
+- Next intended change:
+  - Continue with a separate backlog cycle; suggested next target is another unclaimed setup page button/route audit.
+
 ### Session: rest-of-app
 - Status: paused
 - Branch: experience/operator-companion
