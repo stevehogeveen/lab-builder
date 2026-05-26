@@ -2343,6 +2343,42 @@ def test_ilo_page_removes_old_controls_and_points_to_storage(client):
     assert "Use a single printable login name, 39 characters or less." in response.text
 
 
+def test_ilo_page_latest_receipt_open_log_uses_report_route(client):
+    cfg = main.default_config()
+    cfg["site"]["name"] = "Ilo Log Kit"
+    main.save_kit_config(cfg)
+    summary_path = main.HISTORY_DIR / "ilo-open-log-summary.yml"
+    summary_path.write_text("scope: ilo\nstatus: Completed\n", encoding="utf-8")
+    main.save_history(
+        "Ilo-Log-Kit",
+        [
+            {
+                "time": "2026-05-25 21:45:00",
+                "scope": "ilo",
+                "status": "Completed",
+                "current_stage": "Finished",
+                "run_summary_path": str(summary_path),
+            }
+        ],
+    )
+
+    response = client.get("/ilo")
+
+    assert response.status_code == 200
+    assert 'hx-post="/view-report"' in response.text
+    assert 'name="return_page" value="ilo"' in response.text
+    assert 'name="report_path"' in response.text
+    assert 'hx-post="/view-run-summary"' not in response.text
+
+    open_response = client.post(
+        "/view-report",
+        data={"return_page": "ilo", "report_path": str(summary_path)},
+    )
+    assert open_response.status_code == 200
+    assert "Report: ilo-open-log-summary.yml" in open_response.text
+    assert "scope: ilo" in open_response.text
+
+
 def test_save_esxi_windows_and_qnap_page_settings(client):
     cfg = main.default_config()
     cfg["site"]["name"] = "Workflow Kit"

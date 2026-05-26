@@ -1,0 +1,37 @@
+Task chosen: iLO page latest-run **Open log** button audit from Priority 1.
+
+Files inspected:
+- `.codex/mission.md`, `.codex/rules.md`, `.codex/backlog.md`
+- `SESSION_COORDINATION.md`
+- `docs/workflow-session-scopes.md`, `docs/operator-flow-contract.md`, `docs/automation-principles.md`, `docs/ux-product-principles.md`, `docs/validation.md`
+- `templates/partials/pages/ilo.html`
+- `app/main.py`
+- `app/modules/execution/routes.py`
+- `app/modules/configs/routes.py`
+- `tests/test_app.py`
+
+Files changed:
+- [templates/partials/pages/ilo.html](/home/administrator/lab-builder/templates/partials/pages/ilo.html:358): changed iLO receipt `Open log` from `/view-run-summary` to `/view-report`, preserving the saved `report_path` and returning to the iLO page.
+- [tests/test_app.py](/home/administrator/lab-builder/tests/test_app.py:2346): added focused coverage for the iLO receipt form and actual `/view-report` post.
+- [SESSION_COORDINATION.md](/home/administrator/lab-builder/SESSION_COORDINATION.md:148): claimed and closed the narrow iLO cycle.
+
+Buttons/routes/forms verified:
+- `Open log` on the iLO “What happened last” receipt now posts to `POST /view-report` with `return_page=ilo` and `report_path`.
+- Verified the route opens the saved report without a 422 validation error.
+- Inspected `Save iLO setup`, `Read current iLO`, `Open storage setup`, and `Open Run Center`; no changes made to those flows.
+
+Tests/checks run:
+- `.venv/bin/python -m pytest tests/test_app.py::test_ilo_page_latest_receipt_open_log_uses_report_route`
+- `.venv/bin/python -m pytest tests/test_app.py::test_ilo_page_removes_old_controls_and_points_to_storage tests/test_app.py::test_ilo_page_latest_receipt_open_log_uses_report_route`
+- `.venv/bin/python -m compileall app`
+- `git diff --check`
+
+All passed. No commit and no push.
+
+Real hardware used: none.
+
+Mocked/dry-run only: route/template validation with `TestClient` and a synthetic saved report under the test history directory. No live iLO/server calls.
+
+Remaining risks: the same saved-log route mismatch appears to exist on other pages, including ESXi, storage, and dashboard, but I did not touch them because this cycle was limited to one small task.
+
+Recommended next task: audit and fix the same `Open log` saved-report route mismatch on the ESXi or storage setup page.
