@@ -38,6 +38,26 @@ Copy this block and update it in place.
 
 ## Active Sessions
 
+### Session: dashboard-quality-cycle
+- Status: done
+- Branch: codex/14h-quality-run
+- Scope owner: Dashboard job-status Open log route audit
+- Working on: Completed Dashboard job-status Open log route fix without hardware access.
+- Blocked by: none
+- Ready to hand off: Dashboard job-status Open log buttons now open saved reports; focused test, operator-flow contract test, and compile check pass.
+- Files claimed:
+  - templates/partials/pages/dashboard.html
+  - tests/test_app.py
+- Shared files touched with caution:
+  - SESSION_COORDINATION.md
+  - templates/partials/pages/dashboard.html
+  - tests/test_app.py
+- Last changed:
+  - 2026-05-25 22:56 EDT - Claimed narrow Dashboard job-status Open log route/template slice for the 14-hour quality run.
+  - 2026-05-25 22:56 EDT - Routed Dashboard Open log buttons to the saved-report handler and verified focused tests.
+- Next intended change:
+  - Continue with a separate backlog cycle; suggested next target is a focused History page details/log clutter audit.
+
 ### Session: reports-quality-cycle
 - Status: done
 - Branch: codex/14h-quality-run

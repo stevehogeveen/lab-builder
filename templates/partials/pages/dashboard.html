@@ -270,7 +270,8 @@
                         <div class="dashboard-status-actions">
                             <span class="status pending">Failed</span>
                             {% if item.run_summary_path %}
-                            <form hx-post="/view-run-summary" hx-target="#main-content" hx-swap="outerHTML">
+                            <form hx-post="/view-report" hx-target="#main-content" hx-swap="outerHTML">
+                                <input type="hidden" name="return_page" value="dashboard">
                                 <input type="hidden" name="report_path" value="{{ item.run_summary_path }}">
                                 <button class="btn" type="submit">Open log</button>
                             </form>
@@ -287,7 +288,8 @@
                         <div class="dashboard-status-actions">
                             <span class="status ready">Passed</span>
                             {% if item.run_summary_path %}
-                            <form hx-post="/view-run-summary" hx-target="#main-content" hx-swap="outerHTML">
+                            <form hx-post="/view-report" hx-target="#main-content" hx-swap="outerHTML">
+                                <input type="hidden" name="return_page" value="dashboard">
                                 <input type="hidden" name="report_path" value="{{ item.run_summary_path }}">
                                 <button class="btn" type="submit">Open log</button>
                             </form>

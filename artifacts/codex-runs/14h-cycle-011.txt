@@ -1,0 +1,30 @@
+**Cycle Complete**
+
+Task chosen: Dashboard job-status `Open log` button route audit.
+
+Files inspected: `.codex/mission.md`, `.codex/rules.md`, `.codex/backlog.md`, required session/workflow docs, [dashboard.html](/home/administrator/lab-builder/templates/partials/pages/dashboard.html:270), [history.html](/home/administrator/lab-builder/templates/partials/pages/history.html:1), [app/main.py](/home/administrator/lab-builder/app/main.py:17453), [test_app.py](/home/administrator/lab-builder/tests/test_app.py:11845).
+
+Files changed:
+- [templates/partials/pages/dashboard.html](/home/administrator/lab-builder/templates/partials/pages/dashboard.html:270)
+- [tests/test_app.py](/home/administrator/lab-builder/tests/test_app.py:11845)
+- [SESSION_COORDINATION.md](/home/administrator/lab-builder/SESSION_COORDINATION.md:40)
+
+Buttons/routes/forms verified:
+- Dashboard failed-run `Open log`
+- Dashboard passed-run `Open log`
+- Changed from invalid `hx-post="/view-run-summary"` with `report_path`
+- Now uses `hx-post="/view-report"` with `return_page=dashboard` and `report_path`
+- Verified `/view-report` opens the saved summary content
+
+Tests/checks run:
+- `.venv/bin/python -m pytest tests/test_app.py::test_dashboard_job_status_lists_passed_and_failed_with_dates`
+- `.venv/bin/python -m pytest tests/test_operator_flow_contract.py`
+- `.venv/bin/python -m compileall app`
+
+Real hardware used: none.
+
+Mocked/dry-run only: route/template rendering through FastAPI `TestClient`, with temp artifact files under the test runtime paths.
+
+Remaining risks: full pytest suite was not run; no browser-level HTMX click test was run.
+
+Recommended next task: focused History page details/log clutter audit.

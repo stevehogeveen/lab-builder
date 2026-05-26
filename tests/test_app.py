@@ -11846,11 +11846,15 @@ def test_dashboard_job_status_lists_passed_and_failed_with_dates(client):
     cfg = main.default_config()
     cfg["site"]["name"] = "Dash Status Kit"
     main.save_kit_config(cfg)
+    esxi_summary = main.HISTORY_DIR / "dash-esxi-summary.yml"
+    ilo_summary = main.HISTORY_DIR / "dash-ilo-summary.yml"
+    esxi_summary.write_text("scope: esxi\nstatus: Failed\n", encoding="utf-8")
+    ilo_summary.write_text("scope: ilo\nstatus: Completed\n", encoding="utf-8")
     main.save_history(
         "Dash-Status-Kit",
         [
-            {"time": "2026-04-17 10:30:00", "scope": "esxi", "status": "Failed", "run_summary_path": "/tmp/esxi-summary.yml"},
-            {"time": "2026-04-17 09:15:00", "scope": "ilo", "status": "Completed", "run_summary_path": "/tmp/ilo-summary.yml"},
+            {"time": "2026-04-17 10:30:00", "scope": "esxi", "status": "Failed", "run_summary_path": str(esxi_summary)},
+            {"time": "2026-04-17 09:15:00", "scope": "ilo", "status": "Completed", "run_summary_path": str(ilo_summary)},
         ],
     )
 
@@ -11865,8 +11869,20 @@ def test_dashboard_job_status_lists_passed_and_failed_with_dates(client):
     assert ">Failed<" in response.text
     assert "2026-04-17 10:30:00" in response.text
     assert response.text.count("Open log") >= 2
-    assert "/tmp/ilo-summary.yml" in response.text
-    assert "/tmp/esxi-summary.yml" in response.text
+    assert 'hx-post="/view-report"' in response.text
+    assert 'name="return_page" value="dashboard"' in response.text
+    assert 'name="report_path"' in response.text
+    assert 'hx-post="/view-run-summary"' not in response.text
+    assert str(ilo_summary) in response.text
+    assert str(esxi_summary) in response.text
+
+    open_response = client.post(
+        "/view-report",
+        data={"return_page": "dashboard", "report_path": str(ilo_summary)},
+    )
+    assert open_response.status_code == 200
+    assert "Report: dash-ilo-summary.yml" in open_response.text
+    assert "scope: ilo" in open_response.text
 
 
 def test_dashboard_job_status_ignores_superseded_entries(client):
