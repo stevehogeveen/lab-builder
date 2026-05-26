@@ -82,6 +82,10 @@ def test_reports_page_wires_visible_controls_to_report_routes(reports_client):
     assert 'hx-post="/view-report"' in response.text
     assert 'action="/download-report" method="post"' in response.text
     assert 'name="return_page" value="configs"' in response.text
+    assert 'data-action-title="Opening run bundle"' in response.text
+    assert 'data-action-title="Opening saved report"' in response.text
+    assert '<button class="btn action-button" type="submit">Open bundle</button>' in response.text
+    assert '<button class="btn action-button" type="submit">View</button>' in response.text
     assert str(report_path) in response.text
     assert str(run_summary_path) in response.text
     assert 'href="/configs?report_query=192.168.1.11"' in response.text

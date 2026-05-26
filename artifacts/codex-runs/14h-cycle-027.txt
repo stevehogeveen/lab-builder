@@ -1,0 +1,28 @@
+**Task Chosen**
+Reports page saved-report open action feedback from Priority 1 button/flow audit.
+
+**Changed**
+- [reports.html](/home/administrator/lab-builder/templates/partials/pages/reports.html:115): added shared action metadata and `action-button` styling to `Open bundle` and `View` HTMX report-open forms.
+- [test_reports.py](/home/administrator/lab-builder/tests/test_reports.py:85): added assertions that Reports open controls keep the shared action feedback wiring.
+- [SESSION_COORDINATION.md](/home/administrator/lab-builder/SESSION_COORDINATION.md:41): claimed and closed the narrow cycle.
+
+**Inspected**
+`.codex/mission.md`, `.codex/rules.md`, `.codex/backlog.md`, coordination/workflow docs, `templates/partials/pages/reports.html`, `app/main.py`, `app/modules/configs/routes.py`, `tests/test_reports.py`, and relevant report-center tests in `tests/test_app.py`.
+
+**Verified Buttons/Routes/Forms**
+- Changed and verified: `Open bundle` and `View` forms using `hx-post="/view-report"` through `view_report()` / `view_report_handler()`.
+- Inspected, unchanged: `/download-report`, `/configs` search/filter, `/history`, and related-report links.
+
+**Tests/Checks Run**
+- `.venv/bin/python -m pytest tests/test_reports.py tests/test_app.py::test_report_center_lists_storage_reports_and_view_report tests/test_app.py::test_history_and_report_center_show_run_bundle_links` passed.
+- `.venv/bin/python -m compileall app` passed.
+- `git diff --check` passed.
+
+**Hardware**
+No real hardware was used. This was template/route coverage only, using test temp config/artifact directories. No hardware calls were made.
+
+**Remaining Risks**
+Browser-level HTMX visual timing was not manually tested, but the template wiring and backend report-open flow are covered. Existing untracked `artifacts/codex-runs/14h-cycle-027*.txt` files were left untouched.
+
+**Recommended Next Task**
+In the next cycle, audit another unclaimed normal/HTMX control or a setup-page status placement guard.

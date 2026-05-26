@@ -38,6 +38,24 @@ Copy this block and update it in place.
 
 ## Active Sessions
 
+### Session: reports-action-feedback-quality-cycle
+- Status: done
+- Branch: codex/14h-quality-run
+- Scope owner: Reports page saved-report open action feedback
+- Working on: Completed Reports saved-report open action feedback cleanup without changing report routes.
+- Blocked by: none
+- Ready to hand off: Reports run-bundle and saved-file open controls now use shared action feedback metadata; focused report tests and compile check pass.
+- Files claimed:
+  - templates/partials/pages/reports.html
+  - tests/test_reports.py
+- Shared files touched with caution:
+  - SESSION_COORDINATION.md
+- Last changed:
+  - 2026-05-26 01:04 EDT - Claimed narrow Reports saved-report open action-feedback slice for the 14-hour quality run.
+  - 2026-05-26 01:04 EDT - Added shared action metadata to Reports saved-report opening controls and verified focused report rendering coverage.
+- Next intended change:
+  - Continue with a separate backlog cycle; suggested next target is another unclaimed normal/HTMX control audit or a setup-page status placement guard.
+
 ### Session: dashboard-quick-actions-quality-cycle
 - Status: done
 - Branch: codex/14h-quality-run

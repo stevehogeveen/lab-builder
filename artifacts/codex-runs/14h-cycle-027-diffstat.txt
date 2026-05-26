@@ -1,0 +1,4 @@
+ SESSION_COORDINATION.md               | 18 ++++++++++++++++++
+ templates/partials/pages/reports.html | 16 ++++++++--------
+ tests/test_reports.py                 |  4 ++++
+ 3 files changed, 30 insertions(+), 8 deletions(-)
