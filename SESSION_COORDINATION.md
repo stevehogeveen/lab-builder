@@ -38,6 +38,26 @@ Copy this block and update it in place.
 
 ## Active Sessions
 
+### Session: dashboard-job-log-feedback-quality-cycle
+- Status: done
+- Branch: codex/14h-quality-run
+- Scope owner: Dashboard job-status Open log action feedback consistency
+- Working on: Completed shared action feedback metadata for Dashboard job-status saved-log controls without changing report routes.
+- Blocked by: none
+- Ready to hand off: Dashboard job-status Open log controls now use shared local action feedback; focused Dashboard test, operator-flow contract tests, and compile check pass.
+- Files claimed:
+  - templates/partials/pages/dashboard.html
+  - tests/test_app.py
+- Shared files touched with caution:
+  - SESSION_COORDINATION.md
+  - templates/partials/pages/dashboard.html
+  - tests/test_app.py
+- Last changed:
+  - 2026-05-26 02:30 EDT - Claimed narrow Dashboard job-status Open log action-feedback slice for the 14-hour quality run.
+  - 2026-05-26 02:30 EDT - Added shared action metadata/classes to Dashboard job-status Open log controls and verified focused coverage.
+- Next intended change:
+  - Continue with a separate backlog cycle; suggested next target is another unclaimed saved-log/action-feedback gap or setup-page status-placement guard.
+
 ### Session: vcenter-action-complete-feedback-quality-cycle
 - Status: done
 - Branch: codex/14h-quality-run

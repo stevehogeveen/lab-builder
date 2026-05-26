@@ -11892,6 +11892,9 @@ def test_dashboard_job_status_lists_passed_and_failed_with_dates(client):
     assert "2026-04-17 10:30:00" in response.text
     assert response.text.count("Open log") >= 2
     assert 'hx-post="/view-report"' in response.text
+    assert response.text.count('data-action-title="Opening job log"') >= 2
+    assert 'data-action-start="Loading the saved run log into Dashboard."' in response.text
+    assert '<button class="btn action-button" type="submit">Open log</button>' in response.text
     assert 'name="return_page" value="dashboard"' in response.text
     assert 'name="report_path"' in response.text
     assert 'hx-post="/view-run-summary"' not in response.text
