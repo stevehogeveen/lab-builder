@@ -1,0 +1,4 @@
+ SESSION_COORDINATION.md                            | 19 +++++++++++++++++++
+ .../partials/components/upgrade_gate_panel.html    |  7 ++++++-
+ tests/test_ilo_page.py                             | 22 ++++++++++++++++++++++
+ 3 files changed, 47 insertions(+), 1 deletion(-)

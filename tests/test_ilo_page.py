@@ -60,11 +60,33 @@ def test_ilo_page_wires_actions_and_visible_last_status(ilo_client):
     assert 'data-action-complete="iLO setup saved."' in response.text
     assert 'hx-post="/export-ilo-inventory"' in response.text
     assert 'data-action-complete="Current iLO read finished."' in response.text
+    assert 'hx-post="/save-upgrade-override"' in response.text
+    assert 'hx-vals=\'{"return_page":"ilo","device_key":"ilo"}\'' in response.text
+    assert 'data-action-title="Saving iLO upgrade override"' in response.text
+    assert (
+        'data-action-start="Updating whether iLO can continue setup while its upgrade gate is unresolved."'
+        in response.text
+    )
+    assert 'data-action-complete="iLO upgrade override saved."' in response.text
     assert 'href="/storage"' in response.text
     assert 'href="/execution"' in response.text
     assert '<details class="card identity-soft-card" open>' in response.text
     assert "What happened last" in response.text
     assert "No iLO run has finished for this kit yet." in response.text
+
+
+def test_ilo_page_upgrade_gate_override_route_saves_and_returns_feedback(ilo_client):
+    response = ilo_client.post(
+        "/save-upgrade-override",
+        data={"return_page": "ilo", "device_key": "ilo", "override_upgrade_gate": "true"},
+    )
+
+    assert response.status_code == 200
+    assert "Upgrade override saved" in response.text
+    assert "Override: enabled" in response.text
+    assert 'data-action-title="Saving iLO upgrade override"' in response.text
+    saved = main.load_kit_config()
+    assert saved["upgrade_helper"]["overrides"]["ilo"] is True
 
 
 def test_ilo_page_latest_receipt_open_log_uses_report_route(ilo_client):

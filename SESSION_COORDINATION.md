@@ -38,6 +38,25 @@ Copy this block and update it in place.
 
 ## Active Sessions
 
+### Session: upgrade-gate-override-feedback-quality-cycle
+- Status: done
+- Branch: codex/14h-quality-run
+- Scope owner: Legacy upgrade gate override action feedback consistency
+- Working on: Completed specific local action-feedback metadata for the existing legacy upgrade gate override checkbox without changing route or hardware behavior.
+- Blocked by: none
+- Ready to hand off: Legacy upgrade gate override now has specific local feedback metadata; focused iLO render tests, operator-flow contract tests, and compile check pass.
+- Files claimed:
+  - templates/partials/components/upgrade_gate_panel.html
+  - tests/test_ilo_page.py
+- Shared files touched with caution:
+  - SESSION_COORDINATION.md
+  - templates/partials/components/upgrade_gate_panel.html
+- Last changed:
+  - 2026-05-26 05:03 EDT - Claimed narrow legacy upgrade gate override action-feedback slice for the 14-hour quality run.
+  - 2026-05-26 05:04 EDT - Added override feedback metadata plus direct save-route coverage and verified focused render, operator-flow, and compile checks.
+- Next intended change:
+  - Continue with a separate backlog cycle; suggested next target is another unclaimed setup-page action-feedback gap or route audit.
+
 ### Session: dashboard-active-kit-feedback-quality-cycle
 - Status: done
 - Branch: codex/14h-quality-run

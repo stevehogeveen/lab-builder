@@ -47,7 +47,12 @@
         {% if upgrade_device_key == 'ilo' and not gate_entry.get('current_version') %}
         <button class="btn btn-primary" type="button" hx-post="/export-ilo-inventory" hx-vals='{"return_page":"{{ upgrade_return_page }}"}' hx-target="#main-content" hx-swap="outerHTML" data-action-title="Reading current iLO" data-action-start="Connecting to iLO and reading the current firmware version." data-action-complete="Current iLO read finished.">Read current iLO</button>
         {% endif %}
-        <label class="check card card-compact">
+        <label
+            class="check card card-compact"
+            data-action-title="Saving {{ upgrade_device_label }} upgrade override"
+            data-action-start="Updating whether {{ upgrade_device_label }} can continue setup while its upgrade gate is unresolved."
+            data-action-complete="{{ upgrade_device_label }} upgrade override saved."
+        >
             <input type="checkbox" name="override_upgrade_gate" value="true" {% if gate_override %}checked{% endif %} hx-post="/save-upgrade-override" hx-target="#main-content" hx-swap="outerHTML" hx-vals='{"return_page":"{{ upgrade_return_page }}","device_key":"{{ upgrade_device_key }}"}' hx-trigger="change">
             Override upgrade gate for config setup
         </label>
