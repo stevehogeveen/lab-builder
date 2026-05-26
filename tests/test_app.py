@@ -10206,6 +10206,9 @@ def test_reboot_storage_now_failure_is_logged(client, monkeypatch):
 
     assert response.status_code == 200
     assert "Retry Reboot Now" in response.text
+    assert 'data-action-complete="Server restart request submitted."' in response.text
+    assert '<button class="btn btn-danger action-button" type="submit">Reboot Now</button>' in response.text
+    assert '<button class="btn btn-danger action-button" id="storage-reboot-action-button" type="submit">Retry Reboot Now</button>' in response.text
     reboot_results_text = (apply_dir / "reboot-results.json").read_text(encoding="utf-8")
     apply_results_text = (apply_dir / "apply-results.json").read_text(encoding="utf-8")
     job = main.load_job("Apply-Kit")

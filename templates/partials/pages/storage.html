@@ -239,12 +239,12 @@
                 </div>
                 <div class="result mb-4">This button sends a real Redfish reset request through iLO and waits for the server to return.</div>
                 <div class="actions">
-                    <form hx-post="/reboot-storage-now" hx-target="#main-content" hx-swap="outerHTML" data-action-title="Requesting restart" data-action-start="Requesting a server restart to continue the storage workflow.">
+                    <form hx-post="/reboot-storage-now" hx-target="#main-content" hx-swap="outerHTML" data-action-title="Requesting restart" data-action-start="Requesting a server restart to continue the storage workflow." data-action-complete="Server restart request submitted.">
                         <input type="hidden" name="return_page" value="storage">
                         <input type="hidden" name="discovery_raw_path" value="{{ storage_export_paths.raw if storage_export_paths else '' }}">
                         <input type="hidden" name="raid_plan_path" value="{{ storage_plan_paths.plan if storage_plan_paths else '' }}">
                         <input type="hidden" name="apply_artifact_dir" value="{{ storage_apply_paths.directory }}">
-                        <button class="btn btn-danger" type="submit">Reboot Machine Now</button>
+                        <button class="btn btn-danger action-button" type="submit">Reboot Now</button>
                     </form>
                     <button class="btn" type="button" onclick="document.getElementById('storage-reboot-modal-shell').remove()">Not Now</button>
                 </div>
@@ -281,12 +281,12 @@
 {% endfor %}</div>
                 </details>
                 <div class="actions mt-4" id="storage-reboot-actions" style="{% if not (apply_state.get('status') in ['Completed', 'Staged'] and apply_state.get('reboot_required') and reboot_state.get('status') != 'Running' and reboot_state.get('status') != 'Completed') %}display: none;{% endif %}">
-                    <form hx-post="/reboot-storage-now" hx-target="#main-content" hx-swap="outerHTML" data-action-title="Requesting restart" data-action-start="Requesting a server restart to continue the storage workflow.">
+                    <form hx-post="/reboot-storage-now" hx-target="#main-content" hx-swap="outerHTML" data-action-title="Requesting restart" data-action-start="Requesting a server restart to continue the storage workflow." data-action-complete="Server restart request submitted.">
                         <input type="hidden" name="return_page" value="storage">
                         <input type="hidden" name="discovery_raw_path" value="{{ storage_export_paths.raw if storage_export_paths else '' }}">
                         <input type="hidden" name="raid_plan_path" value="{{ storage_plan_paths.plan if storage_plan_paths else '' }}">
                         <input type="hidden" name="apply_artifact_dir" value="{{ storage_apply_paths.directory }}">
-                        <button class="btn btn-danger" id="storage-reboot-action-button" type="submit">{% if reboot_state.get('status') == 'Failed' %}Retry Reboot Now{% else %}Reboot Now{% endif %}</button>
+                        <button class="btn btn-danger action-button" id="storage-reboot-action-button" type="submit">{% if reboot_state.get('status') == 'Failed' %}Retry Reboot Now{% else %}Reboot Now{% endif %}</button>
                     </form>
                 </div>
             </div>

@@ -1,0 +1,23 @@
+Task chosen: Storage setup restart action feedback consistency.
+
+Files inspected: `SESSION_COORDINATION.md`, workflow/UX/validation docs, `.codex/*`, [storage.html](/home/administrator/lab-builder/templates/partials/pages/storage.html:242), [routes.py](/home/administrator/lab-builder/app/modules/storage/routes.py:617), [test_app.py](/home/administrator/lab-builder/tests/test_app.py:10206), [test_storage.py](/home/administrator/lab-builder/tests/test_storage.py:1).
+
+Files changed:
+- [storage.html](/home/administrator/lab-builder/templates/partials/pages/storage.html:242): added `data-action-complete` to both restart forms, added `action-button` to both dangerous restart submit buttons, normalized modal button text to `Reboot Now`.
+- [test_app.py](/home/administrator/lab-builder/tests/test_app.py:10209): added assertions for the restart action metadata/classes.
+- [SESSION_COORDINATION.md](/home/administrator/lab-builder/SESSION_COORDINATION.md:41): claimed and closed the cycle.
+
+Buttons/routes/forms verified: both Storage `/reboot-storage-now` HTMX forms, the modal `Reboot Now` button, and the progress-card `Reboot Now` / `Retry Reboot Now` button. Handler behavior was inspected but not changed.
+
+Tests/checks run:
+- `.venv/bin/python -m pytest tests/test_app.py::test_reboot_storage_now_failure_is_logged tests/test_storage.py` - 2 passed
+- `.venv/bin/python -m pytest tests/test_operator_flow_contract.py` - 6 passed
+- `.venv/bin/python -m compileall app` - passed
+
+Real hardware used: none.
+
+Mocked/dry-run only: storage reboot regression used the existing fake Gen10 storage client and simulated reboot failure. No live storage/server restart was attempted.
+
+Remaining risks: no browser/HTMX manual pass was run, and the full pytest suite was not run because this was a narrow no-commit cycle.
+
+Recommended next task: another unclaimed setup-page action-feedback or status-placement guard. No commit or push was made.

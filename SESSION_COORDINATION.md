@@ -38,6 +38,25 @@ Copy this block and update it in place.
 
 ## Active Sessions
 
+### Session: storage-restart-action-feedback-quality-cycle
+- Status: done
+- Branch: codex/14h-quality-run
+- Scope owner: Storage setup restart action feedback consistency
+- Working on: Completed Storage server restart action feedback consistency without changing restart safety logic.
+- Blocked by: none
+- Ready to hand off: Storage restart controls now use shared action-button treatment and focused storage/operator-flow checks pass.
+- Files claimed:
+  - templates/partials/pages/storage.html
+  - tests/test_app.py
+- Shared files touched with caution:
+  - SESSION_COORDINATION.md
+  - tests/test_app.py
+- Last changed:
+  - 2026-05-26 01:14 EDT - Claimed narrow Storage restart action-feedback slice for the 14-hour quality run.
+  - 2026-05-26 01:14 EDT - Added shared action metadata/classes to Storage restart controls and verified focused route/template coverage.
+- Next intended change:
+  - Continue with a separate backlog cycle; suggested next target is another unclaimed setup-page action-feedback or status-placement guard.
+
 ### Session: reports-action-feedback-quality-cycle
 - Status: done
 - Branch: codex/14h-quality-run
