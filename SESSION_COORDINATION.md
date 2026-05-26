@@ -38,6 +38,24 @@ Copy this block and update it in place.
 
 ## Active Sessions
 
+### Session: windows-quality-cycle
+- Status: done
+- Branch: codex/14h-quality-run
+- Scope owner: Windows setup page last-action status consistency
+- Working on: Completed focused Windows setup last-action status consistency without hardware access.
+- Blocked by: none
+- Ready to hand off: Windows page now keeps its latest saved/planned action visible; focused tests and compile check pass.
+- Files claimed:
+  - templates/partials/pages/windows.html
+  - tests/test_windows_page.py
+- Shared files touched with caution:
+  - SESSION_COORDINATION.md
+- Last changed:
+  - 2026-05-25 22:39 EDT - Claimed narrow Windows setup last-action status slice for the 14-hour quality run.
+  - 2026-05-25 22:40 EDT - Added Windows last-action status card and focused render coverage.
+- Next intended change:
+  - Continue with a separate backlog cycle; suggested next target is a focused Reports or History button/route audit.
+
 ### Session: ovf-templates-quality-cycle
 - Status: done
 - Branch: codex/14h-quality-run

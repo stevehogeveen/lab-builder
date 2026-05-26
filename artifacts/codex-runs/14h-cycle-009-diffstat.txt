@@ -1,0 +1,3 @@
+ SESSION_COORDINATION.md               | 18 ++++++++++++++++
+ templates/partials/pages/windows.html | 39 +++++++++++++++++++++++++++++++++++
+ 2 files changed, 57 insertions(+)

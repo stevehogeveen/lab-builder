@@ -1,0 +1,29 @@
+**Task Chosen**
+Priority 2: consistent logs/status placement on the Windows setup page.
+
+**Files Inspected**
+`SESSION_COORDINATION.md`, required docs, `.codex/*`, [windows.html](/home/administrator/lab-builder/templates/partials/pages/windows.html), [routes.py](/home/administrator/lab-builder/app/modules/windows/routes.py), [test_app.py](/home/administrator/lab-builder/tests/test_app.py).
+
+**Files Changed**
+- [templates/partials/pages/windows.html](/home/administrator/lab-builder/templates/partials/pages/windows.html:268): added a compact history-backed “What happened last” status card in the existing Reports/next-step area.
+- [tests/test_windows_page.py](/home/administrator/lab-builder/tests/test_windows_page.py:53): added focused render/route coverage.
+- [SESSION_COORDINATION.md](/home/administrator/lab-builder/SESSION_COORDINATION.md:40): claimed and closed the slice.
+
+**Buttons/Routes/Forms Verified**
+`/save-windows-settings`, `/probe-windows-vsphere`, `/probe-windows-winrm`, `/select-windows-ovf-template`, `/plan-windows-install`, plus links to `/global-settings`, `/modules/ovf-templates`, and `/execution`.
+
+**Tests/Checks Run**
+- `.venv/bin/python -m pytest tests/test_windows_page.py`
+- `.venv/bin/python -m pytest tests/test_app.py -k "windows_page_wires_visible_form_actions"`
+- `.venv/bin/python -m compileall app`
+
+All passed.
+
+**Hardware**
+No real hardware used. This was route/template rendering and mocked TestClient-only validation.
+
+**Remaining Risks**
+The new Windows status block mirrors QNAP’s local template pattern; a future cleanup could move this repeated “latest action” pattern into a shared component.
+
+**Recommended Next Task**
+Focused Reports or History button/route audit.

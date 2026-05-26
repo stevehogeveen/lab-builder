@@ -266,6 +266,45 @@
         </div>
         <div class="card identity-soft-card">
             <div class="text-lg font-semibold mb-3">Reports and next step</div>
+            {% set windows_last = namespace(item=None) %}
+            {% for item in history %}
+                {% set item_scope = item.get('scope', '') %}
+                {% if not windows_last.item and (item_scope == 'windows' or item_scope.startswith('windows:')) %}
+                    {% set windows_last.item = item %}
+                {% endif %}
+            {% endfor %}
+            {% set windows_event_labels = {
+                'windows_settings_saved': 'Windows setup saved',
+                'windows_install_planned': 'Windows install planned',
+                'windows_ovf_template_selected': 'Windows OVF template selected',
+                'windows_image_uploaded': 'Windows image uploaded',
+                'windows_local_ovf_registered': 'Windows local OVF registered',
+                'windows_vm_deployed': 'Windows VM deployed'
+            } %}
+            <div class="ops-strip-card mb-3" style="margin-top: 0;">
+                <div class="flex items-start justify-between gap-3">
+                    <div>
+                        <div class="dashboard-kicker">What happened last</div>
+                        {% if windows_last.item %}
+                        <div class="font-semibold">{{ windows_event_labels.get(windows_last.item.get('event'), (windows_last.item.get('event') or 'Windows update')|replace('_', ' ')|title) }}</div>
+                        {% else %}
+                        <div class="font-semibold">No Windows action recorded yet</div>
+                        {% endif %}
+                    </div>
+                    {% if windows_last.item %}
+                    {% set windows_last_state = windows_last.item.get('state', '') %}
+                    <span class="status {{ 'ready' if windows_last_state == 'complete' else 'progress' if windows_last_state in ['running', 'validating'] else 'pending' }}">{{ windows_last.item.get('status') or windows_last_state|replace('_', ' ')|title or 'Recorded' }}</span>
+                    {% else %}
+                    <span class="status pending">Not started</span>
+                    {% endif %}
+                </div>
+                {% if windows_last.item %}
+                <div class="text-sm text-slate-400 mt-2">{{ windows_last.item.get('summary') or 'Latest Windows activity saved for this kit.' }}</div>
+                <div class="text-sm text-slate-400 mt-1">{{ windows_last.item.get('time') or 'Time not recorded' }}{% if windows_last.item.get('target') %} | {{ windows_last.item.get('target') }}{% endif %}</div>
+                {% else %}
+                <div class="text-sm text-slate-400 mt-2">Save or plan Windows setup once and the latest action will stay here.</div>
+                {% endif %}
+            </div>
             {% set install_plan = cfg.get('windows', {}).get('install_plan', {}) or {} %}
             <div class="ops-strip-card mb-3" style="margin-top: 0;">
                 <div class="font-semibold">Install plan status</div>
