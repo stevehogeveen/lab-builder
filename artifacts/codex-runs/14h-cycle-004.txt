@@ -1,0 +1,37 @@
+**Task Chosen**
+QNAP setup page status consistency: keep the latest QNAP-specific action visible after leaving and returning to the page.
+
+**Files Inspected**
+`SESSION_COORDINATION.md`, required workflow docs, `.codex/*`, [qnap.html](/home/administrator/lab-builder/templates/partials/pages/qnap.html:76), [routes.py](/home/administrator/lab-builder/app/modules/qnap/routes.py:13), [service.py](/home/administrator/lab-builder/app/modules/qnap/service.py:1), [test_qnap.py](/home/administrator/lab-builder/tests/test_qnap.py:54).
+
+**Files Changed**
+- [SESSION_COORDINATION.md](/home/administrator/lab-builder/SESSION_COORDINATION.md:41)
+- [templates/partials/pages/qnap.html](/home/administrator/lab-builder/templates/partials/pages/qnap.html:76)
+- [tests/test_qnap.py](/home/administrator/lab-builder/tests/test_qnap.py:54)
+
+**Buttons/Routes/Forms Verified**
+- `Save QNAP setup` form: `hx-post="/save-qnap-settings"` -> `save_qnap_settings_route` -> `save_qnap_settings_handler`
+- `Adjust global defaults`: `/global-settings`
+- `Open Global Settings`: `/global-settings`
+- `Open Run Center`: `/execution`
+
+**What Changed**
+The QNAP “Reports and next step” card now includes a compact “What happened last” status block backed by existing QNAP-scoped history events. It shows a useful empty state before any QNAP action and persists the last saved setup event afterward. No hardware behavior or QNAP automation was added.
+
+**Tests/Checks Run**
+- `.venv/bin/python -m pytest tests/test_qnap.py` -> passed
+- `.venv/bin/python -m pytest tests/test_operator_flow_contract.py` -> passed
+- `.venv/bin/python -m compileall app` -> passed
+- `git diff --check -- templates/partials/pages/qnap.html tests/test_qnap.py SESSION_COORDINATION.md` -> passed
+
+**Hardware**
+No real hardware was used.
+
+**Mocked/Dry-Run Only**
+FastAPI `TestClient` route/template rendering only. No QNAP, server, switch, NetApp, vCenter, or other device calls.
+
+**Remaining Risks**
+QNAP remains manual-only; the new status reflects saved Lab Builder history, not live QNAP verification.
+
+**Recommended Next Task**
+Audit another unclaimed setup page’s visible buttons and report/log links, preferably ESXi or Storage, using route/template tests only unless the available server is explicitly needed. No commit or push was performed.

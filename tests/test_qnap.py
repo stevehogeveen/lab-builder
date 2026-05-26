@@ -62,6 +62,8 @@ def test_qnap_page_wires_save_form_and_navigation(qnap_client):
     assert 'name="included_qnap"' in response.text
     assert 'href="/global-settings"' in response.text
     assert 'href="/execution"' in response.text
+    assert "What happened last" in response.text
+    assert "No QNAP action recorded yet" in response.text
 
 
 def test_save_qnap_settings_receipt_reports_inclusion_and_preserves_secret(qnap_client):
@@ -105,3 +107,11 @@ def test_save_qnap_settings_receipt_reports_inclusion_and_preserves_secret(qnap_
     assert saved["qnap"]["password"] == "ExistingQnapSecret1!"
     assert "Included in kit: No" in response.text
     assert "ExistingQnapSecret1!" not in response.text
+
+    page_response = qnap_client.get("/qnap")
+
+    assert page_response.status_code == 200
+    assert "What happened last" in page_response.text
+    assert "QNAP setup saved" in page_response.text
+    assert "Saved the QNAP setup values for this kit." in page_response.text
+    assert "ExistingQnapSecret1!" not in page_response.text

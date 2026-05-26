@@ -75,6 +75,37 @@
         </div>
         <div class="card identity-soft-card">
             <div class="text-lg font-semibold mb-3">Reports and next step</div>
+            {% set qnap_last = namespace(item=None) %}
+            {% for item in history %}
+                {% set item_scope = item.get('scope', '') %}
+                {% if not qnap_last.item and (item_scope == 'qnap' or item_scope.startswith('qnap:')) %}
+                    {% set qnap_last.item = item %}
+                {% endif %}
+            {% endfor %}
+            <div class="ops-strip-card mb-3" style="margin-top: 0;">
+                <div class="flex items-start justify-between gap-3">
+                    <div>
+                        <div class="dashboard-kicker">What happened last</div>
+                        {% if qnap_last.item %}
+                        <div class="font-semibold">{{ 'QNAP setup saved' if qnap_last.item.get('event') == 'qnap_settings_saved' else (qnap_last.item.get('event') or 'QNAP update')|replace('_', ' ')|title }}</div>
+                        {% else %}
+                        <div class="font-semibold">No QNAP action recorded yet</div>
+                        {% endif %}
+                    </div>
+                    {% if qnap_last.item %}
+                    {% set qnap_last_state = qnap_last.item.get('state', '') %}
+                    <span class="status {{ 'ready' if qnap_last_state == 'complete' else 'progress' if qnap_last_state in ['running', 'validating'] else 'pending' }}">{{ qnap_last.item.get('status') or qnap_last_state|replace('_', ' ')|title or 'Recorded' }}</span>
+                    {% else %}
+                    <span class="status pending">Not started</span>
+                    {% endif %}
+                </div>
+                {% if qnap_last.item %}
+                <div class="text-sm text-slate-400 mt-2">{{ qnap_last.item.get('summary') or 'Latest QNAP activity saved for this kit.' }}</div>
+                <div class="text-sm text-slate-400 mt-1">{{ qnap_last.item.get('time') or 'Time not recorded' }}{% if qnap_last.item.get('target') %} | {{ qnap_last.item.get('target') }}{% endif %}</div>
+                {% else %}
+                <div class="text-sm text-slate-400 mt-2">Save the QNAP setup once and the latest saved action will stay here.</div>
+                {% endif %}
+            </div>
             <div class="text-sm text-slate-400 mb-3">After saving, continue in Run Center for the final review or return to Global Settings if the shared address plan changes.</div>
             <div class="actions">
                 <a class="btn action-button" href="/execution">Open Run Center</a>

@@ -38,6 +38,24 @@ Copy this block and update it in place.
 
 ## Active Sessions
 
+### Session: qnap-quality-cycle
+- Status: done
+- Branch: codex/14h-quality-run
+- Scope owner: QNAP setup page status/button audit
+- Working on: Completed persistent QNAP last-action status without changing hardware behavior
+- Blocked by: none
+- Ready to hand off: QNAP page now keeps its latest saved-action status visible; focused tests and operator-flow contract tests pass
+- Files claimed:
+  - templates/partials/pages/qnap.html
+  - tests/test_qnap.py
+- Shared files touched with caution:
+  - SESSION_COORDINATION.md
+- Last changed:
+  - 2026-05-25 21:59 EDT - Claimed narrow QNAP page status consistency slice for the 14-hour quality run.
+  - 2026-05-25 22:00 EDT - Added QNAP last-action status from existing history events and verified focused tests.
+- Next intended change:
+  - Continue with a separate backlog cycle; suggested next target is another unclaimed setup page button/route audit.
+
 ### Session: cisco
 - Status: active
 - Branch: experience/operator-companion
