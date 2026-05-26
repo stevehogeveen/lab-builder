@@ -38,6 +38,25 @@ Copy this block and update it in place.
 
 ## Active Sessions
 
+### Session: windows-template-selection-quality-cycle
+- Status: done
+- Branch: codex/14h-quality-run
+- Scope owner: Windows setup OVF template selection form-state preservation
+- Working on: Completed Windows OVF template selection form-state preservation without hardware access.
+- Blocked by: none
+- Ready to hand off: Windows template selection now preserves visible setup values; focused Windows page tests, operator-flow contract tests, and compile check pass.
+- Files claimed:
+  - app/modules/windows/routes.py
+  - templates/partials/pages/windows.html
+  - tests/test_windows_page.py
+- Shared files touched with caution:
+  - SESSION_COORDINATION.md
+- Last changed:
+  - 2026-05-26 00:47 EDT - Claimed narrow Windows OVF template selection form-state preservation slice for the 14-hour quality run.
+  - 2026-05-26 00:49 EDT - Added Windows template selection form inclusion, reused existing form application logic, and verified focused coverage.
+- Next intended change:
+  - Continue with a separate backlog cycle; suggested next target is another unclaimed form action that should preserve visible values or a setup-page status placement guard.
+
 ### Session: vcenter-labels-quality-cycle
 - Status: done
 - Branch: codex/14h-quality-run

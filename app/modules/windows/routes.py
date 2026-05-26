@@ -313,6 +313,7 @@ async def select_windows_ovf_template_handler(
     windows_ovf_template_id: str = Form(""),
 ):
     cfg = runtime["load_kit_config"]()
+    _apply_windows_settings_form(cfg, {key: value for key, value in dict(await request.form()).items()})
     template = ovf_service.get_template(cfg, windows_ovf_template_id)
     if not template:
         return runtime["render_page"](request, cfg, active_page=return_page, error_message="Select a registered OVF template first.")

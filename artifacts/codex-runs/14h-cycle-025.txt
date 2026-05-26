@@ -1,0 +1,36 @@
+Task chosen: Windows setup “Use selected template” flow should preserve visible form values.
+
+Files inspected: session/docs plus `.codex/*`, Windows template/route/tests, and OVF template service.
+
+Files changed:
+- [app/modules/windows/routes.py](/home/administrator/lab-builder/app/modules/windows/routes.py:315)
+- [templates/partials/pages/windows.html](/home/administrator/lab-builder/templates/partials/pages/windows.html:172)
+- [tests/test_windows_page.py](/home/administrator/lab-builder/tests/test_windows_page.py:54)
+- [SESSION_COORDINATION.md](/home/administrator/lab-builder/SESSION_COORDINATION.md:38)
+
+What changed:
+- Added `hx-include="#windows-settings-form"` to the Windows OVF template selection form.
+- Reused `_apply_windows_settings_form(...)` in `select_windows_ovf_template_handler` before applying the selected template.
+- Added regression coverage proving unsaved visible Windows fields are preserved and saved secrets are not leaked.
+
+Buttons/routes/forms verified:
+- `#windows-settings-form`
+- `/select-windows-ovf-template`
+- `/save-windows-settings`
+- `/probe-windows-vsphere`
+- `/probe-windows-winrm`
+- `/plan-windows-install`
+- navigation to Global Settings, OVF Templates, and Run Center
+
+Tests/checks run:
+- `.venv/bin/python -m pytest tests/test_windows_page.py` passed
+- `.venv/bin/python -m pytest tests/test_operator_flow_contract.py` passed
+- `.venv/bin/python -m compileall app` passed
+
+Real hardware used: none.
+
+Mocked/dry-run only: FastAPI `TestClient`, temp kit config, and a synthetic local OVF descriptor/template. No vSphere, WinRM, ESXi, NetApp, QNAP, switch, or server calls.
+
+Remaining risks: this verifies route/template behavior only, not a real Windows deployment. Existing untracked `artifacts/codex-runs/14h-cycle-025*` files were left untouched.
+
+Recommended next task: audit another unclaimed setup-page action that posts beside a settings form and should preserve current visible values.

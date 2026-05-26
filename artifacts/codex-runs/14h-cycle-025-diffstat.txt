@@ -1,0 +1,5 @@
+ SESSION_COORDINATION.md               | 19 +++++++++
+ app/modules/windows/routes.py         |  1 +
+ templates/partials/pages/windows.html |  2 +-
+ tests/test_windows_page.py            | 78 ++++++++++++++++++++++++++++++++++-
+ 4 files changed, 98 insertions(+), 2 deletions(-)

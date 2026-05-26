@@ -59,7 +59,7 @@ def test_windows_page_wires_actions_and_empty_last_status(windows_client):
     assert 'hx-post="/save-windows-settings"' in response.text
     assert 'hx-post="/probe-windows-vsphere" hx-include="#windows-settings-form"' in response.text
     assert 'hx-post="/probe-windows-winrm" hx-include="#windows-settings-form"' in response.text
-    assert 'hx-post="/select-windows-ovf-template"' in response.text
+    assert 'hx-post="/select-windows-ovf-template" hx-include="#windows-settings-form"' in response.text
     assert 'hx-post="/plan-windows-install" hx-include="#windows-settings-form"' in response.text
     assert 'href="/global-settings"' in response.text
     assert 'href="/modules/ovf-templates"' in response.text
@@ -113,3 +113,79 @@ def test_windows_page_keeps_last_action_after_save(windows_client):
     assert "ExistingWindowsSecret1!" not in page_response.text
     assert "ExistingVsphereSecret1!" not in page_response.text
     assert "ExistingWinRmSecret1!" not in page_response.text
+
+
+def test_windows_ovf_template_selection_preserves_visible_settings(windows_client, tmp_path):
+    cfg = main.default_config()
+    cfg["site"]["name"] = "Windows Template Preserve Kit"
+    cfg["windows"]["admin_password"] = "ExistingWindowsSecret1!"
+    cfg["windows"]["vsphere_password"] = "ExistingVsphereSecret1!"
+    cfg["windows"]["winrm_password"] = "ExistingWinRmSecret1!"
+    descriptor = tmp_path / "template.ovf"
+    descriptor.write_text("<Envelope />", encoding="utf-8")
+    cfg["ovf_templates"] = {
+        "templates": {
+            "windows-template": {
+                "id": "windows-template",
+                "name": "Reusable Windows Template",
+                "os_family": "windows",
+                "source_location_type": "local",
+                "readiness": {
+                    "ready": True,
+                    "tone": "ready",
+                    "label": "Ready",
+                    "summary": "Local server source does not require NetApp.",
+                    "blockers": [],
+                },
+                "kind": "ovf",
+                "directory": str(tmp_path),
+                "descriptor_path": str(descriptor),
+                "descriptor_name": descriptor.name,
+                "files": [{"name": descriptor.name, "path": str(descriptor), "size_display": "12 B"}],
+                "file_count": 1,
+                "total_size_bytes": 12,
+                "total_size_display": "12 B",
+            }
+        }
+    }
+    main.save_kit_config(cfg)
+
+    response = windows_client.post(
+        "/select-windows-ovf-template",
+        data={
+            "return_page": "windows",
+            "windows_ovf_template_id": "windows-template",
+            "windows_vm_name": "unsaved-windows-vm",
+            "windows_admin_password": "",
+            "windows_vsphere_host": "192.168.1.20",
+            "windows_vsphere_username": "root",
+            "windows_vsphere_password": "",
+            "windows_vsphere_datacenter": "ha-datacenter",
+            "windows_vsphere_datastore": "datastore1",
+            "windows_vsphere_network": "VM Network",
+            "windows_vsphere_folder": "Lab VMs",
+            "windows_vsphere_resource_pool": "Resources",
+            "windows_winrm_username": "Administrator",
+            "windows_winrm_password": "",
+            "windows_winrm_port": "5986",
+            "windows_winrm_use_https": "on",
+            "included_windows": "on",
+        },
+    )
+
+    saved = main.load_kit_config("Windows-Template-Preserve-Kit")
+    assert response.status_code == 200
+    assert "Windows OVF template selected" in response.text
+    assert "unsaved-windows-vm" in response.text
+    assert saved["windows"]["vm_name"] == "unsaved-windows-vm"
+    assert saved["windows"]["vsphere_host"] == "192.168.1.20"
+    assert saved["windows"]["vsphere_folder"] == "Lab VMs"
+    assert saved["windows"]["ovf_template_id"] == "windows-template"
+    assert saved["windows"]["source_image_origin"] == "ovf_template"
+    assert saved["included"]["windows"] is True
+    assert saved["windows"]["admin_password"] == "ExistingWindowsSecret1!"
+    assert saved["windows"]["vsphere_password"] == "ExistingVsphereSecret1!"
+    assert saved["windows"]["winrm_password"] == "ExistingWinRmSecret1!"
+    assert "ExistingWindowsSecret1!" not in response.text
+    assert "ExistingVsphereSecret1!" not in response.text
+    assert "ExistingWinRmSecret1!" not in response.text
