@@ -67,6 +67,8 @@ REQUIRED_ARTIFACTS = [
     "cisco/running-config-after.txt",
 ]
 
+PENDING_ARTIFACT_VALUES = {"", "pending", "status: pending"}
+
 
 def normalize_overnight_mode(value: str | None) -> str:
     mode = str(value or OVERNIGHT_DEFAULT_MODE).strip().lower()
@@ -160,6 +162,12 @@ def redact_nested(value: Any, key_name: str = "") -> Any:
     if isinstance(value, list):
         return [redact_nested(item, key_name) for item in value]
     return value
+
+
+def _redacted_secret_excerpt(line: str) -> str:
+    if not str(line or "").strip():
+        return "[redacted possible secret]"
+    return "[redacted possible secret]"
 
 
 class OvernightArtifactWriter:
@@ -256,6 +264,82 @@ class OvernightArtifactWriter:
         self.write_yaml("summary.yml", summary)
 
 
+def _artifact_placeholder_status(path: Path) -> str:
+    if not path.exists():
+        return "missing"
+    if not path.is_file():
+        return "not_file"
+    try:
+        text = path.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return "unreadable"
+    stripped = text.strip()
+    if stripped.lower() in PENDING_ARTIFACT_VALUES:
+        return "pending"
+    if path.suffix == ".json":
+        try:
+            parsed = json.loads(stripped or "{}")
+        except json.JSONDecodeError:
+            parsed = None
+        if isinstance(parsed, dict) and str(parsed.get("status") or "").lower() == "pending":
+            return "pending"
+    if path.suffix in {".yml", ".yaml"}:
+        try:
+            parsed = yaml.safe_load(stripped) if stripped else {}
+        except yaml.YAMLError:
+            parsed = None
+        if isinstance(parsed, dict) and str(parsed.get("status") or "").lower() == "pending":
+            return "pending"
+    return "present"
+
+
+def inspect_overnight_artifacts(run_dir: Path) -> dict[str, Any]:
+    items: list[dict[str, Any]] = []
+    missing: list[str] = []
+    pending: list[str] = []
+    unreadable: list[str] = []
+    for relative in REQUIRED_ARTIFACTS:
+        path = Path(run_dir) / relative
+        status = _artifact_placeholder_status(path)
+        item = {
+            "relative": relative,
+            "path": str(path),
+            "exists": path.exists(),
+            "status": status,
+        }
+        items.append(item)
+        if status == "missing":
+            missing.append(relative)
+        elif status == "pending":
+            pending.append(relative)
+        elif status in {"unreadable", "not_file"}:
+            unreadable.append(relative)
+    return {
+        "run_folder": str(run_dir),
+        "items": items,
+        "missing": missing,
+        "pending": pending,
+        "unreadable": unreadable,
+        "ok": not missing and not pending and not unreadable,
+    }
+
+
+def read_morning_report_status(path: Path) -> dict[str, str]:
+    if not Path(path).exists():
+        return {"status": "missing", "reason": "MORNING_READY.md is missing."}
+    try:
+        text = Path(path).read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return {"status": "unreadable", "reason": "MORNING_READY.md could not be read."}
+    match = re.search(r"(?im)^Status:\s*(.+?)\s*$", text)
+    status = match.group(1).strip() if match else "unknown"
+    reason_section = ""
+    if "## Needs Attention Reasons" in text:
+        reason_section = text.split("## Needs Attention Reasons", 1)[1].split("\n## ", 1)[0]
+    reasons = re.findall(r"(?m)^-\s+(.+)$", reason_section)
+    return {"status": status, "reason": reasons[0] if reasons else ""}
+
+
 def create_overnight_run_dir(artifacts_root: Path, now: datetime | None = None) -> Path:
     root = Path(artifacts_root) / "runs" / "overnight"
     root.mkdir(parents=True, exist_ok=True)
@@ -286,6 +370,56 @@ def default_ilo_client_factory(*, host: str, username: str, password: str, timeo
     return ILOClient(ILOConfig(host=host, username=username, password=password, timeout=timeout, verify_tls=False))
 
 
+def _ilo_failure_guidance(error: str) -> list[str]:
+    lowered = str(error or "").lower()
+    if any(token in lowered for token in ("401", "403", "unauthorized", "forbidden", "auth")):
+        return [
+            "Verify the saved iLO username and password or LAB_BUILDER_ILO_USERNAME/LAB_BUILDER_ILO_PASSWORD.",
+            "Confirm the account has permission to read Redfish Manager and System resources.",
+        ]
+    if any(token in lowered for token in ("certificate", "ssl", "tls")):
+        return [
+            "Check whether the iLO TLS certificate changed or the host is presenting an unexpected certificate.",
+            "Retry discovery only after confirming the saved target is the intended iLO.",
+        ]
+    if any(token in lowered for token in ("timed out", "timeout", "connection", "unreachable", "name or service")):
+        return [
+            "Confirm the iLO host is reachable from this workstation before starting another overnight run.",
+            "Check cabling, IP address, gateway, and whether another maintenance window is using the controller.",
+        ]
+    if any(token in lowered for token in ("json", "decode", "redfish", "odata", "manager", "system")):
+        return [
+            "Open the raw iLO discovery artifact and verify the Redfish service root returned valid JSON.",
+            "Confirm `/redfish/v1/Managers` and `/redfish/v1/Systems` are available on this iLO firmware.",
+        ]
+    return [
+        "Review the raw iLO error in Debug Mode before retrying.",
+        "Retry discovery only after confirming the target host and credentials are correct.",
+    ]
+
+
+def write_ilo_skipped_artifacts(writer: OvernightArtifactWriter, reason: str, *, now: datetime | None = None) -> None:
+    current = now or datetime.now().astimezone()
+    payload = {
+        "ok": False,
+        "status": "skipped",
+        "reason": reason,
+        "recorded_at": current.isoformat(),
+        "next_steps": [
+            "Start the overnight run before the hardware stop window if iLO discovery evidence is required.",
+            "Use the finalizer only when no new hardware discovery should be attempted.",
+        ],
+    }
+    for relative in (
+        "ilo/discovery.json",
+        "ilo/power-state-before.json",
+        "ilo/boot-options.json",
+        "ilo/virtual-media.json",
+        "ilo/final-state.json",
+    ):
+        writer.write_json(relative, payload)
+
+
 def collect_ilo_discovery(
     cfg: dict[str, Any],
     run_config: OvernightHardwareConfig,
@@ -299,7 +433,7 @@ def collect_ilo_discovery(
     password = resolve_secret(str(ilo_cfg.get("password") or ""), env_name="LAB_BUILDER_ILO_PASSWORD")
     if not username or not password:
         error = "iLO credentials are not available from saved kit config or LAB_BUILDER_ILO_USERNAME/LAB_BUILDER_ILO_PASSWORD."
-        payload = {"ok": False, "host": host, "error": error}
+        payload = {"ok": False, "host": host, "error": error, "next_steps": _ilo_failure_guidance(error)}
         writer.write_json("ilo/discovery.json", payload)
         writer.write_json("ilo/power-state-before.json", payload)
         writer.write_json("ilo/boot-options.json", payload)
@@ -346,7 +480,7 @@ def collect_ilo_discovery(
         return discovery
     except Exception as exc:
         error = str(exc).splitlines()[0]
-        payload = {"ok": False, "host": host, "error": error}
+        payload = {"ok": False, "host": host, "error": error, "next_steps": _ilo_failure_guidance(error)}
         for relative in (
             "ilo/discovery.json",
             "ilo/power-state-before.json",
@@ -400,6 +534,62 @@ def _console_detect_text(diagnostics: dict[str, Any], candidates: list[dict[str,
     return "\n".join(lines).rstrip() + "\n"
 
 
+def _cisco_console_guidance(error: str = "") -> list[str]:
+    lowered = str(error or "").lower()
+    if any(token in lowered for token in ("busy", "permission", "denied", "resource")):
+        return [
+            "Close any terminal session that is already using the Cisco console port.",
+            "Check local serial device permissions for the app user.",
+        ]
+    if any(token in lowered for token in ("timeout", "timed out", "no prompt", "prompt")):
+        return [
+            "Verify the console cable is connected to the switch console port.",
+            "Try the saved baud rate first, then check whether the device expects 115200 or 9600.",
+        ]
+    if any(token in lowered for token in ("baud", "framing", "decode")):
+        return [
+            "Confirm the Cisco console baud rate in the saved kit settings.",
+            "Retry with the expected platform baud rate after preserving the transcript.",
+        ]
+    return [
+        "Set a saved Cisco console port or plug in a USB serial adapter before the next run.",
+        "Check Debug Mode for detected serial devices and raw console transcript evidence.",
+    ]
+
+
+def _cisco_guidance_text(reason: str, *, selected_port: str = "", selected_baud: int = 9600) -> str:
+    lines = [
+        "Cisco console discovery did not capture command output.",
+        f"reason: {reason}",
+        f"selected_port: {selected_port or '(none)'}",
+        f"selected_baud: {selected_baud}",
+        "next_steps:",
+    ]
+    lines.extend(f"- {item}" for item in _cisco_console_guidance(reason))
+    return "\n".join(lines).rstrip() + "\n"
+
+
+def write_cisco_skipped_artifacts(writer: OvernightArtifactWriter, reason: str, *, now: datetime | None = None) -> None:
+    current = now or datetime.now().astimezone()
+    text = "\n".join(
+        [
+            "Cisco console discovery skipped.",
+            f"reason: {reason}",
+            f"recorded_at: {current.isoformat()}",
+            "next_steps:",
+            "- Start the overnight run before the hardware stop window if Cisco evidence is required.",
+            "- Keep this transcript as the raw record that no console connection was attempted.",
+            "",
+        ]
+    )
+    writer.write_text("cisco/console-detect.txt", text)
+    writer.write_text("cisco/initial-session.txt", text)
+    writer.write_text("cisco/show-version.txt", text)
+    writer.write_text("cisco/running-config-before.txt", text)
+    writer.write_text("cisco/setup-transcript.txt", text)
+    writer.write_text("cisco/running-config-after.txt", text)
+
+
 def collect_cisco_console_discovery(
     cfg: dict[str, Any],
     run_config: OvernightHardwareConfig,
@@ -430,11 +620,12 @@ def collect_cisco_console_discovery(
     if not selected_port:
         error = "No saved or detected Cisco console port is available."
         payload = {"ok": False, "error": error, "diagnostics": diagnostics, "candidates": candidates}
-        writer.write_text("cisco/initial-session.txt", error + "\n")
-        writer.write_text("cisco/show-version.txt", "")
-        writer.write_text("cisco/running-config-before.txt", "")
-        writer.write_text("cisco/setup-transcript.txt", "No setup actions executed because no console port was selected.\n")
-        writer.write_text("cisco/running-config-after.txt", "")
+        guidance = _cisco_guidance_text(error, selected_port=selected_port, selected_baud=selected_baud)
+        writer.write_text("cisco/initial-session.txt", guidance)
+        writer.write_text("cisco/show-version.txt", guidance)
+        writer.write_text("cisco/running-config-before.txt", guidance)
+        writer.write_text("cisco/setup-transcript.txt", guidance + "No setup actions executed because no console port was selected.\n")
+        writer.write_text("cisco/running-config-after.txt", guidance)
         writer.trace(stage="cisco_console", status="blocked", progress=63, message=error)
         return payload
 
@@ -459,11 +650,12 @@ def collect_cisco_console_discovery(
         return {"ok": True, "selected_port": selected_port, "selected_baud": selected_baud, "diagnostics": diagnostics, "candidates": candidates}
     except Exception as exc:
         error = str(exc).splitlines()[0]
-        writer.write_text("cisco/initial-session.txt", f"Console open/read failed: {error}\n")
-        writer.write_text("cisco/show-version.txt", "")
-        writer.write_text("cisco/running-config-before.txt", "")
-        writer.write_text("cisco/setup-transcript.txt", "No setup actions executed because console read failed.\n")
-        writer.write_text("cisco/running-config-after.txt", "")
+        guidance = _cisco_guidance_text(error, selected_port=selected_port, selected_baud=selected_baud)
+        writer.write_text("cisco/initial-session.txt", f"Console open/read failed: {error}\n\n{guidance}")
+        writer.write_text("cisco/show-version.txt", guidance)
+        writer.write_text("cisco/running-config-before.txt", guidance)
+        writer.write_text("cisco/setup-transcript.txt", guidance + "No setup actions executed because console read failed.\n")
+        writer.write_text("cisco/running-config-after.txt", guidance)
         writer.trace(stage="cisco_console", status="failed", progress=66, message=f"Cisco console read failed: {error}")
         return {"ok": False, "selected_port": selected_port, "selected_baud": selected_baud, "error": error, "diagnostics": diagnostics, "candidates": candidates}
 
@@ -542,7 +734,7 @@ def scan_text_for_secrets(text: str, *, path: str = "") -> list[dict[str, Any]]:
             continue
         for pattern in SECRET_PATTERNS:
             if pattern.search(line):
-                findings.append({"path": path, "line": number, "reason": pattern.pattern, "excerpt": line[:160]})
+                findings.append({"path": path, "line": number, "reason": pattern.pattern, "excerpt": _redacted_secret_excerpt(line)})
                 break
     return findings
 
@@ -615,6 +807,7 @@ def request_hardware_stop(writer: OvernightArtifactWriter, *, now: datetime | No
 
 
 def _write_morning_report(writer: OvernightArtifactWriter, payload: dict[str, Any]) -> None:
+    reasons = list(payload.get("needs_attention_reasons") or [])
     lines = [
         "# Morning Ready",
         "",
@@ -626,12 +819,15 @@ def _write_morning_report(writer: OvernightArtifactWriter, payload: dict[str, An
         f"- Branch: {payload.get('branch') or 'unknown'}",
         f"- Commit: {payload.get('commit_sha') or 'not created'}",
         f"- Tests: {payload.get('test_result') or 'not run'}",
+        f"- Compile: {payload.get('compile_result') or 'not run'}",
         f"- Push: {payload.get('push_result') or 'not run'}",
         f"- Secret scan: {payload.get('secret_scan_result') or 'not run'}",
         f"- Hardware stop marker: {payload.get('hardware_stop_marker') or 'not written'}",
-        "",
-        "## Notes",
     ]
+    if reasons:
+        lines.extend(["", "## Needs Attention Reasons"])
+        lines.extend(f"- {reason}" for reason in reasons)
+    lines.extend(["", "## Notes"])
     notes = list(payload.get("notes") or [])
     if not notes:
         notes = ["No additional notes."]
@@ -644,7 +840,18 @@ def _write_morning_report(writer: OvernightArtifactWriter, payload: dict[str, An
     if payload.get("secret_findings"):
         lines.extend(["", "## Secret Findings"])
         for finding in payload["secret_findings"][:40]:
-            lines.append(f"- {finding.get('path')}:{finding.get('line')} possible secret ({finding.get('excerpt')})")
+            lines.append(f"- {finding.get('path')}:{finding.get('line')} possible secret ({finding.get('excerpt') or '[redacted]'})")
+    artifact_health = dict(payload.get("artifact_health") or {})
+    if artifact_health:
+        lines.extend(["", "## Artifact Health"])
+        any_issue = False
+        for key, label in (("missing", "Missing"), ("pending", "Still pending"), ("unreadable", "Unreadable")):
+            values = list(artifact_health.get(key) or [])
+            if values:
+                any_issue = True
+                lines.append(f"- {label}: {', '.join(values)}")
+        if not any_issue:
+            lines.append("- Required artifacts are present and no placeholders remain.")
     if payload.get("git_status_before") or payload.get("git_status_after"):
         lines.extend(["", "## Git Status Before", "```text", str(payload.get("git_status_before") or "").rstrip(), "```"])
         lines.extend(["", "## Git Status After", "```text", str(payload.get("git_status_after") or "").rstrip(), "```"])
@@ -670,10 +877,35 @@ def finalize_overnight_run(
     commands: list[dict[str, Any]] = []
     notes: list[str] = []
     tests_ok = True
+    compile_ok = True
     test_result = "not run"
+    compile_result = "not run"
+    artifact_health: dict[str, Any] = {}
+    status_before = CommandCapture(["git", "status", "--short", "--branch"], 1, "", "not run")
+    status_after = CommandCapture(["git", "status", "--short", "--branch"], 1, "", "not run")
+
+    _write_morning_report(
+        writer,
+        {
+            "status_label": "Needs attention",
+            "branch": "unknown",
+            "commit_sha": "",
+            "test_result": "running" if run_tests else "not run",
+            "compile_result": "pending" if run_tests else "not run",
+            "push_result": "not run",
+            "secret_scan_result": "pending",
+            "artifact_folder": str(writer.run_dir),
+            "hardware_stop_marker": str(stop_marker),
+            "needs_attention_reasons": ["Finalization has started but has not completed yet."],
+            "notes": ["This provisional report is overwritten when finalization completes."],
+        },
+    )
 
     def run(command: list[str]) -> CommandCapture:
-        result = runner(command, Path(repo_root))
+        try:
+            result = runner(command, Path(repo_root))
+        except Exception as exc:
+            result = CommandCapture(command=list(command), returncode=1, stdout="", stderr=str(exc).splitlines()[0])
         commands.append(_command_dict(result))
         return result
 
@@ -686,13 +918,16 @@ def finalize_overnight_run(
         focused = run([python_cmd, "-m", "pytest", "-q", "tests/test_overnight_run.py"])
         tests_ok = tests_ok and focused.ok
     elif run_tests:
+        tests_ok = False
         notes.append("Focused overnight tests were not found.")
 
     if run_tests:
         full = run([python_cmd, "-m", "pytest", "-q"])
         compileall = run([python_cmd, "-m", "compileall", "app"])
-        tests_ok = tests_ok and full.ok and compileall.ok
+        tests_ok = tests_ok and full.ok
+        compile_ok = compileall.ok
         test_result = "passed" if tests_ok else "failed"
+        compile_result = "passed" if compile_ok else "failed"
 
     secret_findings = scan_paths_for_secrets([writer.run_dir])
     secret_scan_result = "clean" if not secret_findings else f"blocked ({len(secret_findings)} finding(s))"
@@ -702,7 +937,7 @@ def finalize_overnight_run(
         notes.append("Hardware stop marker was written at or after 5:30 AM local time; verify no hardware action overran the stop window.")
     decision = decide_finalization_git_action(
         allow_git=allow_git,
-        tests_ok=tests_ok,
+        tests_ok=tests_ok and compile_ok,
         secret_findings_count=len(secret_findings),
         deadline_ok=deadline_ok,
     )
@@ -762,12 +997,34 @@ def finalize_overnight_run(
     if not branch:
         branch = _parse_git_branch(status_after.stdout)
 
-    status_label = "Ready for review" if tests_ok and not secret_findings and git_ok and deadline_ok else "Needs attention"
+    writer.write_summary({"status": "finalization_running", "finalization": {"status_label": "Running"}})
+    artifact_health = inspect_overnight_artifacts(writer.run_dir)
+    artifact_issues = bool(artifact_health.get("missing") or artifact_health.get("pending") or artifact_health.get("unreadable"))
+    needs_attention_reasons: list[str] = []
+    if not tests_ok:
+        needs_attention_reasons.append("Pytest did not pass; review command output in MORNING_READY.md.")
+    if not compile_ok:
+        needs_attention_reasons.append("compileall did not pass; review command output in MORNING_READY.md.")
+    if secret_findings:
+        needs_attention_reasons.append("Possible secrets were found; auto-commit and push were blocked.")
+    if not deadline_ok:
+        needs_attention_reasons.append("The 6:00 AM finalization deadline was missed.")
+    if artifact_health.get("missing"):
+        needs_attention_reasons.append("Expected artifacts are missing: " + ", ".join(artifact_health["missing"]))
+    if artifact_health.get("pending"):
+        needs_attention_reasons.append("Expected artifacts still contain placeholders: " + ", ".join(artifact_health["pending"]))
+    if artifact_health.get("unreadable"):
+        needs_attention_reasons.append("Expected artifacts could not be read: " + ", ".join(artifact_health["unreadable"]))
+    if allow_git and not git_ok:
+        needs_attention_reasons.append("Git commit or push did not complete.")
+
+    status_label = "Ready for review" if tests_ok and compile_ok and not secret_findings and git_ok and deadline_ok and not artifact_issues else "Needs attention"
     payload = {
         "status_label": status_label,
         "branch": branch,
         "commit_sha": commit_sha,
         "test_result": test_result,
+        "compile_result": compile_result,
         "push_result": push_result,
         "secret_scan_result": secret_scan_result,
         "secret_findings": secret_findings,
@@ -777,15 +1034,17 @@ def finalize_overnight_run(
         "git_status_after": status_after.stdout,
         "commands": commands,
         "notes": notes,
+        "needs_attention_reasons": needs_attention_reasons,
+        "artifact_health": artifact_health,
     }
     _write_morning_report(writer, payload)
+    writer.trace(stage="finalization", status="completed" if status_label == "Ready for review" else "needs_attention", progress=100, message=f"Finalization result: {status_label}.")
     writer.write_summary(
         {
             "status": status_label,
             "finalization": payload,
         }
     )
-    writer.trace(stage="finalization", status="completed" if status_label == "Ready for review" else "needs_attention", progress=100, message=f"Finalization result: {status_label}.")
     return payload
 
 
@@ -825,13 +1084,17 @@ def run_overnight_hardware(
 
     reason = stop_reason()
     if reason:
+        write_ilo_skipped_artifacts(writer, reason, now=now())
         writer.trace(stage="hardware_stop", status="stopped", progress=70, message=reason)
+        results["ilo"] = {"ok": False, "status": "skipped", "reason": reason}
     else:
         results["ilo"] = collect_ilo_discovery(cfg, run_config, writer, client_factory=ilo_client_factory)
 
     reason = stop_reason()
     if reason:
+        write_cisco_skipped_artifacts(writer, reason, now=now())
         writer.trace(stage="hardware_stop", status="stopped", progress=70, message=reason)
+        results["cisco"] = {"ok": False, "status": "skipped", "reason": reason}
     else:
         results["cisco"] = collect_cisco_console_discovery(
             cfg,
@@ -874,6 +1137,14 @@ def list_overnight_run_artifacts(artifacts_root: Path) -> list[dict[str, Any]]:
                 summary = yaml.safe_load(summary_path.read_text(encoding="utf-8")) or {}
             except Exception:
                 summary = {}
+        morning = read_morning_report_status(morning_path)
+        artifact_health = inspect_overnight_artifacts(run_dir)
+        finalization = dict(summary.get("finalization") or {}) if isinstance(summary.get("finalization"), dict) else {}
+        needs_attention_reasons = list(finalization.get("needs_attention_reasons") or [])
+        if not needs_attention_reasons and morning.get("reason"):
+            needs_attention_reasons = [str(morning.get("reason") or "")]
+        if str(morning.get("status") or "").lower() == "pending" and not needs_attention_reasons:
+            needs_attention_reasons = ["MORNING_READY.md is still pending; finalization did not record a completed result."]
         runs.append(
             {
                 "name": run_dir.name,
@@ -881,6 +1152,10 @@ def list_overnight_run_artifacts(artifacts_root: Path) -> list[dict[str, Any]]:
                 "summary_path": str(summary_path),
                 "morning_report_path": str(morning_path),
                 "status": str(summary.get("status") or "pending"),
+                "morning_status": str(morning.get("status") or ""),
+                "display_status": str(morning.get("status") or summary.get("status") or "pending"),
+                "needs_attention_reasons": needs_attention_reasons,
+                "artifact_health": artifact_health,
                 "generated_at": str(summary.get("generated_at") or ""),
                 "artifact_count": len([item for item in run_dir.rglob("*") if item.is_file()]),
             }

@@ -186,6 +186,7 @@
         <div class="overnight-tile">
             <div class="overnight-kicker">Mode</div>
             <div class="overnight-value">{{ operator.get('current_mode', 'discovery_only') }}</div>
+            <div class="text-xs text-slate-400 mt-2">Default remains discovery_only.</div>
         </div>
         <div class="overnight-tile">
             <div class="overnight-kicker">Completion</div>
@@ -195,6 +196,7 @@
         <div class="overnight-tile">
             <div class="overnight-kicker">Morning</div>
             <div class="overnight-value" style="font-size: 1.05rem;">{{ operator.get('finalization_status', 'Pending') }}</div>
+            <div class="text-xs text-slate-400 mt-2">{{ operator.get('latest_run_status', 'No run') }}</div>
         </div>
     </div>
 
@@ -203,11 +205,18 @@
             <div class="overnight-section-title">
                 <div>
                     <div class="overnight-kicker">Current State</div>
-                    <div class="text-lg font-bold">Discovered / Saved / Ready</div>
+                    <div class="text-lg font-bold">Latest run and next action</div>
                 </div>
                 <span class="overnight-chip">{{ operator.get('status', 'Idle') }}</span>
             </div>
             <div class="overnight-row-list">
+                <div class="overnight-row">
+                    <div>
+                        <strong>Latest run</strong>
+                        <div class="text-sm text-slate-400 truncate-wrap">{{ operator.get('latest_run_folder') or 'No overnight run has been started.' }}</div>
+                    </div>
+                    <span class="overnight-chip">{{ operator.get('latest_run_status', 'No run') }}</span>
+                </div>
                 <div class="overnight-row">
                     <div>
                         <strong>Discovered/current state</strong>
@@ -238,10 +247,17 @@
                 </div>
                 <div class="overnight-row">
                     <div>
-                        <strong>Finalization result</strong>
-                        <div class="text-sm text-slate-400">{{ operator.get('finalization_status', 'Pending') }}</div>
+                        <strong>Needs attention</strong>
+                        <div class="text-sm text-slate-400">{{ operator.get('needs_attention') or 'No current blocker reported.' }}</div>
                     </div>
-                    <span class="overnight-chip">report</span>
+                    <span class="overnight-chip-warn overnight-chip">review</span>
+                </div>
+                <div class="overnight-row">
+                    <div>
+                        <strong>Next action</strong>
+                        <div class="text-sm text-slate-400">{{ operator.get('next') }}</div>
+                    </div>
+                    <span class="overnight-chip">next</span>
                 </div>
             </div>
         </section>
@@ -377,6 +393,10 @@
             <div>
                 <div class="overnight-kicker">Logs</div>
                 <div class="overnight-code mt-2">{{ debug.get('live_log') or 'No live-job.log yet.' }}</div>
+            </div>
+            <div>
+                <div class="overnight-kicker">Artifact health</div>
+                <div class="overnight-code mt-2">{{ debug.get('artifact_health') or 'No artifact health yet.' }}</div>
             </div>
             <div>
                 <div class="overnight-kicker">Traces</div>

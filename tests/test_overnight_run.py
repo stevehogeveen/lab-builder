@@ -19,12 +19,34 @@ from app.overnight_run import (
     finalization_deadline_ok,
     finalize_overnight_run,
     hardware_stop_requested,
+    inspect_overnight_artifacts,
     normalize_overnight_mode,
     request_hardware_stop,
     run_overnight_hardware,
     scan_text_for_secrets,
     should_stop_hardware_actions,
 )
+
+
+def write_complete_nonsecret_artifacts(writer: OvernightArtifactWriter) -> None:
+    writer.write_config_snapshot({}, OvernightHardwareConfig.from_mapping({}, {}))
+    for relative in [
+        "ilo/discovery.json",
+        "ilo/power-state-before.json",
+        "ilo/boot-options.json",
+        "ilo/virtual-media.json",
+        "ilo/final-state.json",
+    ]:
+        writer.write_json(relative, {"ok": True, "status": "captured"})
+    for relative in [
+        "cisco/console-detect.txt",
+        "cisco/initial-session.txt",
+        "cisco/show-version.txt",
+        "cisco/running-config-before.txt",
+        "cisco/setup-transcript.txt",
+        "cisco/running-config-after.txt",
+    ]:
+        writer.write_text(relative, "captured\n")
 
 
 def test_overnight_mode_validation_and_defaults():
@@ -81,13 +103,27 @@ def test_secret_scan_blocks_auto_commit(tmp_path):
     assert result["status_label"] == "Needs attention"
     assert result["secret_findings"]
     assert not any(command[:2] == ["git", "commit"] for command in calls)
-    assert "Possible secrets were found" in writer.morning_report_path.read_text(encoding="utf-8")
+    report = writer.morning_report_path.read_text(encoding="utf-8")
+    assert "Possible secrets were found" in report
+    assert "verysecretvalue" not in report
 
 
 def test_secret_scan_ignores_code_variable_plumbing():
     assert scan_text_for_secrets("password = str(cfg.get('password') or '')\n") == []
     secretish_line = "api_key = '" + ("abcd1234" * 2) + "'\n"
     assert scan_text_for_secrets(secretish_line)
+
+
+def test_missing_and_pending_artifacts_are_reported_clearly(tmp_path):
+    writer = OvernightArtifactWriter(tmp_path / "run")
+    writer.initialize_placeholders()
+    (writer.run_dir / "ilo" / "discovery.json").unlink()
+
+    health = inspect_overnight_artifacts(writer.run_dir)
+
+    assert health["ok"] is False
+    assert "ilo/discovery.json" in health["missing"]
+    assert "cisco/initial-session.txt" in health["pending"]
 
 
 def test_finalization_decision_allows_git_only_when_clean():
@@ -133,6 +169,7 @@ def test_finalize_records_git_statuses_and_push_result(tmp_path):
     tracked_file.write_text("print('safe scheduler path')\n", encoding="utf-8")
     writer = OvernightArtifactWriter(repo / "artifacts" / "runs" / "overnight" / "20260527-052000-ilo-cisco")
     writer.initialize_placeholders()
+    write_complete_nonsecret_artifacts(writer)
     calls: list[list[str]] = []
     status_calls = 0
 
@@ -172,13 +209,51 @@ def test_finalize_records_git_statuses_and_push_result(tmp_path):
     assert result["branch"] == "feature/finalizer"
     assert result["commit_sha"] == "abc123def456"
     assert result["push_result"] == "pushed"
+    assert result["compile_result"] == "not run"
     assert result["artifact_folder"] == str(writer.run_dir)
     assert result["git_status_before"].startswith("## feature/finalizer")
     assert result["git_status_after"].strip() == "## feature/finalizer...origin/feature/finalizer"
     assert hardware_stop_requested(writer.run_dir)
     assert "## Git Status Before" in report
     assert "Artifact folder:" in report
+    assert "- Compile: not run" in report
     assert any(command[:2] == ["git", "commit"] for command in calls)
+
+
+def test_finalize_morning_report_records_needs_attention_reason_and_compile(tmp_path):
+    repo = tmp_path
+    (repo / "tests").mkdir()
+    (repo / "tests" / "test_overnight_run.py").write_text("def test_placeholder():\n    assert True\n", encoding="utf-8")
+    (repo / "app").mkdir()
+    writer = OvernightArtifactWriter(repo / "artifacts" / "runs" / "overnight" / "20260527-052500-ilo-cisco")
+    writer.initialize_placeholders()
+    write_complete_nonsecret_artifacts(writer)
+
+    def runner(command: list[str], cwd: Path) -> CommandCapture:
+        if command == ["git", "status", "--short", "--branch"]:
+            return CommandCapture(command, 0, "## feature/finalizer\n", "")
+        if command[1:3] == ["-m", "pytest"]:
+            return CommandCapture(command, 1, "failed\n", "")
+        if command[1:3] == ["-m", "compileall"]:
+            return CommandCapture(command, 0, "compiled\n", "")
+        return CommandCapture(command, 0, "", "")
+
+    result = finalize_overnight_run(
+        writer,
+        repo_root=repo,
+        run_tests=True,
+        allow_git=False,
+        command_runner=runner,
+        python_executable="/venv/bin/python",
+        now=datetime(2026, 5, 27, 5, 40),
+    )
+
+    report = writer.morning_report_path.read_text(encoding="utf-8")
+    assert result["status_label"] == "Needs attention"
+    assert result["compile_result"] == "passed"
+    assert "## Needs Attention Reasons" in report
+    assert "Pytest did not pass" in report
+    assert "- Compile: passed" in report
 
 
 def test_hardware_stop_marker_prevents_hardware_collectors(tmp_path):
@@ -210,6 +285,8 @@ def test_hardware_stop_marker_prevents_hardware_collectors(tmp_path):
 
     assert calls == []
     assert result["finalization"]["status_label"] == "Ready for review"
+    assert '"status": "skipped"' in (writer.run_dir / "ilo" / "discovery.json").read_text(encoding="utf-8")
+    assert "Cisco console discovery skipped" in (writer.run_dir / "cisco" / "initial-session.txt").read_text(encoding="utf-8")
 
 
 class FakeIloClient:
@@ -309,6 +386,25 @@ def test_mocked_cisco_console_discovery_is_read_only(tmp_path):
     assert "Version 17.09.05" in (writer.run_dir / "cisco" / "show-version.txt").read_text(encoding="utf-8")
 
 
+def test_cisco_no_console_port_writes_guidance_without_connecting(tmp_path):
+    writer = OvernightArtifactWriter(tmp_path / "run")
+    writer.initialize_placeholders()
+
+    result = collect_cisco_console_discovery(
+        {"cisco_switch": {"console_port": "", "console_baud": 9600}},
+        OvernightHardwareConfig.from_mapping({}, {}),
+        writer,
+        diagnostics_fn=lambda: {"serial_imported": True, "ordered_ports": []},
+        discovery_factory=lambda: SimpleNamespace(scan=lambda: []),
+        client_factory=lambda port, baud: (_ for _ in ()).throw(AssertionError("should not connect")),
+    )
+
+    transcript = (writer.run_dir / "cisco" / "initial-session.txt").read_text(encoding="utf-8")
+    assert result["ok"] is False
+    assert "No saved or detected Cisco console port" in transcript
+    assert "next_steps:" in transcript
+
+
 @pytest.fixture()
 def client(tmp_path, monkeypatch):
     config_dir = tmp_path / "config"
@@ -368,3 +464,33 @@ def test_overnight_react_api_exposes_safe_defaults(client):
     assert payload["default_mode"] == "discovery_only"
     assert payload["targets"]["ilo"] == "192.168.1.200"
     assert all(value is False for value in payload["destructive_flags"].values())
+
+
+def test_overnight_latest_run_status_appears_in_api_and_ui(client):
+    run_dir = main.ARTIFACTS_DIR / "runs" / "overnight" / "20260527-052500-ilo-cisco"
+    writer = OvernightArtifactWriter(run_dir)
+    writer.initialize_placeholders()
+    write_complete_nonsecret_artifacts(writer)
+    writer.write_summary(
+        {
+            "status": "Needs attention",
+            "finalization": {
+                "status_label": "Needs attention",
+                "needs_attention_reasons": ["Pytest did not pass; review command output in MORNING_READY.md."],
+            },
+        }
+    )
+    writer.morning_report_path.write_text(
+        "# Morning Ready\n\nStatus: Needs attention\n\n## Needs Attention Reasons\n- Pytest did not pass; review command output in MORNING_READY.md.\n",
+        encoding="utf-8",
+    )
+
+    api_response = client.get("/api/ui/overnight-hardware")
+    payload = api_response.json()
+    assert payload["operator"]["latest_run_status"] == "Needs attention"
+    assert payload["operator"]["latest_run_folder"] == str(run_dir)
+    assert "Pytest did not pass" in payload["operator"]["needs_attention"]
+
+    page_response = client.get("/overnight-hardware")
+    assert str(run_dir) in page_response.text
+    assert "Pytest did not pass" in page_response.text

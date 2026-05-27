@@ -88,6 +88,7 @@ def main(argv: list[str] | None = None) -> int:
     print(f"commit_sha: {result.get('commit_sha') or 'not created'}")
     print(f"push_result: {result.get('push_result')}")
     print(f"test_result: {result.get('test_result')}")
+    print(f"compile_result: {result.get('compile_result')}")
     return 0 if result.get("status_label") == "Ready for review" else 2
 
 

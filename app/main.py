@@ -802,6 +802,41 @@ def write_run_bundle_files(kit_name: str, job: dict[str, Any]) -> None:
     trace_path = Path(str(job.get("run_trace_path") or bundle_dir / "trace.yml"))
     summary_path = Path(str(job.get("run_summary_path") or bundle_dir / "summary.yml"))
 
+    if str(job.get("scope") or "") == "overnight_hardware":
+        job_state_path = bundle_dir / "job-state.yml"
+        job_state_path.write_text(
+            yaml.safe_dump(
+                {
+                    "kit_name": sanitize_kit_name(kit_name),
+                    "run_id": str(job.get("run_id") or ""),
+                    "status": str(job.get("status") or ""),
+                    "current_stage": str(job.get("current_stage") or ""),
+                    "progress_percent": int(job.get("progress_percent") or 0),
+                    "updated_at": str(job.get("updated_at") or ""),
+                    "job_fields": {
+                        key: value
+                        for key, value in job.items()
+                        if key
+                        not in {
+                            "logs",
+                            "trace_events",
+                        }
+                    },
+                    "logs": [str(line) for line in list(job.get("logs") or [])],
+                    "events": list(job.get("trace_events") or []),
+                    "paths": {
+                        "job_yaml": str(job_path(kit_name)),
+                        "live_log": str(live_log_path),
+                        "trace": str(trace_path),
+                        "summary": str(summary_path),
+                    },
+                },
+                sort_keys=False,
+            ),
+            encoding="utf-8",
+        )
+        return
+
     logs = list(job.get("logs") or [])
     live_log_text = "\n".join(str(line) for line in logs)
     if live_log_text:
@@ -14229,6 +14264,7 @@ def build_overnight_hardware_state(cfg: dict[str, Any], job: dict[str, Any] | No
             "trace.yml",
             "summary.yml",
             "MORNING_READY.md",
+            "job-state.yml",
             "ilo/discovery.json",
             "ilo/power-state-before.json",
             "ilo/boot-options.json",
@@ -14247,6 +14283,27 @@ def build_overnight_hardware_state(cfg: dict[str, Any], job: dict[str, Any] | No
     active_job = job or {}
     mode = str(active_job.get("overnight_mode") or default_run_config.mode)
     finalization_excerpt = _read_text_excerpt(latest_path / "MORNING_READY.md", max_chars=2400) if latest else ""
+    latest_status = str(latest.get("display_status") or latest.get("status") or "No run")
+    latest_folder = str(latest.get("path") or "")
+    morning_status = str(latest.get("morning_status") or ("Ready for review" if "Status: Ready for review" in finalization_excerpt else ("Needs attention" if "Status: Needs attention" in finalization_excerpt else "Pending")))
+    needs_attention_reasons = [str(item) for item in list(latest.get("needs_attention_reasons") or []) if str(item).strip()]
+    artifact_health = dict(latest.get("artifact_health") or {})
+    if not needs_attention_reasons and artifact_health:
+        if artifact_health.get("missing"):
+            needs_attention_reasons.append("Expected artifacts are missing: " + ", ".join(artifact_health.get("missing") or []))
+        if artifact_health.get("pending"):
+            needs_attention_reasons.append("Expected artifacts still contain placeholders: " + ", ".join(artifact_health.get("pending") or []))
+    active_status = str(active_job.get("status") or "")
+    if not latest:
+        next_action = "Start discovery_only for the safe default pass."
+    elif active_status == "Running":
+        next_action = "Let the current finalization finish, then review MORNING_READY.md."
+    elif needs_attention_reasons or morning_status.lower() in {"needs attention", "pending", "missing", "unreadable"}:
+        next_action = "Review Debug Mode and rerun the finalizer for the last folder."
+    elif morning_status == "Ready for review":
+        next_action = "Review MORNING_READY.md."
+    else:
+        next_action = "Start discovery_only for the safe default pass."
     return {
         "modes": list(OVERNIGHT_MODES),
         "default_mode": default_run_config.mode,
@@ -14260,19 +14317,24 @@ def build_overnight_hardware_state(cfg: dict[str, Any], job: dict[str, Any] | No
         "operator": {
             "purpose": "Collect current iLO Redfish state and Cisco console evidence overnight without wiping storage, factory resetting devices, or installing ESXi by default.",
             "current_mode": mode,
-            "next": "Start discovery_only for the safe default pass. Guided setup and full overnight require the safety confirmation sheet.",
+            "next": next_action,
             "last": str(active_job.get("logs", ["No overnight run has been started."])[-1] if active_job.get("logs") else "No overnight run has been started."),
             "completion": int(active_job.get("progress_percent") or 0),
             "status": str(active_job.get("status") or "Idle"),
             "current_stage": str(active_job.get("current_stage") or "Not running"),
-            "finalization_status": "Ready for review" if "Status: Ready for review" in finalization_excerpt else ("Needs attention" if "Status: Needs attention" in finalization_excerpt else "Pending"),
+            "finalization_status": morning_status,
+            "latest_run_status": latest_status,
+            "latest_run_folder": latest_folder,
+            "needs_attention": needs_attention_reasons[0] if needs_attention_reasons else "",
+            "needs_attention_reasons": needs_attention_reasons,
         },
         "debug": {
             "latest_run": latest,
             "artifact_links": artifact_links,
+            "artifact_health": artifact_health,
             "live_log": _read_text_excerpt(latest_path / "live-job.log") if latest else "",
             "trace": _read_text_excerpt(latest_path / "trace.yml") if latest else "",
-            "api_output": yaml.safe_dump({"job": active_job, "defaults": default_run_config.to_dict(), "latest_run": latest}, sort_keys=False),
+            "api_output": yaml.safe_dump({"route": "/api/ui/overnight-hardware", "job": active_job, "defaults": default_run_config.to_dict(), "latest_run": latest}, sort_keys=False),
             "console_transcripts": {
                 "detect": _read_text_excerpt(latest_path / "cisco" / "console-detect.txt") if latest else "",
                 "initial": _read_text_excerpt(latest_path / "cisco" / "initial-session.txt") if latest else "",
