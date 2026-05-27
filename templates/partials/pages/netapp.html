@@ -31,6 +31,9 @@
     {% set bootstrap_checks = bootstrap.get('bootstrap_checks', netapp_cfg.get('bootstrap_checks', {})) %}
     {% set console_ports = payload.get('console_ports') or netapp_cfg.get('last_console_probe_results') or netapp_cfg.get('console_ports', {}) %}
     {% set console_candidates = console_ports.get('candidates') or netapp_cfg.get('last_console_candidates') or [] %}
+    {% set console_state = payload.get('console_state', netapp_cfg.get('last_console_state', {})) %}
+    {% set console_ip_setup = payload.get('console_ip_setup', netapp_cfg.get('last_console_ip_setup', {})) %}
+    {% set console_ip_commands = console_ip_setup.get('commands') or [] %}
     {% set factory_reset_result = payload.get('factory_reset', netapp_cfg.get('last_factory_reset', {})) %}
     {% set factory_reset_mode = factory_reset_result.get('mode', 'preflight') %}
     {% set factory_reset_targets = factory_reset_result.get('targets') or desired.get('required_nodes') or [] %}
@@ -82,6 +85,9 @@
     {% set api_status_tone = 'ready' if api_reachable else ('danger' if api_has_result else 'pending') %}
     {% set console_port = netapp_cfg.get('console_port') or '' %}
     {% set console_baud = netapp_cfg.get('console_baud') or 9600 %}
+    {% set console_username = netapp_cfg.get('console_username') or netapp_cfg.get('username', 'admin') %}
+    {% set console_password_saved = netapp_cfg.get('console_password') or netapp_cfg.get('password') %}
+    {% set console_cluster_name = netapp_cfg.get('last_console_cluster_name') or display_cluster_name or desired.get('cluster_name', '') %}
     {% set review_needed = warnings or bootstrap_warnings or cluster_name_mismatch or cluster_mgmt_mismatch or node_mgmt_mismatch or factory_reset_result.get('status') in ['refused', 'blocked', 'preflight_blocked', 'not_implemented'] or ip_setup_apply.get('status') == 'blocked' %}
     {% set setup_ready = bootstrap_complete and netapp_cfg.get('host') and api_reachable %}
     {% set hero_status = 'Ready' if setup_ready and not review_needed else ('Needs review' if review_needed else 'Needs setup') %}
@@ -254,6 +260,7 @@
             color: var(--muted);
             font-size: .78rem;
             overflow-wrap: anywhere;
+            white-space: pre-wrap;
         }
         @container (max-width: 1180px) {
             .netapp-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
@@ -298,6 +305,11 @@
                     <div class="netapp-fact"><span>Console port</span><strong>{{ console_port or 'not selected' }}</strong></div>
                     <div class="netapp-fact"><span>Baud</span><strong>{{ console_baud }}</strong></div>
                     <div class="netapp-fact netapp-fact-wide"><span>Candidates found</span><strong>{{ console_candidates | length }}{% if console_ports.get('checked_at') %} checked {{ console_ports.get('checked_at') }}{% endif %}</strong></div>
+                    <div class="netapp-fact"><span>Console user</span><strong>{{ console_username or 'admin' }}</strong></div>
+                    <div class="netapp-fact"><span>Console password</span><strong>{{ 'saved' if console_password_saved else 'needed' }}</strong></div>
+                    {% if console_state %}
+                    <div class="netapp-fact netapp-fact-wide"><span>Last console read</span><strong>{{ 'OK' if console_state.get('ok') else (console_state.get('error') or 'failed') }}{% if console_state.get('checked_at') %} | {{ console_state.get('checked_at') }}{% endif %}</strong></div>
+                    {% endif %}
                 </div>
                 <div class="netapp-grid-tight">
                     <div class="netapp-field">
@@ -316,10 +328,19 @@
                         <label>Baud</label>
                         <input class="input" name="netapp_console_baud_quick" value="{{ console_baud }}">
                     </div>
+                    <div class="netapp-field">
+                        <label>Console username</label>
+                        <input class="input" name="netapp_console_username_quick" value="{{ console_username or 'admin' }}" autocomplete="username">
+                    </div>
+                    <div class="netapp-field">
+                        <label>Console password</label>
+                        <input class="input" type="password" name="netapp_console_password_quick" value="" placeholder="{{ 'Saved - leave blank to keep' if console_password_saved else 'Enter console password' }}" autocomplete="current-password">
+                    </div>
                 </div>
                 <div class="netapp-actions">
                     <button class="btn" formaction="/modules/netapp/discover-console" formmethod="post" type="submit">Check console ports</button>
                     <button class="btn btn-primary" formaction="/modules/netapp/save-console" formmethod="post" type="submit">Save selected console</button>
+                    <button class="btn" formaction="/modules/netapp/console-read-state" formmethod="post" type="submit">Read console state</button>
                 </div>
                 {% if action_feedback and 'console' in feedback_title %}{{ netapp_inline_feedback(action_feedback) }}{% endif %}
             </article>
@@ -481,6 +502,8 @@
                             </select>
                         </div>
                         <div class="netapp-field"><label>Baud</label><input class="input" name="netapp_console_baud" value="{{ console_baud }}"></div>
+                        <div class="netapp-field"><label>Console username</label><input class="input" name="netapp_console_username" value="{{ console_username or 'admin' }}" autocomplete="username"></div>
+                        <div class="netapp-field"><label>Console password</label><input class="input" type="password" name="netapp_console_password" value="" placeholder="{{ 'Saved - leave blank to keep' if console_password_saved else 'Enter console password' }}" autocomplete="current-password"></div>
                     </div>
                 </section>
 
@@ -509,6 +532,42 @@
                     </div>
                     <div class="netapp-command-panel">
                         <div>
+                            <div class="netapp-section-title">Cluster management IP by console</div>
+                            <div class="netapp-section-copy">Use this for initial setup when ONTAP API is not reachable yet. Preview first, then type the confirmation to apply over the serial console.</div>
+                        </div>
+                        <div class="netapp-facts">
+                            <div class="netapp-fact"><span>Console port</span><strong>{{ console_port or 'not selected' }}</strong></div>
+                            <div class="netapp-fact"><span>Cluster name</span><strong>{{ console_cluster_name or 'read from console' }}</strong></div>
+                            <div class="netapp-fact"><span>Target IP</span><strong>{{ bootstrap.get('cluster_mgmt_ip') or netapp_cfg.get('host') or 'not set' }}</strong></div>
+                            <div class="netapp-fact"><span>Gateway</span><strong>{{ desired.get('management_gateway') or bootstrap.get('gateway') or cfg.get('ip_plan', {}).get('gateway', 'not set') }}</strong></div>
+                        </div>
+                        <div class="netapp-grid-tight">
+                            <div class="netapp-field">
+                                <label>Cluster name from console</label>
+                                <input class="input" name="netapp_console_cluster_name" value="{{ console_cluster_name }}" placeholder="Read console state first if unknown">
+                            </div>
+                            <div class="netapp-field">
+                                <label>Type SET CLUSTER IP to apply</label>
+                                <input class="input" name="netapp_console_ip_confirmation" value="" autocomplete="off">
+                            </div>
+                        </div>
+                        <div class="netapp-actions">
+                            <button class="btn" formaction="/modules/netapp/console-read-state" formmethod="post" type="submit">Read console state</button>
+                            <button class="btn" name="netapp_console_ip_mode" value="preview" formaction="/modules/netapp/console-cluster-mgmt-ip" formmethod="post" type="submit">Preview console IP commands</button>
+                            <button class="btn btn-danger" name="netapp_console_ip_mode" value="apply" formaction="/modules/netapp/console-cluster-mgmt-ip" formmethod="post" type="submit">Apply cluster IP by console</button>
+                        </div>
+                        {% if console_ip_setup %}
+                        <div class="result">
+                            <div class="font-semibold">{{ console_ip_setup.get('status', 'unknown') | replace('_', ' ') | title }}</div>
+                            <div class="text-sm text-slate-400 mt-1">{{ console_ip_setup.get('message') or 'No result message.' }}</div>
+                            {% if console_ip_commands %}
+                            <div class="netapp-command-preview mt-2">{{ console_ip_commands | join('\n') }}</div>
+                            {% endif %}
+                        </div>
+                        {% endif %}
+                    </div>
+                    <div class="netapp-command-panel">
+                        <div>
                             <div class="netapp-section-title">Cluster management IP action</div>
                             <div class="netapp-section-copy">Preview or apply the ONTAP PATCH for the cluster management LIF. Applying can move the API endpoint, so confirm the new IP before running it.</div>
                         </div>
@@ -526,7 +585,7 @@
                             <button class="btn" name="netapp_cluster_mgmt_ip_mode" value="preview" formaction="/modules/netapp/cluster-mgmt-ip" formmethod="post" type="submit">Preview cluster IP command</button>
                             <button class="btn btn-danger" name="netapp_cluster_mgmt_ip_mode" value="apply" formaction="/modules/netapp/cluster-mgmt-ip" formmethod="post" type="submit">Apply cluster management IP</button>
                         </div>
-                        {% if cluster_mgmt_ip_change %}
+                        {% if cluster_mgmt_ip_change and action_feedback and 'cluster management ip' in feedback_title %}
                         <div class="result">
                             <div class="font-semibold">{{ cluster_mgmt_ip_change.get('status', 'unknown') | replace('_', ' ') | title }}</div>
                             <div class="text-sm text-slate-400 mt-1">{{ cluster_mgmt_ip_change.get('message') or 'No result message.' }}</div>
@@ -745,6 +804,30 @@
                     {% else %}
                     <div class="result" style="margin-top: 0;">No likely Ubuntu console adapters were found.</div>
                     {% endfor %}
+                </div>
+            </section>
+            {% endif %}
+
+            {% if console_state %}
+            <section class="card card-compact">
+                <div class="font-semibold mb-3">Console state read details</div>
+                <div class="ops-list">
+                    <div class="result" style="margin-top: 0;"><div class="font-semibold">{{ 'OK' if console_state.get('ok') else 'Failed' }}</div><div class="text-sm text-slate-400 mt-1">Console {{ console_state.get('port') or console_port or 'not selected' }} @ {{ console_state.get('baud') or console_baud }} | User {{ console_state.get('username') or console_username }} | Checked {{ console_state.get('checked_at') or 'unknown' }}{% if console_state.get('error') %} | {{ console_state.get('error') }}{% endif %}</div></div>
+                    {% if console_state.get('commands') %}<div class="result" style="margin-top: 0;">Commands {{ console_state.get('commands') | join(' | ') }}</div>{% endif %}
+                    {% if console_state.get('output') %}<pre class="result whitespace-pre-wrap text-xs text-slate-300" style="margin-top: 0;">{{ console_state.get('output') }}</pre>{% endif %}
+                </div>
+            </section>
+            {% endif %}
+
+            {% if console_ip_setup %}
+            <section class="card card-compact">
+                <div class="font-semibold mb-3">Console cluster IP setup details</div>
+                <div class="ops-list">
+                    <div class="result" style="margin-top: 0;"><div class="font-semibold">{{ console_ip_setup.get('status', 'unknown') | replace('_', ' ') | title }}</div><div class="text-sm text-slate-400 mt-1">{{ console_ip_setup.get('message') or 'No result message.' }}</div></div>
+                    <div class="result" style="margin-top: 0;">Desired {{ console_ip_setup.get('desired_ip') or 'not set' }} / {{ console_ip_setup.get('desired_netmask') or 'no netmask' }} | Gateway {{ console_ip_setup.get('gateway') or 'not set' }} | Attempted {{ console_ip_setup.get('attempted_at') or 'unknown' }}</div>
+                    {% if console_ip_commands %}<div class="result" style="margin-top: 0;">Commands {{ console_ip_commands | join(' | ') }}</div>{% endif %}
+                    {% for item in console_ip_setup.get('attempted', []) %}<div class="result" style="margin-top: 0;">{{ item }}</div>{% endfor %}
+                    {% if (console_ip_setup.get('console_result') or {}).get('output') %}<pre class="result whitespace-pre-wrap text-xs text-slate-300" style="margin-top: 0;">{{ (console_ip_setup.get('console_result') or {}).get('output') }}</pre>{% endif %}
                 </div>
             </section>
             {% endif %}

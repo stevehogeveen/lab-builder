@@ -168,6 +168,139 @@ def test_netapp_discover_console_route_saves_candidates(client, monkeypatch):
     assert cfg["netapp"]["console_ports"]["candidates"][0]["path"] == "/dev/ttyUSB0"
 
 
+def test_netapp_console_read_state_saves_cluster_and_output(client, monkeypatch):
+    import app.modules.netapp.routes as netapp_routes
+
+    calls = []
+
+    def fake_console_run(**kwargs):
+        calls.append(kwargs)
+        return {
+            "ok": True,
+            "port": kwargs["port"],
+            "baud": kwargs["baud"],
+            "username": kwargs["username"],
+            "commands": kwargs["commands"],
+            "output": "Cluster Name: X23\nX23::>",
+            "error": "",
+            "checked_at": "2026-05-27T00:00:00+00:00",
+        }
+
+    monkeypatch.setattr(netapp_routes, "_run_netapp_console_commands", fake_console_run)
+    cfg = main.load_kit_config()
+    cfg["netapp"]["console_port"] = "/dev/ttyUSB0"
+    cfg["netapp"]["console_baud"] = "115200"
+    cfg["netapp"]["username"] = "admin"
+    cfg["netapp"]["password"] = "secret"
+    main.save_kit_config(cfg)
+
+    response = client.post(
+        "/modules/netapp/console-read-state",
+        data={
+            "netapp_console_username": "admin",
+            "netapp_console_password": "secret",
+        },
+    )
+
+    assert response.status_code == 200
+    assert "Read console state" in response.text
+    cfg = main.load_kit_config()
+    assert cfg["netapp"]["last_console_cluster_name"] == "X23"
+    assert cfg["netapp"]["last_console_state"]["ok"] is True
+    assert cfg["netapp"]["last_console_state"]["output"] == "Cluster Name: X23\nX23::>"
+    assert calls[0]["commands"][-1] == "security login show -user-or-group-name admin"
+
+
+def test_netapp_console_cluster_mgmt_ip_preview_and_apply_are_guarded(client, monkeypatch):
+    import app.modules.netapp.routes as netapp_routes
+
+    calls = []
+
+    def fake_console_run(**kwargs):
+        calls.append(kwargs)
+        commands = kwargs["commands"]
+        if "cluster identity show" in commands:
+            return {
+                "ok": True,
+                "port": kwargs["port"],
+                "baud": kwargs["baud"],
+                "username": kwargs["username"],
+                "commands": commands,
+                "output": "Cluster Name: X23\nX23::>",
+                "error": "",
+                "checked_at": "2026-05-27T00:00:00+00:00",
+            }
+        return {
+            "ok": True,
+            "port": kwargs["port"],
+            "baud": kwargs["baud"],
+            "username": kwargs["username"],
+            "commands": commands,
+            "output": "cluster_mgmt 10.10.8.45 255.255.255.0\nX23::>",
+            "error": "",
+            "checked_at": "2026-05-27T00:00:00+00:00",
+        }
+
+    monkeypatch.setattr(netapp_routes, "_run_netapp_console_commands", fake_console_run)
+    cfg = main.load_kit_config()
+    cfg["netapp"]["console_port"] = "/dev/ttyUSB0"
+    cfg["netapp"]["console_baud"] = "115200"
+    cfg["netapp"]["username"] = "admin"
+    cfg["netapp"]["password"] = "secret"
+    cfg["netapp"]["last_console_cluster_name"] = "X23"
+    main.save_kit_config(cfg)
+
+    response = client.post(
+        "/modules/netapp/console-cluster-mgmt-ip",
+        data={
+            "netapp_cluster_mgmt_ip": "10.10.8.45",
+            "management_netmask": "255.255.255.0",
+            "management_gateway": "10.10.8.1",
+            "netapp_console_ip_mode": "preview",
+        },
+    )
+
+    assert response.status_code == 200
+    cfg = main.load_kit_config()
+    assert cfg["netapp"]["last_console_ip_setup"]["status"] == "preview"
+    assert calls == []
+
+    response = client.post(
+        "/modules/netapp/console-cluster-mgmt-ip",
+        data={
+            "netapp_cluster_mgmt_ip": "10.10.8.45",
+            "management_netmask": "255.255.255.0",
+            "management_gateway": "10.10.8.1",
+            "netapp_console_ip_mode": "apply",
+        },
+    )
+
+    assert response.status_code == 200
+    cfg = main.load_kit_config()
+    assert cfg["netapp"]["last_console_ip_setup"]["status"] == "refused"
+    assert calls == []
+
+    response = client.post(
+        "/modules/netapp/console-cluster-mgmt-ip",
+        data={
+            "netapp_cluster_mgmt_ip": "10.10.8.45",
+            "management_netmask": "255.255.255.0",
+            "management_gateway": "10.10.8.1",
+            "netapp_console_ip_mode": "apply",
+            "netapp_console_ip_confirmation": "SET CLUSTER IP",
+        },
+    )
+
+    assert response.status_code == 200
+    cfg = main.load_kit_config()
+    assert cfg["netapp"]["host"] == "10.10.8.45"
+    assert cfg["netapp"]["last_console_ip_setup"]["status"] == "applied"
+    assert len(calls) == 2
+    apply_commands = calls[1]["commands"]
+    assert "network interface modify -vserver X23 -lif cluster_mgmt -address 10.10.8.45 -netmask 255.255.255.0" in apply_commands
+    assert "network route create -vserver X23 -destination 0.0.0.0/0 -gateway 10.10.8.1" in apply_commands
+
+
 def test_netapp_bootstrap_test_all_saves_each_result(client, monkeypatch):
     import app.modules.netapp.routes as netapp_routes
 
