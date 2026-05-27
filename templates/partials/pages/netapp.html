@@ -1,7 +1,8 @@
 <section class="panel netapp-cisco-page">
     {% set payload = netapp_payload or {} %}
     {% set plan = payload.get('plan', {}) %}
-    {% set discovery = payload.get('discovery', {}) %}
+    {% set netapp_cfg = cfg.get('netapp', {}) %}
+    {% set discovery = payload.get('discovery') or netapp_cfg.get('last_current_config', {}) %}
     {% set settings = netapp_settings or {} %}
     {% set desired = settings.get('desired', {}) %}
     {% set bootstrap = settings.get('bootstrap', payload.get('bootstrap', {})) %}
@@ -16,10 +17,15 @@
     {% set portset_details = discovery.get('portset_details', []) %}
     {% set lun_details = discovery.get('lun_details', []) %}
     {% set lun_map_details = discovery.get('lun_map_details', []) %}
+    {% set aggregate_details = discovery.get('aggregate_details', []) %}
+    {% set fc_service_details = discovery.get('fc_service_details', []) %}
+    {% set fc_interface_details = discovery.get('fc_interface_details', []) %}
+    {% set fc_port_details = discovery.get('fc_port_details', []) %}
+    {% set ip_summary = discovery.get('ip_summary', {}) %}
+    {% set space_summary = discovery.get('space_summary', {}) %}
     {% set warnings = payload.get('warnings', []) %}
     {% set suggestions = payload.get('suggestions', []) %}
     {% set validation_checks = payload.get('validation_checks', []) %}
-    {% set netapp_cfg = cfg.get('netapp', {}) %}
     {% set connection_test = payload.get('connection_test', {}) %}
     {% set last_api_check = connection_test or netapp_cfg.get('last_api_check', {}) %}
     {% set bootstrap_checks = bootstrap.get('bootstrap_checks', netapp_cfg.get('bootstrap_checks', {})) %}
@@ -31,6 +37,8 @@
     {% set factory_reset_probe = factory_reset_result.get('console_probe', {}) %}
     {% set factory_reset_steps = factory_reset_result.get('planned_steps') or [] %}
     {% set ip_setup_apply = payload.get('ip_setup_apply', netapp_cfg.get('last_ip_setup_apply', {})) %}
+    {% set cluster_mgmt_ip_change = payload.get('cluster_mgmt_ip_change', netapp_cfg.get('last_cluster_mgmt_ip_change', {})) %}
+    {% set cluster_mgmt_plan = cluster_mgmt_ip_change.get('plan', {}) %}
     {% set adaptive = plan.get('adaptive_discovery', {}) %}
     {% set vmware_plan = plan.get('vmware_plan', {}) %}
     {% set vmware_checks = settings.get('vmware_checks', {}) %}
@@ -203,8 +211,53 @@
         .netapp-reset-facts .netapp-fact {
             border-radius: .7rem;
         }
+        .netapp-current-grid {
+            display: grid;
+            grid-template-columns: repeat(3, minmax(0, 1fr));
+            gap: .85rem;
+        }
+        .netapp-mini-list {
+            display: grid;
+            gap: .45rem;
+        }
+        .netapp-mini-row {
+            min-width: 0;
+            padding: .5rem .6rem;
+            border: 1px solid color-mix(in srgb, var(--border) 75%, transparent);
+            border-radius: .65rem;
+            background: color-mix(in srgb, var(--panel) 72%, transparent);
+            color: var(--text);
+            font-size: .82rem;
+            overflow-wrap: anywhere;
+        }
+        .netapp-mini-row span {
+            display: block;
+            color: var(--muted);
+            font-size: .68rem;
+            font-weight: 800;
+            letter-spacing: .06em;
+            text-transform: uppercase;
+        }
+        .netapp-command-panel {
+            display: grid;
+            gap: .75rem;
+            margin-top: .9rem;
+            padding: .85rem;
+            border: 1px solid color-mix(in srgb, var(--warn) 35%, var(--border));
+            border-radius: .9rem;
+            background: color-mix(in srgb, var(--warn) 7%, var(--panel));
+        }
+        .netapp-command-preview {
+            padding: .65rem .75rem;
+            border-radius: .65rem;
+            background: color-mix(in srgb, black 22%, var(--panel));
+            color: var(--muted);
+            font-size: .78rem;
+            overflow-wrap: anywhere;
+        }
         @container (max-width: 1180px) {
             .netapp-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+            .netapp-current-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
         }
         @container (max-width: 900px) {
             .netapp-fact-wide,
@@ -213,6 +266,7 @@
         @container (max-width: 720px) {
             .netapp-hero,
             .netapp-two-col,
+            .netapp-current-grid,
             .netapp-grid,
             .netapp-grid-tight,
             .netapp-reset-facts,
@@ -286,10 +340,91 @@
                 </div>
                 <div class="netapp-actions">
                     <button class="btn" formaction="/modules/netapp/test-connection" formmethod="post" type="submit">Test ONTAP API</button>
-                    <button class="btn" formaction="/modules/netapp/discover-page" formmethod="post" type="submit">Read current ONTAP</button>
+                    <button class="btn" formaction="/modules/netapp/read-current-config" formmethod="post" type="submit">Read current ONTAP</button>
                 </div>
                 {% if action_feedback and ('ontap' in feedback_title or 'api' in feedback_title) %}{{ netapp_inline_feedback(action_feedback) }}{% endif %}
             </article>
+        </section>
+
+        <section class="card identity-soft-card">
+            <div class="flex flex-wrap items-start justify-between gap-3 mb-4">
+                <div>
+                    <div class="font-semibold text-lg">Current NetApp config</div>
+                    <div class="text-sm text-slate-400 mt-1">Live ONTAP names, IPs, storage protocols, and active space use.</div>
+                </div>
+                <div class="netapp-actions">
+                    <button class="btn" formaction="/modules/netapp/read-current-config" formmethod="post" type="submit">Read current NetApp config</button>
+                    {% if has_snapshot %}<button class="btn" formaction="/modules/netapp/use-discovered-values" formmethod="post" type="submit">Use discovered values</button>{% endif %}
+                </div>
+            </div>
+            <div class="netapp-facts mb-4">
+                <div class="netapp-fact"><span>Cluster name</span><strong>{{ display_cluster_name or 'unknown' }}</strong></div>
+                <div class="netapp-fact"><span>Cluster mgmt IP</span><strong>{{ discovered_cluster_mgmt_ip or netapp_cfg.get('host') or 'unknown' }}</strong></div>
+                <div class="netapp-fact"><span>Protocols</span><strong>{{ active_protocols | join(', ') or 'unknown' }}</strong></div>
+                <div class="netapp-fact"><span>Space used</span><strong>{{ space_summary.get('aggregate_used_label') or space_summary.get('volume_used_label') or 'unknown' }}</strong></div>
+                <div class="netapp-fact"><span>Volumes</span><strong>{{ volume_details | length }}</strong></div>
+                <div class="netapp-fact"><span>Time read</span><strong>{{ read_time_label or 'not recorded' }}</strong></div>
+            </div>
+            <div class="netapp-current-grid">
+                <section class="netapp-form-section">
+                    <div>
+                        <div class="netapp-section-title">IPs and LIFs</div>
+                        <div class="netapp-section-copy">Cluster, node, SVM, and data access points found by ONTAP.</div>
+                    </div>
+                    <div class="netapp-mini-list">
+                        <div class="netapp-mini-row"><span>Cluster mgmt</span>{{ discovered_cluster_mgmt_ip or 'not found' }}</div>
+                        {% for lif in discovered_node_mgmt_map.items() %}
+                        <div class="netapp-mini-row"><span>Node mgmt</span>{{ lif[0] }} | {{ lif[1] }}</div>
+                        {% else %}
+                        <div class="netapp-mini-row"><span>Node mgmt</span>not found</div>
+                        {% endfor %}
+                        {% for lif in discovery.get('discovered_svm_management_lifs', []) %}
+                        <div class="netapp-mini-row"><span>SVM mgmt</span>{{ lif.get('name') }} | {{ lif.get('address') or 'no IP' }}</div>
+                        {% else %}
+                        <div class="netapp-mini-row"><span>SVM mgmt</span>not found</div>
+                        {% endfor %}
+                        {% for lif in discovered_nfs_lifs[:3] %}
+                        <div class="netapp-mini-row"><span>NFS</span>{{ lif.get('name') }} | {{ lif.get('address') }} | {{ lif.get('home_node') }}:{{ lif.get('home_port') }}</div>
+                        {% endfor %}
+                        {% for lif in discovered_iscsi_lifs[:3] %}
+                        <div class="netapp-mini-row"><span>iSCSI</span>{{ lif.get('name') }} | {{ lif.get('address') }} | {{ lif.get('home_node') }}:{{ lif.get('home_port') }}</div>
+                        {% endfor %}
+                        {% for lif in fc_interface_details[:3] %}
+                        <div class="netapp-mini-row"><span>FC</span>{{ lif.get('name') }} | {{ lif.get('wwpn') or 'no WWPN' }} | {{ lif.get('home_node') }}:{{ lif.get('home_port') }}</div>
+                        {% endfor %}
+                    </div>
+                </section>
+                <section class="netapp-form-section">
+                    <div>
+                        <div class="netapp-section-title">Storage protocols</div>
+                        <div class="netapp-section-copy">NFS, iSCSI, and FC services or objects currently visible.</div>
+                    </div>
+                    <div class="netapp-mini-list">
+                        <div class="netapp-mini-row"><span>NFS</span>{{ 'enabled' if 'nfs' in active_protocols else 'not detected' }} | policies {{ export_policy_details | length }}</div>
+                        <div class="netapp-mini-row"><span>iSCSI</span>{{ 'enabled' if 'iscsi' in active_protocols else 'not detected' }} | igroups {{ igroup_details | length }} | LUNs {{ lun_details | length }}</div>
+                        <div class="netapp-mini-row"><span>FC</span>{{ 'enabled' if 'fc' in active_protocols else 'not detected' }} | FC LIFs {{ fc_interface_details | length }} | FC ports {{ fc_port_details | length }}</div>
+                        {% for svm in discovery.get('svm_details', [])[:4] %}
+                        <div class="netapp-mini-row"><span>SVM</span>{{ svm.get('name') }} | {{ svm.get('state') or 'unknown' }} | {{ (svm.get('allowed_protocols') or []) | join(', ') or 'protocols unknown' }}</div>
+                        {% endfor %}
+                    </div>
+                </section>
+                <section class="netapp-form-section">
+                    <div>
+                        <div class="netapp-section-title">Space use</div>
+                        <div class="netapp-section-copy">Best available used-capacity counters from ONTAP.</div>
+                    </div>
+                    <div class="netapp-mini-list">
+                        <div class="netapp-mini-row"><span>Aggregates</span>{{ space_summary.get('aggregate_used_label') or 'unknown used' }} used of {{ space_summary.get('aggregate_size_label') or 'unknown total' }}{% if space_summary.get('aggregate_used_percent') is not none %} | {{ space_summary.get('aggregate_used_percent') }}%{% endif %}</div>
+                        <div class="netapp-mini-row"><span>Volumes</span>{{ space_summary.get('volume_used_label') or 'unknown used' }} used of {{ space_summary.get('volume_size_label') or 'unknown total' }}</div>
+                        {% for volume in volume_details[:4] %}
+                        <div class="netapp-mini-row"><span>Volume</span>{{ volume.get('name') }} | {{ volume.get('used_label') or 'unknown used' }} / {{ volume.get('size_label') or 'unknown size' }}{% if volume.get('used_percent') is not none %} | {{ volume.get('used_percent') }}%{% endif %}</div>
+                        {% else %}
+                        <div class="netapp-mini-row"><span>Volume</span>not found</div>
+                        {% endfor %}
+                    </div>
+                </section>
+            </div>
+            {% if action_feedback and ('current ontap' in feedback_title or 'discovered' in feedback_title) %}{{ netapp_inline_feedback(action_feedback) }}{% endif %}
         </section>
 
         <section class="card identity-soft-card">
@@ -372,6 +507,36 @@
                         {% set svm_check = bootstrap_checks.get('svm_mgmt', {}) %}
                         <div class="netapp-field"><label class="netapp-badge-label"><span>SVM management IP</span><span class="status {{ 'ready' if svm_check.get('reachable') else ('danger' if svm_check else 'pending') }}">{{ 'UP' if svm_check.get('reachable') else ('DOWN' if svm_check else 'NOT CHECKED') }}</span></label><input class="input" name="netapp_svm_mgmt_ip" value="{{ bootstrap.get('svm_mgmt_ip') or '' }}"></div>
                     </div>
+                    <div class="netapp-command-panel">
+                        <div>
+                            <div class="netapp-section-title">Cluster management IP action</div>
+                            <div class="netapp-section-copy">Preview or apply the ONTAP PATCH for the cluster management LIF. Applying can move the API endpoint, so confirm the new IP before running it.</div>
+                        </div>
+                        <div class="netapp-grid-tight">
+                            <div class="netapp-field">
+                                <label>Type CHANGE CLUSTER IP to apply</label>
+                                <input class="input" name="netapp_cluster_mgmt_ip_confirmation" value="" autocomplete="off">
+                            </div>
+                            <div class="netapp-field">
+                                <label>Current live cluster mgmt</label>
+                                <input class="input" value="{{ discovered_cluster_mgmt_ip or 'unknown until read' }}" readonly>
+                            </div>
+                        </div>
+                        <div class="netapp-actions">
+                            <button class="btn" name="netapp_cluster_mgmt_ip_mode" value="preview" formaction="/modules/netapp/cluster-mgmt-ip" formmethod="post" type="submit">Preview cluster IP command</button>
+                            <button class="btn btn-danger" name="netapp_cluster_mgmt_ip_mode" value="apply" formaction="/modules/netapp/cluster-mgmt-ip" formmethod="post" type="submit">Apply cluster management IP</button>
+                        </div>
+                        {% if cluster_mgmt_ip_change %}
+                        <div class="result">
+                            <div class="font-semibold">{{ cluster_mgmt_ip_change.get('status', 'unknown') | replace('_', ' ') | title }}</div>
+                            <div class="text-sm text-slate-400 mt-1">{{ cluster_mgmt_ip_change.get('message') or 'No result message.' }}</div>
+                            {% if cluster_mgmt_plan.get('endpoint') %}
+                            <div class="netapp-command-preview mt-2">PATCH {{ cluster_mgmt_plan.get('endpoint') }} {{ cluster_mgmt_plan.get('body') }}</div>
+                            {% endif %}
+                        </div>
+                        {% endif %}
+                        {% if action_feedback and 'cluster management ip' in feedback_title %}{{ netapp_inline_feedback(action_feedback) }}{% endif %}
+                    </div>
                 </section>
             </div>
 
@@ -379,7 +544,7 @@
                 <button class="btn btn-primary" formaction="/modules/netapp/save-settings" formmethod="post" type="submit">Save NetApp setup</button>
                 <button class="btn" formaction="/modules/netapp/bootstrap-test-all" formmethod="post" type="submit">Ping all NetApp IPs</button>
                 <button class="btn" formaction="/modules/netapp/apply-ip-setup" formmethod="post" type="submit">Apply IP setup</button>
-                <button class="btn" formaction="/modules/netapp/discover-page" formmethod="post" type="submit">Read current ONTAP</button>
+                <button class="btn" formaction="/modules/netapp/read-current-config" formmethod="post" type="submit">Read current ONTAP</button>
             </div>
             {% if action_feedback and ('saved' in feedback_title or 'ip setup' in feedback_title or 'ping' in feedback_title) %}{{ netapp_inline_feedback(action_feedback) }}{% endif %}
 
@@ -532,6 +697,20 @@
             </section>
             {% endif %}
 
+            {% if cluster_mgmt_ip_change %}
+            <section class="card card-compact">
+                <div class="font-semibold mb-3">Cluster management IP action details</div>
+                <div class="ops-list">
+                    <div class="result" style="margin-top: 0;"><div class="font-semibold">{{ cluster_mgmt_ip_change.get('status', 'unknown') | replace('_', ' ') | title }}</div><div class="text-sm text-slate-400 mt-1">{{ cluster_mgmt_ip_change.get('message') or 'No result message.' }}</div></div>
+                    {% if cluster_mgmt_plan %}
+                    <div class="result" style="margin-top: 0;">{{ cluster_mgmt_plan.get('lif_name') or 'cluster_mgmt' }} | {{ cluster_mgmt_plan.get('current_ip') or 'unknown' }} -> {{ cluster_mgmt_plan.get('desired_ip') or 'unknown' }} | {{ cluster_mgmt_plan.get('endpoint') or 'no endpoint' }}</div>
+                    <div class="result" style="margin-top: 0;">PATCH body {{ cluster_mgmt_plan.get('body') }}</div>
+                    {% endif %}
+                    {% for item in cluster_mgmt_ip_change.get('attempted', []) %}<div class="result" style="margin-top: 0;">{{ item }}</div>{% endfor %}
+                </div>
+            </section>
+            {% endif %}
+
             {% if factory_reset_result %}
             <section class="card card-compact">
                 <div class="font-semibold mb-3">Factory reset result details</div>
@@ -659,6 +838,15 @@
                             {% for lun in lun_details %}<div class="ops-row-item"><div class="ops-row-copy"><div class="font-semibold">{{ lun.get('name') }}</div><div class="text-sm text-slate-400 mt-1">LUN | {{ lun.get('state') or 'unknown' }} | {{ lun.get('os_type') or 'unknown' }}</div></div></div>{% endfor %}
                             {% for mapping in lun_map_details %}<div class="ops-row-item"><div class="ops-row-copy"><div class="font-semibold">{{ mapping.get('lun') or 'unknown lun' }}</div><div class="text-sm text-slate-400 mt-1">Mapped to {{ mapping.get('igroup') or 'unknown igroup' }}{% if mapping.get('lun_id') is not none %} | LUN ID {{ mapping.get('lun_id') }}{% endif %}</div></div></div>{% endfor %}
                             {% if not igroup_details and not portset_details and not lun_details and not lun_map_details %}<div class="text-sm text-slate-300">No SAN protocol objects discovered.</div>{% endif %}
+                        </div>
+                    </div>
+                    <div class="card card-compact">
+                        <div class="font-semibold mb-2">FC</div>
+                        <div class="ops-row-list">
+                            {% for service in fc_service_details %}<div class="ops-row-item"><div class="ops-row-copy"><div class="font-semibold">{{ service.get('svm') or 'cluster' }}</div><div class="text-sm text-slate-400 mt-1">FCP service {{ 'enabled' if service.get('enabled') else 'disabled' }}{% if service.get('target') %} | {{ service.get('target') }}{% endif %}</div></div></div>{% endfor %}
+                            {% for lif in fc_interface_details %}<div class="ops-row-item"><div class="ops-row-copy"><div class="font-semibold">{{ lif.get('name') or lif.get('wwpn') }}</div><div class="text-sm text-slate-400 mt-1">{{ lif.get('svm') or 'unknown SVM' }} | {{ lif.get('wwpn') or 'no WWPN' }} | {{ lif.get('home_node') or '?' }}:{{ lif.get('home_port') or '?' }}</div></div></div>{% endfor %}
+                            {% for port in fc_port_details %}<div class="ops-row-item"><div class="ops-row-copy"><div class="font-semibold">{{ port.get('node') or '?' }}:{{ port.get('name') }}</div><div class="text-sm text-slate-400 mt-1">{{ port.get('state') or 'unknown' }} | {{ port.get('wwpn') or 'no WWPN' }}{% if port.get('configured_speed') %} | {{ port.get('configured_speed') }}{% endif %}</div></div></div>{% endfor %}
+                            {% if not fc_service_details and not fc_interface_details and not fc_port_details %}<div class="text-sm text-slate-300">No FC service, interface, or port inventory discovered.</div>{% endif %}
                         </div>
                     </div>
                 </div>

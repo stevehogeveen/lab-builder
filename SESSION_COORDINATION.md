@@ -41,7 +41,7 @@ Copy this block and update it in place.
 - Status: done
 - Branch: codex/netapp-cisco-style-setup
 - Scope owner: NetApp Cisco-style setup page, safe console/IP/API checks, and GitHub-pushed branch handoff
-- Working on: Completed guarded NetApp factory reset readiness flow for live testing.
+- Working on: Completed guarded cluster management IP update plus current NetApp config readout.
 - Blocked by: none
 - Ready to hand off: Branch can hand off after commit and push.
 - Files claimed:
@@ -79,6 +79,8 @@ Copy this block and update it in place.
   - 2026-05-27 EDT - Restored functional NetApp setup inputs, verified console save persistence, ping-all results, tests, and app render.
   - 2026-05-27 EDT - Reopened NetApp session to add guarded factory-reset live-test readiness flow.
   - 2026-05-27 EDT - Added reset readiness check, live reset gate, saved result details, tests, and render verification.
+  - 2026-05-27 EDT - Reopened NetApp session for current-config readout and guarded cluster management IP update.
+  - 2026-05-27 EDT - Added current config readout, FC inventory, capacity summary, guarded cluster management IP PATCH route, tests, and render verification.
 - Next intended change:
   - none
 

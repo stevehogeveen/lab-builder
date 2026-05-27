@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+import ipaddress
 import os
 from pathlib import Path
 import threading
@@ -13,7 +14,7 @@ from jinja2 import Environment, FileSystemLoader, select_autoescape
 
 from app.modules.netapp.schemas import NetAppModuleContext
 from app.modules.netapp.service import NetAppModuleService
-from app.netapp import NetAppClient, NetAppConfig
+from app.netapp import NetAppClient, NetAppConfig, NetAppError
 from app.netapp_upgrade import build_netapp_upgrade_plan, execute_netapp_upgrade
 from app.plan_renderer import build_token_map, render_command_preview, write_plan_artifacts
 from app.storage_profiles import build_protocol_profile
@@ -178,6 +179,11 @@ def _store_live_read(cfg: dict[str, Any], read: dict[str, Any]) -> dict[str, str
     return live_read
 
 
+def _store_current_config_read(cfg: dict[str, Any], discovery: dict[str, Any]) -> None:
+    cfg.setdefault("netapp", {})
+    cfg["netapp"]["last_current_config"] = {key: value for key, value in dict(discovery).items() if key != "raw"}
+
+
 def _scan_console_ports() -> dict[str, Any]:
     candidates: list[dict[str, str]] = []
     seen: set[str] = set()
@@ -270,6 +276,39 @@ def _probe_netapp_reset_console(port: str, baud: str) -> dict[str, Any]:
     except Exception as exc:
         result["error"] = str(exc).splitlines()[0]
     return result
+
+
+def _valid_ipv4(value: str) -> bool:
+    try:
+        ipaddress.ip_address(str(value or "").strip())
+        return True
+    except ValueError:
+        return False
+
+
+def _cluster_mgmt_patch_plan(discovery: dict[str, Any], desired_ip: str, netmask: str) -> dict[str, Any]:
+    lif = dict(discovery.get("discovered_cluster_mgmt_lif") or {})
+    if not lif:
+        for item in list(discovery.get("lif_details") or []):
+            name = str((item or {}).get("name") or "").strip().lower()
+            service = str((item or {}).get("service_policy") or "").strip().lower()
+            if name == "cluster_mgmt" or ("cluster" in name and ("management" in service or "mgmt" in service)):
+                lif = dict(item)
+                break
+    uuid = str(lif.get("uuid") or "").strip()
+    current_ip = str(lif.get("address") or "").strip()
+    current_netmask = str(lif.get("netmask") or "").strip()
+    return {
+        "lif": lif,
+        "lif_name": str(lif.get("name") or "cluster_mgmt").strip(),
+        "lif_uuid": uuid,
+        "current_ip": current_ip,
+        "current_netmask": current_netmask,
+        "desired_ip": desired_ip,
+        "desired_netmask": netmask,
+        "endpoint": f"/api/network/ip/interfaces/{uuid}" if uuid else "",
+        "body": {"ip": {"address": desired_ip, "netmask": netmask}},
+    }
 
 
 def _sync_discovered_values(cfg: dict[str, Any], discovery: dict[str, Any]) -> list[str]:
@@ -746,7 +785,10 @@ def _render_template(template_name: str, context: dict[str, Any]) -> str:
 @router.get("/modules/netapp", response_class=HTMLResponse)
 async def netapp_module_page(request: Request):
     context = _module_context(request)
-    payload = service.plan(context)
+    payload = service._response(context, "setup")
+    cached = ((context.get("cfg") or {}).get("netapp") or {}).get("last_current_config") or {}
+    if cached:
+        payload["discovery"] = cached
     return _render_netapp_page(request, context, payload)
 
 
@@ -871,7 +913,10 @@ async def netapp_save_settings(
     _apply_live_netapp_form_state(cfg, form)
     main.save_kit_config(cfg)
     context = _module_context(request)
-    payload = service.plan(context)
+    payload = service._response(context, "save_settings")
+    cached = ((context.get("cfg") or {}).get("netapp") or {}).get("last_current_config") or {}
+    if cached:
+        payload["discovery"] = cached
     return _render_netapp_page(request, context, payload, saved=True)
 
 
@@ -1011,6 +1056,69 @@ async def netapp_test_connection(
     return _render_netapp_page(request, context, payload, action_feedback=feedback)
 
 
+@router.post("/modules/netapp/read-current-config", response_class=HTMLResponse)
+async def netapp_read_current_config(request: Request):
+    from app import main
+
+    context = _module_context(request)
+    cfg = context["cfg"]
+    form = {key: value for key, value in dict(await request.form()).items()}
+    _apply_live_netapp_form_state(cfg, form)
+    main.save_kit_config(cfg)
+    context = _module_context(request)
+    try:
+        client = service._build_client(context)
+        discovery = client.build_discovery_summary()
+    except NetAppError as exc:
+        payload = service._response(context, "read_current_config")
+        payload["ok"] = False
+        payload["error"] = str(exc)
+        payload["warnings"] = ["Current NetApp config read failed. Review cluster management IP, credentials, and ONTAP API reachability."]
+        result = {
+            "status": "failed",
+            "message": str(exc),
+            "read_at": datetime.now(timezone.utc).isoformat(),
+            "source": "Live read",
+            "target_host": str((cfg.get("netapp") or {}).get("host") or ""),
+        }
+        cfg.setdefault("netapp", {})["last_current_config_result"] = result
+        main.save_kit_config(cfg)
+        feedback = main.build_action_feedback(
+            "Current NetApp config read failed",
+            result["message"],
+            tone="danger",
+            outcomes=["No configuration changes were sent."],
+        )
+        return _render_netapp_page(request, context, payload, action_feedback=feedback)
+
+    _cache_discovery_summary(cfg, discovery)
+    _store_live_read(cfg, discovery)
+    _store_current_config_read(cfg, discovery)
+    cfg.setdefault("netapp", {})["last_current_config_result"] = {
+        "status": "read",
+        "message": "Current NetApp config was read from ONTAP.",
+        "read_at": str(discovery.get("read_at") or datetime.now(timezone.utc).isoformat()),
+        "source": "Live read",
+        "target_host": str(discovery.get("source_host") or (cfg.get("netapp") or {}).get("host") or ""),
+    }
+    main.save_kit_config(cfg)
+    context = _module_context(request)
+    payload = service._response(context, "read_current_config")
+    payload["discovery"] = discovery
+    payload["warnings"] = list(discovery.get("warnings") or [])
+    feedback = main.build_action_feedback(
+        "Current NetApp config read complete",
+        f"Cluster: {discovery.get('cluster_name') or 'unknown'}",
+        tone="ready",
+        outcomes=[
+            f"Protocols: {', '.join(list(discovery.get('enabled_protocols') or [])) or 'unknown'}",
+            f"Cluster mgmt: {discovery.get('discovered_cluster_mgmt_ip') or 'unknown'}",
+            f"Volumes: {len(list(discovery.get('volume_details') or []))}",
+        ],
+    )
+    return _render_netapp_page(request, context, payload, action_feedback=feedback)
+
+
 @router.post("/modules/netapp/discover-page", response_class=HTMLResponse)
 async def netapp_discover_page(
     request: Request,
@@ -1064,7 +1172,10 @@ async def netapp_bootstrap_complete(request: Request, bootstrap_complete: str = 
     cfg["netapp"]["bootstrap_complete"] = str(bootstrap_complete or "").strip().lower() in {"1", "true", "yes", "on"}
     main.save_kit_config(cfg)
     context = _module_context(request)
-    payload = service.plan(context) if cfg["netapp"]["bootstrap_complete"] else service._response(context, "bootstrap")
+    payload = service._response(context, "bootstrap")
+    cached = ((context.get("cfg") or {}).get("netapp") or {}).get("last_current_config") or {}
+    if cached:
+        payload["discovery"] = cached
     return _render_netapp_page(request, context, payload, saved=True)
 
 
@@ -1202,6 +1313,153 @@ async def netapp_apply_ip_setup(request: Request):
         tone="pending",
         outcomes=["No NetApp commands were sent.", "Setup values were saved."],
     )
+    return _render_netapp_page(request, context, payload, action_feedback=feedback)
+
+
+@router.post("/modules/netapp/cluster-mgmt-ip", response_class=HTMLResponse)
+async def netapp_cluster_mgmt_ip(request: Request):
+    from app import main
+
+    context = _module_context(request)
+    cfg = context["cfg"]
+    form = {key: value for key, value in dict(await request.form()).items()}
+    _apply_live_netapp_form_state(cfg, form)
+    main.save_kit_config(cfg)
+    context = _module_context(request)
+    netapp_cfg = cfg.setdefault("netapp", {})
+    mode = str(form.get("netapp_cluster_mgmt_ip_mode") or "preview").strip().lower()
+    if mode not in {"preview", "apply"}:
+        mode = "preview"
+    confirmation = str(form.get("netapp_cluster_mgmt_ip_confirmation") or "").strip()
+    desired_ip = str(form.get("netapp_cluster_mgmt_ip") or (netapp_cfg.get("bootstrap_overrides") or {}).get("netapp_cluster_mgmt") or netapp_cfg.get("host") or "").strip()
+    netmask = str(form.get("management_netmask") or ((netapp_cfg.get("desired") or {}).get("management_netmask")) or "255.255.255.0").strip()
+    attempted_at = datetime.now(timezone.utc).isoformat()
+    result: dict[str, Any] = {
+        "status": "preview",
+        "mode": mode,
+        "attempted_at": attempted_at,
+        "attempted_action": "cluster_mgmt_ip_change",
+        "desired_ip": desired_ip,
+        "desired_netmask": netmask,
+        "confirmation": confirmation,
+        "message": "",
+        "attempted": [],
+    }
+    discovery: dict[str, Any] = {}
+    tone = "pending"
+    title = "Cluster management IP preview"
+    outcomes: list[str] = []
+
+    if not desired_ip or not _valid_ipv4(desired_ip):
+        result.update(
+            {
+                "status": "refused",
+                "message": "Cluster management IP was not changed because the requested IP is not valid.",
+                "attempted": ["Validated requested cluster management IP.", "No ONTAP commands were sent."],
+            }
+        )
+        tone = "danger"
+        title = "Cluster management IP not changed"
+        outcomes = ["Requested IP is invalid.", "No ONTAP commands were sent."]
+    elif not netmask:
+        result.update(
+            {
+                "status": "refused",
+                "message": "Cluster management IP was not changed because netmask/subnet mask is not set.",
+                "attempted": ["Validated requested netmask.", "No ONTAP commands were sent."],
+            }
+        )
+        tone = "danger"
+        title = "Cluster management IP not changed"
+        outcomes = ["Netmask is missing.", "No ONTAP commands were sent."]
+    else:
+        try:
+            client = service._build_client(context)
+            discovery = client.build_discovery_summary()
+            plan = _cluster_mgmt_patch_plan(discovery, desired_ip, netmask)
+            result["plan"] = plan
+            if not plan.get("lif_uuid"):
+                result.update(
+                    {
+                        "status": "blocked",
+                        "message": "Cluster management IP was not changed because the current cluster management LIF UUID could not be discovered.",
+                        "attempted": ["Read current ONTAP network interfaces.", "No ONTAP PATCH command was sent."],
+                    }
+                )
+                tone = "danger"
+                title = "Cluster management IP blocked"
+                outcomes = ["Current cluster_mgmt LIF UUID was not found.", "No ONTAP commands were sent."]
+            elif str(plan.get("current_ip") or "").strip() == desired_ip and str(plan.get("current_netmask") or "").strip() in {"", netmask}:
+                result.update(
+                    {
+                        "status": "already_current",
+                        "message": "Cluster management IP already matches the requested value.",
+                        "attempted": ["Read current ONTAP network interfaces.", "No ONTAP PATCH command was needed."],
+                    }
+                )
+                tone = "ready"
+                title = "Cluster management IP already current"
+                outcomes = [f"Current IP: {desired_ip}", "No ONTAP commands were sent."]
+            elif mode == "preview":
+                result.update(
+                    {
+                        "status": "preview",
+                        "message": "Preview only. Review the PATCH command and type CHANGE CLUSTER IP before applying.",
+                        "attempted": ["Read current ONTAP network interfaces.", "Built PATCH preview.", "No ONTAP PATCH command was sent."],
+                    }
+                )
+                outcomes = [f"{plan.get('current_ip') or 'unknown'} -> {desired_ip}", f"Endpoint: {plan.get('endpoint')}"]
+            elif confirmation != "CHANGE CLUSTER IP":
+                result.update(
+                    {
+                        "status": "refused",
+                        "message": "Cluster management IP was not changed because confirmation did not match CHANGE CLUSTER IP.",
+                        "attempted": ["Read current ONTAP network interfaces.", "Checked typed confirmation.", "No ONTAP PATCH command was sent."],
+                    }
+                )
+                tone = "danger"
+                title = "Cluster management IP not changed"
+                outcomes = ["Typed confirmation did not match.", "No ONTAP commands were sent."]
+            else:
+                response = client.patch(str(plan["endpoint"]), dict(plan["body"]))
+                result.update(
+                    {
+                        "status": "applied",
+                        "message": "Cluster management IP PATCH was accepted by ONTAP. The current browser/API connection may need to reconnect to the new address.",
+                        "response": response,
+                        "attempted": [
+                            "Read current ONTAP network interfaces.",
+                            f"Sent PATCH {plan['endpoint']} with ip.address={desired_ip} and ip.netmask={netmask}.",
+                            "Updated Lab Builder NetApp host to the requested cluster management IP.",
+                        ],
+                    }
+                )
+                netapp_cfg["host"] = desired_ip
+                netapp_cfg.setdefault("management", {})["cluster_mgmt_ip"] = desired_ip
+                netapp_cfg.setdefault("bootstrap_overrides", {})["netapp_cluster_mgmt"] = desired_ip
+                tone = "ready"
+                title = "Cluster management IP PATCH sent"
+                outcomes = [f"Requested IP: {desired_ip}", "Retest ONTAP API after the LIF settles."]
+        except NetAppError as exc:
+            result.update(
+                {
+                    "status": "failed",
+                    "message": str(exc),
+                    "attempted": ["Tried to read or patch ONTAP cluster management LIF.", "Review credentials, current cluster IP, and ONTAP network state."],
+                }
+            )
+            tone = "danger"
+            title = "Cluster management IP action failed"
+            outcomes = [str(exc)[:180]]
+
+    netapp_cfg["last_cluster_mgmt_ip_change"] = result
+    main.save_kit_config(cfg)
+    context = _module_context(request)
+    payload = service._response(context, "cluster_mgmt_ip")
+    if discovery:
+        payload["discovery"] = discovery
+    payload["cluster_mgmt_ip_change"] = result
+    feedback = main.build_action_feedback(title, result["message"], tone=tone, outcomes=outcomes)
     return _render_netapp_page(request, context, payload, action_feedback=feedback)
 
 

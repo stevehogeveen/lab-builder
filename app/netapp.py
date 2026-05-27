@@ -27,6 +27,50 @@ class NetAppError(Exception):
     pass
 
 
+def _int_or_none(value: Any) -> int | None:
+    try:
+        if value is None or value == "":
+            return None
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _format_bytes(value: Any) -> str:
+    number = _int_or_none(value)
+    if number is None:
+        return "unknown"
+    units = ("B", "KiB", "MiB", "GiB", "TiB", "PiB")
+    rendered = float(number)
+    for unit in units:
+        if abs(rendered) < 1024 or unit == units[-1]:
+            return f"{rendered:.1f} {unit}" if unit != "B" else f"{int(rendered)} B"
+        rendered /= 1024
+    return f"{number} B"
+
+
+def _space_metric(record: dict[str, Any], names: tuple[str, ...]) -> int | None:
+    space = record.get("space") if isinstance(record.get("space"), dict) else {}
+    candidates: list[dict[str, Any]] = [record]
+    if isinstance(space, dict):
+        candidates.append(space)
+        for nested_name in ("block_storage", "logical_space", "footprint", "performance_tier"):
+            nested = space.get(nested_name)
+            if isinstance(nested, dict):
+                candidates.append(nested)
+    for container in candidates:
+        for name in names:
+            number = _int_or_none(container.get(name))
+            if number is not None:
+                return number
+    return None
+
+
+def _sum_known(values: list[int | None]) -> int | None:
+    known = [item for item in values if item is not None]
+    return sum(known) if known else None
+
+
 class NetAppClient:
     def __init__(self, config: NetAppConfig) -> None:
         self.config = config
@@ -252,7 +296,9 @@ class NetAppClient:
         records, _ = self._records_with_fallback(
             "/api/svm/svms",
             [
+                "name,uuid,state,subtype,allowed_protocols",
                 "name,uuid,state,subtype",
+                "name,state,subtype,allowed_protocols",
                 "name,state,subtype",
                 "name,state",
                 None,
@@ -264,6 +310,9 @@ class NetAppClient:
         records, _ = self._records_with_fallback(
             "/api/storage/volumes",
             [
+                "name,svm,aggregates,size,space,state,type,nas.path,nas.export_policy",
+                "name,svm,aggregate,size,space,state,type,nas.path,nas.export_policy",
+                "name,svm,size,space,state,type,nas.path,nas.export_policy",
                 "name,svm,aggregates,size,state,type,nas.path,nas.export_policy",
                 "name,svm,aggregate,size,state,type,nas.path,nas.export_policy",
                 "name,svm,size,state,type,nas.path,nas.export_policy",
@@ -277,7 +326,8 @@ class NetAppClient:
         records, _ = self._records_with_fallback(
             "/api/network/ip/interfaces",
             [
-                "name,svm,ip,location,service_policy,enabled",
+                "name,uuid,scope,svm,ip,location,service_policy,enabled",
+                "name,uuid,svm,ip,location,service_policy,enabled",
                 "name,svm,ip,location,enabled",
                 "name,svm,ip,location",
                 None,
@@ -317,6 +367,44 @@ class NetAppClient:
             ],
         )
         return {"nfs": nfs_records, "iscsi": iscsi_records}
+
+    def get_fcp_services(self) -> list[dict[str, Any]]:
+        records, _ = self._records_with_fallback(
+            "/api/protocols/san/fcp/services",
+            [
+                "svm,enabled,target",
+                "svm,enabled",
+                "enabled",
+                None,
+            ],
+        )
+        return records
+
+    def get_fc_interfaces(self) -> list[dict[str, Any]]:
+        records, _ = self._records_with_fallback(
+            "/api/network/fc/interfaces",
+            [
+                "name,uuid,svm,location,enabled,wwpn",
+                "name,svm,location,enabled,wwpn",
+                "name,svm,location,wwpn",
+                "name,svm,wwpn",
+                None,
+            ],
+        )
+        return records
+
+    def get_fc_ports(self) -> list[dict[str, Any]]:
+        records, _ = self._records_with_fallback(
+            "/api/network/fc/ports",
+            [
+                "name,uuid,node,enabled,speed,state,wwpn,supported_protocols,fabric",
+                "name,node,enabled,speed,state,wwpn,supported_protocols",
+                "name,node,enabled,state,wwpn",
+                "name,node,state",
+                None,
+            ],
+        )
+        return records
 
     def get_export_policies(self) -> list[dict[str, Any]]:
         records, _ = self._records_with_fallback(
@@ -451,6 +539,9 @@ class NetAppClient:
             "subnets": True,
             "licenses": True,
             "protocol_services": True,
+            "fcp_services": True,
+            "fc_interfaces": True,
+            "fc_ports": True,
             "export_policies": True,
             "igroups": True,
             "portsets": True,
@@ -531,6 +622,43 @@ class NetAppClient:
             capabilities["protocol_services"] = False
             capability_status["protocol_services"] = "missing"
             warnings.append("Protocol service records could not be read through REST API.")
+        try:
+            fcp_services, capability_status["fcp_services"] = self._records_with_fallback(
+                "/api/protocols/san/fcp/services",
+                ["svm,enabled,target", "svm,enabled", "enabled", None],
+            )
+            protocol_services["fc"] = fcp_services
+        except NetAppError:
+            fcp_services = []
+            protocol_services["fc"] = []
+            capabilities["fcp_services"] = False
+            capability_status["fcp_services"] = "missing"
+            warnings.append("FC protocol service records could not be read through REST API.")
+        try:
+            fc_interfaces, capability_status["fc_interfaces"] = self._records_with_fallback(
+                "/api/network/fc/interfaces",
+                ["name,uuid,svm,location,enabled,wwpn", "name,svm,location,enabled,wwpn", "name,svm,wwpn", None],
+            )
+        except NetAppError:
+            fc_interfaces = []
+            capabilities["fc_interfaces"] = False
+            capability_status["fc_interfaces"] = "missing"
+            warnings.append("FC interfaces could not be read through REST API.")
+        try:
+            fc_ports, capability_status["fc_ports"] = self._records_with_fallback(
+                "/api/network/fc/ports",
+                [
+                    "name,uuid,node,enabled,speed,state,wwpn,supported_protocols,fabric",
+                    "name,node,enabled,speed,state,wwpn,supported_protocols",
+                    "name,node,state",
+                    None,
+                ],
+            )
+        except NetAppError:
+            fc_ports = []
+            capabilities["fc_ports"] = False
+            capability_status["fc_ports"] = "missing"
+            warnings.append("FC port inventory could not be read through REST API.")
         try:
             export_policies, capability_status["export_policies"] = self._records_with_fallback(
                 "/api/protocols/nfs/export-policies",
@@ -631,16 +759,22 @@ class NetAppClient:
             enabled_protocols.append("nfs")
         if any(bool(item.get("enabled")) for item in protocol_services.get("iscsi", [])):
             enabled_protocols.append("iscsi")
+        if any(bool(item.get("enabled")) for item in protocol_services.get("fc", [])):
+            enabled_protocols.append("fc")
         if not enabled_protocols:
             allowed_set = {str(p).lower() for svm in svms for p in list(svm.get("allowed_protocols") or [])}
             if "nfs" in allowed_set:
                 enabled_protocols.append("nfs")
             if "iscsi" in allowed_set:
                 enabled_protocols.append("iscsi")
+            if "fcp" in allowed_set or "fc" in allowed_set:
+                enabled_protocols.append("fc")
         if "nfs" not in enabled_protocols and export_policies:
             enabled_protocols.append("nfs")
         if "iscsi" not in enabled_protocols and (igroups or portsets or luns or lun_maps):
             enabled_protocols.append("iscsi")
+        if "fc" not in enabled_protocols and (fc_interfaces or fc_ports):
+            enabled_protocols.append("fc")
         try:
             autosupport = self.get_autosupport()
         except NetAppError:
@@ -681,7 +815,14 @@ class NetAppClient:
         try:
             volumes, capability_status["volumes"] = self._records_with_fallback(
                 "/api/storage/volumes",
-                ["name,svm,aggregate,size,state,type", "name,svm,size,state,type", "name,size,state,type", None],
+                [
+                    "name,svm,aggregate,aggregates,size,space,state,type,nas.path,nas.export_policy",
+                    "name,svm,aggregate,size,space,state,type",
+                    "name,svm,size,space,state,type",
+                    "name,svm,size,state,type",
+                    "name,size,state,type",
+                    None,
+                ],
             )
         except NetAppError:
             volumes = []
@@ -691,7 +832,13 @@ class NetAppClient:
         try:
             interfaces, capability_status["network_interfaces"] = self._records_with_fallback(
                 "/api/network/ip/interfaces",
-                ["name,svm,ip,location,service_policy,enabled", "name,svm,ip,location,enabled", "name,svm,ip,location", None],
+                [
+                    "name,uuid,scope,svm,ip,location,service_policy,enabled",
+                    "name,uuid,svm,ip,location,service_policy,enabled",
+                    "name,svm,ip,location,enabled",
+                    "name,svm,ip,location",
+                    None,
+                ],
             )
         except NetAppError:
             interfaces = []
@@ -733,6 +880,29 @@ class NetAppClient:
                 disk_counts[node_name] = disk_counts.get(node_name, 0) + 1
             if disk_type:
                 disk_type_counts[disk_type] = disk_type_counts.get(disk_type, 0) + 1
+        aggregate_details: list[dict[str, Any]] = []
+        for aggregate in aggregates:
+            name = str(aggregate.get("name") or "").strip()
+            if not name:
+                continue
+            total = _space_metric(aggregate, ("size", "total", "total_size"))
+            used = _space_metric(aggregate, ("used", "used_size"))
+            available = _space_metric(aggregate, ("available", "available_size"))
+            used_percent = round((used / total) * 100, 1) if used is not None and total else None
+            aggregate_details.append(
+                {
+                    "name": name,
+                    "node": str(((aggregate.get("node") or {}).get("name") or "")).strip(),
+                    "state": str(aggregate.get("state") or "").strip(),
+                    "size": total,
+                    "size_label": _format_bytes(total),
+                    "used": used,
+                    "used_label": _format_bytes(used),
+                    "available": available,
+                    "available_label": _format_bytes(available),
+                    "used_percent": used_percent,
+                }
+            )
         svm_details: list[dict[str, Any]] = []
         for svm in svms:
             name = str(svm.get("name") or "").strip()
@@ -767,6 +937,8 @@ class NetAppClient:
             lif_details.append(
                 {
                     "name": name,
+                    "uuid": str(interface.get("uuid") or "").strip(),
+                    "scope": str(interface.get("scope") or "").strip(),
                     "svm": str(svm.get("name") or "").strip(),
                     "address": address,
                     "netmask": netmask,
@@ -833,14 +1005,25 @@ class NetAppClient:
             name = str(volume.get("name") or "").strip()
             if not name:
                 continue
+            size = _space_metric(volume, ("size", "total", "total_size"))
+            used = _space_metric(volume, ("used", "used_size"))
+            available = _space_metric(volume, ("available", "available_size"))
+            used_percent = round((used / size) * 100, 1) if used is not None and size else None
             volume_details.append(
                 {
                     "name": name,
+                    "uuid": str(volume.get("uuid") or "").strip(),
                     "svm": str(((volume.get("svm") or {}).get("name") or "")).strip(),
                     "aggregate": str(((volume.get("aggregate") or {}).get("name") or ((list(volume.get("aggregates") or [{}])[0]).get("name") if list(volume.get("aggregates") or []) else "")) or "").strip(),
                     "state": str(volume.get("state") or "").strip(),
                     "type": str(volume.get("type") or "").strip(),
-                    "size": volume.get("size"),
+                    "size": size,
+                    "size_label": _format_bytes(size),
+                    "used": used,
+                    "used_label": _format_bytes(used),
+                    "available": available,
+                    "available_label": _format_bytes(available),
+                    "used_percent": used_percent,
                     "nas_path": str(((volume.get("nas") or {}).get("path") or "")).strip(),
                     "export_policy": str((((volume.get("nas") or {}).get("export_policy") or {}).get("name") or "")).strip(),
                 }
@@ -892,6 +1075,8 @@ class NetAppClient:
                 continue
             location = lun.get("location") or {}
             status = lun.get("status") or {}
+            size = _space_metric(lun, ("size", "total", "total_size"))
+            used = _space_metric(lun, ("used", "used_size"))
             lun_details.append(
                 {
                     "name": name,
@@ -900,6 +1085,10 @@ class NetAppClient:
                     "state": str(lun.get("state") or (status.get("state") if isinstance(status, dict) else "") or "").strip(),
                     "comment": str(lun.get("comment") or "").strip(),
                     "volume": str(((location.get("volume") or {}).get("name") or "")).strip(),
+                    "size": size,
+                    "size_label": _format_bytes(size),
+                    "used": used,
+                    "used_label": _format_bytes(used),
                 }
             )
         lun_map_details: list[dict[str, Any]] = []
@@ -916,6 +1105,79 @@ class NetAppClient:
                     "svm": str(((lun_map.get("svm") or {}).get("name") or "")).strip(),
                 }
             )
+        fc_service_details: list[dict[str, Any]] = []
+        for service in fcp_services:
+            fc_service_details.append(
+                {
+                    "svm": str(((service.get("svm") or {}).get("name") or "")).strip(),
+                    "enabled": bool(service.get("enabled")),
+                    "target": str(((service.get("target") or {}).get("name") or service.get("target") or "")).strip(),
+                }
+            )
+        fc_interface_details: list[dict[str, Any]] = []
+        for interface in fc_interfaces:
+            name = str(interface.get("name") or "").strip()
+            location = interface.get("location") or {}
+            if not name and not interface.get("wwpn"):
+                continue
+            fc_interface_details.append(
+                {
+                    "name": name,
+                    "uuid": str(interface.get("uuid") or "").strip(),
+                    "svm": str(((interface.get("svm") or {}).get("name") or "")).strip(),
+                    "wwpn": str(interface.get("wwpn") or "").strip(),
+                    "home_node": str(((location.get("home_node") or {}).get("name") or "")).strip(),
+                    "home_port": str(((location.get("home_port") or {}).get("name") or "")).strip(),
+                    "enabled": bool(interface.get("enabled")),
+                }
+            )
+        fc_port_details: list[dict[str, Any]] = []
+        for port in fc_ports:
+            name = str(port.get("name") or "").strip()
+            if not name:
+                continue
+            fabric = port.get("fabric") or {}
+            fc_port_details.append(
+                {
+                    "name": name,
+                    "uuid": str(port.get("uuid") or "").strip(),
+                    "node": str(((port.get("node") or {}).get("name") or "")).strip(),
+                    "enabled": bool(port.get("enabled")),
+                    "state": str(port.get("state") or "").strip(),
+                    "wwpn": str(port.get("wwpn") or "").strip(),
+                    "configured_speed": str(((port.get("speed") or {}).get("configured") or "")).strip() if isinstance(port.get("speed"), dict) else str(port.get("speed") or "").strip(),
+                    "fabric_connected": bool(fabric.get("connected")) if isinstance(fabric, dict) else False,
+                    "supported_protocols": [str(item).strip().lower() for item in list(port.get("supported_protocols") or []) if str(item).strip()],
+                }
+            )
+        volume_size = _sum_known([_int_or_none(item.get("size")) for item in volume_details])
+        volume_used = _sum_known([_int_or_none(item.get("used")) for item in volume_details])
+        aggregate_size = _sum_known([_int_or_none(item.get("size")) for item in aggregate_details])
+        aggregate_used = _sum_known([_int_or_none(item.get("used")) for item in aggregate_details])
+        aggregate_available = _sum_known([_int_or_none(item.get("available")) for item in aggregate_details])
+        space_summary = {
+            "volume_count": len(volume_details),
+            "volume_size": volume_size,
+            "volume_size_label": _format_bytes(volume_size),
+            "volume_used": volume_used,
+            "volume_used_label": _format_bytes(volume_used),
+            "aggregate_count": len(aggregate_details),
+            "aggregate_size": aggregate_size,
+            "aggregate_size_label": _format_bytes(aggregate_size),
+            "aggregate_used": aggregate_used,
+            "aggregate_used_label": _format_bytes(aggregate_used),
+            "aggregate_available": aggregate_available,
+            "aggregate_available_label": _format_bytes(aggregate_available),
+            "aggregate_used_percent": round((aggregate_used / aggregate_size) * 100, 1) if aggregate_used is not None and aggregate_size else None,
+        }
+        ip_summary = {
+            "cluster_mgmt": discovered_cluster_mgmt_lif,
+            "node_mgmt": discovered_node_mgmt_lifs,
+            "svm_mgmt": discovered_svm_management_lifs,
+            "nfs": discovered_nfs_lifs,
+            "iscsi": discovered_iscsi_lifs,
+            "fc": fc_interface_details,
+        }
         return {
             "ontap_version": version,
             "cluster_name": cluster_name,
@@ -940,9 +1202,11 @@ class NetAppClient:
                 }
             ),
             "aggregates": [str(item.get("name") or "") for item in aggregates if str(item.get("name") or "").strip()],
+            "aggregate_details": aggregate_details,
             "svms": [str(item.get("name") or "") for item in svms if str(item.get("name") or "").strip()],
             "svm_details": svm_details,
             "lif_details": lif_details,
+            "ip_summary": ip_summary,
             "discovered_cluster_mgmt_lif": discovered_cluster_mgmt_lif,
             "discovered_cluster_mgmt_ip": str(discovered_cluster_mgmt_lif.get("address") or "").strip(),
             "discovered_node_mgmt_lifs": discovered_node_mgmt_lifs,
@@ -957,7 +1221,11 @@ class NetAppClient:
             "portset_details": portset_details,
             "lun_details": lun_details,
             "lun_map_details": lun_map_details,
+            "fc_service_details": fc_service_details,
+            "fc_interface_details": fc_interface_details,
+            "fc_port_details": fc_port_details,
             "enabled_protocols": enabled_protocols,
+            "space_summary": space_summary,
             "capabilities": capabilities,
             "capability_status": capability_status,
             "disk_count": len(disk_inventory),
@@ -979,6 +1247,8 @@ class NetAppClient:
                 "disks": disks,
                 "licenses": licenses,
                 "protocol_services": protocol_services,
+                "fc_interfaces": fc_interfaces,
+                "fc_ports": fc_ports,
                 "export_policies": export_policies,
                 "igroups": igroups,
                 "portsets": portsets,

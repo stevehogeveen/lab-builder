@@ -271,6 +271,142 @@ def test_netapp_factory_reset_requires_exact_confirmation(client, monkeypatch):
     assert "No wipeconfig" in " ".join(result["attempted"])
 
 
+def test_netapp_cluster_mgmt_ip_preview_and_apply_are_guarded(client, monkeypatch):
+    import app.modules.netapp.routes as netapp_routes
+
+    class FakeNetAppClient:
+        def __init__(self):
+            self.patch_calls = []
+
+        def build_discovery_summary(self):
+            return {
+                "cluster_name": "X20",
+                "ontap_version": "ONTAP 9.9.1",
+                "source": "Live read",
+                "read_at": "2026-05-27T00:00:00+00:00",
+                "enabled_protocols": ["nfs"],
+                "discovered_cluster_mgmt_ip": "10.10.8.40",
+                "discovered_cluster_mgmt_lif": {
+                    "name": "cluster_mgmt",
+                    "uuid": "lif-uuid-1",
+                    "address": "10.10.8.40",
+                    "netmask": "255.255.255.0",
+                },
+                "discovered_node_mgmt_ips": {},
+                "lif_details": [],
+                "volume_details": [],
+                "space_summary": {},
+                "warnings": [],
+                "raw": {"interfaces": []},
+            }
+
+        def patch(self, path, body):
+            self.patch_calls.append((path, body))
+            return {"job": {"uuid": "job-1"}}
+
+    fake = FakeNetAppClient()
+    monkeypatch.setattr(netapp_routes.service, "_build_client", lambda context: fake)
+    cfg = main.load_kit_config()
+    cfg["netapp"]["host"] = "10.10.8.40"
+    cfg["netapp"]["username"] = "admin"
+    cfg["netapp"]["password"] = "secret"
+    cfg["netapp"]["bootstrap_complete"] = True
+    main.save_kit_config(cfg)
+
+    response = client.post(
+        "/modules/netapp/cluster-mgmt-ip",
+        data={"netapp_cluster_mgmt_ip": "10.10.8.45", "management_netmask": "255.255.255.0", "netapp_cluster_mgmt_ip_mode": "preview"},
+    )
+
+    assert response.status_code == 200
+    cfg = main.load_kit_config()
+    result = cfg["netapp"]["last_cluster_mgmt_ip_change"]
+    assert result["status"] == "preview"
+    assert result["plan"]["endpoint"] == "/api/network/ip/interfaces/lif-uuid-1"
+    assert fake.patch_calls == []
+
+    response = client.post(
+        "/modules/netapp/cluster-mgmt-ip",
+        data={"netapp_cluster_mgmt_ip": "10.10.8.45", "management_netmask": "255.255.255.0", "netapp_cluster_mgmt_ip_mode": "apply"},
+    )
+
+    assert response.status_code == 200
+    cfg = main.load_kit_config()
+    result = cfg["netapp"]["last_cluster_mgmt_ip_change"]
+    assert result["status"] == "refused"
+    assert fake.patch_calls == []
+
+    response = client.post(
+        "/modules/netapp/cluster-mgmt-ip",
+        data={
+            "netapp_cluster_mgmt_ip": "10.10.8.45",
+            "management_netmask": "255.255.255.0",
+            "netapp_cluster_mgmt_ip_mode": "apply",
+            "netapp_cluster_mgmt_ip_confirmation": "CHANGE CLUSTER IP",
+        },
+    )
+
+    assert response.status_code == 200
+    cfg = main.load_kit_config()
+    result = cfg["netapp"]["last_cluster_mgmt_ip_change"]
+    assert result["status"] == "applied"
+    assert cfg["netapp"]["host"] == "10.10.8.45"
+    assert fake.patch_calls == [
+        ("/api/network/ip/interfaces/lif-uuid-1", {"ip": {"address": "10.10.8.45", "netmask": "255.255.255.0"}})
+    ]
+
+
+def test_netapp_read_current_config_route_caches_summary(client, monkeypatch):
+    import app.modules.netapp.routes as netapp_routes
+
+    class FakeNetAppClient:
+        def build_discovery_summary(self):
+            return {
+                "cluster_name": "X20",
+                "ontap_version": "ONTAP 9.9.1",
+                "source": "Live read",
+                "read_at": "2026-05-27T00:00:00+00:00",
+                "source_host": "10.10.8.45",
+                "enabled_protocols": ["nfs", "fc"],
+                "discovered_cluster_mgmt_ip": "10.10.8.45",
+                "discovered_cluster_mgmt_lif": {"name": "cluster_mgmt", "uuid": "lif-1", "address": "10.10.8.45", "netmask": "255.255.255.0"},
+                "discovered_node_mgmt_ips": {"X20-01": "10.10.8.46"},
+                "discovered_node_mgmt_ip_list": ["10.10.8.46"],
+                "discovered_svm_management_lifs": [{"name": "svm_mgmt", "address": "10.10.8.48"}],
+                "discovered_nfs_lifs": [{"name": "nfs_lif1", "address": "10.10.8.51", "home_node": "X20-01", "home_port": "a0a"}],
+                "discovered_iscsi_lifs": [],
+                "fc_interface_details": [{"name": "fc_lif1", "wwpn": "20:00:00:25:b5:11:11:11", "home_node": "X20-01", "home_port": "0a"}],
+                "fc_port_details": [],
+                "fc_service_details": [{"svm": "stage_nfs", "enabled": True}],
+                "volume_details": [{"name": "vol1", "used_label": "125 B", "size_label": "500 B", "used_percent": 25.0}],
+                "export_policy_details": [],
+                "igroup_details": [],
+                "portset_details": [],
+                "lun_details": [],
+                "lun_map_details": [],
+                "space_summary": {"aggregate_used_label": "250 B", "aggregate_size_label": "1000 B", "aggregate_used_percent": 25.0, "volume_used_label": "125 B", "volume_size_label": "500 B"},
+                "warnings": [],
+                "raw": {"secret": "not persisted by route cache"},
+            }
+
+    monkeypatch.setattr(netapp_routes.service, "_build_client", lambda context: FakeNetAppClient())
+    cfg = main.load_kit_config()
+    cfg["netapp"]["host"] = "10.10.8.45"
+    cfg["netapp"]["username"] = "admin"
+    cfg["netapp"]["password"] = "secret"
+    main.save_kit_config(cfg)
+
+    response = client.post("/modules/netapp/read-current-config")
+
+    assert response.status_code == 200
+    assert "Current NetApp config" in response.text
+    assert "fc_lif1" in response.text
+    cfg = main.load_kit_config()
+    assert cfg["netapp"]["last_live_read"]["source"] == "Live read"
+    assert cfg["netapp"]["last_current_config"]["enabled_protocols"] == ["nfs", "fc"]
+    assert "raw" not in cfg["netapp"]["last_current_config"]
+
+
 def test_netapp_plan_includes_validate_and_plan_stage_order_when_host_is_set(client):
     cfg = main.load_kit_config()
     cfg["netapp"]["host"] = "10.10.8.45"
@@ -724,7 +860,7 @@ def test_discovery_inferrs_protocols_from_export_and_san_objects_when_service_en
         if path == "/api/network/ethernet/ports":
             return {"records": [{"name": "a0a", "node": {"name": "X20-01"}, "broadcast_domain": {"name": "Data"}, "mtu": 9000, "type": "if_group"}]}
         if path == "/api/storage/aggregates":
-            return {"records": [{"name": "aggr_01"}]}
+            return {"records": [{"name": "aggr_01", "space": {"block_storage": {"size": 1000, "used": 250, "available": 750}}}]}
         if path == "/api/svm/svms":
             return {"records": [{"name": "stage_nfs", "state": "running", "subtype": "default"}]}
         if path == "/api/network/ethernet/broadcast-domains":
@@ -735,6 +871,12 @@ def test_discovery_inferrs_protocols_from_export_and_san_objects_when_service_en
             return {"records": []}
         if path == "/api/protocols/san/iscsi/services":
             return {"records": []}
+        if path == "/api/protocols/san/fcp/services":
+            return {"records": [{"svm": {"name": "stage_nfs"}, "enabled": True}]}
+        if path == "/api/network/fc/interfaces":
+            return {"records": [{"name": "fc_lif1", "svm": {"name": "stage_nfs"}, "wwpn": "20:00:00:25:b5:11:11:11", "location": {"home_node": {"name": "X20-01"}, "home_port": {"name": "0a"}}, "enabled": True}]}
+        if path == "/api/network/fc/ports":
+            return {"records": [{"name": "0a", "node": {"name": "X20-01"}, "state": "online", "enabled": True, "wwpn": "50:00:00:25:b5:22:22:22"}]}
         if path == "/api/protocols/nfs/export-policies":
             return {"records": [{"name": "stage_nfs_policy", "svm": {"name": "stage_nfs"}, "rules": [{}]}]}
         if path == "/api/protocols/san/igroups":
@@ -745,6 +887,8 @@ def test_discovery_inferrs_protocols_from_export_and_san_objects_when_service_en
             return {"records": [{"name": "esxi_lun01", "svm": {"name": "stage_nfs"}, "os_type": "vmware", "state": "online"}]}
         if path == "/api/protocols/san/lun-maps":
             return {"records": [{"lun": {"name": "esxi_lun01"}, "igroup": {"name": "stage_esxi"}, "logical_unit_number": 1}]}
+        if path == "/api/storage/volumes":
+            return {"records": [{"name": "vol1", "svm": {"name": "stage_nfs"}, "space": {"size": 500, "used": 125, "available": 375}, "state": "online"}]}
         return {"records": []}
 
     client._get = fake_get  # type: ignore[method-assign]
@@ -752,9 +896,13 @@ def test_discovery_inferrs_protocols_from_export_and_san_objects_when_service_en
 
     assert "nfs" in summary["enabled_protocols"]
     assert "iscsi" in summary["enabled_protocols"]
+    assert "fc" in summary["enabled_protocols"]
     assert summary["export_policy_details"][0]["name"] == "stage_nfs_policy"
     assert summary["igroup_details"][0]["protocol"] == "iscsi"
     assert summary["lun_map_details"][0]["igroup"] == "stage_esxi"
+    assert summary["fc_interface_details"][0]["wwpn"] == "20:00:00:25:b5:11:11:11"
+    assert summary["space_summary"]["aggregate_used"] == 250
+    assert summary["volume_details"][0]["used"] == 125
 
 
 def test_discovery_summary_separates_cluster_and_node_management_ips():
