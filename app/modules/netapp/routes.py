@@ -29,6 +29,16 @@ template_env = Environment(
 
 service = NetAppModuleService()
 
+BOOTSTRAP_CHECK_TARGETS = (
+    "sp_a",
+    "sp_b",
+    "node_01_mgmt",
+    "node_02_mgmt",
+    "cluster_mgmt",
+    "svm_mgmt",
+)
+CONSOLE_PORT_PATTERNS = ("/dev/ttyUSB*", "/dev/ttyACM*", "/dev/serial/by-id/*")
+
 
 def _lines(value: str) -> list[str]:
     return [line.strip() for line in str(value or "").replace(",", "\n").splitlines() if line.strip()]
@@ -115,10 +125,46 @@ def _set_vmware_check(cfg: dict[str, Any], key: str, result: dict[str, Any]) -> 
 def _cache_discovery_summary(cfg: dict[str, Any], discovery: dict[str, Any]) -> None:
     cfg.setdefault("netapp", {})
     version = str(discovery.get("ontap_version") or "").strip()
+    read_at = str(discovery.get("read_at") or datetime.now(timezone.utc).isoformat()).strip()
+    source = str(discovery.get("source") or "Live read").strip()
     cfg["netapp"]["last_discovered_ontap_version"] = version
     cfg["netapp"]["last_discovered_cluster_name"] = str(discovery.get("cluster_name") or "").strip()
+    cfg["netapp"]["last_discovered_at"] = read_at
+    cfg["netapp"]["last_discovered_source"] = source
     if version:
-        record_upgrade_inventory(cfg, "netapp", current_version=version, source="Last NetApp discovery", raw_version=version)
+        record_upgrade_inventory(cfg, "netapp", current_version=version, source="Live NetApp discovery", raw_version=version, checked_at=read_at)
+
+
+def _scan_console_ports() -> dict[str, Any]:
+    candidates: list[dict[str, str]] = []
+    seen: set[str] = set()
+    for pattern in CONSOLE_PORT_PATTERNS:
+        parent = Path(pattern).parent
+        name_pattern = Path(pattern).name
+        if not parent.exists():
+            continue
+        for path in sorted(parent.glob(name_pattern)):
+            path_text = str(path)
+            if path_text in seen:
+                continue
+            seen.add(path_text)
+            resolved = ""
+            try:
+                resolved = str(path.resolve())
+            except OSError:
+                resolved = ""
+            candidates.append(
+                {
+                    "path": path_text,
+                    "resolved": resolved,
+                    "name": path.name,
+                }
+            )
+    return {
+        "checked_at": datetime.now(timezone.utc).isoformat(),
+        "patterns": list(CONSOLE_PORT_PATTERNS),
+        "candidates": candidates,
+    }
 
 
 def _sync_discovered_values(cfg: dict[str, Any], discovery: dict[str, Any]) -> list[str]:
@@ -281,9 +327,12 @@ def _read_current_ontap_version_for_upgrade(cfg: dict[str, Any]) -> tuple[str, l
     if isinstance(version_payload, dict):
         version = str(version_payload.get("full") or version_payload.get("generation") or "").strip()
     cluster_name = str(cluster.get("name") or "").strip() if isinstance(cluster, dict) else ""
+    read_at = datetime.now(timezone.utc).isoformat()
     if version:
         netapp_cfg["last_discovered_ontap_version"] = version
-        record_upgrade_inventory(cfg, "netapp", current_version=version, source="Live ONTAP upgrade readiness check", raw_version=version)
+        netapp_cfg["last_discovered_at"] = read_at
+        netapp_cfg["last_discovered_source"] = "Live ONTAP upgrade readiness check"
+        record_upgrade_inventory(cfg, "netapp", current_version=version, source="Live ONTAP upgrade readiness check", raw_version=version, checked_at=read_at)
         notes.append(f"Current ONTAP version read from {host}: {version}")
     else:
         notes.append(f"Connected to {host}, but /api/cluster did not return an ONTAP version.")
@@ -343,11 +392,17 @@ def _apply_current_netapp_convention(cfg: dict[str, Any]) -> list[str]:
 
 def _apply_live_netapp_form_state(cfg: dict[str, Any], form: dict[str, Any]) -> None:
     cfg.setdefault("netapp", {})
-    cfg["netapp"]["host"] = str(form.get("netapp_host") or cfg["netapp"].get("host") or "").strip()
+    cfg["netapp"]["host"] = str(form.get("netapp_host") or form.get("netapp_cluster_mgmt_ip") or cfg["netapp"].get("host") or "").strip()
     cfg["netapp"]["username"] = str(form.get("netapp_username") or cfg["netapp"].get("username") or "admin").strip()
     password = str(form.get("netapp_password") or "")
     if password:
         cfg["netapp"]["password"] = password
+    console_port = str(form.get("netapp_console_port") or "").strip()
+    if console_port:
+        cfg["netapp"]["console_port"] = console_port
+    console_baud = str(form.get("netapp_console_baud") or "").strip()
+    if console_baud:
+        cfg["netapp"]["console_baud"] = console_baud
     protocol = str(form.get("netapp_storage_protocol") or cfg["netapp"].get("storage_protocol") or "nfs").strip().lower()
     cfg["netapp"]["storage_protocol"] = protocol if protocol in {"iscsi", "nfs"} else "nfs"
     cfg["netapp"]["bootstrap_overrides"] = {
@@ -414,8 +469,11 @@ def _apply_settings_to_cfg(
     netapp_iscsi_commands: str,
     netapp_nfs_commands: str,
 ) -> None:
-    existing_password = str(((cfg.get("netapp") or {}).get("password") or ""))
-    existing_desired = dict((((cfg.get("netapp") or {}).get("desired")) or {}))
+    existing_netapp = cfg.get("netapp") or {}
+    existing_password = str((existing_netapp.get("password") or ""))
+    existing_host = str((existing_netapp.get("host") or "")).strip()
+    resolved_host = netapp_host.strip() or netapp_cluster_mgmt_ip.strip() or existing_host
+    existing_desired = dict(((existing_netapp.get("desired")) or {}))
     existing_iscsi = dict((existing_desired.get("iscsi") or {}))
     existing_nfs = dict((existing_desired.get("nfs") or {}))
     try:
@@ -426,7 +484,7 @@ def _apply_settings_to_cfg(
         diskcount_value = int(str(aggregate_diskcount or "11").strip())
     except ValueError:
         diskcount_value = 11
-    protocol = str(netapp_storage_protocol or "nfs").strip().lower()
+    protocol = str(netapp_storage_protocol or cfg.get("netapp", {}).get("storage_protocol") or "nfs").strip().lower()
     if protocol not in {"iscsi", "nfs"}:
         protocol = "nfs"
     cfg.setdefault("netapp", {})
@@ -440,7 +498,7 @@ def _apply_settings_to_cfg(
     }
     cfg["netapp"].update(
         {
-            "host": netapp_host.strip(),
+            "host": resolved_host,
             "username": netapp_username.strip(),
             "password": netapp_password if netapp_password else existing_password,
             "storage_protocol": protocol,
@@ -534,7 +592,9 @@ async def netapp_save_settings(
     netapp_host: str = Form(""),
     netapp_username: str = Form("admin"),
     netapp_password: str = Form(""),
-    netapp_storage_protocol: str = Form("nfs"),
+    netapp_console_port: str = Form(""),
+    netapp_console_baud: str = Form("9600"),
+    netapp_storage_protocol: str = Form(""),
     bootstrap_complete: bool = Form(False),
     netapp_sp_a_ip: str = Form(""),
     netapp_sp_b_ip: str = Form(""),
@@ -639,6 +699,10 @@ async def netapp_save_settings(
         netapp_iscsi_commands=netapp_iscsi_commands,
         netapp_nfs_commands=netapp_nfs_commands,
     )
+    if netapp_console_port.strip():
+        cfg["netapp"]["console_port"] = netapp_console_port.strip()
+    if netapp_console_baud.strip():
+        cfg["netapp"]["console_baud"] = netapp_console_baud.strip()
     main.save_kit_config(cfg)
     context = _module_context(request)
     payload = service.plan(context)
@@ -651,7 +715,7 @@ async def netapp_test_connection(
     netapp_host: str = Form(""),
     netapp_username: str = Form("admin"),
     netapp_password: str = Form(""),
-    netapp_storage_protocol: str = Form("nfs"),
+    netapp_storage_protocol: str = Form(""),
     bootstrap_complete: bool = Form(False),
     netapp_sp_a_ip: str = Form(""),
     netapp_sp_b_ip: str = Form(""),
@@ -759,6 +823,10 @@ async def netapp_test_connection(
     main.save_kit_config(cfg)
     context = _module_context(request)
     payload = service.test_connection(context)
+    if payload.get("connection_test"):
+        cfg.setdefault("netapp", {})["last_api_check"] = payload["connection_test"]
+        main.save_kit_config(cfg)
+        context = _module_context(request)
     return _render_netapp_page(request, context, payload)
 
 
@@ -768,7 +836,7 @@ async def netapp_discover_page(
     netapp_host: str = Form(""),
     netapp_username: str = Form("admin"),
     netapp_password: str = Form(""),
-    netapp_storage_protocol: str = Form("nfs"),
+    netapp_storage_protocol: str = Form(""),
 ):
     from app import main
 
@@ -854,6 +922,24 @@ async def netapp_bootstrap_complete(request: Request, bootstrap_complete: str = 
     return _render_netapp_page(request, context, payload, saved=True)
 
 
+@router.post("/modules/netapp/discover-console", response_class=HTMLResponse)
+@router.post("/modules/netapp/check-console-ports", response_class=HTMLResponse)
+async def netapp_check_console_ports(request: Request):
+    from app import main
+
+    context = _module_context(request)
+    cfg = context["cfg"]
+    form = {key: value for key, value in dict(await request.form()).items()}
+    _apply_live_netapp_form_state(cfg, form)
+    cfg.setdefault("netapp", {})
+    cfg["netapp"]["console_ports"] = _scan_console_ports()
+    main.save_kit_config(cfg)
+    context = _module_context(request)
+    payload = service._response(context, "check_console_ports")
+    payload["console_ports"] = cfg["netapp"]["console_ports"]
+    return _render_netapp_page(request, context, payload)
+
+
 @router.post("/modules/netapp/bootstrap-test/{target}", response_class=HTMLResponse)
 async def netapp_bootstrap_test(request: Request, target: str):
     from app import main
@@ -872,6 +958,110 @@ async def netapp_bootstrap_test(request: Request, target: str):
         payload = service._response(context, f"bootstrap_{target}")
         payload["bootstrap_test"] = cfg["netapp"]["bootstrap_checks"].get(target)
     return _render_netapp_page(request, context, payload)
+
+
+@router.post("/modules/netapp/bootstrap-test-all", response_class=HTMLResponse)
+async def netapp_bootstrap_test_all(request: Request):
+    from app import main
+
+    context = _module_context(request)
+    cfg = context["cfg"]
+    form = {key: value for key, value in dict(await request.form()).items()}
+    _apply_live_netapp_form_state(cfg, form)
+    main.save_kit_config(cfg)
+    context = _module_context(request)
+    results: dict[str, Any] = {}
+    for target in BOOTSTRAP_CHECK_TARGETS:
+        target_payload = service.test_bootstrap_target(context, target)
+        if target_payload.get("bootstrap_test"):
+            result = target_payload["bootstrap_test"]
+            _set_bootstrap_check(cfg, target, result)
+            results[target] = result
+    main.save_kit_config(cfg)
+    context = _module_context(request)
+    payload = service._response(context, "bootstrap_all")
+    payload["bootstrap_test_all"] = results
+    payload["bootstrap_test"] = {
+        "target": "all",
+        "results": results,
+        "reachable": any(bool(result.get("reachable")) for result in results.values()),
+    }
+    return _render_netapp_page(request, context, payload)
+
+
+@router.post("/modules/netapp/apply-ip-setup", response_class=HTMLResponse)
+async def netapp_apply_ip_setup(request: Request):
+    from app import main
+
+    context = _module_context(request)
+    cfg = context["cfg"]
+    form = {key: value for key, value in dict(await request.form()).items()}
+    _apply_live_netapp_form_state(cfg, form)
+    result = {
+        "status": "blocked",
+        "attempted_at": datetime.now(timezone.utc).isoformat(),
+        "attempted_action": "apply_ip_setup",
+        "message": "NetApp IP setup apply backend is not implemented yet. Saved setup values only.",
+        "target": str((cfg.get("netapp") or {}).get("host") or ""),
+        "attempted": ["Saved form values.", "Did not send NetApp configuration commands."],
+    }
+    cfg.setdefault("netapp", {})["last_ip_setup_apply"] = result
+    main.save_kit_config(cfg)
+    context = _module_context(request)
+    payload = service._response(context, "apply_ip_setup")
+    payload["ip_setup_apply"] = result
+    feedback = main.build_action_feedback(
+        "NetApp IP setup not applied",
+        result["message"],
+        tone="pending",
+        outcomes=["No NetApp commands were sent.", "Setup values were saved."],
+    )
+    return _render_netapp_page(request, context, payload, action_feedback=feedback)
+
+
+@router.post("/modules/netapp/factory-reset", response_class=HTMLResponse)
+async def netapp_factory_reset(request: Request, netapp_factory_reset_confirmation: str = Form("")):
+    from app import main
+
+    context = _module_context(request)
+    cfg = context["cfg"]
+    form = {key: value for key, value in dict(await request.form()).items()}
+    _apply_live_netapp_form_state(cfg, form)
+    confirmation = str(netapp_factory_reset_confirmation or "").strip()
+    attempted_at = datetime.now(timezone.utc).isoformat()
+    if confirmation != "FACTORY RESET":
+        result = {
+            "status": "refused",
+            "attempted_at": attempted_at,
+            "attempted_action": "factory_reset",
+            "confirmation": confirmation,
+            "message": "Factory reset was not attempted because confirmation did not match FACTORY RESET.",
+            "target": str((cfg.get("netapp") or {}).get("host") or ""),
+            "attempted": ["Checked typed confirmation.", "No NetApp commands were sent."],
+        }
+        tone = "danger"
+        title = "Factory reset not attempted"
+        outcomes = ["Typed confirmation did not match.", "No NetApp commands were sent."]
+    else:
+        result = {
+            "status": "not_implemented",
+            "attempted_at": attempted_at,
+            "attempted_action": "factory_reset",
+            "confirmation": "FACTORY RESET",
+            "message": "Factory reset backend is not implemented yet for NetApp.",
+            "target": str((cfg.get("netapp") or {}).get("host") or ""),
+            "attempted": ["Accepted exact typed confirmation.", "Stopped because no guarded NetApp factory-reset backend exists."],
+        }
+        tone = "pending"
+        title = "Factory reset backend unavailable"
+        outcomes = ["Confirmation accepted.", "No NetApp commands were sent."]
+    cfg.setdefault("netapp", {})["last_factory_reset"] = result
+    main.save_kit_config(cfg)
+    context = _module_context(request)
+    payload = service._response(context, "factory_reset")
+    payload["factory_reset"] = result
+    feedback = main.build_action_feedback(title, result["message"], tone=tone, outcomes=outcomes)
+    return _render_netapp_page(request, context, payload, action_feedback=feedback)
 
 
 @router.post("/modules/netapp/use-discovered-values", response_class=HTMLResponse)

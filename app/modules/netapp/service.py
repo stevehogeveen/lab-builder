@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import datetime, timezone
 import re
 import shutil
 import socket
@@ -636,6 +637,9 @@ class NetAppModuleService:
             "api_auth_ok": False,
             "first_endpoint": "/api/cluster",
             "cluster_name": "",
+            "ontap_version": "",
+            "source": "",
+            "read_at": "",
         }
         if not host:
             payload["ok"] = False
@@ -648,6 +652,10 @@ class NetAppModuleService:
             cluster = client.get_cluster()
             result["api_auth_ok"] = True
             result["cluster_name"] = str(cluster.get("name") or "")
+            version = cluster.get("version") if isinstance(cluster.get("version"), dict) else {}
+            result["ontap_version"] = str(version.get("full") or version.get("generation") or "")
+            result["source"] = "Live read"
+            result["read_at"] = datetime.now(timezone.utc).isoformat()
             payload["connection_test"] = result
             payload["outcome"] = "connected"
             return payload
@@ -667,6 +675,7 @@ class NetAppModuleService:
             "node_01_mgmt": ("node_01_mgmt_ip", [22, 443]),
             "node_02_mgmt": ("node_02_mgmt_ip", [22, 443]),
             "cluster_mgmt": ("cluster_mgmt_ip", [443, 80, 22]),
+            "svm_mgmt": ("svm_mgmt_ip", [443, 80, 22]),
         }
         field, ports = target_map.get(target, ("", []))
         host = str(info.get(field) or "").strip()

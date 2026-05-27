@@ -38,15 +38,16 @@ Copy this block and update it in place.
 ## Active Sessions
 
 ### Session: netapp
-- Status: active
-- Branch: unknown
-- Scope owner: NetApp workflow, NetApp module UI, NetApp planning/validation
-- Working on: Final NetApp page completion, protocol-object editing, and richer dry-run review
+- Status: done
+- Branch: codex/netapp-cisco-style-setup
+- Scope owner: NetApp Cisco-style setup page, safe console/IP/API checks, and GitHub-pushed branch handoff
+- Working on: Completed Cisco-style NetApp setup flow, guarded factory-reset stub, and validation for Nova review.
 - Blocked by: none
-- Ready to hand off: Page-complete NetApp review slice can hand off after template and route parsing updates are recorded here
+- Ready to hand off: Branch is ready for commit/push handoff after final git operations.
 - Files claimed:
-  - app/modules/netapp/**
   - app/netapp.py
+  - app/modules/netapp/routes.py
+  - app/modules/netapp/service.py
   - tests/test_netapp_module.py
   - templates/partials/pages/netapp.html
 - Shared files touched with caution:
@@ -70,8 +71,12 @@ Copy this block and update it in place.
   - 2026-05-12 America/Toronto - Reworked NetApp into a bootstrap-first compact page with generated manual checklist, derived SP/node/cluster IPs, connectivity tests, and a reduced post-bootstrap snapshot focused on controllers, disks, and current port IPs.
   - 2026-05-13 America/Toronto - Shifted NetApp defaults to the real .45/.46/.47/.48 management convention, added legacy .40/.41/.42/.43 warning plus one-click update, and relabeled the bootstrap plan with controller and port names.
   - 2026-05-13 America/Toronto - Enabled the first NetApp safe-apply slice for create-only API actions (subnets, SVM, LIFs, services, export policy, igroup, portset, NFS volume) with in-page execution logs and manual blocks for the remaining actions.
+  - 2026-05-27 09:52 EDT - Claimed focused NetApp UI/workflow clarity patch plus safe bootstrap IP check-all route.
+  - 2026-05-27 10:16 EDT - Added console-first NetApp page flow, all-IP bootstrap checks, live/cached ONTAP read labeling, and verified render plus focused tests.
+  - 2026-05-27 10:24 EDT - Reopened NetApp session on codex/netapp-cisco-style-setup for Cisco-style setup page branch.
+  - 2026-05-27 10:45 EDT - Rebuilt NetApp page in Cisco-style setup layout, added read-only console discovery, all-IP ping, safe factory-reset refusal, and verified tests/render.
 - Next intended change:
-  - Use operator feedback from the next manual test pass to tighten layout, wording, and any remaining protocol-detail validations.
+  - none
 
 ### Session: rest-of-app
 - Status: active

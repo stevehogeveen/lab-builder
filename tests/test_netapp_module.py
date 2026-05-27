@@ -89,11 +89,17 @@ def test_netapp_module_route_returns_200_with_bootstrap_and_connection_state(cli
     response = client.get("/modules/netapp")
 
     assert response.status_code == 200
+    assert "Setup NetApp access" in response.text
+    assert "Console access" in response.text
+    assert "Current NetApp access" in response.text
     assert "NetApp setup" in response.text
-    assert "Connection Target" in response.text
-    assert "Bootstrap Plan" in response.text
-    assert "ONTAP API / Cluster Management IP" in response.text
-    assert "Test ONTAP API connection" in response.text
+    assert "Cluster management IP" in response.text
+    assert "Test ONTAP API" in response.text
+    assert "Ping all NetApp IPs" in response.text
+    assert "Factory reset NetApp" in response.text
+    assert "Storage presentation" in response.text
+    assert "Technical details, logs, and files" in response.text
+    assert "What the app found" not in response.text
 
 
 def test_netapp_action_endpoints_return_planning_data(client):
@@ -132,7 +138,91 @@ def test_netapp_test_connection_endpoint_returns_result(client):
     )
 
     assert response.status_code == 200
-    assert "API connection test" in response.text
+    assert "Current NetApp access" in response.text
+    assert "ONTAP version" in response.text
+
+
+def test_netapp_discover_console_route_saves_candidates(client, monkeypatch):
+    import app.modules.netapp.routes as netapp_routes
+
+    monkeypatch.setattr(
+        netapp_routes,
+        "_scan_console_ports",
+        lambda: {
+            "checked_at": "2026-05-27T00:00:00+00:00",
+            "patterns": ["/dev/ttyUSB*"],
+            "candidates": [{"path": "/dev/ttyUSB0", "resolved": "/dev/ttyUSB0", "name": "ttyUSB0"}],
+        },
+    )
+
+    response = client.post(
+        "/modules/netapp/discover-console",
+        data={"netapp_console_port": "/dev/ttyUSB0", "netapp_console_baud": "115200"},
+    )
+
+    assert response.status_code == 200
+    assert "Check console ports" in response.text
+    cfg = main.load_kit_config()
+    assert cfg["netapp"]["console_port"] == "/dev/ttyUSB0"
+    assert cfg["netapp"]["console_baud"] == "115200"
+    assert cfg["netapp"]["console_ports"]["candidates"][0]["path"] == "/dev/ttyUSB0"
+
+
+def test_netapp_bootstrap_test_all_saves_each_result(client, monkeypatch):
+    import app.modules.netapp.routes as netapp_routes
+
+    def fake_probe(host, ports=None, timeout=1.5):
+        _ = ports
+        _ = timeout
+        return {
+            "host": host,
+            "reachable": host.endswith(".45"),
+            "ports": {"443": "open" if host.endswith(".45") else "closed"},
+            "error": "" if host.endswith(".45") else "No tested TCP ports responded.",
+        }
+
+    monkeypatch.setattr(netapp_routes.service, "_probe_host", fake_probe)
+    cfg = main.load_kit_config()
+    cfg["included"]["netapp"] = True
+    main.save_kit_config(cfg)
+
+    response = client.post(
+        "/modules/netapp/bootstrap-test-all",
+        data={
+            "netapp_sp_a_ip": "10.10.8.13",
+            "netapp_sp_b_ip": "10.10.8.14",
+            "netapp_cluster_mgmt_ip": "10.10.8.45",
+            "netapp_node_01_mgmt_ip": "10.10.8.46",
+            "netapp_node_02_mgmt_ip": "10.10.8.47",
+            "netapp_svm_mgmt_ip": "10.10.8.48",
+        },
+    )
+
+    assert response.status_code == 200
+    assert "Ping all NetApp IPs" in response.text
+    cfg = main.load_kit_config()
+    checks = cfg["netapp"]["bootstrap_checks"]
+    assert set(checks) >= {"sp_a", "sp_b", "cluster_mgmt", "node_01_mgmt", "node_02_mgmt", "svm_mgmt"}
+    assert checks["cluster_mgmt"]["reachable"] is True
+    assert checks["svm_mgmt"]["reachable"] is False
+
+
+def test_netapp_factory_reset_requires_exact_confirmation(client):
+    response = client.post("/modules/netapp/factory-reset", data={"netapp_factory_reset_confirmation": "RESET"})
+
+    assert response.status_code == 200
+    cfg = main.load_kit_config()
+    result = cfg["netapp"]["last_factory_reset"]
+    assert result["status"] == "refused"
+    assert "No NetApp commands" in " ".join(result["attempted"])
+
+    response = client.post("/modules/netapp/factory-reset", data={"netapp_factory_reset_confirmation": "FACTORY RESET"})
+
+    assert response.status_code == 200
+    cfg = main.load_kit_config()
+    result = cfg["netapp"]["last_factory_reset"]
+    assert result["status"] == "not_implemented"
+    assert result["message"] == "Factory reset backend is not implemented yet for NetApp."
 
 
 def test_netapp_plan_includes_validate_and_plan_stage_order_when_host_is_set(client):

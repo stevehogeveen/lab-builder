@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import datetime, timezone
 import ipaddress
 from pathlib import Path
 import re
@@ -918,6 +919,9 @@ class NetAppClient:
         return {
             "ontap_version": version,
             "cluster_name": cluster_name,
+            "source": "Live read",
+            "read_at": datetime.now(timezone.utc).isoformat(),
+            "source_host": self.config.host,
             "node_count": len(nodes),
             "node_names": node_names,
             "node_models": node_models,
