@@ -38,12 +38,12 @@ Copy this block and update it in place.
 ## Active Sessions
 
 ### Session: netapp
-- Status: done
+- Status: active
 - Branch: codex/netapp-cisco-style-setup
 - Scope owner: NetApp Cisco-style setup page, safe console/IP/API checks, and GitHub-pushed branch handoff
-- Working on: Completed Cisco-style NetApp setup flow, guarded factory-reset stub, and validation for Nova review.
+- Working on: Fixing NetApp setup workflow functionality after Cisco-style redesign: console selection persistence, live read visibility, restored setup inputs, ping details, and safe factory reset feedback.
 - Blocked by: none
-- Ready to hand off: Branch is ready for commit/push handoff after final git operations.
+- Ready to hand off: After validation, render check, commit, and push.
 - Files claimed:
   - app/netapp.py
   - app/modules/netapp/routes.py
@@ -75,8 +75,9 @@ Copy this block and update it in place.
   - 2026-05-27 10:16 EDT - Added console-first NetApp page flow, all-IP bootstrap checks, live/cached ONTAP read labeling, and verified render plus focused tests.
   - 2026-05-27 10:24 EDT - Reopened NetApp session on codex/netapp-cisco-style-setup for Cisco-style setup page branch.
   - 2026-05-27 10:45 EDT - Rebuilt NetApp page in Cisco-style setup layout, added read-only console discovery, all-IP ping, safe factory-reset refusal, and verified tests/render.
+  - 2026-05-27 EDT - Reopened NetApp session to restore functional setup inputs, console selection persistence, ONTAP read visibility, and ping/factory reset results.
 - Next intended change:
-  - none
+  - Patch NetApp template/routes/service, validate, render, commit, and push.
 
 ### Session: rest-of-app
 - Status: active

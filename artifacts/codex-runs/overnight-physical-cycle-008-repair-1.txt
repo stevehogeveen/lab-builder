@@ -1,0 +1,26 @@
+OpenAI Codex v0.133.0
+--------
+workdir: /home/administrator/lab-builder
+model: gpt-5.5
+provider: openai
+approval: never
+sandbox: workspace-write [workdir, /tmp, $TMPDIR]
+reasoning effort: xhigh
+reasoning summaries: none
+session id: 019e6625-93d3-7dc2-bb92-db52909798f4
+--------
+user
+Pytest failed during overnight physical Lab Builder cycle 008.
+
+Read:
+- artifacts/codex-runs/overnight-physical-cycle-008-pytest-0.txt
+- current git diff
+- .codex/prompts/overnight-physical-lab-run.md
+
+Fix only the failing tests or production bug causing them.
+Do not start new features.
+Do not touch unrelated modules.
+Keep focus on Cisco, iLO, ESXi, OVF/OVA, and NetApp prep only.
+Do not commit.
+Report files changed and exact issue fixed.
+warning: Codex's Linux sandbox uses bubblewrap and needs access to create user namespaces.
