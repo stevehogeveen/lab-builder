@@ -395,6 +395,34 @@ def _safe_ontap_name(value: str) -> str:
     return text if re.fullmatch(r"[A-Za-z0-9_.-]+", text) else ""
 
 
+def _clean_string_list(values: Any) -> list[str]:
+    if isinstance(values, str):
+        return _lines(values)
+    if not isinstance(values, list | tuple):
+        return []
+    cleaned: list[str] = []
+    for item in values:
+        if isinstance(item, dict):
+            text = str(item.get("name") or "").strip()
+        else:
+            text = str(item or "").strip()
+        if text and text not in cleaned:
+            cleaned.append(text)
+    return cleaned
+
+
+def _live_node_names_from_discovery(discovery: dict[str, Any]) -> list[str]:
+    node_names = _clean_string_list(discovery.get("node_names") or discovery.get("nodes") or [])
+    if node_names:
+        return sorted(node_names)
+    return sorted(_clean_string_list(discovery.get("node_details") or []))
+
+
+def _is_placeholder_node_targets(targets: list[str]) -> bool:
+    normalized = [str(item or "").strip().lower().replace("_", "-") for item in targets if str(item or "").strip()]
+    return normalized in (["node-a", "node-b"], ["node-1", "node-2"], ["node01", "node02"])
+
+
 def _cluster_mgmt_patch_plan(discovery: dict[str, Any], desired_ip: str, netmask: str) -> dict[str, Any]:
     lif = dict(discovery.get("discovered_cluster_mgmt_lif") or {})
     if not lif:
@@ -436,8 +464,19 @@ def _sync_discovered_values(cfg: dict[str, Any], discovery: dict[str, Any]) -> l
         notes.append(f"ONTAP API target set to {cluster_mgmt_ip}.")
 
     node_mgmt_ips = dict(discovery.get("discovered_node_mgmt_ips") or {})
-    node_names = list(discovery.get("node_names") or discovery.get("nodes") or [])
+    node_names = _live_node_names_from_discovery(discovery)
     if node_names:
+        current_required = _clean_string_list(desired.get("required_nodes") or [])
+        if current_required != node_names:
+            desired["required_nodes"] = node_names
+            notes.append(f"Required nodes set to live ONTAP nodes: {', '.join(node_names)}.")
+        netapp_cfg["nodes"] = node_names
+        netapp_cfg["last_discovered_node_names"] = node_names
+        current_reset_targets = _clean_string_list(netapp_cfg.get("factory_reset_targets") or [])
+        if current_reset_targets != node_names:
+            netapp_cfg["factory_reset_targets"] = node_names
+            if current_required == node_names:
+                notes.append(f"Factory reset targets set to live ONTAP nodes: {', '.join(node_names)}.")
         if len(node_names) >= 1:
             node_01_ip = str(node_mgmt_ips.get(str(node_names[0])) or "").strip()
             if node_01_ip:
@@ -1209,6 +1248,7 @@ async def netapp_read_current_config(request: Request):
     _cache_discovery_summary(cfg, discovery)
     _store_live_read(cfg, discovery)
     _store_current_config_read(cfg, discovery)
+    sync_notes = _sync_discovered_values(cfg, discovery)
     cfg.setdefault("netapp", {})["last_current_config_result"] = {
         "status": "read",
         "message": "Current NetApp config was read from ONTAP.",
@@ -1221,6 +1261,8 @@ async def netapp_read_current_config(request: Request):
     payload = service._response(context, "read_current_config")
     payload["discovery"] = discovery
     payload["warnings"] = list(discovery.get("warnings") or [])
+    payload.setdefault("suggestions", [])
+    payload["suggestions"] = list(sync_notes) + list(payload.get("suggestions") or [])
     feedback = main.build_action_feedback(
         "Current NetApp config read complete",
         f"Cluster: {discovery.get('cluster_name') or 'unknown'}",
@@ -1229,7 +1271,8 @@ async def netapp_read_current_config(request: Request):
             f"Protocols: {', '.join(list(discovery.get('enabled_protocols') or [])) or 'unknown'}",
             f"Cluster mgmt: {discovery.get('discovered_cluster_mgmt_ip') or 'unknown'}",
             f"Volumes: {len(list(discovery.get('volume_details') or []))}",
-        ],
+        ]
+        + sync_notes[:3],
     )
     return _render_netapp_page(request, context, payload, action_feedback=feedback)
 
@@ -1259,8 +1302,13 @@ async def netapp_discover_page(
     if payload.get("ok") and payload.get("discovery"):
         _cache_discovery_summary(cfg, payload["discovery"])
         _store_live_read(cfg, payload["discovery"])
+        sync_notes = _sync_discovered_values(cfg, payload["discovery"])
         main.save_kit_config(cfg)
         context = _module_context(request)
+        payload.setdefault("suggestions", [])
+        payload["suggestions"] = list(sync_notes) + list(payload.get("suggestions") or [])
+    else:
+        sync_notes = []
     discovery_result = payload.get("discovery") or {}
     feedback = main.build_action_feedback(
         "Current ONTAP read complete" if payload.get("ok") and discovery_result else "Current ONTAP read failed",
@@ -1269,7 +1317,8 @@ async def netapp_discover_page(
         outcomes=[
             f"Cluster: {discovery_result.get('cluster_name') or 'unknown'}",
             f"ONTAP: {discovery_result.get('ontap_version') or 'unknown'}",
-        ],
+        ]
+        + sync_notes[:3],
         details=([str(payload.get("error"))] if payload.get("error") else []),
     )
     return _render_netapp_page(request, context, payload, action_feedback=feedback)
@@ -1809,7 +1858,17 @@ async def netapp_factory_reset(request: Request, netapp_factory_reset_confirmati
     mode = str(form.get("netapp_factory_reset_mode") or form.get("netapp_factory_reset_mode_select") or "preflight").strip()
     if mode not in {"preflight", "live_console"}:
         mode = "preflight"
-    targets = _lines(str(form.get("netapp_factory_reset_targets") or ""))
+    saved_targets = _clean_string_list(netapp_cfg.get("factory_reset_targets") or [])
+    desired_targets = _clean_string_list((netapp_cfg.get("desired") or {}).get("required_nodes") or [])
+    cached_targets = _live_node_names_from_discovery(netapp_cfg.get("last_current_config") or {})
+    discovered_targets = desired_targets or cached_targets
+    live_targets = saved_targets if saved_targets and not _is_placeholder_node_targets(saved_targets) else (discovered_targets or saved_targets)
+    posted_targets = _lines(str(form.get("netapp_factory_reset_targets") or ""))
+    targets = posted_targets or live_targets
+    if live_targets and _is_placeholder_node_targets(targets):
+        targets = live_targets
+    if targets:
+        netapp_cfg["factory_reset_targets"] = targets
     planned_steps = _netapp_factory_reset_steps(targets)
     console_port = str(netapp_cfg.get("console_port") or "").strip()
     console_baud = str(netapp_cfg.get("console_baud") or "115200").strip() or "115200"

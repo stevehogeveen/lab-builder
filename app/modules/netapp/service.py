@@ -194,6 +194,14 @@ class NetAppModuleService:
             },
         }
         merged.update(desired if isinstance(desired, dict) else {})
+        cached_discovery = cfg.get("last_current_config") if isinstance(cfg.get("last_current_config"), dict) else {}
+        cached_nodes = [
+            str(item.get("name") if isinstance(item, dict) else item).strip()
+            for item in list((cached_discovery or {}).get("node_names") or (cached_discovery or {}).get("nodes") or [])
+            if str(item.get("name") if isinstance(item, dict) else item).strip()
+        ]
+        if cached_nodes and (not desired.get("required_nodes") or merged.get("required_nodes") == [f"{kit_name}-01", f"{kit_name}-02"]):
+            merged["required_nodes"] = sorted(cached_nodes)
         if not isinstance(merged.get("iscsi"), dict):
             merged["iscsi"] = {}
         if not isinstance(merged.get("nfs"), dict):

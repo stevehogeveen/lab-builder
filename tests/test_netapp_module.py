@@ -404,6 +404,46 @@ def test_netapp_factory_reset_requires_exact_confirmation(client, monkeypatch):
     assert "No wipeconfig" in " ".join(result["attempted"])
 
 
+def test_netapp_factory_reset_replaces_placeholder_targets_with_live_nodes(client, monkeypatch):
+    import app.modules.netapp.routes as netapp_routes
+
+    monkeypatch.setattr(
+        netapp_routes,
+        "_probe_netapp_reset_console",
+        lambda port, baud: {
+            "ok": True,
+            "port": port,
+            "baud": baud,
+            "sent": ["newline only"],
+            "output_excerpt": "X23::>",
+            "error": "",
+            "checked_at": "2026-05-27T00:00:00+00:00",
+        },
+    )
+    cfg = main.load_kit_config()
+    cfg["netapp"]["console_port"] = "/dev/ttyUSB0"
+    cfg["netapp"]["console_baud"] = "115200"
+    cfg["netapp"]["desired"]["required_nodes"] = ["X23-01", "X23-02"]
+    cfg["netapp"]["factory_reset_targets"] = ["node-a", "node-b"]
+    main.save_kit_config(cfg)
+
+    response = client.post(
+        "/modules/netapp/factory-reset",
+        data={
+            "netapp_factory_reset_confirmation": "FACTORY RESET",
+            "netapp_factory_reset_mode": "preflight",
+            "netapp_factory_reset_targets": "node-a\nnode-b",
+        },
+    )
+
+    assert response.status_code == 200
+    cfg = main.load_kit_config()
+    result = cfg["netapp"]["last_factory_reset"]
+    assert result["targets"] == ["X23-01", "X23-02"]
+    assert cfg["netapp"]["factory_reset_targets"] == ["X23-01", "X23-02"]
+    assert "node-a" not in response.text
+
+
 def test_netapp_cluster_mgmt_ip_preview_and_apply_are_guarded(client, monkeypatch):
     import app.modules.netapp.routes as netapp_routes
 
@@ -500,6 +540,8 @@ def test_netapp_read_current_config_route_caches_summary(client, monkeypatch):
                 "source": "Live read",
                 "read_at": "2026-05-27T00:00:00+00:00",
                 "source_host": "10.10.8.45",
+                "node_names": ["X20-01", "X20-02"],
+                "nodes": ["X20-01", "X20-02"],
                 "enabled_protocols": ["nfs", "fc"],
                 "discovered_cluster_mgmt_ip": "10.10.8.45",
                 "discovered_cluster_mgmt_lif": {"name": "cluster_mgmt", "uuid": "lif-1", "address": "10.10.8.45", "netmask": "255.255.255.0"},
@@ -537,6 +579,8 @@ def test_netapp_read_current_config_route_caches_summary(client, monkeypatch):
     cfg = main.load_kit_config()
     assert cfg["netapp"]["last_live_read"]["source"] == "Live read"
     assert cfg["netapp"]["last_current_config"]["enabled_protocols"] == ["nfs", "fc"]
+    assert cfg["netapp"]["desired"]["required_nodes"] == ["X20-01", "X20-02"]
+    assert cfg["netapp"]["factory_reset_targets"] == ["X20-01", "X20-02"]
     assert "raw" not in cfg["netapp"]["last_current_config"]
 
 

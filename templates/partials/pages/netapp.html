@@ -12,6 +12,7 @@
     {% set disk_inventory = discovery.get('disk_inventory', []) %}
     {% set lif_details = discovery.get('lif_details', []) %}
     {% set volume_details = discovery.get('volume_details', []) %}
+    {% set discovered_node_names = discovery.get('node_names') or discovery.get('nodes') or [] %}
     {% set export_policy_details = discovery.get('export_policy_details', []) %}
     {% set igroup_details = discovery.get('igroup_details', []) %}
     {% set portset_details = discovery.get('portset_details', []) %}
@@ -36,7 +37,7 @@
     {% set console_ip_commands = console_ip_setup.get('commands') or [] %}
     {% set factory_reset_result = payload.get('factory_reset', netapp_cfg.get('last_factory_reset', {})) %}
     {% set factory_reset_mode = factory_reset_result.get('mode', 'preflight') %}
-    {% set factory_reset_targets = factory_reset_result.get('targets') or desired.get('required_nodes') or [] %}
+    {% set factory_reset_targets = netapp_cfg.get('factory_reset_targets') or desired.get('required_nodes') or discovered_node_names or factory_reset_result.get('targets') or [] %}
     {% set factory_reset_probe = factory_reset_result.get('console_probe', {}) %}
     {% set factory_reset_steps = factory_reset_result.get('planned_steps') or [] %}
     {% set ip_setup_apply = payload.get('ip_setup_apply', netapp_cfg.get('last_ip_setup_apply', {})) %}
@@ -466,7 +467,7 @@
                     <div class="netapp-grid">
                         <div class="netapp-field"><label>Cluster name</label><input class="input" name="cluster_name" value="{{ desired.get('cluster_name', planned_cluster_name) }}"></div>
                         <div class="netapp-field"><label>SVM name</label><input class="input" name="svm_name" value="{{ desired.get('svm_name', '') }}"></div>
-                        <div class="netapp-field"><label>Required nodes</label><textarea class="input" name="required_nodes" rows="3">{{ (desired.get('required_nodes') or []) | join('\n') }}</textarea></div>
+                        <div class="netapp-field"><label>Required nodes</label><textarea class="input" name="required_nodes" rows="3">{{ (desired.get('required_nodes') or discovered_node_names or []) | join('\n') }}</textarea></div>
                         <div class="netapp-field"><label>Expected ports</label><textarea class="input" name="expected_ports" rows="3">{{ (desired.get('expected_ports') or []) | join('\n') }}</textarea></div>
                     </div>
                 </section>
@@ -691,7 +692,7 @@
                     </div>
                     <div class="netapp-field netapp-long-field">
                         <label>Controller targets</label>
-                        <textarea class="input" name="netapp_factory_reset_targets" rows="3" placeholder="node-a&#10;node-b">{{ factory_reset_targets | join('\n') }}</textarea>
+                        <textarea class="input" name="netapp_factory_reset_targets" rows="3" placeholder="X23-01&#10;X23-02">{{ factory_reset_targets | join('\n') }}</textarea>
                     </div>
                 </div>
                 <div class="netapp-facts">
