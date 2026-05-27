@@ -680,7 +680,7 @@ class NetAppModuleService:
         field, ports = target_map.get(target, ("", []))
         host = str(info.get(field) or "").strip()
         result = self._probe_host(host, ports)
-        payload["bootstrap_test"] = {"target": target, **result}
+        payload["bootstrap_test"] = {"target": target, "checked_at": datetime.now(timezone.utc).isoformat(), **result}
         if not result.get("reachable"):
             payload["ok"] = False
             payload["warnings"] = [f"{target.replace('_', ' ').title()} did not respond on tested ports."]

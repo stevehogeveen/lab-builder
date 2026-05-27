@@ -23,8 +23,8 @@
     {% set connection_test = payload.get('connection_test', {}) %}
     {% set last_api_check = connection_test or netapp_cfg.get('last_api_check', {}) %}
     {% set bootstrap_checks = bootstrap.get('bootstrap_checks', netapp_cfg.get('bootstrap_checks', {})) %}
-    {% set console_ports = payload.get('console_ports', netapp_cfg.get('console_ports', {})) %}
-    {% set console_candidates = console_ports.get('candidates', []) %}
+    {% set console_ports = payload.get('console_ports') or netapp_cfg.get('last_console_probe_results') or netapp_cfg.get('console_ports', {}) %}
+    {% set console_candidates = console_ports.get('candidates') or netapp_cfg.get('last_console_candidates') or [] %}
     {% set factory_reset_result = payload.get('factory_reset', netapp_cfg.get('last_factory_reset', {})) %}
     {% set ip_setup_apply = payload.get('ip_setup_apply', netapp_cfg.get('last_ip_setup_apply', {})) %}
     {% set adaptive = plan.get('adaptive_discovery', {}) %}
@@ -47,12 +47,14 @@
     {% set cached_ontap_version = netapp_cfg.get('last_discovered_ontap_version') or '' %}
     {% set cached_cluster_name = netapp_cfg.get('last_discovered_cluster_name') or '' %}
     {% set cached_read_at = netapp_cfg.get('last_discovered_at') or cfg.get('upgrade_inventory', {}).get('netapp', {}).get('last_checked_at') or '' %}
+    {% set last_live_read = netapp_cfg.get('last_live_read', {}) %}
     {% set live_ontap_version = discovery.get('ontap_version') or connection_test.get('ontap_version') or '' %}
-    {% set display_ontap_version = live_ontap_version or cached_ontap_version or '' %}
-    {% set display_cluster_name = discovered_cluster_name or connection_test.get('cluster_name') or cached_cluster_name or '' %}
+    {% set display_ontap_version = live_ontap_version or last_live_read.get('ontap_version') or cached_ontap_version or '' %}
+    {% set display_cluster_name = discovered_cluster_name or connection_test.get('cluster_name') or last_live_read.get('cluster_name') or cached_cluster_name or '' %}
     {% set has_live_read = ((discovery.get('source') == 'Live read') and (discovery.get('ontap_version') or discovered_cluster_name)) or ((connection_test.get('source') == 'Live read') and (connection_test.get('ontap_version') or connection_test.get('cluster_name'))) %}
-    {% set read_source_label = 'Live read' if has_live_read else ('Last cached read' if cached_ontap_version or cached_cluster_name else 'Unknown') %}
-    {% set read_time_label = discovery.get('read_at') or connection_test.get('read_at') or (cached_read_at if read_source_label == 'Last cached read' else '') %}
+    {% set has_cached_read = last_live_read.get('ontap_version') or last_live_read.get('cluster_name') or cached_ontap_version or cached_cluster_name %}
+    {% set read_source_label = 'Live read' if has_live_read else ('Last cached read' if has_cached_read else 'Unknown') %}
+    {% set read_time_label = discovery.get('read_at') or connection_test.get('read_at') or (last_live_read.get('read_at') if read_source_label == 'Last cached read' else '') or (cached_read_at if read_source_label == 'Last cached read' else '') %}
     {% set discovered_cluster_mgmt_ip = discovery.get('discovered_cluster_mgmt_ip') or '' %}
     {% set discovered_node_mgmt_ips = discovery.get('discovered_node_mgmt_ip_list', []) %}
     {% set discovered_node_mgmt_map = discovery.get('discovered_node_mgmt_ips', {}) %}
@@ -62,7 +64,10 @@
     {% set cluster_mgmt_mismatch = planned_cluster_mgmt_ip and discovered_cluster_mgmt_ip and planned_cluster_mgmt_ip != discovered_cluster_mgmt_ip %}
     {% set node_mgmt_mismatch = (planned_node_01_mgmt_ip and discovered_node_mgmt_map and discovered_node_mgmt_ips and planned_node_01_mgmt_ip not in discovered_node_mgmt_ips) or (planned_node_02_mgmt_ip and discovered_node_mgmt_map and discovered_node_mgmt_ips and planned_node_02_mgmt_ip not in discovered_node_mgmt_ips) %}
     {% set active_protocols = discovery.get('enabled_protocols', []) %}
+    {% set api_has_result = connection_test or last_api_check or has_snapshot %}
     {% set api_reachable = connection_test.get('api_auth_ok') or last_api_check.get('api_auth_ok') or has_snapshot %}
+    {% set api_status_label = 'Yes' if api_reachable else ('No' if api_has_result else 'Unknown') %}
+    {% set api_status_tone = 'ready' if api_reachable else ('danger' if api_has_result else 'pending') %}
     {% set console_port = netapp_cfg.get('console_port') or '' %}
     {% set console_baud = netapp_cfg.get('console_baud') or 9600 %}
     {% set review_needed = warnings or bootstrap_warnings or cluster_name_mismatch or cluster_mgmt_mismatch or node_mgmt_mismatch or factory_reset_result.get('status') in ['refused', 'not_implemented'] or ip_setup_apply.get('status') == 'blocked' %}
@@ -104,6 +109,7 @@
         .netapp-step-title { font-size: 1rem; font-weight: 800; line-height: 1.2; }
         .netapp-step-copy { color: var(--muted); font-size: .82rem; line-height: 1.35; }
         .netapp-facts { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: .45rem; }
+        .netapp-access-facts { grid-template-columns: repeat(2, minmax(0, 1fr)); }
         .netapp-fact {
             min-width: 0;
             padding: .55rem .65rem;
@@ -122,13 +128,25 @@
         .netapp-fact strong {
             display: block;
             margin-top: .2rem;
-            overflow: hidden;
             color: var(--text);
             font-size: .9rem;
-            text-overflow: ellipsis;
-            white-space: nowrap;
+            overflow-wrap: anywhere;
+            white-space: normal;
         }
+        .netapp-fact-wide { grid-column: span 2; }
         .netapp-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: .85rem; }
+        .netapp-grid-tight { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: .85rem; }
+        .netapp-setup-sections { display: grid; gap: 1rem; }
+        .netapp-form-section {
+            display: grid;
+            gap: .8rem;
+            padding: .9rem;
+            border: 1px solid color-mix(in srgb, var(--border) 78%, transparent);
+            border-radius: 1rem;
+            background: color-mix(in srgb, var(--panel) 58%, transparent);
+        }
+        .netapp-section-title { font-size: .92rem; font-weight: 800; color: var(--text); }
+        .netapp-section-copy { color: var(--muted); font-size: .8rem; line-height: 1.35; }
         .netapp-field label {
             display: flex;
             justify-content: space-between;
@@ -140,6 +158,23 @@
             letter-spacing: .07em;
             text-transform: uppercase;
         }
+        .netapp-field .input,
+        .netapp-field select,
+        .netapp-field textarea {
+            min-width: 0;
+            width: 100%;
+        }
+        .netapp-field textarea {
+            resize: vertical;
+        }
+        .netapp-badge-label {
+            display: flex;
+            justify-content: space-between;
+            gap: .5rem;
+            align-items: flex-start;
+        }
+        .netapp-long-field { grid-column: span 2; }
+        .netapp-full-field { grid-column: 1 / -1; }
         .netapp-actions { display: flex; flex-wrap: wrap; gap: .55rem; }
         .netapp-actions .btn { min-height: 2.45rem; padding: .58rem .78rem; font-size: .86rem; }
         .netapp-action-feedback { max-width: 38rem; color: var(--muted); font-size: .82rem; line-height: 1.35; }
@@ -155,10 +190,15 @@
         @container (max-width: 1180px) {
             .netapp-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
         }
+        @container (max-width: 900px) {
+            .netapp-fact-wide,
+            .netapp-long-field { grid-column: 1 / -1; }
+        }
         @container (max-width: 720px) {
             .netapp-hero,
             .netapp-two-col,
             .netapp-grid,
+            .netapp-grid-tight,
             .netapp-facts { grid-template-columns: 1fr; }
         }
     </style>
@@ -186,25 +226,29 @@
                 <div class="netapp-facts">
                     <div class="netapp-fact"><span>Console port</span><strong>{{ console_port or 'not selected' }}</strong></div>
                     <div class="netapp-fact"><span>Baud</span><strong>{{ console_baud }}</strong></div>
+                    <div class="netapp-fact netapp-fact-wide"><span>Candidates found</span><strong>{{ console_candidates | length }}{% if console_ports.get('checked_at') %} checked {{ console_ports.get('checked_at') }}{% endif %}</strong></div>
                 </div>
-                <div class="netapp-grid" style="grid-template-columns: minmax(0, 1fr) 9rem;">
+                <div class="netapp-grid-tight">
                     <div class="netapp-field">
                         <label>Console port</label>
-                        <select name="netapp_console_port" class="input">
-                            {% if not console_port %}<option value="">Select after check</option>{% endif %}
+                        <select name="netapp_console_port_quick" class="input">
+                            <option value="">Select after check</option>
+                            {% if console_port %}<option value="{{ console_port }}" selected>{{ console_port }} (saved)</option>{% endif %}
                             {% for port in console_candidates %}
+                            {% if port.get('path') != console_port %}
                             <option value="{{ port.get('path') }}" {% if port.get('path') == console_port %}selected{% endif %}>{{ port.get('path') }}</option>
+                            {% endif %}
                             {% endfor %}
-                            {% if console_port and not console_candidates %}<option value="{{ console_port }}" selected>{{ console_port }}</option>{% endif %}
                         </select>
                     </div>
                     <div class="netapp-field">
                         <label>Baud</label>
-                        <input class="input" name="netapp_console_baud" value="{{ console_baud }}">
+                        <input class="input" name="netapp_console_baud_quick" value="{{ console_baud }}">
                     </div>
                 </div>
                 <div class="netapp-actions">
                     <button class="btn" formaction="/modules/netapp/discover-console" formmethod="post" type="submit">Check console ports</button>
+                    <button class="btn btn-primary" formaction="/modules/netapp/save-console" formmethod="post" type="submit">Save selected console</button>
                 </div>
                 {% if action_feedback and 'console' in feedback_title %}{{ netapp_inline_feedback(action_feedback) }}{% endif %}
             </article>
@@ -212,16 +256,16 @@
             <article class="netapp-step">
                 <div class="netapp-step-header">
                     <div class="netapp-step-title">Current NetApp access</div>
-                    <span class="status {{ 'ready' if api_reachable else 'pending' }}">{{ 'Reachable' if api_reachable else 'Check needed' }}</span>
+                    <span class="status {{ api_status_tone }}">{{ 'Reachable' if api_reachable else ('Not reachable' if api_has_result else 'Unknown') }}</span>
                 </div>
                 <div class="netapp-step-copy">Tell us whether ONTAP API is reachable after IPs are configured.</div>
-                <div class="netapp-facts">
+                <div class="netapp-facts netapp-access-facts">
                     <div class="netapp-fact"><span>Cluster management IP</span><strong>{{ netapp_cfg.get('host') or planned_cluster_mgmt_ip or 'not set' }}</strong></div>
-                    <div class="netapp-fact"><span>API reachable</span><strong>{{ 'yes' if api_reachable else 'no' }}</strong></div>
-                    <div class="netapp-fact"><span>ONTAP version</span><strong>{{ display_ontap_version or 'unknown' }}</strong></div>
+                    <div class="netapp-fact"><span>API reachable</span><strong>{{ api_status_label }}</strong></div>
+                    <div class="netapp-fact netapp-fact-wide"><span>ONTAP version</span><strong>{{ display_ontap_version or 'unknown' }}</strong></div>
                     <div class="netapp-fact"><span>Cluster name</span><strong>{{ display_cluster_name or 'unknown' }}</strong></div>
-                    <div class="netapp-fact"><span>Version source</span><strong>{{ read_source_label }}</strong></div>
-                    <div class="netapp-fact"><span>Time read</span><strong>{{ read_time_label or 'not recorded' }}</strong></div>
+                    <div class="netapp-fact"><span>Read source</span><strong>{{ read_source_label }}</strong></div>
+                    <div class="netapp-fact netapp-fact-wide"><span>Time read</span><strong>{{ read_time_label or 'not recorded' }}</strong></div>
                 </div>
                 <div class="netapp-actions">
                     <button class="btn" formaction="/modules/netapp/test-connection" formmethod="post" type="submit">Test ONTAP API</button>
@@ -240,28 +284,78 @@
                 <span class="status {{ 'ready' if netapp_cfg.get('host') and netapp_cfg.get('username') else 'pending' }}">editable</span>
             </div>
 
-            <div class="netapp-grid">
-                <div class="netapp-field"><label>Cluster name</label><input class="input" name="cluster_name" value="{{ desired.get('cluster_name', planned_cluster_name) }}"></div>
-                <div class="netapp-field"><label>SVM name</label><input class="input" name="svm_name" value="{{ desired.get('svm_name', '') }}"></div>
-                <div class="netapp-field"><label>ONTAP username</label><input class="input" name="netapp_username" value="{{ netapp_cfg.get('username', 'admin') }}"></div>
-                <div class="netapp-field"><label>ONTAP/admin password</label><input class="input" type="password" name="netapp_password" value="" placeholder="{{ 'Saved - leave blank to keep' if netapp_cfg.get('password') else 'Enter password' }}"></div>
-                <div class="netapp-field"><label>Console port</label><input class="input" name="netapp_console_port" value="{{ console_port }}"></div>
-                <div class="netapp-field"><label>Baud</label><input class="input" name="netapp_console_baud" value="{{ console_baud }}"></div>
-                <div class="netapp-field"><label>Gateway</label><input class="input" name="management_gateway" value="{{ desired.get('management_gateway') or bootstrap.get('gateway') or cfg.get('ip_plan', {}).get('gateway', '') }}"></div>
-                <div class="netapp-field"><label>Netmask</label><input class="input" name="management_netmask" value="{{ desired.get('management_netmask') or bootstrap.get('netmask') or cfg.get('ip_plan', {}).get('netmask', '255.255.255.0') }}"></div>
-                {% set sp_a_check = bootstrap_checks.get('sp_a', {}) %}
-                <div class="netapp-field"><label><span>Controller A SP IP</span><span class="status {{ 'ready' if sp_a_check.get('reachable') else ('danger' if sp_a_check else 'pending') }}">{{ 'UP' if sp_a_check.get('reachable') else ('DOWN' if sp_a_check else 'NOT CHECKED') }}</span></label><input class="input" name="netapp_sp_a_ip" value="{{ bootstrap.get('sp_a_ip') or '' }}"></div>
-                {% set sp_b_check = bootstrap_checks.get('sp_b', {}) %}
-                <div class="netapp-field"><label><span>Controller B SP IP</span><span class="status {{ 'ready' if sp_b_check.get('reachable') else ('danger' if sp_b_check else 'pending') }}">{{ 'UP' if sp_b_check.get('reachable') else ('DOWN' if sp_b_check else 'NOT CHECKED') }}</span></label><input class="input" name="netapp_sp_b_ip" value="{{ bootstrap.get('sp_b_ip') or '' }}"></div>
-                {% set cluster_check = bootstrap_checks.get('cluster_mgmt', {}) %}
-                <div class="netapp-field"><label><span>Cluster management IP</span><span class="status {{ 'ready' if cluster_check.get('reachable') else ('danger' if cluster_check else 'pending') }}">{{ 'UP' if cluster_check.get('reachable') else ('DOWN' if cluster_check else 'NOT CHECKED') }}</span></label><input class="input" name="netapp_cluster_mgmt_ip" value="{{ bootstrap.get('cluster_mgmt_ip') or '' }}"></div>
-                {% set node_01_check = bootstrap_checks.get('node_01_mgmt', {}) %}
-                <div class="netapp-field"><label><span>Controller A management IP</span><span class="status {{ 'ready' if node_01_check.get('reachable') else ('danger' if node_01_check else 'pending') }}">{{ 'UP' if node_01_check.get('reachable') else ('DOWN' if node_01_check else 'NOT CHECKED') }}</span></label><input class="input" name="netapp_node_01_mgmt_ip" value="{{ bootstrap.get('node_01_mgmt_ip') or '' }}"></div>
-                {% set node_02_check = bootstrap_checks.get('node_02_mgmt', {}) %}
-                <div class="netapp-field"><label><span>Controller B management IP</span><span class="status {{ 'ready' if node_02_check.get('reachable') else ('danger' if node_02_check else 'pending') }}">{{ 'UP' if node_02_check.get('reachable') else ('DOWN' if node_02_check else 'NOT CHECKED') }}</span></label><input class="input" name="netapp_node_02_mgmt_ip" value="{{ bootstrap.get('node_02_mgmt_ip') or '' }}"></div>
-                {% set svm_check = bootstrap_checks.get('svm_mgmt', {}) %}
-                <div class="netapp-field"><label><span>SVM management IP</span><span class="status {{ 'ready' if svm_check.get('reachable') else ('danger' if svm_check else 'pending') }}">{{ 'UP' if svm_check.get('reachable') else ('DOWN' if svm_check else 'NOT CHECKED') }}</span></label><input class="input" name="netapp_svm_mgmt_ip" value="{{ bootstrap.get('svm_mgmt_ip') or '' }}"></div>
-                <div class="netapp-field"><label>NTP servers</label><textarea class="input" name="ntp_servers" rows="3">{{ (desired.get('ntp_servers') or []) | join('\n') }}</textarea></div>
+            <div class="netapp-setup-sections">
+                <section class="netapp-form-section">
+                    <div>
+                        <div class="netapp-section-title">Identity</div>
+                        <div class="netapp-section-copy">Names used for initial setup and later validation.</div>
+                    </div>
+                    <div class="netapp-grid">
+                        <div class="netapp-field"><label>Cluster name</label><input class="input" name="cluster_name" value="{{ desired.get('cluster_name', planned_cluster_name) }}"></div>
+                        <div class="netapp-field"><label>SVM name</label><input class="input" name="svm_name" value="{{ desired.get('svm_name', '') }}"></div>
+                        <div class="netapp-field"><label>Required nodes</label><textarea class="input" name="required_nodes" rows="3">{{ (desired.get('required_nodes') or []) | join('\n') }}</textarea></div>
+                        <div class="netapp-field"><label>Expected ports</label><textarea class="input" name="expected_ports" rows="3">{{ (desired.get('expected_ports') or []) | join('\n') }}</textarea></div>
+                    </div>
+                </section>
+
+                <section class="netapp-form-section">
+                    <div>
+                        <div class="netapp-section-title">Credentials</div>
+                        <div class="netapp-section-copy">Credentials are saved only when you type a password.</div>
+                    </div>
+                    <div class="netapp-grid">
+                        <div class="netapp-field"><label>ONTAP username</label><input class="input" name="netapp_username" value="{{ netapp_cfg.get('username', 'admin') }}"></div>
+                        <div class="netapp-field"><label>ONTAP/admin bootstrap password</label><input class="input" type="password" name="netapp_password" value="" placeholder="{{ 'Saved - leave blank to keep' if netapp_cfg.get('password') else 'Enter password' }}"></div>
+                        <div class="netapp-field"><label>Required users</label><textarea class="input" name="required_users" rows="3">{{ (desired.get('required_users') or []) | join('\n') }}</textarea></div>
+                    </div>
+                </section>
+
+                <section class="netapp-form-section">
+                    <div>
+                        <div class="netapp-section-title">Console</div>
+                        <div class="netapp-section-copy">Use this when ONTAP does not have a management IP yet.</div>
+                    </div>
+                    <div class="netapp-grid">
+                        <div class="netapp-field">
+                            <label>Console port</label>
+                            <select class="input" name="netapp_console_port">
+                                <option value="">Select or check ports</option>
+                                {% if console_port %}<option value="{{ console_port }}" selected>{{ console_port }} (saved)</option>{% endif %}
+                                {% for port in console_candidates %}
+                                {% if port.get('path') != console_port %}
+                                <option value="{{ port.get('path') }}">{{ port.get('path') }}</option>
+                                {% endif %}
+                                {% endfor %}
+                            </select>
+                        </div>
+                        <div class="netapp-field"><label>Baud</label><input class="input" name="netapp_console_baud" value="{{ console_baud }}"></div>
+                    </div>
+                </section>
+
+                <section class="netapp-form-section">
+                    <div>
+                        <div class="netapp-section-title">IP setup</div>
+                        <div class="netapp-section-copy">Ping all checks these addresses and shows status beside each one.</div>
+                    </div>
+                    <div class="netapp-grid">
+                        <div class="netapp-field"><label>Gateway</label><input class="input" name="management_gateway" value="{{ desired.get('management_gateway') or bootstrap.get('gateway') or cfg.get('ip_plan', {}).get('gateway', '') }}"></div>
+                        <div class="netapp-field"><label>Netmask/subnet mask</label><input class="input" name="management_netmask" value="{{ desired.get('management_netmask') or bootstrap.get('netmask') or cfg.get('ip_plan', {}).get('netmask', '255.255.255.0') }}"></div>
+                        <div class="netapp-field"><label>Management subnet</label><input class="input" name="management_subnet" value="{{ desired.get('management_subnet') or bootstrap.get('subnet') or cfg.get('ip_plan', {}).get('subnet', '') }}"></div>
+                        <div class="netapp-field"><label>NTP servers</label><textarea class="input" name="ntp_servers" rows="3">{{ (desired.get('ntp_servers') or []) | join('\n') }}</textarea></div>
+                        {% set sp_a_check = bootstrap_checks.get('sp_a', {}) %}
+                        <div class="netapp-field"><label class="netapp-badge-label"><span>Controller A SP IP</span><span class="status {{ 'ready' if sp_a_check.get('reachable') else ('danger' if sp_a_check else 'pending') }}">{{ 'UP' if sp_a_check.get('reachable') else ('DOWN' if sp_a_check else 'NOT CHECKED') }}</span></label><input class="input" name="netapp_sp_a_ip" value="{{ bootstrap.get('sp_a_ip') or '' }}"></div>
+                        {% set sp_b_check = bootstrap_checks.get('sp_b', {}) %}
+                        <div class="netapp-field"><label class="netapp-badge-label"><span>Controller B SP IP</span><span class="status {{ 'ready' if sp_b_check.get('reachable') else ('danger' if sp_b_check else 'pending') }}">{{ 'UP' if sp_b_check.get('reachable') else ('DOWN' if sp_b_check else 'NOT CHECKED') }}</span></label><input class="input" name="netapp_sp_b_ip" value="{{ bootstrap.get('sp_b_ip') or '' }}"></div>
+                        {% set cluster_check = bootstrap_checks.get('cluster_mgmt', {}) %}
+                        <div class="netapp-field"><label class="netapp-badge-label"><span>Cluster management IP</span><span class="status {{ 'ready' if cluster_check.get('reachable') else ('danger' if cluster_check else 'pending') }}">{{ 'UP' if cluster_check.get('reachable') else ('DOWN' if cluster_check else 'NOT CHECKED') }}</span></label><input class="input" name="netapp_cluster_mgmt_ip" value="{{ bootstrap.get('cluster_mgmt_ip') or '' }}"></div>
+                        {% set node_01_check = bootstrap_checks.get('node_01_mgmt', {}) %}
+                        <div class="netapp-field"><label class="netapp-badge-label"><span>Controller A management IP</span><span class="status {{ 'ready' if node_01_check.get('reachable') else ('danger' if node_01_check else 'pending') }}">{{ 'UP' if node_01_check.get('reachable') else ('DOWN' if node_01_check else 'NOT CHECKED') }}</span></label><input class="input" name="netapp_node_01_mgmt_ip" value="{{ bootstrap.get('node_01_mgmt_ip') or '' }}"></div>
+                        {% set node_02_check = bootstrap_checks.get('node_02_mgmt', {}) %}
+                        <div class="netapp-field"><label class="netapp-badge-label"><span>Controller B management IP</span><span class="status {{ 'ready' if node_02_check.get('reachable') else ('danger' if node_02_check else 'pending') }}">{{ 'UP' if node_02_check.get('reachable') else ('DOWN' if node_02_check else 'NOT CHECKED') }}</span></label><input class="input" name="netapp_node_02_mgmt_ip" value="{{ bootstrap.get('node_02_mgmt_ip') or '' }}"></div>
+                        {% set svm_check = bootstrap_checks.get('svm_mgmt', {}) %}
+                        <div class="netapp-field"><label class="netapp-badge-label"><span>SVM management IP</span><span class="status {{ 'ready' if svm_check.get('reachable') else ('danger' if svm_check else 'pending') }}">{{ 'UP' if svm_check.get('reachable') else ('DOWN' if svm_check else 'NOT CHECKED') }}</span></label><input class="input" name="netapp_svm_mgmt_ip" value="{{ bootstrap.get('svm_mgmt_ip') or '' }}"></div>
+                    </div>
+                </section>
             </div>
 
             <div class="netapp-actions mt-4">
@@ -270,7 +364,30 @@
                 <button class="btn" formaction="/modules/netapp/apply-ip-setup" formmethod="post" type="submit">Apply IP setup</button>
                 <button class="btn" formaction="/modules/netapp/discover-page" formmethod="post" type="submit">Read current ONTAP</button>
             </div>
-            {% if action_feedback and ('saved' in feedback_title or 'ip setup' in feedback_title) %}{{ netapp_inline_feedback(action_feedback) }}{% endif %}
+            {% if action_feedback and ('saved' in feedback_title or 'ip setup' in feedback_title or 'ping' in feedback_title) %}{{ netapp_inline_feedback(action_feedback) }}{% endif %}
+
+            <details class="card card-compact mt-4">
+                <summary class="summary-row"><span class="font-semibold">Advanced setup values</span><span class="status progress">optional</span></summary>
+                <div class="space-y-4 mt-4">
+                    <div class="netapp-grid">
+                        <div class="netapp-field"><label>Data broadcast domain</label><input class="input" name="data_broadcast_domain" value="{{ desired.get('data_broadcast_domain', 'Data') }}"></div>
+                        <div class="netapp-field"><label>Target MTU</label><input class="input" name="target_mtu" value="{{ desired.get('target_mtu', 9000) }}"></div>
+                        <div class="netapp-field"><label>Aggregate node 1</label><input class="input" name="aggregate_node_01" value="{{ desired.get('aggregate_node_01', 'aggr_01') }}"></div>
+                        <div class="netapp-field"><label>Aggregate node 2</label><input class="input" name="aggregate_node_02" value="{{ desired.get('aggregate_node_02', 'aggr_02') }}"></div>
+                        <div class="netapp-field"><label>Aggregate disk count</label><input class="input" name="aggregate_diskcount" value="{{ desired.get('aggregate_diskcount', 11) }}"></div>
+                        <div class="netapp-field"><label>Aggregate RAID type</label><input class="input" name="aggregate_raidtype" value="{{ desired.get('aggregate_raidtype', 'raid_dp') }}"></div>
+                        <div class="netapp-field"><label>SVM mgmt LIF</label><input class="input" name="svm_mgmt_lif" value="{{ desired.get('svm_mgmt_lif', '') }}"></div>
+                        <div class="netapp-field"><label>AutoSupport from</label><input class="input" name="autosupport_from" value="{{ desired.get('autosupport_from', '') }}"></div>
+                        <div class="netapp-field"><label>AutoSupport to</label><input class="input" name="autosupport_to" value="{{ desired.get('autosupport_to', '') }}"></div>
+                        <div class="netapp-field"><label>AutoSupport mail hosts</label><textarea class="input" name="autosupport_mail_hosts" rows="3">{{ (desired.get('autosupport_mail_hosts') or []) | join('\n') }}</textarea></div>
+                        <div class="netapp-field"><label>ESXi hosts</label><textarea class="input" name="esxi_hosts" rows="3">{{ (desired.get('esxi_hosts') or []) | join('\n') }}</textarea></div>
+                    </div>
+                    <div class="grid grid-cols-1 md:grid-cols-2 gap-3">
+                        <div class="netapp-field"><label>NFS command template</label><textarea class="input" name="netapp_nfs_commands" rows="7">{{ (netapp_cfg.get('command_templates') or {}).get('nfs', '') }}</textarea></div>
+                        <div class="netapp-field"><label>iSCSI command template</label><textarea class="input" name="netapp_iscsi_commands" rows="7">{{ (netapp_cfg.get('command_templates') or {}).get('iscsi', '') }}</textarea></div>
+                    </div>
+                </div>
+            </details>
 
             <details class="card card-compact mt-4">
                 <summary class="summary-row"><span class="font-semibold">Storage presentation</span><span class="status progress">{{ selected_protocol | upper }}</span></summary>
@@ -285,16 +402,26 @@
                         </div>
                         <div class="netapp-field"><label>SVM mgmt IP</label><input class="input" name="svm_mgmt_ip" value="{{ desired.get('svm_mgmt_ip', '') }}"></div>
                         <div class="netapp-field"><label>NFS volume</label><input class="input" name="nfs_volume" value="{{ nfs.get('volume', 'esxi_datastore_01') }}"></div>
+                        <div class="netapp-field"><label>NFS export policy</label><input class="input" name="nfs_export_policy" value="{{ nfs.get('export_policy', 'esxi_nfs_policy') }}"></div>
                         <div class="netapp-field"><label>NFS mount path</label><input class="input" name="nfs_mount_path" value="{{ nfs.get('mount_path', '/esxi_datastore_01') }}"></div>
+                        <div class="netapp-field"><label>iSCSI subnet</label><input class="input" name="iscsi_subnet" value="{{ iscsi.get('subnet', '192.168.1.0/24') }}"></div>
+                        <div class="netapp-field"><label>iSCSI subnet CIDR</label><input class="input" name="iscsi_subnet_cidr" value="{{ iscsi.get('subnet_cidr', '192.168.1.0/24') }}"></div>
+                        <div class="netapp-field"><label>iSCSI gateway</label><input class="input" name="iscsi_gateway" value="{{ iscsi.get('gateway', '192.168.1.1') }}"></div>
+                        <div class="netapp-field"><label>iSCSI IP range</label><input class="input" name="iscsi_ip_range" value="{{ iscsi.get('ip_range', '192.168.1.11-192.168.1.60') }}"></div>
+                        <div class="netapp-field"><label>iSCSI portset</label><input class="input" name="iscsi_portset" value="{{ iscsi.get('portset', 'iSCSI') }}"></div>
+                        <div class="netapp-field"><label>iSCSI igroup</label><input class="input" name="iscsi_igroup" value="{{ iscsi.get('igroup', '') }}"></div>
+                        <div class="netapp-field"><label>iSCSI LUN</label><input class="input" name="iscsi_lun" value="{{ iscsi.get('lun', 'esxi_lun01') }}"></div>
+                        <div class="netapp-field"><label>VMFS datastore</label><input class="input" name="iscsi_vmfs_datastore" value="{{ iscsi.get('vmfs_datastore', 'vmfs_ds01') }}"></div>
                     </div>
                     <div class="grid grid-cols-1 md:grid-cols-2 gap-3">
-                        <div class="netapp-field"><label>NFS/iSCSI LIFs</label><textarea class="input" name="nfs_lifs" rows="5" placeholder="name,ip,node,port">{% for lif in nfs.get('lifs', []) %}{{ lif.get('name', '') }},{{ lif.get('ip', '') }},{{ lif.get('node', '') }},{{ lif.get('port', '') }}{% if not loop.last %}
+                        <div class="netapp-field"><label>NFS LIFs</label><textarea class="input" name="nfs_lifs" rows="5" placeholder="name,ip,node,port">{% for lif in nfs.get('lifs', []) %}{{ lif.get('name', '') }},{{ lif.get('ip', '') }},{{ lif.get('node', '') }},{{ lif.get('port', '') }}{% if not loop.last %}
 {% endif %}{% endfor %}</textarea></div>
                         <div class="netapp-field"><label>iSCSI LIFs</label><textarea class="input" name="iscsi_lifs" rows="5" placeholder="name,ip,node,port">{% for lif in iscsi.get('lifs', []) %}{{ lif.get('name', '') }},{{ lif.get('ip', '') }},{{ lif.get('node', '') }},{{ lif.get('port', '') }}{% if not loop.last %}
 {% endif %}{% endfor %}</textarea></div>
                     </div>
                     <div class="grid grid-cols-1 md:grid-cols-2 gap-3">
-                        <div class="netapp-field"><label>ESXi mount targets / IQNs</label><textarea class="input" name="{{ 'nfs_esxi_mount_targets' if selected_protocol == 'nfs' else 'iscsi_iqns' }}" rows="5">{{ ((nfs.get('esxi_mount_targets') if selected_protocol == 'nfs' else iscsi.get('iqns')) or []) | join('\n') }}</textarea></div>
+                        <div class="netapp-field"><label>ESXi NFS mount targets</label><textarea class="input" name="nfs_esxi_mount_targets" rows="5">{{ (nfs.get('esxi_mount_targets') or []) | join('\n') }}</textarea></div>
+                        <div class="netapp-field"><label>ESXi iSCSI IQNs</label><textarea class="input" name="iscsi_iqns" rows="5">{{ (iscsi.get('iqns') or []) | join('\n') }}</textarea></div>
                         <div class="netapp-field"><label>iSCSI volumes</label><textarea class="input" name="iscsi_volumes" rows="5" placeholder="volume_name,lun_name,aggregate,lun_id,lun_size,description">{% for item in iscsi.get('volumes', []) %}{{ item.get('volume_name', '') }},{{ item.get('lun_name', '') }},{{ item.get('aggregate', '') }},{{ item.get('lun_id', '') }},{{ item.get('lun_size', '') }},{{ item.get('description', '') }}{% if not loop.last %}
 {% endif %}{% endfor %}</textarea></div>
                     </div>
@@ -394,8 +521,8 @@
                 <div class="ops-list">
                     {% for target, check in bootstrap_checks.items() %}
                     <div class="result" style="margin-top: 0;">
-                        <div class="font-semibold">{{ target | replace('_', ' ') | title }} | {{ 'UP' if check.get('reachable') else 'DOWN' }}</div>
-                        <div class="text-sm text-slate-400 mt-1">{{ check.get('host') or 'No host set' }}{% if check.get('ports') %} | Ports {{ check.get('ports') }}{% endif %}{% if check.get('error') %} | {{ check.get('error') }}{% endif %}</div>
+                        <div class="font-semibold">{{ check.get('label') or (target | replace('_', ' ') | title) }} | {{ 'UP' if check.get('reachable') else 'DOWN' }}</div>
+                        <div class="text-sm text-slate-400 mt-1">{{ check.get('ip') or check.get('host') or 'No host set' }}{% if check.get('checked_at') %} | {{ check.get('checked_at') }}{% endif %}{% if check.get('ports') %} | Ports {{ check.get('ports') }}{% endif %}{% if check.get('error') %} | {{ check.get('error') }}{% endif %}</div>
                     </div>
                     {% endfor %}
                 </div>

@@ -32,9 +32,9 @@ service = NetAppModuleService()
 BOOTSTRAP_CHECK_TARGETS = (
     "sp_a",
     "sp_b",
+    "cluster_mgmt",
     "node_01_mgmt",
     "node_02_mgmt",
-    "cluster_mgmt",
     "svm_mgmt",
 )
 BOOTSTRAP_CHECK_LABELS = {
