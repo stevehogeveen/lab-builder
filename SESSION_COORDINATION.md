@@ -41,7 +41,7 @@ Copy this block and update it in place.
 - Status: done
 - Branch: codex/netapp-cisco-style-setup
 - Scope owner: NetApp Cisco-style setup page, safe console/IP/API checks, and GitHub-pushed branch handoff
-- Working on: Completed NetApp setup workflow functionality fix after Cisco-style redesign.
+- Working on: Completed guarded NetApp factory reset readiness flow for live testing.
 - Blocked by: none
 - Ready to hand off: Branch can hand off after commit and push.
 - Files claimed:
@@ -77,6 +77,8 @@ Copy this block and update it in place.
   - 2026-05-27 10:45 EDT - Rebuilt NetApp page in Cisco-style setup layout, added read-only console discovery, all-IP ping, safe factory-reset refusal, and verified tests/render.
   - 2026-05-27 EDT - Reopened NetApp session to restore functional setup inputs, console selection persistence, ONTAP read visibility, and ping/factory reset results.
   - 2026-05-27 EDT - Restored functional NetApp setup inputs, verified console save persistence, ping-all results, tests, and app render.
+  - 2026-05-27 EDT - Reopened NetApp session to add guarded factory-reset live-test readiness flow.
+  - 2026-05-27 EDT - Added reset readiness check, live reset gate, saved result details, tests, and render verification.
 - Next intended change:
   - none
 

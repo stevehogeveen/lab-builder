@@ -26,6 +26,10 @@
     {% set console_ports = payload.get('console_ports') or netapp_cfg.get('last_console_probe_results') or netapp_cfg.get('console_ports', {}) %}
     {% set console_candidates = console_ports.get('candidates') or netapp_cfg.get('last_console_candidates') or [] %}
     {% set factory_reset_result = payload.get('factory_reset', netapp_cfg.get('last_factory_reset', {})) %}
+    {% set factory_reset_mode = factory_reset_result.get('mode', 'preflight') %}
+    {% set factory_reset_targets = factory_reset_result.get('targets') or desired.get('required_nodes') or [] %}
+    {% set factory_reset_probe = factory_reset_result.get('console_probe', {}) %}
+    {% set factory_reset_steps = factory_reset_result.get('planned_steps') or [] %}
     {% set ip_setup_apply = payload.get('ip_setup_apply', netapp_cfg.get('last_ip_setup_apply', {})) %}
     {% set adaptive = plan.get('adaptive_discovery', {}) %}
     {% set vmware_plan = plan.get('vmware_plan', {}) %}
@@ -70,7 +74,7 @@
     {% set api_status_tone = 'ready' if api_reachable else ('danger' if api_has_result else 'pending') %}
     {% set console_port = netapp_cfg.get('console_port') or '' %}
     {% set console_baud = netapp_cfg.get('console_baud') or 9600 %}
-    {% set review_needed = warnings or bootstrap_warnings or cluster_name_mismatch or cluster_mgmt_mismatch or node_mgmt_mismatch or factory_reset_result.get('status') in ['refused', 'not_implemented'] or ip_setup_apply.get('status') == 'blocked' %}
+    {% set review_needed = warnings or bootstrap_warnings or cluster_name_mismatch or cluster_mgmt_mismatch or node_mgmt_mismatch or factory_reset_result.get('status') in ['refused', 'blocked', 'preflight_blocked', 'not_implemented'] or ip_setup_apply.get('status') == 'blocked' %}
     {% set setup_ready = bootstrap_complete and netapp_cfg.get('host') and api_reachable %}
     {% set hero_status = 'Ready' if setup_ready and not review_needed else ('Needs review' if review_needed else 'Needs setup') %}
     {% set hero_tone = 'ready' if hero_status == 'Ready' else ('danger' if hero_status == 'Needs review' else 'pending') %}
@@ -187,6 +191,18 @@
             border-color: color-mix(in srgb, var(--bad) 42%, var(--border));
             background: color-mix(in srgb, var(--bad) 7%, var(--panel));
         }
+        .netapp-reset-result {
+            display: grid;
+            gap: .6rem;
+        }
+        .netapp-reset-facts {
+            display: grid;
+            grid-template-columns: repeat(3, minmax(0, 1fr));
+            gap: .55rem;
+        }
+        .netapp-reset-facts .netapp-fact {
+            border-radius: .7rem;
+        }
         @container (max-width: 1180px) {
             .netapp-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
         }
@@ -199,6 +215,7 @@
             .netapp-two-col,
             .netapp-grid,
             .netapp-grid-tight,
+            .netapp-reset-facts,
             .netapp-facts { grid-template-columns: 1fr; }
         }
     </style>
@@ -435,20 +452,44 @@
         <details class="card netapp-danger">
             <summary class="summary-row"><span class="font-semibold">Factory reset NetApp</span><span class="status danger">destructive</span></summary>
             <div class="space-y-4 mt-4">
-                <div class="text-sm text-slate-300">Resetting will erase the NetApp configuration and return it to factory setup state. Use only when rebuilding from scratch.</div>
-                <div class="netapp-grid" style="grid-template-columns: minmax(0, 1fr) auto;">
+                <div class="text-sm text-slate-300">Resetting erases NetApp configuration and returns controllers to factory setup state. Readiness check sends Enter only; destructive automation remains blocked unless explicitly implemented and enabled.</div>
+                <div class="netapp-grid">
                     <div class="netapp-field">
                         <label>Type FACTORY RESET to confirm</label>
                         <input class="input" name="netapp_factory_reset_confirmation" value="" autocomplete="off">
                     </div>
-                    <div class="netapp-actions" style="align-self: end;">
-                        <button class="btn btn-danger" formaction="/modules/netapp/factory-reset" formmethod="post" type="submit">Factory reset NetApp</button>
+                    <div class="netapp-field">
+                        <label>Reset mode</label>
+                        <select class="input" name="netapp_factory_reset_mode_select">
+                            <option value="preflight" {% if factory_reset_mode != 'live_console' %}selected{% endif %}>Readiness check only</option>
+                            <option value="live_console" {% if factory_reset_mode == 'live_console' %}selected{% endif %}>Live console reset</option>
+                        </select>
+                    </div>
+                    <div class="netapp-field netapp-long-field">
+                        <label>Controller targets</label>
+                        <textarea class="input" name="netapp_factory_reset_targets" rows="3" placeholder="node-a&#10;node-b">{{ factory_reset_targets | join('\n') }}</textarea>
                     </div>
                 </div>
+                <div class="netapp-facts">
+                    <div class="netapp-fact"><span>Console port</span><strong>{{ console_port or 'not selected' }}</strong></div>
+                    <div class="netapp-fact"><span>Baud</span><strong>{{ console_baud }}</strong></div>
+                    <div class="netapp-fact netapp-fact-wide"><span>Live executor gate</span><strong>{{ factory_reset_result.get('env_gate', 'LAB_BUILDER_ENABLE_NETAPP_FACTORY_RESET') }}={{ 'enabled' if factory_reset_result.get('live_enabled') else 'disabled' }}</strong></div>
+                </div>
+                <div class="netapp-actions">
+                    <button class="btn" name="netapp_factory_reset_mode" value="preflight" formaction="/modules/netapp/factory-reset" formmethod="post" type="submit">Check reset readiness</button>
+                    <button class="btn btn-danger" name="netapp_factory_reset_mode" value="live_console" formaction="/modules/netapp/factory-reset" formmethod="post" type="submit">Factory reset NetApp</button>
+                </div>
                 {% if factory_reset_result %}
-                <div class="result">
-                    <div class="font-semibold">{{ factory_reset_result.get('status', 'unknown') | replace('_', ' ') | title }}</div>
-                    <div class="text-sm text-slate-400 mt-1">{{ factory_reset_result.get('message') or 'No result message.' }}</div>
+                <div class="result netapp-reset-result">
+                    <div>
+                        <div class="font-semibold">{{ factory_reset_result.get('status', 'unknown') | replace('_', ' ') | title }}</div>
+                        <div class="text-sm text-slate-400 mt-1">{{ factory_reset_result.get('message') or 'No result message.' }}</div>
+                    </div>
+                    <div class="netapp-reset-facts">
+                        <div class="netapp-fact"><span>Mode</span><strong>{{ factory_reset_result.get('mode', 'preflight') | replace('_', ' ') }}</strong></div>
+                        <div class="netapp-fact"><span>Console probe</span><strong>{{ 'ready' if factory_reset_probe.get('ok') else (factory_reset_probe.get('error') or 'not checked') }}</strong></div>
+                        <div class="netapp-fact"><span>Commands sent</span><strong>none destructive</strong></div>
+                    </div>
                 </div>
                 {% endif %}
                 {% if action_feedback and 'factory reset' in feedback_title %}{{ netapp_inline_feedback(action_feedback) }}{% endif %}
@@ -496,7 +537,21 @@
                 <div class="font-semibold mb-3">Factory reset result details</div>
                 <div class="ops-list">
                     <div class="result" style="margin-top: 0;"><div class="font-semibold">{{ factory_reset_result.get('status', 'unknown') | replace('_', ' ') | title }}</div><div class="text-sm text-slate-400 mt-1">{{ factory_reset_result.get('message') or 'No result message.' }}</div></div>
+                    <div class="result" style="margin-top: 0;">Mode {{ factory_reset_result.get('mode', 'preflight') | replace('_', ' ') }} | Console {{ factory_reset_result.get('console_port') or 'not selected' }} @ {{ factory_reset_result.get('console_baud') or console_baud }} | Gate {{ factory_reset_result.get('env_gate') or 'LAB_BUILDER_ENABLE_NETAPP_FACTORY_RESET' }}={{ 'enabled' if factory_reset_result.get('live_enabled') else 'disabled' }}</div>
                     {% for item in factory_reset_result.get('attempted', []) %}<div class="result" style="margin-top: 0;">{{ item }}</div>{% endfor %}
+                    {% if factory_reset_steps %}
+                    <div class="result" style="margin-top: 0;">
+                        <div class="font-semibold">Planned manual reset path</div>
+                        <div class="text-sm text-slate-400 mt-1">{{ factory_reset_steps | join(' | ') }}</div>
+                    </div>
+                    {% endif %}
+                    {% if factory_reset_probe %}
+                    <div class="result" style="margin-top: 0;">
+                        <div class="font-semibold">Console readiness probe</div>
+                        <div class="text-sm text-slate-400 mt-1">OK {{ factory_reset_probe.get('ok') }} | Sent {{ (factory_reset_probe.get('sent') or []) | join(', ') }} | Checked {{ factory_reset_probe.get('checked_at') or 'unknown' }}{% if factory_reset_probe.get('error') %} | {{ factory_reset_probe.get('error') }}{% endif %}</div>
+                        {% if factory_reset_probe.get('output_excerpt') %}<pre class="mt-2 whitespace-pre-wrap text-xs text-slate-300">{{ factory_reset_probe.get('output_excerpt') }}</pre>{% endif %}
+                    </div>
+                    {% endif %}
                 </div>
             </section>
             {% endif %}

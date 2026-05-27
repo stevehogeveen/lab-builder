@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+import os
 from pathlib import Path
 import threading
+import time
 from typing import Any
 
 from fastapi import APIRouter, FastAPI, Form, Request
@@ -46,6 +48,7 @@ BOOTSTRAP_CHECK_LABELS = {
     "svm_mgmt": "SVM management",
 }
 CONSOLE_PORT_PATTERNS = ("/dev/ttyUSB*", "/dev/ttyACM*", "/dev/serial/by-id/*")
+NETAPP_FACTORY_RESET_ENV = "LAB_BUILDER_ENABLE_NETAPP_FACTORY_RESET"
 
 
 def _lines(value: str) -> list[str]:
@@ -205,6 +208,68 @@ def _scan_console_ports() -> dict[str, Any]:
         "patterns": list(CONSOLE_PORT_PATTERNS),
         "candidates": candidates,
     }
+
+
+def _truthy_env(name: str) -> bool:
+    return str(os.environ.get(name) or "").strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _netapp_factory_reset_steps(targets: list[str]) -> list[str]:
+    target_text = ", ".join(targets) if targets else "each controller that must be reset"
+    return [
+        f"Use the selected serial console to access {target_text}.",
+        "Interrupt boot to reach the ONTAP boot menu.",
+        "At the boot menu, run wipeconfig.",
+        "Answer yes only after confirming this is the intended lab NetApp.",
+        "Let the controller reboot back to factory setup state.",
+        "Repeat on the partner controller when rebuilding a pair from scratch.",
+    ]
+
+
+def _probe_netapp_reset_console(port: str, baud: str) -> dict[str, Any]:
+    result: dict[str, Any] = {
+        "ok": False,
+        "port": str(port or "").strip(),
+        "baud": str(baud or "115200").strip() or "115200",
+        "sent": ["newline only"],
+        "output_excerpt": "",
+        "error": "",
+        "checked_at": datetime.now(timezone.utc).isoformat(),
+    }
+    if not result["port"]:
+        result["error"] = "Console port is not selected."
+        return result
+    try:
+        baud_int = int(result["baud"])
+    except ValueError:
+        result["error"] = f"Invalid baud rate: {result['baud']}"
+        return result
+    try:
+        import serial  # type: ignore
+    except ImportError:
+        result["error"] = "pyserial is not installed, so Lab Builder cannot probe the NetApp console."
+        return result
+    chunks: list[bytes] = []
+    try:
+        with serial.Serial(port=result["port"], baudrate=baud_int, timeout=0.5, write_timeout=0.5) as conn:
+            conn.write(b"\r\n")
+            conn.flush()
+            deadline = time.monotonic() + 2.0
+            while time.monotonic() < deadline:
+                waiting = int(getattr(conn, "in_waiting", 0) or 0)
+                chunk = conn.read(waiting or 256)
+                if chunk:
+                    chunks.append(chunk)
+                else:
+                    time.sleep(0.05)
+        output = b"".join(chunks).decode("utf-8", errors="replace")
+        result["output_excerpt"] = "\n".join(output.splitlines()[-40:]).strip()
+        result["ok"] = True
+        if not result["output_excerpt"]:
+            result["error"] = "Console opened, but no output was received after sending Enter."
+    except Exception as exc:
+        result["error"] = str(exc).splitlines()[0]
+    return result
 
 
 def _sync_discovered_values(cfg: dict[str, Any], discovery: dict[str, Any]) -> list[str]:
@@ -1148,35 +1213,105 @@ async def netapp_factory_reset(request: Request, netapp_factory_reset_confirmati
     cfg = context["cfg"]
     form = {key: value for key, value in dict(await request.form()).items()}
     _apply_live_netapp_form_state(cfg, form)
+    netapp_cfg = cfg.setdefault("netapp", {})
     confirmation = str(netapp_factory_reset_confirmation or "").strip()
+    mode = str(form.get("netapp_factory_reset_mode") or form.get("netapp_factory_reset_mode_select") or "preflight").strip()
+    if mode not in {"preflight", "live_console"}:
+        mode = "preflight"
+    targets = _lines(str(form.get("netapp_factory_reset_targets") or ""))
+    planned_steps = _netapp_factory_reset_steps(targets)
+    console_port = str(netapp_cfg.get("console_port") or "").strip()
+    console_baud = str(netapp_cfg.get("console_baud") or "115200").strip() or "115200"
+    live_enabled = _truthy_env(NETAPP_FACTORY_RESET_ENV)
     attempted_at = datetime.now(timezone.utc).isoformat()
+
+    base_result: dict[str, Any] = {
+        "attempted_at": attempted_at,
+        "attempted_action": "factory_reset",
+        "confirmation": confirmation,
+        "mode": mode,
+        "env_gate": NETAPP_FACTORY_RESET_ENV,
+        "live_enabled": live_enabled,
+        "target": str(netapp_cfg.get("host") or ""),
+        "targets": targets,
+        "console_port": console_port,
+        "console_baud": console_baud,
+        "planned_steps": planned_steps,
+        "documentation_basis": "ONTAP boot-menu wipeconfig reset path",
+    }
+
     if confirmation != "FACTORY RESET":
         result = {
+            **base_result,
             "status": "refused",
-            "attempted_at": attempted_at,
-            "attempted_action": "factory_reset",
-            "confirmation": confirmation,
             "message": "Factory reset was not attempted because confirmation did not match FACTORY RESET.",
-            "target": str((cfg.get("netapp") or {}).get("host") or ""),
             "attempted": ["Checked typed confirmation.", "No NetApp commands were sent."],
         }
         tone = "danger"
         title = "Factory reset not attempted"
         outcomes = ["Typed confirmation did not match.", "No NetApp commands were sent."]
     else:
-        result = {
-            "status": "not_implemented",
-            "attempted_at": attempted_at,
-            "attempted_action": "factory_reset",
-            "confirmation": "FACTORY RESET",
-            "message": "Factory reset backend is not implemented yet for NetApp.",
-            "target": str((cfg.get("netapp") or {}).get("host") or ""),
-            "attempted": ["Accepted exact typed confirmation.", "Stopped because no guarded NetApp factory-reset backend exists."],
-        }
-        tone = "pending"
-        title = "Factory reset backend unavailable"
-        outcomes = ["Confirmation accepted.", "No NetApp commands were sent."]
-    cfg.setdefault("netapp", {})["last_factory_reset"] = result
+        console_probe = _probe_netapp_reset_console(console_port, console_baud)
+        console_ok = bool(console_probe.get("ok"))
+        if mode == "preflight":
+            result = {
+                **base_result,
+                "status": "preflight_ready" if console_ok else "preflight_blocked",
+                "message": "Factory reset readiness check completed. No destructive commands were sent."
+                if console_ok
+                else "Factory reset readiness check could not confirm console access. No destructive commands were sent.",
+                "console_probe": console_probe,
+                "attempted": [
+                    "Accepted exact typed confirmation.",
+                    "Opened the selected console and sent Enter only." if console_ok else "Tried to open the selected console for a newline-only probe.",
+                    "No wipeconfig, reset, reboot, or ONTAP configuration commands were sent.",
+                ],
+            }
+            tone = "ready" if console_ok else "pending"
+            title = "Factory reset readiness checked"
+            outcomes = [
+                f"Console: {'ready' if console_ok else 'not ready'}",
+                "No destructive commands were sent.",
+            ]
+            if console_probe.get("error"):
+                outcomes.append(str(console_probe.get("error")))
+        elif not live_enabled:
+            result = {
+                **base_result,
+                "status": "blocked",
+                "message": f"Live NetApp factory reset is disabled. Set {NETAPP_FACTORY_RESET_ENV}=1 and restart Lab Builder before live testing destructive reset automation.",
+                "console_probe": console_probe,
+                "attempted": [
+                    "Accepted exact typed confirmation.",
+                    "Probed the selected console with Enter only." if console_ok else "Tried to probe the selected console with Enter only.",
+                    f"Stopped because {NETAPP_FACTORY_RESET_ENV} is not enabled.",
+                    "No wipeconfig, reset, reboot, or ONTAP configuration commands were sent.",
+                ],
+            }
+            tone = "danger"
+            title = "Factory reset blocked"
+            outcomes = [f"{NETAPP_FACTORY_RESET_ENV} is not enabled.", "No destructive commands were sent."]
+            if console_probe.get("error"):
+                outcomes.append(str(console_probe.get("error")))
+        else:
+            result = {
+                **base_result,
+                "status": "not_implemented",
+                "message": "Factory reset backend is not implemented yet for NetApp.",
+                "console_probe": console_probe,
+                "attempted": [
+                    "Accepted exact typed confirmation.",
+                    f"Verified {NETAPP_FACTORY_RESET_ENV} is enabled.",
+                    "Stopped because no guarded NetApp factory-reset executor exists.",
+                    "No wipeconfig, reset, reboot, or ONTAP configuration commands were sent.",
+                ],
+            }
+            tone = "pending"
+            title = "Factory reset backend unavailable"
+            outcomes = ["Confirmation accepted.", "Executor is not implemented.", "No destructive commands were sent."]
+            if console_probe.get("error"):
+                outcomes.append(str(console_probe.get("error")))
+    netapp_cfg["last_factory_reset"] = result
     main.save_kit_config(cfg)
     context = _module_context(request)
     payload = service._response(context, "factory_reset")

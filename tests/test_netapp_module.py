@@ -207,7 +207,24 @@ def test_netapp_bootstrap_test_all_saves_each_result(client, monkeypatch):
     assert checks["svm_mgmt"]["reachable"] is False
 
 
-def test_netapp_factory_reset_requires_exact_confirmation(client):
+def test_netapp_factory_reset_requires_exact_confirmation(client, monkeypatch):
+    import app.modules.netapp.routes as netapp_routes
+
+    monkeypatch.delenv("LAB_BUILDER_ENABLE_NETAPP_FACTORY_RESET", raising=False)
+    monkeypatch.setattr(
+        netapp_routes,
+        "_probe_netapp_reset_console",
+        lambda port, baud: {
+            "ok": True,
+            "port": port,
+            "baud": baud,
+            "sent": ["newline only"],
+            "output_excerpt": "LOADER>",
+            "error": "",
+            "checked_at": "2026-05-27T00:00:00+00:00",
+        },
+    )
+
     response = client.post("/modules/netapp/factory-reset", data={"netapp_factory_reset_confirmation": "RESET"})
 
     assert response.status_code == 200
@@ -216,13 +233,42 @@ def test_netapp_factory_reset_requires_exact_confirmation(client):
     assert result["status"] == "refused"
     assert "No NetApp commands" in " ".join(result["attempted"])
 
-    response = client.post("/modules/netapp/factory-reset", data={"netapp_factory_reset_confirmation": "FACTORY RESET"})
+    response = client.post(
+        "/modules/netapp/factory-reset",
+        data={
+            "netapp_factory_reset_confirmation": "FACTORY RESET",
+            "netapp_factory_reset_mode": "preflight",
+            "netapp_console_port": "/dev/ttyUSB0",
+            "netapp_console_baud": "115200",
+            "netapp_factory_reset_targets": "node-a\nnode-b",
+        },
+    )
 
     assert response.status_code == 200
     cfg = main.load_kit_config()
     result = cfg["netapp"]["last_factory_reset"]
-    assert result["status"] == "not_implemented"
-    assert result["message"] == "Factory reset backend is not implemented yet for NetApp."
+    assert result["status"] == "preflight_ready"
+    assert result["console_port"] == "/dev/ttyUSB0"
+    assert result["console_probe"]["ok"] is True
+    assert result["targets"] == ["node-a", "node-b"]
+    assert "No wipeconfig" in " ".join(result["attempted"])
+
+    response = client.post(
+        "/modules/netapp/factory-reset",
+        data={
+            "netapp_factory_reset_confirmation": "FACTORY RESET",
+            "netapp_factory_reset_mode": "live_console",
+            "netapp_console_port": "/dev/ttyUSB0",
+            "netapp_console_baud": "115200",
+        },
+    )
+
+    assert response.status_code == 200
+    cfg = main.load_kit_config()
+    result = cfg["netapp"]["last_factory_reset"]
+    assert result["status"] == "blocked"
+    assert result["env_gate"] == "LAB_BUILDER_ENABLE_NETAPP_FACTORY_RESET"
+    assert "No wipeconfig" in " ".join(result["attempted"])
 
 
 def test_netapp_plan_includes_validate_and_plan_stage_order_when_host_is_set(client):
