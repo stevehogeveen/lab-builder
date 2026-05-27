@@ -72,6 +72,15 @@ from app.core.jobs import JobStepRunner
 from app.core.database import DatabaseStore, SQLiteRuntime
 from app.core.registry import load_modules
 from app.core.stage_registry import StageRegistry
+from app.overnight_run import (
+    DESTRUCTIVE_FLAG_DEFAULTS,
+    OVERNIGHT_MODES,
+    OvernightArtifactWriter,
+    OvernightHardwareConfig,
+    initialize_overnight_artifacts,
+    list_overnight_run_artifacts,
+    run_overnight_hardware,
+)
 from app.stages.ilo.adapter import HpeIloRedfishAdapter
 from app.modules.ilo.routes import (
     ilo_page_handler,
@@ -537,6 +546,10 @@ PAGE_META = {
     "execution": {
         "title": "Execution",
         "subtitle": "Run staged actions and monitor live job progress.",
+    },
+    "overnight_hardware": {
+        "title": "Overnight Hardware Run",
+        "subtitle": "Controlled iLO and Cisco console discovery with morning finalization.",
     },
     "esxi": {
         "title": "ESXi",
@@ -13993,6 +14006,129 @@ def execute_preview_job_in_background(cfg: dict, scope: str):
         append_job_history_snapshot(cfg, scope)
 
 
+def _read_text_excerpt(path: str | Path, *, max_chars: int = 6000) -> str:
+    target = Path(path)
+    if not target.exists() or not target.is_file():
+        return ""
+    try:
+        text = target.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return ""
+    if len(text) <= max_chars:
+        return text
+    return text[-max_chars:]
+
+
+def build_overnight_hardware_state(cfg: dict[str, Any], job: dict[str, Any] | None = None) -> dict[str, Any]:
+    default_run_config = OvernightHardwareConfig.from_mapping({}, cfg)
+    cisco_cfg = dict(cfg.get("cisco_switch") or {})
+    runs = list_overnight_run_artifacts(ARTIFACTS_DIR)
+    latest = runs[0] if runs else {}
+    latest_path = Path(str(latest.get("path") or "")) if latest else Path()
+    artifact_links: list[dict[str, str]] = []
+    if latest_path and latest_path.exists():
+        for relative in [
+            "config-snapshot.yml",
+            "live-job.log",
+            "trace.yml",
+            "summary.yml",
+            "MORNING_READY.md",
+            "ilo/discovery.json",
+            "ilo/power-state-before.json",
+            "ilo/boot-options.json",
+            "ilo/virtual-media.json",
+            "ilo/final-state.json",
+            "cisco/console-detect.txt",
+            "cisco/initial-session.txt",
+            "cisco/show-version.txt",
+            "cisco/running-config-before.txt",
+            "cisco/setup-transcript.txt",
+            "cisco/running-config-after.txt",
+        ]:
+            path = latest_path / relative
+            artifact_links.append({"label": relative, "path": str(path), "exists": "yes" if path.exists() else "no"})
+
+    active_job = job or {}
+    mode = str(active_job.get("overnight_mode") or default_run_config.mode)
+    finalization_excerpt = _read_text_excerpt(latest_path / "MORNING_READY.md", max_chars=2400) if latest else ""
+    return {
+        "modes": list(OVERNIGHT_MODES),
+        "default_mode": default_run_config.mode,
+        "defaults": default_run_config.to_dict(),
+        "destructive_flags": dict(DESTRUCTIVE_FLAG_DEFAULTS),
+        "targets": {
+            "ilo": default_run_config.ilo_host,
+            "cisco_console_port": default_run_config.cisco_console_port or str(cisco_cfg.get("console_port") or "Auto-detect"),
+            "cisco_console_baud": default_run_config.cisco_console_baud,
+        },
+        "operator": {
+            "purpose": "Collect current iLO Redfish state and Cisco console evidence overnight without wiping storage, factory resetting devices, or installing ESXi by default.",
+            "current_mode": mode,
+            "next": "Start discovery_only for the safe default pass. Guided setup and full overnight require the safety confirmation sheet.",
+            "last": str(active_job.get("logs", ["No overnight run has been started."])[-1] if active_job.get("logs") else "No overnight run has been started."),
+            "completion": int(active_job.get("progress_percent") or 0),
+            "status": str(active_job.get("status") or "Idle"),
+            "current_stage": str(active_job.get("current_stage") or "Not running"),
+            "finalization_status": "Ready for review" if "Status: Ready for review" in finalization_excerpt else ("Needs attention" if "Status: Needs attention" in finalization_excerpt else "Pending"),
+        },
+        "debug": {
+            "latest_run": latest,
+            "artifact_links": artifact_links,
+            "live_log": _read_text_excerpt(latest_path / "live-job.log") if latest else "",
+            "trace": _read_text_excerpt(latest_path / "trace.yml") if latest else "",
+            "api_output": yaml.safe_dump({"job": active_job, "defaults": default_run_config.to_dict(), "latest_run": latest}, sort_keys=False),
+            "console_transcripts": {
+                "detect": _read_text_excerpt(latest_path / "cisco" / "console-detect.txt") if latest else "",
+                "initial": _read_text_excerpt(latest_path / "cisco" / "initial-session.txt") if latest else "",
+                "show_version": _read_text_excerpt(latest_path / "cisco" / "show-version.txt") if latest else "",
+                "setup": _read_text_excerpt(latest_path / "cisco" / "setup-transcript.txt") if latest else "",
+            },
+            "finalization": finalization_excerpt,
+        },
+        "runs": runs,
+    }
+
+
+def _record_overnight_job_event(kit_name: str, event: dict[str, Any]) -> None:
+    job = load_job(kit_name)
+    progress = int(event.get("progress") or job.get("progress_percent") or 0)
+    status = str(event.get("status") or "")
+    stage = str(event.get("stage") or "overnight_hardware")
+    if stage == "finalization" and status == "completed":
+        job_status = "Completed"
+    elif status in {"failed", "needs_attention", "blocked"}:
+        job_status = "Needs attention"
+    else:
+        job_status = "Running"
+    job["status"] = job_status
+    job["scope"] = "overnight_hardware"
+    job["root_scope"] = "overnight_hardware"
+    job["current_stage"] = stage.replace("_", " ").title()
+    job["progress_percent"] = progress
+    job["completed_steps"] = progress
+    job["total_steps"] = 100
+    job.setdefault("logs", []).append(f"[OVERNIGHT] {stage}: {status} - {event.get('message') or ''}")
+    job.setdefault("trace_events", []).append(dict(event))
+    save_job(kit_name, job)
+
+
+def _execute_overnight_hardware_background(cfg: dict[str, Any], run_config: OvernightHardwareConfig, run_dir: str) -> None:
+    kit_name = cfg["site"]["name"]
+    writer = OvernightArtifactWriter(Path(run_dir))
+    try:
+        run_overnight_hardware(
+            cfg,
+            run_config,
+            writer,
+            repo_root=BASE_DIR,
+            on_event=lambda event: _record_overnight_job_event(kit_name, event),
+        )
+    except Exception as exc:
+        event = writer.trace(stage="overnight_error", status="failed", progress=100, message=str(exc).splitlines()[0])
+        _record_overnight_job_event(kit_name, event)
+        writer.write_summary({"status": "Needs attention", "error": str(exc).splitlines()[0]})
+
+
 def render_page(
     request: Request,
     cfg: dict,
@@ -14096,6 +14232,7 @@ def render_page(
     live_job_story = build_live_job_story(job)
     live_stage_cards = build_live_stage_cards(job)
     run_checklist = build_run_checklist(job, cfg)
+    overnight_run = build_overnight_hardware_state(cfg, job)
     report_center = build_report_center(
         cfg,
         query=str(request.query_params.get("report_query", "") or ""),
@@ -14184,6 +14321,7 @@ def render_page(
         "live_job_story": live_job_story,
         "live_stage_cards": live_stage_cards,
         "run_checklist": run_checklist,
+        "overnight_run": overnight_run,
         "report_center": report_center,
         "ilo_inclusion": ilo_inclusion,
         "esxi_inclusion": esxi_inclusion,
@@ -14230,6 +14368,7 @@ def page_name_from_request_path(path: str) -> str:
         "save_qnap_settings": "qnap",
         "prepare_execute": "execution",
         "execute": "execution",
+        "overnight_hardware": "overnight_hardware",
         "configs": "configs",
         "reports": "configs",
         "history": "history",
@@ -14294,6 +14433,7 @@ class ReactFormAdapter(dict):
 def react_ui_page_specs() -> list[dict[str, str]]:
     return [
         {"key": "dashboard", "label": "Dashboard / Run Center", "group": "Operate", "legacy_href": "/dashboard"},
+        {"key": "overnight_hardware", "label": "Overnight Hardware Run", "group": "Operate", "legacy_href": "/overnight-hardware"},
         {"key": "ilo", "label": "iLO setup", "group": "Setup", "legacy_href": "/ilo"},
         {"key": "esxi", "label": "ESXi setup", "group": "Setup", "legacy_href": "/esxi"},
         {"key": "netapp", "label": "NetApp setup", "group": "Setup", "legacy_href": "/modules/netapp"},
@@ -14309,10 +14449,15 @@ def react_ui_action_inventory() -> dict[str, list[dict[str, str]]]:
     return {
         "dashboard": [
             {"label": "Open Run Center", "method": "GET", "route": "/execution", "mode": "legacy-html"},
+            {"label": "Open Overnight Hardware Run", "method": "GET", "route": "/overnight-hardware", "mode": "legacy-html"},
             {"label": "Prepare run review", "method": "POST", "route": "/prepare-execute", "mode": "legacy-html"},
             {"label": "Start preview run", "method": "POST", "route": "/execute-preview", "mode": "legacy-html"},
             {"label": "Start real run", "method": "POST", "route": "/execute", "mode": "legacy-html"},
             {"label": "Retry storage stage", "method": "POST", "route": "/retry-storage-stage", "mode": "legacy-html"},
+        ],
+        "overnight_hardware": [
+            {"label": "Load overnight run state", "method": "GET", "route": "/api/ui/overnight-hardware", "mode": "json"},
+            {"label": "Start overnight hardware run", "method": "POST", "route": "/overnight-hardware/start", "mode": "legacy-html"},
         ],
         "ilo": [
             {"label": "Load iLO state", "method": "GET", "route": "/api/ui/ilo", "mode": "json"},
@@ -14666,6 +14811,7 @@ def build_react_ui_state() -> dict[str, Any]:
         "job": react_ui_job_payload(job),
         "dashboard": dashboard_overview,
         "modules": react_ui_module_summaries(cfg, workflow_contexts),
+        "overnight_hardware": build_overnight_hardware_state(cfg, job),
         "recent_activity": build_activity_feed(history, limit=10),
         "run_history": build_history_display_entries(history)[:30],
         "technical": {
@@ -14809,6 +14955,13 @@ async def api_ui_technical_events():
     )
 
 
+@app.get("/api/ui/overnight-hardware")
+async def api_ui_overnight_hardware():
+    cfg = load_kit_config()
+    job = load_job(cfg.get("site", {}).get("name", ""))
+    return jsonable_encoder(build_overnight_hardware_state(cfg, job))
+
+
 @app.get("/api/ui/ilo")
 async def api_ui_ilo():
     return jsonable_encoder(build_react_ilo_state())
@@ -14899,6 +15052,76 @@ async def dashboard_page(request: Request):
 async def execution_page(request: Request):
     cfg = load_kit_config()
     return render_page(request, cfg, active_page="execution")
+
+
+@app.get("/overnight-hardware", response_class=HTMLResponse)
+async def overnight_hardware_page(request: Request):
+    cfg = load_kit_config()
+    return render_page(request, cfg, active_page="overnight_hardware")
+
+
+@app.post("/overnight-hardware/start", response_class=HTMLResponse)
+async def start_overnight_hardware_run(request: Request):
+    cfg = load_kit_config()
+    form = dict(await request.form())
+    run_config = OvernightHardwareConfig.from_mapping(form, cfg)
+    if run_config.requires_safety_confirmation:
+        confirmed = str(form.get("overnight_safety_phrase") or "").strip().upper() == "OVERNIGHT"
+        sheet_ack = str(form.get("overnight_safety_ack") or "").strip().lower() == "on"
+        if not confirmed or not sheet_ack:
+            return render_page(
+                request,
+                cfg,
+                active_page="overnight_hardware",
+                error_message="Overnight hardware run blocked: guided_setup and full_overnight require the safety confirmation sheet and phrase OVERNIGHT.",
+            )
+
+    writer = initialize_overnight_artifacts(cfg, run_config, ARTIFACTS_DIR)
+    kit_name = cfg["site"]["name"]
+    save_job(
+        kit_name,
+        {
+            "status": "Overnight queued",
+            "execution_mode": "overnight_hardware",
+            "execution_mode_label": "Overnight hardware run",
+            "overnight_mode": run_config.mode,
+            "scope": "overnight_hardware",
+            "root_scope": "overnight_hardware",
+            "current_stage": "Queued",
+            "progress_percent": 3,
+            "completed_steps": 3,
+            "total_steps": 100,
+            "logs": [f"[OVERNIGHT] Queued {run_config.mode} iLO/Cisco hardware run."],
+            "trace_events": list(writer.events),
+            "run_id": writer.run_dir.name,
+            "run_bundle_dir": str(writer.run_dir),
+            "run_live_log_path": str(writer.live_log_path),
+            "run_trace_path": str(writer.trace_path),
+            "run_summary_path": str(writer.summary_path),
+            "run_config_snapshot_path": str(writer.run_dir / "config-snapshot.yml"),
+        },
+    )
+    threading.Thread(
+        target=_execute_overnight_hardware_background,
+        args=(cfg, run_config, str(writer.run_dir)),
+        daemon=True,
+        name="overnight-hardware-run",
+    ).start()
+    return render_page(
+        request,
+        cfg,
+        active_page="overnight_hardware",
+        action_feedback=build_action_feedback(
+            "Overnight hardware run queued",
+            "The run is collecting iLO and Cisco console evidence and will stop hardware actions before the finalization window.",
+            tone="progress",
+            outcomes=[
+                f"Mode: {run_config.mode}",
+                f"iLO: {run_config.ilo_host}",
+                f"Run folder: {writer.run_dir}",
+            ],
+        ),
+    )
 
 
 @app.get("/react-preview", response_class=HTMLResponse)

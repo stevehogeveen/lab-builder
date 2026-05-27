@@ -57,7 +57,7 @@
         {% endif %}
     </section>
     {% endif %}
-    {% set setup_pages = ["global_settings", "configuration", "ilo", "storage", "esxi", "execution"] %}
+    {% set setup_pages = ["global_settings", "configuration", "ilo", "storage", "esxi", "execution", "overnight_hardware"] %}
     {% if config_view_title and config_view_content and active_page not in setup_pages and active_page != "configs" %}
     <details class="card" open>
         <summary class="summary-row">
@@ -107,6 +107,8 @@
         {% include "partials/pages/ilo.html" %}
     {% elif active_page == "execution" %}
         {% include "partials/pages/execution.html" %}
+    {% elif active_page == "overnight_hardware" %}
+        {% include "partials/pages/overnight_hardware.html" %}
     {% elif active_page == "esxi" %}
         {% include "partials/pages/esxi.html" %}
     {% elif active_page == "windows" %}
