@@ -12,6 +12,26 @@ The experimental desktop interface is served from `GET /react-preview`. It keeps
 
 The frontend uses CDN React and ReactDOM. There is no npm package, bundler, or frontend build step in this pass.
 
+## Visual Research Inputs
+
+This pass uses established admin-console patterns as references, without copying template code or adding a frontend build system:
+
+- PatternFly page/card patterns: persistent masthead/sidebar/page sections and cards for dashboard state.
+- Carbon and Clarity form guidance: grouped, labeled form controls with setup context separated from diagnostics.
+- Clarity alert guidance: warnings stay contextual and concise; technical logs stay outside the main setup flow.
+- Flowbite Admin Dashboard: sidebar plus top navigation, data cards, tables, and drawer-style affordances as a practical admin template reference.
+- Fluent 2 navigation guidance: high-level navigation should stay short, scannable, and always reachable.
+
+Reference URLs:
+
+- https://pf-react-staging.patternfly.org/components/page/
+- https://www.patternfly.org/components/card/
+- https://carbondesignsystem.com/components/form/usage/
+- https://core.clarity.design/core-components/form/
+- https://core.clarity.design/core-components/alert/
+- https://github.com/themesberg/flowbite-admin-dashboard
+- https://fluent2.microsoft.design/components/web/react/core/nav/usage
+
 ## Run
 
 Port 8001 is the experimental UI port:
@@ -33,6 +53,7 @@ http://localhost:8001/react-preview
 - `GET /api/ui/job-status` - live job status for polling.
 - `GET /api/ui/recent-activity` - recent operator and run events.
 - `GET /api/ui/modules` - module summaries plus mapped action routes.
+- `GET /api/ui/action-catalog` - generated route/action catalog from FastAPI's registered routes.
 - `GET /api/ui/run-history` - run history display records.
 - `GET /api/ui/technical-events` - job logs, trace events, and artifact paths.
 - `GET /api/ui/ilo` - iLO setup state and validation.
@@ -53,8 +74,9 @@ Those routes still return HTML; React only treats them as backend actions and th
 - NetApp setup: shell page with real `/modules/netapp/status`.
 - ESXi setup: shell page with readiness summary and mapped legacy actions.
 - Cisco setup: shell page with readiness summary and mapped legacy actions.
-- Configuration / Kit management: shell page with current kit state and mapped legacy actions.
+- Configuration / Kit management: real current-kit and kit-list state from `/api/ui/app-state`; form writes still use the legacy page.
 - Reports / run history: real state from `/api/ui/app-state` and `/api/ui/run-history`.
+- Action catalog: real generated route inventory from `/api/ui/action-catalog`.
 - Technical details/logs: real `/api/ui/technical-events` plus the global technical drawer.
 
 ## Migration Status By Module
@@ -64,8 +86,9 @@ Those routes still return HTML; React only treats them as backend actions and th
 - ESXi: inventory and shell only; forms/actions still use legacy page.
 - NetApp: status is real; save/plan/apply actions are listed but not fully integrated in React controls.
 - Cisco: inventory and shell only; actions still use legacy page.
-- Configuration / Kit management: inventory and shell only; actions still use legacy page.
+- Configuration / Kit management: read-only kit state migrated; save/load/import actions still use legacy page.
 - Reports / history: read-only state is migrated; detailed report viewers still use legacy routes.
+- Action catalog: migrated as a read-only control surface for route coverage and migration planning.
 - Technical details/logs: read-only diagnostics migrated.
 
 ## Safety Notes
