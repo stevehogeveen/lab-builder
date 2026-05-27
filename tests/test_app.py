@@ -348,6 +348,9 @@ def isolate_runtime_paths(tmp_path, monkeypatch):
     for value in paths.values():
         if isinstance(value, Path) and value.suffix == "":
             value.mkdir(parents=True, exist_ok=True)
+    esxi7_base_dir = media_dir / "esxi" / "base" / "esxi7"
+    esxi7_base_dir.mkdir(parents=True, exist_ok=True)
+    (esxi7_base_dir / "esxi7-base.iso").write_text("fake esxi 7 iso", encoding="utf-8")
     for name, value in paths.items():
         monkeypatch.setattr(main, name, value)
     monkeypatch.setenv("LAB_BUILDER_VALIDATE_ESXI_MEDIA_URL", "0")
@@ -1336,6 +1339,62 @@ def test_navigation_pages_render(client):
         assert response.status_code == 200
 
 
+def test_react_preview_route_renders_isolated_desktop_experiment(client):
+    response = client.get("/react-preview")
+
+    assert response.status_code == 200
+    assert 'id="react-preview-root"' in response.text
+    assert "LAB_BUILDER_USE_EXTERNAL_REACT_APP" in response.text
+    assert 'src="/static/js/react-desktop-ui.js"' in response.text
+    assert "Run Center workspace" in response.text
+    assert "Large live job panel" in response.text
+    assert "Technical details" in response.text
+    assert 'href: "/execution"' in response.text
+    assert "react.development.js" in response.text
+
+
+def test_react_ui_app_state_api_exposes_desktop_shell_state(client):
+    response = client.get("/api/ui/app-state")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["app"]["name"] == "Lab Builder"
+    assert payload["kit"]["name"] == "Kit-01"
+    assert any(page["key"] == "dashboard" and page["legacy_href"] == "/dashboard" for page in payload["pages"])
+    assert any(page["key"] == "ilo" and page["legacy_href"] == "/ilo" for page in payload["pages"])
+    assert any(module["key"] == "ilo" for module in payload["modules"])
+    assert payload["actions"]["ilo"][0]["route"] == "/api/ui/ilo"
+    assert "status" in payload["job"]
+
+
+def test_react_ui_ilo_settings_api_reuses_backend_save_logic(client):
+    response = client.post(
+        "/api/ui/ilo/settings",
+        json={
+            "current_ip": "10.10.8.90",
+            "target_ip": "10.10.8.91",
+            "gateway": "10.10.8.1",
+            "hostname": "ilo-react",
+            "username": "Administrator",
+            "password": "Valid1Pass!",
+        },
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["ok"] is True
+    assert payload["message"] == "iLO setup saved."
+
+    saved = main.load_kit_config("Kit-01")
+    assert saved["ilo"]["current_ip"] == "10.10.8.90"
+    assert saved["ilo"]["host"] == "10.10.8.90"
+    assert saved["ilo"]["target_ip"] == "10.10.8.91"
+    assert saved["ilo"]["hostname"] == "ilo-react"
+    assert saved["ilo"]["username"] == "Administrator"
+    assert saved["ilo"]["password"] == "Valid1Pass!"
+    assert saved["included"]["ilo"] is True
+
+
 def test_save_config_persists_manual_completion_and_ilo_ips(client):
     response = client.post(
         "/save-config",
@@ -2082,8 +2141,8 @@ def test_save_esxi_settings_persists_version_and_base_iso(client, tmp_path):
 
 
 def test_discover_esxi_base_isos_finds_version_folders(tmp_path, monkeypatch):
-    monkeypatch.setattr(main, "BASE_DIR", tmp_path)
-    base = tmp_path / "media" / "esxi" / "base"
+    monkeypatch.setattr(main, "MEDIA_DIR", tmp_path / "custom-media")
+    base = main.MEDIA_DIR / "esxi" / "base"
     (base / "esxi7").mkdir(parents=True)
     (base / "esxi8").mkdir(parents=True)
     (base / "esxi7" / "esxi7.iso").write_text("iso7", encoding="utf-8")

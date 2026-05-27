@@ -16,6 +16,7 @@ from typing import Any, Callable
 from urllib.parse import quote, urlparse
 
 from fastapi import FastAPI, Request, Form, WebSocket, WebSocketDisconnect, UploadFile, File
+from fastapi.encoders import jsonable_encoder
 from fastapi.responses import FileResponse, HTMLResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
@@ -76,6 +77,7 @@ from app.modules.ilo.routes import (
     ilo_page_handler,
     save_ilo_settings_handler,
 )
+from app.modules.ilo.service import default_ilo_module_service
 from app.modules.configs.routes import (
     autofill_ip_plan_handler,
     download_current_kit_config_handler,
@@ -10699,7 +10701,7 @@ def _execute_netapp_stage(cfg: dict[str, Any], kit_name: str) -> None:
 
 
 def resolve_esxi_base_iso_path(cfg: dict) -> Path:
-    return esxi_resolve_base_iso_path(cfg, media_base_dir=BASE_DIR / "media" / "esxi" / "base")
+    return esxi_resolve_base_iso_path(cfg, media_base_dir=MEDIA_DIR / "esxi" / "base")
 
 
 def normalize_esxi_version(value: Any) -> str:
@@ -10707,7 +10709,7 @@ def normalize_esxi_version(value: Any) -> str:
 
 
 def discover_esxi_base_isos(version: str | None = None) -> list[dict[str, Any]]:
-    return esxi_discover_base_isos(BASE_DIR / "media" / "esxi" / "base", version=version)
+    return esxi_discover_base_isos(MEDIA_DIR / "esxi" / "base", version=version)
 
 
 def infer_esxi_version_from_iso_path(path: Path) -> str:
@@ -14279,6 +14281,401 @@ async def websocket_job_stream(websocket: WebSocket, kit_name: str):
         return
 
 
+class ReactFormAdapter(dict):
+    def getlist(self, key: str) -> list[Any]:
+        value = self.get(key)
+        if value is None:
+            return []
+        if isinstance(value, list):
+            return value
+        return [value]
+
+
+def react_ui_page_specs() -> list[dict[str, str]]:
+    return [
+        {"key": "dashboard", "label": "Dashboard / Run Center", "group": "Operate", "legacy_href": "/dashboard"},
+        {"key": "ilo", "label": "iLO setup", "group": "Setup", "legacy_href": "/ilo"},
+        {"key": "esxi", "label": "ESXi setup", "group": "Setup", "legacy_href": "/esxi"},
+        {"key": "netapp", "label": "NetApp setup", "group": "Setup", "legacy_href": "/modules/netapp"},
+        {"key": "cisco", "label": "Cisco setup", "group": "Setup", "legacy_href": "/cisco"},
+        {"key": "configuration", "label": "Configuration / Kits", "group": "Manage", "legacy_href": "/configuration"},
+        {"key": "reports", "label": "Reports / History", "group": "Manage", "legacy_href": "/configs"},
+        {"key": "technical", "label": "Technical details", "group": "Operate", "legacy_href": "/configs"},
+    ]
+
+
+def react_ui_action_inventory() -> dict[str, list[dict[str, str]]]:
+    return {
+        "dashboard": [
+            {"label": "Prepare run review", "method": "POST", "route": "/prepare-execute", "mode": "legacy-html"},
+            {"label": "Start preview run", "method": "POST", "route": "/execute-preview", "mode": "legacy-html"},
+            {"label": "Start real run", "method": "POST", "route": "/execute", "mode": "legacy-html"},
+        ],
+        "ilo": [
+            {"label": "Load iLO state", "method": "GET", "route": "/api/ui/ilo", "mode": "json"},
+            {"label": "Save iLO setup", "method": "POST", "route": "/api/ui/ilo/settings", "mode": "json"},
+            {"label": "Legacy save iLO setup", "method": "POST", "route": "/save-ilo-settings", "mode": "legacy-html"},
+            {"label": "Export iLO inventory", "method": "POST", "route": "/export-ilo-inventory", "mode": "legacy-html"},
+        ],
+        "esxi": [
+            {"label": "Save ESXi setup", "method": "POST", "route": "/save-esxi-settings", "mode": "legacy-html"},
+            {"label": "Prepare ESXi run", "method": "POST", "route": "/prepare-execute", "mode": "legacy-html"},
+        ],
+        "netapp": [
+            {"label": "Module status", "method": "GET", "route": "/modules/netapp/status", "mode": "json"},
+            {"label": "Save NetApp settings", "method": "POST", "route": "/modules/netapp/save-settings", "mode": "legacy-html"},
+            {"label": "Plan NetApp", "method": "POST", "route": "/modules/netapp/plan", "mode": "json"},
+            {"label": "Validate NetApp", "method": "POST", "route": "/modules/netapp/validate", "mode": "json"},
+            {"label": "Safe apply NetApp", "method": "POST", "route": "/modules/netapp/apply", "mode": "json"},
+        ],
+        "cisco": [
+            {"label": "Test SSH", "method": "POST", "route": "/modules/cisco/test-ssh", "mode": "legacy-html"},
+            {"label": "Preview config", "method": "POST", "route": "/modules/cisco/preview-config", "mode": "legacy-html"},
+            {"label": "Apply config", "method": "POST", "route": "/modules/cisco/apply-config", "mode": "legacy-html"},
+        ],
+        "configuration": [
+            {"label": "Save global settings", "method": "POST", "route": "/save-global-settings", "mode": "legacy-html"},
+            {"label": "Load kit", "method": "POST", "route": "/load-kit", "mode": "legacy-html"},
+            {"label": "Create kit", "method": "POST", "route": "/new-kit", "mode": "legacy-html"},
+        ],
+        "reports": [
+            {"label": "Run history API", "method": "GET", "route": "/api/ui/run-history", "mode": "json"},
+            {"label": "View run summary", "method": "POST", "route": "/view-run-summary", "mode": "legacy-html"},
+            {"label": "Download debug bundle", "method": "GET", "route": "/debug-bundles/latest", "mode": "download"},
+        ],
+        "technical": [
+            {"label": "Technical events API", "method": "GET", "route": "/api/ui/technical-events", "mode": "json"},
+            {"label": "Live job websocket", "method": "WS", "route": "/ws/job/{kit_name}", "mode": "websocket"},
+        ],
+    }
+
+
+def react_ui_artifact_links(job: dict[str, Any]) -> list[dict[str, str]]:
+    artifacts = [
+        ("Run bundle", "run_bundle_dir"),
+        ("Live job log", "run_live_log_path"),
+        ("Trace", "run_trace_path"),
+        ("Summary", "run_summary_path"),
+        ("Config snapshot", "run_config_snapshot_path"),
+        ("ESXi ISO path", "esxi_iso_path"),
+        ("ESXi ISO URL", "esxi_iso_url"),
+        ("Storage run directory", "storage_run_directory"),
+    ]
+    links = []
+    for label, key in artifacts:
+        value = str(job.get(key) or "").strip()
+        if value:
+            links.append({"label": label, "value": value})
+    return links
+
+
+def react_ui_job_payload(job: dict[str, Any]) -> dict[str, Any]:
+    logs = [str(line) for line in list(job.get("logs") or [])]
+    return {
+        "status": str(job.get("status") or "Idle"),
+        "scope": str(job.get("scope") or ""),
+        "root_scope": str(job.get("root_scope") or ""),
+        "execution_mode": str(job.get("execution_mode") or ""),
+        "execution_mode_label": str(job.get("execution_mode_label") or ""),
+        "current_stage": str(job.get("current_stage") or ""),
+        "progress_percent": int(job.get("progress_percent") or 0),
+        "completed_steps": int(job.get("completed_steps") or 0),
+        "total_steps": int(job.get("total_steps") or 0),
+        "started_at": str(job.get("started_at") or ""),
+        "updated_at": str(job.get("updated_at") or ""),
+        "last_message": str(logs[-1] if logs else ""),
+        "logs": logs[-80:],
+        "stage_statuses": dict(job.get("stage_statuses") or {}),
+        "artifacts": react_ui_artifact_links(job),
+    }
+
+
+def react_ui_module_summaries(cfg: dict[str, Any], workflow_contexts: dict[str, dict[str, Any]]) -> list[dict[str, Any]]:
+    module_keys = [
+        ("ilo", "iLO", "/ilo"),
+        ("esxi", "ESXi", "/esxi"),
+        ("netapp", "NetApp", "/modules/netapp"),
+        ("cisco_switch", "Cisco", "/cisco"),
+    ]
+    modules = []
+    for key, label, legacy_href in module_keys:
+        context = dict(workflow_contexts.get(key) or {})
+        checks = list(context.get("checks") or [])
+        modules.append(
+            {
+                "key": "cisco" if key == "cisco_switch" else key,
+                "workflow_key": key,
+                "label": label,
+                "legacy_href": legacy_href,
+                "target": str(context.get("target") or "Not set"),
+                "state": str(context.get("state") or "not_started"),
+                "state_label": str(context.get("state_label") or "Review"),
+                "tone": str(context.get("tone") or "progress"),
+                "planned_summary": str(context.get("planned_summary") or ""),
+                "last_summary": str(context.get("result_summary") or ""),
+                "included": bool((cfg.get("included") or {}).get(key)),
+                "checks_ready": sum(1 for item in checks if item.get("ok")),
+                "total_checks": len(checks),
+                "blockers": [dict(item) for item in checks if not item.get("ok")],
+            }
+        )
+    modules.append(
+        {
+            "key": "configuration",
+            "workflow_key": "configuration",
+            "label": "Configuration",
+            "legacy_href": "/configuration",
+            "target": str(cfg.get("site", {}).get("name") or "Current kit"),
+            "state": "ready",
+            "state_label": "Available",
+            "tone": "ready",
+            "planned_summary": "Manage kit selection, global network values, and included modules.",
+            "last_summary": f"{len(list_kits())} kit(s) available.",
+            "included": True,
+            "checks_ready": 1,
+            "total_checks": 1,
+            "blockers": [],
+        }
+    )
+    return modules
+
+
+def build_react_ui_state() -> dict[str, Any]:
+    cfg = load_kit_config()
+    kit_name = cfg.get("site", {}).get("name", "")
+    job = load_job(kit_name)
+    history = load_history(kit_name)
+    workflow_contexts = build_workflow_contexts(cfg, job, history)
+    recommended_next_step = build_recommended_next_step(cfg, workflow_contexts)
+    setup_precheck_summary = build_setup_precheck_summary(cfg, workflow_contexts, recommended_next_step)
+    dashboard_job_status = build_dashboard_job_status(history)
+    dashboard_overview = build_dashboard_overview(cfg, setup_precheck_summary, workflow_contexts, dashboard_job_status, job)
+    return {
+        "app": {"name": APP_NAME, "version": app_version()},
+        "kit": {
+            "name": kit_name,
+            "available": list_kits(),
+            "site": cfg.get("site", {}),
+            "ip_plan": cfg.get("ip_plan", {}),
+            "included": cfg.get("included", {}),
+        },
+        "pages": react_ui_page_specs(),
+        "actions": react_ui_action_inventory(),
+        "job": react_ui_job_payload(job),
+        "dashboard": dashboard_overview,
+        "modules": react_ui_module_summaries(cfg, workflow_contexts),
+        "recent_activity": build_activity_feed(history, limit=10),
+        "run_history": build_history_display_entries(history)[:30],
+        "technical": {
+            "logs": react_ui_job_payload(job)["logs"],
+            "artifacts": react_ui_artifact_links(job),
+            "trace_events": list(job.get("trace_events") or [])[-50:],
+        },
+    }
+
+
+def _react_body_value(body: dict[str, Any], *keys: str, default: Any = "") -> Any:
+    for key in keys:
+        if key in body:
+            return body.get(key)
+    return default
+
+
+def _ilo_service_for_api():
+    return default_ilo_module_service(
+        {
+            "normalize_ilo_hostname": normalize_ilo_hostname,
+            "extract_ilo_additional_users_from_form": extract_ilo_additional_users_from_form,
+            "normalize_ilo_policy": normalize_ilo_policy,
+        }
+    )
+
+
+def build_react_ilo_state(cfg: dict[str, Any] | None = None) -> dict[str, Any]:
+    cfg = cfg or load_kit_config()
+    history = load_history(cfg.get("site", {}).get("name", ""))
+    job = load_job(cfg.get("site", {}).get("name", ""))
+    workflow_contexts = build_workflow_contexts(cfg, job, history)
+    context = dict(workflow_contexts.get("ilo") or {})
+    review = build_ilo_input_review(cfg, include_policy_validation=True)
+    field_errors = build_ilo_field_errors(cfg)
+    ilo_cfg = cfg.get("ilo", {}) or {}
+    latest = latest_history_entry_for_scope(history, ["ilo"]) or {}
+    checks = list(context.get("checks") or [])
+    blocker = next((dict(item) for item in checks if not item.get("ok")), None)
+    return {
+        "page": {
+            "key": "ilo",
+            "title": "iLO setup",
+            "legacy_href": "/ilo",
+            "what": "Set the controller address, sign-in, hostname, and saved policy inputs used by Run Center.",
+            "next": blocker.get("fix") if blocker else "Review the saved iLO target, then continue to Run Center or Storage setup.",
+            "last": latest.get("status") or context.get("result_summary") or "No iLO run has been recorded yet.",
+        },
+        "values": {
+            "current_ip": ilo_cfg.get("current_ip") or ilo_cfg.get("host") or "",
+            "target_ip": ilo_cfg.get("target_ip") or "",
+            "gateway": ilo_cfg.get("gateway") or cfg.get("ip_plan", {}).get("gateway") or "",
+            "hostname": ilo_cfg.get("hostname") or "",
+            "username": ilo_cfg.get("username") or "",
+            "password_saved": bool(ilo_cfg.get("password")),
+            "included": bool(cfg.get("included", {}).get("ilo")),
+        },
+        "status": {
+            "state": context.get("state") or "not_started",
+            "label": context.get("state_label") or "Review",
+            "tone": context.get("tone") or "progress",
+            "target": context.get("target") or "Not set",
+        },
+        "review": {
+            "errors": list(review.get("errors") or []),
+            "notes": list(review.get("notes") or []),
+            "field_errors": field_errors,
+            "checks": checks,
+        },
+        "actions": react_ui_action_inventory().get("ilo", []),
+    }
+
+
+@app.get("/api/ui/app-state")
+async def api_ui_app_state():
+    return jsonable_encoder(build_react_ui_state())
+
+
+@app.get("/api/ui/current-kit")
+async def api_ui_current_kit():
+    cfg = load_kit_config()
+    return jsonable_encoder(
+        {
+            "name": cfg.get("site", {}).get("name", ""),
+            "available": list_kits(),
+            "site": cfg.get("site", {}),
+            "ip_plan": cfg.get("ip_plan", {}),
+            "included": cfg.get("included", {}),
+        }
+    )
+
+
+@app.get("/api/ui/job-status")
+async def api_ui_job_status():
+    cfg = load_kit_config()
+    return jsonable_encoder(react_ui_job_payload(load_job(cfg.get("site", {}).get("name", ""))))
+
+
+@app.get("/api/ui/recent-activity")
+async def api_ui_recent_activity():
+    cfg = load_kit_config()
+    return jsonable_encoder(build_activity_feed(load_history(cfg.get("site", {}).get("name", "")), limit=20))
+
+
+@app.get("/api/ui/modules")
+async def api_ui_modules():
+    cfg = load_kit_config()
+    history = load_history(cfg.get("site", {}).get("name", ""))
+    job = load_job(cfg.get("site", {}).get("name", ""))
+    return jsonable_encoder(
+        {
+            "modules": react_ui_module_summaries(cfg, build_workflow_contexts(cfg, job, history)),
+            "actions": react_ui_action_inventory(),
+        }
+    )
+
+
+@app.get("/api/ui/run-history")
+async def api_ui_run_history():
+    cfg = load_kit_config()
+    history = load_history(cfg.get("site", {}).get("name", ""))
+    return jsonable_encoder({"history": build_history_display_entries(history), "activity": build_activity_feed(history, limit=20)})
+
+
+@app.get("/api/ui/technical-events")
+async def api_ui_technical_events():
+    cfg = load_kit_config()
+    job = load_job(cfg.get("site", {}).get("name", ""))
+    return jsonable_encoder(
+        {
+            "job": react_ui_job_payload(job),
+            "logs": [str(line) for line in list(job.get("logs") or [])][-200:],
+            "trace_events": list(job.get("trace_events") or [])[-100:],
+            "artifacts": react_ui_artifact_links(job),
+        }
+    )
+
+
+@app.get("/api/ui/ilo")
+async def api_ui_ilo():
+    return jsonable_encoder(build_react_ilo_state())
+
+
+@app.post("/api/ui/ilo/settings")
+async def api_ui_ilo_settings(request: Request):
+    cfg = load_kit_config()
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+    if not isinstance(body, dict):
+        body = {}
+    ilo_cfg = cfg.get("ilo", {}) or {}
+    policy_updates = dict(body.get("policy") or {}) if isinstance(body.get("policy"), dict) else {}
+    password_default = ilo_cfg.get("password") or ""
+    payload = {
+        "form": ReactFormAdapter(body),
+        "ilo_current_ip": _react_body_value(body, "current_ip", "ilo_current_ip", default=ilo_cfg.get("current_ip") or ilo_cfg.get("host") or ""),
+        "ilo_target_ip": _react_body_value(body, "target_ip", "ilo_target_ip", default=ilo_cfg.get("target_ip") or ""),
+        "ilo_gateway": _react_body_value(body, "gateway", "ilo_gateway", default=ilo_cfg.get("gateway") or cfg.get("ip_plan", {}).get("gateway") or ""),
+        "ilo_hostname": _react_body_value(body, "hostname", "ilo_hostname", default=ilo_cfg.get("hostname") or ""),
+        "ilo_username": _react_body_value(body, "username", "ilo_username", default=ilo_cfg.get("username") or ""),
+        "ilo_password": _react_body_value(body, "password", "ilo_password", default=password_default),
+        "policy_updates": policy_updates,
+        "ilo_policy_snmp_read_community": _react_body_value(
+            body,
+            "snmp_read_community",
+            "ilo_policy_snmp_read_community",
+            default=(cfg.get("shared_snmp", {}) or {}).get("read_community") or "",
+        ),
+    }
+    updated = _ilo_service_for_api().update_saved_ilo_settings(cfg, payload)
+    cfg = updated["cfg"]
+    core_ilo_input_review = build_ilo_input_review(cfg, include_policy_validation=False)
+    if core_ilo_input_review["errors"]:
+        return jsonable_encoder(
+            {
+                "ok": False,
+                "message": "iLO setup needs attention before it can be saved.",
+                "errors": list(core_ilo_input_review["errors"]),
+                "notes": list(core_ilo_input_review["notes"]),
+                "ilo": build_react_ilo_state(cfg),
+            }
+        )
+    try:
+        cfg = apply_ip_plan(cfg)
+    except Exception as e:
+        return jsonable_encoder({"ok": False, "message": f"Could not save iLO setup: {str(e).splitlines()[0]}", "ilo": build_react_ilo_state(cfg)})
+    save_kit_config(cfg)
+    append_activity_event(
+        cfg["site"]["name"],
+        "ilo_settings_saved",
+        workflow="ilo",
+        summary="Saved iLO settings from the React desktop UI.",
+        target=cfg["ilo"].get("current_ip") or cfg["ilo"].get("host") or "",
+        details=[
+            f"Planned final IP: {cfg['ilo'].get('target_ip') or 'Unchanged'}",
+            f"Gateway: {cfg['ilo'].get('gateway') or 'Not set'}",
+            f"Hostname: {cfg['ilo'].get('hostname') or 'Not set'}",
+        ],
+    )
+    return jsonable_encoder(
+        {
+            "ok": True,
+            "message": "iLO setup saved.",
+            "normalized_hostname": updated.get("normalized_hostname") or "",
+            "ilo": build_react_ilo_state(load_kit_config()),
+            "app_state": build_react_ui_state(),
+        }
+    )
+
+
 @app.get("/", response_class=HTMLResponse)
 async def home(request: Request):
     cfg = load_kit_config()
@@ -14295,6 +14692,20 @@ async def dashboard_page(request: Request):
 async def execution_page(request: Request):
     cfg = load_kit_config()
     return render_page(request, cfg, active_page="execution")
+
+
+@app.get("/react-preview", response_class=HTMLResponse)
+async def react_preview_page(request: Request):
+    cfg = load_kit_config()
+    return templates.TemplateResponse(
+        request=request,
+        name="react_preview.html",
+        context={
+            "title": "Lab Builder React Preview",
+            "current_kit": cfg.get("site", {}).get("name", ""),
+            "app_version": app_version(),
+        },
+    )
 
 
 @app.get("/global-settings", response_class=HTMLResponse)

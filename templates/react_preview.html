@@ -1,0 +1,1555 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{{ title }}</title>
+    <style>
+        :root {
+            --bg: #f3f5f8;
+            --surface: #ffffff;
+            --surface-2: #f8fafc;
+            --surface-3: #eef2f6;
+            --ink: #18212f;
+            --ink-2: #323c4d;
+            --muted: #667085;
+            --line: #d7dee8;
+            --line-strong: #b9c4d0;
+            --nav: #24272d;
+            --nav-2: #30343b;
+            --blue: #2563eb;
+            --blue-soft: #eaf1ff;
+            --green: #147d5a;
+            --green-soft: #e8f6ef;
+            --amber: #a16207;
+            --amber-soft: #fff4dd;
+            --red: #b42318;
+            --red-soft: #fff0ed;
+            --purple: #7156d9;
+            --shadow: 0 16px 36px rgba(24, 33, 47, 0.08);
+        }
+
+        * {
+            box-sizing: border-box;
+        }
+
+        html,
+        body {
+            min-height: 100%;
+        }
+
+        body {
+            margin: 0;
+            background: var(--bg);
+            color: var(--ink);
+            font-family: Inter, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+            line-height: 1.45;
+            letter-spacing: 0;
+            text-rendering: optimizeLegibility;
+            -webkit-font-smoothing: antialiased;
+        }
+
+        button,
+        input {
+            font: inherit;
+        }
+
+        a {
+            color: inherit;
+            text-decoration: none;
+        }
+
+        .preview-loading {
+            display: grid;
+            min-height: 100vh;
+            place-items: center;
+            color: var(--muted);
+        }
+
+        .desktop-preview {
+            display: grid;
+            grid-template-columns: 268px minmax(0, 1fr);
+            min-height: 100vh;
+        }
+
+        .app-sidebar {
+            display: flex;
+            flex-direction: column;
+            gap: 18px;
+            min-height: 100vh;
+            padding: 18px 14px;
+            background: var(--nav);
+            color: #f8fafc;
+            border-right: 1px solid rgba(255, 255, 255, 0.08);
+        }
+
+        .brand-row {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            min-height: 42px;
+            padding: 4px 6px;
+        }
+
+        .brand-mark {
+            display: grid;
+            width: 34px;
+            height: 34px;
+            place-items: center;
+            border-radius: 8px;
+            background: #f8fafc;
+            color: var(--nav);
+            font-weight: 850;
+        }
+
+        .brand-name {
+            font-size: 0.98rem;
+            font-weight: 800;
+        }
+
+        .brand-subtitle {
+            color: #b8c0cc;
+            font-size: 0.78rem;
+        }
+
+        .sidebar-section-title {
+            margin: 14px 8px 8px;
+            color: #aab3c1;
+            font-size: 0.72rem;
+            font-weight: 800;
+            text-transform: uppercase;
+            letter-spacing: 0;
+        }
+
+        .nav-list {
+            display: grid;
+            gap: 4px;
+        }
+
+        .nav-item {
+            display: grid;
+            grid-template-columns: 22px 1fr auto;
+            align-items: center;
+            gap: 10px;
+            min-height: 42px;
+            padding: 8px 10px;
+            border: 1px solid transparent;
+            border-radius: 8px;
+            color: #dce3ee;
+        }
+
+        .nav-item:hover,
+        .nav-item:focus-visible {
+            border-color: rgba(255, 255, 255, 0.12);
+            background: var(--nav-2);
+            outline: none;
+        }
+
+        .nav-item-active {
+            background: #f8fafc;
+            color: var(--ink);
+            border-color: #f8fafc;
+        }
+
+        .nav-icon {
+            display: grid;
+            width: 22px;
+            height: 22px;
+            place-items: center;
+            border-radius: 6px;
+            background: rgba(255, 255, 255, 0.1);
+            font-size: 0.72rem;
+            font-weight: 800;
+        }
+
+        .nav-item-active .nav-icon {
+            background: var(--blue-soft);
+            color: var(--blue);
+        }
+
+        .nav-text {
+            min-width: 0;
+        }
+
+        .nav-label {
+            display: block;
+            overflow: hidden;
+            font-size: 0.9rem;
+            font-weight: 750;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+
+        .nav-meta {
+            display: block;
+            color: currentColor;
+            font-size: 0.72rem;
+            opacity: 0.68;
+        }
+
+        .sidebar-footer {
+            margin-top: auto;
+            padding: 12px;
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            border-radius: 8px;
+            background: rgba(255, 255, 255, 0.06);
+        }
+
+        .sidebar-footer strong {
+            display: block;
+            margin-bottom: 4px;
+            font-size: 0.86rem;
+        }
+
+        .sidebar-footer span {
+            display: block;
+            color: #b8c0cc;
+            font-size: 0.78rem;
+        }
+
+        .workspace-shell {
+            display: grid;
+            grid-template-rows: 58px minmax(0, 1fr);
+            min-width: 0;
+        }
+
+        .top-status {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 16px;
+            padding: 0 24px;
+            background: rgba(255, 255, 255, 0.92);
+            border-bottom: 1px solid var(--line);
+        }
+
+        .top-status-left,
+        .top-status-right {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            min-width: 0;
+        }
+
+        .status-cluster {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            min-height: 34px;
+            padding: 6px 10px;
+            border: 1px solid var(--line);
+            border-radius: 8px;
+            background: var(--surface);
+            color: var(--ink-2);
+            font-size: 0.82rem;
+            font-weight: 700;
+            white-space: nowrap;
+        }
+
+        .status-dot {
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            background: var(--muted);
+        }
+
+        .dot-good {
+            background: var(--green);
+        }
+
+        .dot-warn {
+            background: var(--amber);
+        }
+
+        .dot-blue {
+            background: var(--blue);
+        }
+
+        .workspace {
+            min-width: 0;
+            padding: 26px;
+            overflow: auto;
+        }
+
+        .workspace-heading {
+            display: flex;
+            align-items: flex-start;
+            justify-content: space-between;
+            gap: 18px;
+            margin-bottom: 18px;
+        }
+
+        .eyebrow {
+            color: var(--muted);
+            font-size: 0.78rem;
+            font-weight: 800;
+            text-transform: uppercase;
+            letter-spacing: 0;
+        }
+
+        h1,
+        h2,
+        h3,
+        p {
+            margin: 0;
+        }
+
+        h1 {
+            margin-top: 4px;
+            font-size: clamp(1.65rem, 2.2vw, 2.25rem);
+            line-height: 1.12;
+            letter-spacing: 0;
+        }
+
+        .heading-summary {
+            max-width: 760px;
+            margin-top: 8px;
+            color: var(--muted);
+            font-size: 0.96rem;
+        }
+
+        .toolbar {
+            display: flex;
+            flex-wrap: wrap;
+            justify-content: flex-end;
+            gap: 8px;
+        }
+
+        .button {
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            gap: 8px;
+            min-height: 36px;
+            padding: 8px 12px;
+            border: 1px solid var(--line-strong);
+            border-radius: 6px;
+            background: var(--surface);
+            color: var(--ink);
+            cursor: pointer;
+            font-size: 0.86rem;
+            font-weight: 760;
+        }
+
+        .button:hover,
+        .button:focus-visible {
+            border-color: var(--blue);
+            outline: none;
+        }
+
+        .button-primary {
+            border-color: var(--blue);
+            background: var(--blue);
+            color: white;
+        }
+
+        .summary-strip {
+            display: grid;
+            grid-template-columns: repeat(3, minmax(0, 1fr));
+            gap: 12px;
+            margin-bottom: 16px;
+        }
+
+        .strip-item {
+            min-width: 0;
+            padding: 14px 16px;
+            border: 1px solid var(--line);
+            border-radius: 8px;
+            background: var(--surface);
+            box-shadow: 0 8px 24px rgba(24, 33, 47, 0.04);
+        }
+
+        .strip-label,
+        .panel-label,
+        .metric-label {
+            color: var(--muted);
+            font-size: 0.76rem;
+            font-weight: 800;
+            text-transform: uppercase;
+            letter-spacing: 0;
+        }
+
+        .strip-value {
+            margin-top: 6px;
+            color: var(--ink);
+            font-size: 0.95rem;
+            font-weight: 760;
+        }
+
+        .content-grid {
+            display: grid;
+            grid-template-columns: minmax(0, 1.6fr) minmax(320px, 0.8fr);
+            gap: 16px;
+            align-items: start;
+        }
+
+        .primary-stack,
+        .side-stack {
+            display: grid;
+            gap: 16px;
+            min-width: 0;
+        }
+
+        .panel {
+            min-width: 0;
+            border: 1px solid var(--line);
+            border-radius: 8px;
+            background: var(--surface);
+            box-shadow: var(--shadow);
+        }
+
+        .panel-header {
+            display: flex;
+            align-items: flex-start;
+            justify-content: space-between;
+            gap: 12px;
+            padding: 16px 18px;
+            border-bottom: 1px solid var(--line);
+        }
+
+        .panel-title {
+            margin-top: 3px;
+            font-size: 1rem;
+            font-weight: 820;
+        }
+
+        .panel-subtitle {
+            margin-top: 3px;
+            color: var(--muted);
+            font-size: 0.82rem;
+        }
+
+        .panel-body {
+            padding: 18px;
+        }
+
+        .live-panel {
+            border-color: var(--line-strong);
+        }
+
+        .job-hero {
+            display: grid;
+            grid-template-columns: minmax(0, 1fr) auto;
+            gap: 18px;
+            align-items: center;
+            margin-bottom: 18px;
+        }
+
+        .job-title {
+            font-size: 1.45rem;
+            font-weight: 840;
+            line-height: 1.15;
+        }
+
+        .job-summary {
+            max-width: 760px;
+            margin-top: 8px;
+            color: var(--muted);
+            font-size: 0.94rem;
+        }
+
+        .progress-ring {
+            display: grid;
+            width: 112px;
+            height: 112px;
+            place-items: center;
+            border-radius: 50%;
+            background:
+                conic-gradient(var(--blue) 0 68%, var(--surface-3) 68% 100%);
+        }
+
+        .progress-ring-inner {
+            display: grid;
+            width: 82px;
+            height: 82px;
+            place-items: center;
+            border-radius: 50%;
+            background: var(--surface);
+            text-align: center;
+        }
+
+        .progress-ring-value {
+            font-size: 1.35rem;
+            font-weight: 850;
+        }
+
+        .progress-ring-label {
+            color: var(--muted);
+            font-size: 0.72rem;
+            font-weight: 780;
+        }
+
+        .metric-row {
+            display: grid;
+            grid-template-columns: repeat(4, minmax(0, 1fr));
+            border-top: 1px solid var(--line);
+            border-bottom: 1px solid var(--line);
+        }
+
+        .metric {
+            min-width: 0;
+            padding: 13px 14px;
+            border-right: 1px solid var(--line);
+        }
+
+        .metric:last-child {
+            border-right: 0;
+        }
+
+        .metric-value {
+            margin-top: 5px;
+            overflow: hidden;
+            color: var(--ink);
+            font-size: 0.96rem;
+            font-weight: 800;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+
+        .wide-progress {
+            height: 10px;
+            margin: 18px 0 0;
+            overflow: hidden;
+            border-radius: 6px;
+            background: var(--surface-3);
+            border: 1px solid var(--line);
+        }
+
+        .wide-progress-bar {
+            width: 68%;
+            height: 100%;
+            background: var(--blue);
+        }
+
+        .job-actions {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 8px;
+            margin-top: 18px;
+        }
+
+        .timeline {
+            display: grid;
+            gap: 0;
+        }
+
+        .timeline-item {
+            display: grid;
+            grid-template-columns: 28px minmax(0, 1fr) auto;
+            gap: 12px;
+            align-items: start;
+            padding: 14px 18px;
+            border-top: 1px solid var(--line);
+            cursor: pointer;
+        }
+
+        .timeline-item:first-child {
+            border-top: 0;
+        }
+
+        .timeline-item:hover,
+        .timeline-item:focus-visible,
+        .timeline-item-selected {
+            background: var(--surface-2);
+            outline: none;
+        }
+
+        .timeline-marker {
+            display: grid;
+            width: 24px;
+            height: 24px;
+            place-items: center;
+            border: 2px solid var(--line-strong);
+            border-radius: 50%;
+            color: var(--muted);
+            font-size: 0.72rem;
+            font-weight: 850;
+        }
+
+        .timeline-done .timeline-marker {
+            border-color: var(--green);
+            color: var(--green);
+        }
+
+        .timeline-running .timeline-marker {
+            border-color: var(--blue);
+            color: var(--blue);
+        }
+
+        .timeline-warn .timeline-marker {
+            border-color: var(--amber);
+            color: var(--amber);
+        }
+
+        .timeline-title {
+            font-size: 0.92rem;
+            font-weight: 800;
+        }
+
+        .timeline-detail {
+            margin-top: 3px;
+            color: var(--muted);
+            font-size: 0.82rem;
+        }
+
+        .timeline-time {
+            color: var(--muted);
+            font-size: 0.78rem;
+            font-weight: 740;
+            white-space: nowrap;
+        }
+
+        .pill {
+            display: inline-flex;
+            align-items: center;
+            min-height: 24px;
+            padding: 3px 8px;
+            border: 1px solid var(--line);
+            border-radius: 999px;
+            background: var(--surface-2);
+            color: var(--ink-2);
+            font-size: 0.76rem;
+            font-weight: 820;
+            white-space: nowrap;
+        }
+
+        .pill-good {
+            border-color: #b8dccb;
+            background: var(--green-soft);
+            color: var(--green);
+        }
+
+        .pill-blue {
+            border-color: #b7cbff;
+            background: var(--blue-soft);
+            color: var(--blue);
+        }
+
+        .pill-warn {
+            border-color: #f5d088;
+            background: var(--amber-soft);
+            color: var(--amber);
+        }
+
+        .pill-red {
+            border-color: #ffc5bd;
+            background: var(--red-soft);
+            color: var(--red);
+        }
+
+        .data-list,
+        .activity-list,
+        .warning-list {
+            display: grid;
+            gap: 0;
+        }
+
+        .data-row,
+        .activity-row,
+        .warning-row {
+            display: grid;
+            grid-template-columns: minmax(0, 1fr) auto;
+            gap: 12px;
+            align-items: start;
+            padding: 12px 0;
+            border-top: 1px solid var(--line);
+        }
+
+        .data-row:first-child,
+        .activity-row:first-child,
+        .warning-row:first-child {
+            border-top: 0;
+            padding-top: 0;
+        }
+
+        .data-name,
+        .activity-title,
+        .warning-title {
+            min-width: 0;
+            font-size: 0.88rem;
+            font-weight: 790;
+        }
+
+        .data-value,
+        .activity-detail,
+        .warning-detail {
+            margin-top: 3px;
+            color: var(--muted);
+            font-size: 0.8rem;
+        }
+
+        .next-step {
+            border-color: #b7cbff;
+            background: #fbfdff;
+        }
+
+        .next-step .panel-body {
+            display: grid;
+            gap: 12px;
+        }
+
+        .next-step-title {
+            font-size: 1rem;
+            font-weight: 850;
+        }
+
+        .next-step-copy {
+            color: var(--muted);
+            font-size: 0.88rem;
+        }
+
+        .technical-panel {
+            margin-top: 16px;
+            border-color: var(--line-strong);
+            box-shadow: none;
+        }
+
+        .technical-panel .panel-header {
+            align-items: center;
+        }
+
+        .technical-body {
+            display: none;
+            grid-template-columns: minmax(0, 0.9fr) minmax(0, 1.1fr);
+            gap: 16px;
+            padding: 0 18px 18px;
+        }
+
+        .technical-panel-open .technical-body {
+            display: grid;
+        }
+
+        .selected-stage {
+            border-top: 1px solid var(--line);
+            padding-top: 16px;
+        }
+
+        .log-box {
+            min-height: 226px;
+            max-height: 330px;
+            overflow: auto;
+            padding: 14px;
+            border: 1px solid var(--line);
+            border-radius: 8px;
+            background: #15181d;
+            color: #dce3ee;
+            font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+            font-size: 0.78rem;
+            line-height: 1.55;
+            white-space: pre-wrap;
+        }
+
+        .detail-grid {
+            display: grid;
+            grid-template-columns: repeat(2, minmax(0, 1fr));
+            gap: 10px;
+        }
+
+        .detail-item {
+            min-width: 0;
+            padding: 10px 0;
+            border-bottom: 1px solid var(--line);
+        }
+
+        .detail-value {
+            margin-top: 4px;
+            overflow-wrap: anywhere;
+            font-size: 0.86rem;
+            font-weight: 760;
+        }
+
+        .noscript-panel {
+            max-width: 680px;
+            margin: 40px auto;
+            padding: 18px;
+            border: 1px solid var(--line);
+            border-radius: 8px;
+            background: var(--surface);
+            color: var(--ink);
+        }
+
+        .page-layout {
+            display: grid;
+            grid-template-columns: minmax(0, 1fr) minmax(280px, 360px);
+            gap: 16px;
+            align-items: start;
+        }
+
+        .page-main {
+            display: grid;
+            gap: 16px;
+            min-width: 0;
+        }
+
+        .context-panel {
+            position: sticky;
+            top: 18px;
+            display: grid;
+            gap: 16px;
+            min-width: 0;
+        }
+
+        .section-grid {
+            display: grid;
+            grid-template-columns: repeat(3, minmax(0, 1fr));
+            gap: 12px;
+        }
+
+        .module-grid {
+            display: grid;
+            grid-template-columns: repeat(2, minmax(0, 1fr));
+            gap: 12px;
+        }
+
+        .module-card,
+        .setup-card {
+            min-width: 0;
+            padding: 14px;
+            border: 1px solid var(--line);
+            border-radius: 8px;
+            background: var(--surface);
+        }
+
+        .form-grid {
+            display: grid;
+            grid-template-columns: repeat(2, minmax(0, 1fr));
+            gap: 12px;
+        }
+
+        .field {
+            display: grid;
+            gap: 6px;
+            min-width: 0;
+        }
+
+        .field label {
+            color: var(--muted);
+            font-size: 0.78rem;
+            font-weight: 800;
+            text-transform: uppercase;
+            letter-spacing: 0;
+        }
+
+        .text-input,
+        .select-input {
+            width: 100%;
+            min-height: 40px;
+            padding: 8px 10px;
+            border: 1px solid var(--line-strong);
+            border-radius: 6px;
+            background: var(--surface);
+            color: var(--ink);
+            outline: none;
+        }
+
+        .text-input:focus,
+        .select-input:focus {
+            border-color: var(--blue);
+            box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.12);
+        }
+
+        .field-help {
+            color: var(--muted);
+            font-size: 0.78rem;
+        }
+
+        .message {
+            padding: 12px 14px;
+            border: 1px solid var(--line);
+            border-radius: 8px;
+            background: var(--surface-2);
+            color: var(--ink-2);
+            font-size: 0.88rem;
+            font-weight: 730;
+        }
+
+        .message-good {
+            border-color: #b8dccb;
+            background: var(--green-soft);
+            color: var(--green);
+        }
+
+        .message-warn {
+            border-color: #f5d088;
+            background: var(--amber-soft);
+            color: var(--amber);
+        }
+
+        .action-list {
+            display: grid;
+            gap: 8px;
+        }
+
+        .action-row {
+            display: grid;
+            grid-template-columns: minmax(0, 1fr) auto;
+            gap: 8px;
+            align-items: center;
+            padding: 10px 0;
+            border-top: 1px solid var(--line);
+        }
+
+        .action-row:first-child {
+            border-top: 0;
+            padding-top: 0;
+        }
+
+        .code-mini {
+            overflow: auto;
+            max-height: 420px;
+            padding: 12px;
+            border: 1px solid var(--line);
+            border-radius: 8px;
+            background: #15181d;
+            color: #dce3ee;
+            font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+            font-size: 0.78rem;
+            line-height: 1.55;
+            white-space: pre-wrap;
+        }
+
+        .technical-drawer {
+            margin-top: 16px;
+            border: 1px solid var(--line-strong);
+            border-radius: 8px;
+            background: var(--surface);
+        }
+
+        .technical-drawer-body {
+            display: grid;
+            grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+            gap: 16px;
+            padding: 18px;
+            border-top: 1px solid var(--line);
+        }
+
+        .empty-state {
+            padding: 18px;
+            border: 1px dashed var(--line-strong);
+            border-radius: 8px;
+            background: var(--surface-2);
+            color: var(--muted);
+        }
+
+        @media (max-width: 1180px) {
+            .desktop-preview {
+                grid-template-columns: 228px minmax(0, 1fr);
+            }
+
+            .content-grid {
+                grid-template-columns: minmax(0, 1fr);
+            }
+
+            .side-stack {
+                grid-template-columns: repeat(2, minmax(0, 1fr));
+            }
+
+            .next-step {
+                grid-column: 1 / -1;
+            }
+        }
+
+        @media (max-width: 860px) {
+            .desktop-preview {
+                grid-template-columns: 1fr;
+            }
+
+            .app-sidebar {
+                min-height: auto;
+            }
+
+            .workspace-shell {
+                grid-template-rows: auto minmax(0, 1fr);
+            }
+
+            .top-status,
+            .workspace-heading,
+            .job-hero {
+                align-items: flex-start;
+                flex-direction: column;
+            }
+
+            .top-status {
+                padding: 14px 18px;
+            }
+
+            .top-status-left,
+            .top-status-right,
+            .toolbar {
+                flex-wrap: wrap;
+                justify-content: flex-start;
+            }
+
+            .workspace {
+                padding: 18px;
+            }
+
+            .summary-strip,
+            .metric-row,
+            .side-stack,
+            .page-layout,
+            .section-grid,
+            .module-grid,
+            .form-grid,
+            .technical-drawer-body,
+            .technical-body {
+                grid-template-columns: 1fr;
+            }
+
+            .metric {
+                border-right: 0;
+                border-bottom: 1px solid var(--line);
+            }
+
+            .metric:last-child {
+                border-bottom: 0;
+            }
+        }
+    </style>
+</head>
+<body>
+    <noscript>
+        <div class="noscript-panel">
+            JavaScript is required for the React preview route. The existing Jinja and HTMX pages remain available from the normal navigation.
+        </div>
+    </noscript>
+    <div id="react-preview-root">
+        <div class="preview-loading">Loading Run Center preview...</div>
+    </div>
+
+    <script>
+        window.LAB_BUILDER_REACT_PREVIEW = {
+            currentKit: {{ current_kit|tojson }},
+            version: {{ app_version|tojson }}
+        };
+        window.LAB_BUILDER_USE_EXTERNAL_REACT_APP = true;
+    </script>
+    <script crossorigin src="https://unpkg.com/react@18/umd/react.development.js"></script>
+    <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
+    <script>
+        (function () {
+            if (window.LAB_BUILDER_USE_EXTERNAL_REACT_APP) {
+                return;
+            }
+            const h = React.createElement;
+            const serverState = window.LAB_BUILDER_REACT_PREVIEW || {};
+
+            const mockData = {
+                kit: {
+                    name: serverState.currentKit || "Kit-01",
+                    site: "Lab rack A",
+                    targetHost: "dl380-g11-01",
+                    mode: "Preview / safety mode",
+                    build: serverState.version || "unknown",
+                    subnet: "10.10.8.0/24",
+                    includedStages: ["iLO", "Storage", "ESXi", "Windows", "NetApp"],
+                    readiness: "8 of 10 checks ready"
+                },
+                job: {
+                    title: "Included kit preview",
+                    status: "Running",
+                    progress: 68,
+                    currentStage: "ESXi installer media",
+                    started: "05:18",
+                    elapsed: "14m 32s",
+                    eta: "7m",
+                    operator: "Local console"
+                },
+                purpose: [
+                    {
+                        label: "What this page is for",
+                        value: "Monitor the active run, surface blockers, and keep setup flow separate from technical logs."
+                    },
+                    {
+                        label: "What to do next",
+                        value: "Confirm generated ESXi media readback, then continue the real execution gate."
+                    },
+                    {
+                        label: "What happened last",
+                        value: "Storage plan preview finished and the approved RAID artifact was attached to the run."
+                    }
+                ],
+                timeline: [
+                    {
+                        id: "ilo",
+                        title: "iLO connection",
+                        detail: "Credentials verified, Redfish service root reachable.",
+                        status: "done",
+                        label: "Done",
+                        tone: "good",
+                        time: "05:19"
+                    },
+                    {
+                        id: "storage",
+                        title: "Storage plan",
+                        detail: "Approved exact artifact loaded for controller slot 0.",
+                        status: "done",
+                        label: "Done",
+                        tone: "good",
+                        time: "05:23"
+                    },
+                    {
+                        id: "esxi",
+                        title: "ESXi installer media",
+                        detail: "Generated ISO URL validated. Virtual media readback is pending.",
+                        status: "running",
+                        label: "Running",
+                        tone: "blue",
+                        time: "Now"
+                    },
+                    {
+                        id: "windows",
+                        title: "Windows safe stage",
+                        detail: "OVF template is registered. Deployment remains dry-run only.",
+                        status: "waiting",
+                        label: "Waiting",
+                        tone: "neutral",
+                        time: "Next"
+                    },
+                    {
+                        id: "netapp",
+                        title: "NetApp apply",
+                        detail: "ONTAP policy allows safe apply after upgrade gate review.",
+                        status: "warn",
+                        label: "Review",
+                        tone: "warn",
+                        time: "Queued"
+                    }
+                ],
+                warnings: [
+                    {
+                        title: "Virtual media readback pending",
+                        detail: "The generated ISO URL is reachable, but iLO has not confirmed the mounted image yet.",
+                        severity: "warn"
+                    },
+                    {
+                        title: "Windows deploy remains dry-run",
+                        detail: "The registered OVF template has not been promoted to a real deployment action.",
+                        severity: "neutral"
+                    },
+                    {
+                        title: "Upgrade gate review",
+                        detail: "NetApp version policy is warn-only for this mock preview run.",
+                        severity: "warn"
+                    }
+                ],
+                activity: [
+                    {
+                        title: "Storage approval restored",
+                        detail: "Exact artifact matched current kit host.",
+                        time: "05:24"
+                    },
+                    {
+                        title: "Execution preview started",
+                        detail: "Included stages selected from Run Center.",
+                        time: "05:18"
+                    },
+                    {
+                        title: "iLO inventory snapshot loaded",
+                        detail: "Firmware and power state were attached to the run context.",
+                        time: "05:17"
+                    },
+                    {
+                        title: "Kit settings saved",
+                        detail: "Global subnet and ESXi host values refreshed.",
+                        time: "05:12"
+                    }
+                ],
+                logs: [
+                    "[05:18:02] preview initialized scope=included kit=Kit-01",
+                    "[05:19:11] iLO service root reachable model=iLO 6 firmware=3.00",
+                    "[05:21:48] storage artifact restored path=artifacts/exports/storage-raid/Kit-01/approved.yml",
+                    "[05:24:06] generated ESXi ISO URL http://lab-builder:8001/esxi-built-iso/Kit-01/Kit-01.iso",
+                    "[05:26:15] waiting for virtual media image readback",
+                    "[05:27:03] next gate requires operator confirmation before real execution"
+                ]
+            };
+
+            function Pill(props) {
+                return h("span", { className: "pill pill-" + (props.tone || "neutral") }, props.children);
+            }
+
+            function Sidebar() {
+                const nav = [
+                    ["RC", "Run Center", "Live execution", "/react-preview", true],
+                    ["DB", "Dashboard", "Kit overview", "/dashboard", false],
+                    ["HW", "Hardware", "iLO and storage", "/ilo", false],
+                    ["EX", "ESXi", "Installer setup", "/esxi", false],
+                    ["VM", "Windows", "Safe VM stage", "/windows", false],
+                    ["LG", "History", "Run records", "/history", false]
+                ];
+                return h("aside", { className: "app-sidebar", "aria-label": "Preview navigation" },
+                    h("div", { className: "brand-row" },
+                        h("div", { className: "brand-mark" }, "LB"),
+                        h("div", null,
+                            h("div", { className: "brand-name" }, "Lab Builder"),
+                            h("div", { className: "brand-subtitle" }, "Desktop preview")
+                        )
+                    ),
+                    h("div", null,
+                        h("div", { className: "sidebar-section-title" }, "Workspace"),
+                        h("nav", { className: "nav-list" },
+                            nav.map(function (item) {
+                                return h("a", {
+                                    key: item[1],
+                                    className: "nav-item" + (item[4] ? " nav-item-active" : ""),
+                                    href: item[3]
+                                },
+                                    h("span", { className: "nav-icon", "aria-hidden": "true" }, item[0]),
+                                    h("span", { className: "nav-text" },
+                                        h("span", { className: "nav-label" }, item[1]),
+                                        h("span", { className: "nav-meta" }, item[2])
+                                    ),
+                                    item[4] ? h(Pill, { tone: "blue" }, "Open") : null
+                                );
+                            })
+                        )
+                    ),
+                    h("div", null,
+                        h("div", { className: "sidebar-section-title" }, "Quick Links"),
+                        h("nav", { className: "nav-list" },
+                            h("a", { className: "nav-item", href: "/execution" },
+                                h("span", { className: "nav-icon", "aria-hidden": "true" }, "HT"),
+                                h("span", { className: "nav-text" },
+                                    h("span", { className: "nav-label" }, "Current Run Center"),
+                                    h("span", { className: "nav-meta" }, "Jinja / HTMX route")
+                                )
+                            ),
+                            h("a", { className: "nav-item", href: "/configs" },
+                                h("span", { className: "nav-icon", "aria-hidden": "true" }, "RP"),
+                                h("span", { className: "nav-text" },
+                                    h("span", { className: "nav-label" }, "Reports"),
+                                    h("span", { className: "nav-meta" }, "Logs and exports")
+                                )
+                            )
+                        )
+                    ),
+                    h("div", { className: "sidebar-footer" },
+                        h("strong", null, mockData.kit.name),
+                        h("span", null, mockData.kit.readiness),
+                        h("span", null, mockData.kit.subnet)
+                    )
+                );
+            }
+
+            function TopStatus() {
+                return h("header", { className: "top-status" },
+                    h("div", { className: "top-status-left" },
+                        h("div", { className: "status-cluster" },
+                            h("span", { className: "status-dot dot-good", "aria-hidden": "true" }),
+                            "Connected"
+                        ),
+                        h("div", { className: "status-cluster" },
+                            h("span", { className: "status-dot dot-blue", "aria-hidden": "true" }),
+                            mockData.kit.name
+                        ),
+                        h("div", { className: "status-cluster" }, mockData.job.operator)
+                    ),
+                    h("div", { className: "top-status-right" },
+                        h("div", { className: "status-cluster" }, "Mode: " + mockData.kit.mode),
+                        h("div", { className: "status-cluster" },
+                            h("span", { className: "status-dot dot-warn", "aria-hidden": "true" }),
+                            "3 warnings"
+                        )
+                    )
+                );
+            }
+
+            function WorkspaceHeading(props) {
+                return h("div", { className: "workspace-heading" },
+                    h("div", null,
+                        h("div", { className: "eyebrow" }, "React preview"),
+                        h("h1", null, "Run Center workspace"),
+                        h("p", { className: "heading-summary" }, "A desktop-style control center for the active Lab Builder run, with operator decisions separated from low-level diagnostics.")
+                    ),
+                    h("div", { className: "toolbar" },
+                        h("button", { className: "button", type: "button", onClick: props.onToggleDetails }, props.detailsOpen ? "Hide details" : "Show details"),
+                        h("a", { className: "button", href: "/execution" }, "Open current UI"),
+                        h("button", { className: "button button-primary", type: "button" }, "Start preview")
+                    )
+                );
+            }
+
+            function PurposeStrip() {
+                return h("section", { className: "summary-strip", "aria-label": "Run Center setup flow summary" },
+                    mockData.purpose.map(function (item) {
+                        return h("div", { className: "strip-item", key: item.label },
+                            h("div", { className: "strip-label" }, item.label),
+                            h("div", { className: "strip-value" }, item.value)
+                        );
+                    })
+                );
+            }
+
+            function LiveJobPanel() {
+                const metrics = [
+                    ["Current step", mockData.job.currentStage],
+                    ["Started", mockData.job.started],
+                    ["Elapsed", mockData.job.elapsed],
+                    ["ETA", mockData.job.eta]
+                ];
+                return h("section", { className: "panel live-panel", "aria-label": "Large live job panel" },
+                    h("div", { className: "panel-header" },
+                        h("div", null,
+                            h("div", { className: "panel-label" }, "Live job"),
+                            h("h2", { className: "panel-title" }, "Execution monitor")
+                        ),
+                        h(Pill, { tone: "blue" }, mockData.job.status)
+                    ),
+                    h("div", { className: "panel-body" },
+                        h("div", { className: "job-hero" },
+                            h("div", null,
+                                h("div", { className: "job-title" }, mockData.job.title),
+                                h("p", { className: "job-summary" }, "Preview mode is validating run inputs and collecting device state. Real execution remains gated behind the existing Run Center confirmation flow.")
+                            ),
+                            h("div", { className: "progress-ring", role: "img", "aria-label": mockData.job.progress + " percent complete" },
+                                h("div", { className: "progress-ring-inner" },
+                                    h("div", { className: "progress-ring-value" }, mockData.job.progress + "%"),
+                                    h("div", { className: "progress-ring-label" }, "complete")
+                                )
+                            )
+                        ),
+                        h("div", { className: "metric-row" },
+                            metrics.map(function (metric) {
+                                return h("div", { className: "metric", key: metric[0] },
+                                    h("div", { className: "metric-label" }, metric[0]),
+                                    h("div", { className: "metric-value", title: metric[1] }, metric[1])
+                                );
+                            })
+                        ),
+                        h("div", { className: "wide-progress", "aria-hidden": "true" },
+                            h("div", { className: "wide-progress-bar" })
+                        ),
+                        h("div", { className: "job-actions" },
+                            h("button", { className: "button button-primary", type: "button" }, "Continue gate"),
+                            h("button", { className: "button", type: "button" }, "Hold run"),
+                            h("button", { className: "button", type: "button" }, "Export summary")
+                        )
+                    )
+                );
+            }
+
+            function TimelinePanel(props) {
+                return h("section", { className: "panel", "aria-label": "Progress timeline" },
+                    h("div", { className: "panel-header" },
+                        h("div", null,
+                            h("div", { className: "panel-label" }, "Progress"),
+                            h("h2", { className: "panel-title" }, "Timeline")
+                        ),
+                        h(Pill, { tone: "blue" }, "5 stages")
+                    ),
+                    h("div", { className: "timeline" },
+                        mockData.timeline.map(function (item, index) {
+                            const selected = props.selectedStage.id === item.id;
+                            return h("button", {
+                                key: item.id,
+                                type: "button",
+                                className: "timeline-item timeline-" + item.status + (selected ? " timeline-item-selected" : ""),
+                                onClick: function () { props.onSelect(item); }
+                            },
+                                h("span", { className: "timeline-marker" }, index + 1),
+                                h("span", null,
+                                    h("span", { className: "timeline-title" }, item.title),
+                                    h("span", { className: "timeline-detail" }, item.detail)
+                                ),
+                                h("span", { className: "timeline-time" }, item.time)
+                            );
+                        })
+                    )
+                );
+            }
+
+            function KitSummaryPanel() {
+                const rows = [
+                    ["Kit", mockData.kit.name],
+                    ["Site", mockData.kit.site],
+                    ["Target", mockData.kit.targetHost],
+                    ["Subnet", mockData.kit.subnet],
+                    ["Mode", mockData.kit.mode],
+                    ["Build", mockData.kit.build]
+                ];
+                return h("section", { className: "panel", "aria-label": "Kit summary panel" },
+                    h("div", { className: "panel-header" },
+                        h("div", null,
+                            h("div", { className: "panel-label" }, "Kit summary"),
+                            h("h2", { className: "panel-title" }, mockData.kit.name)
+                        ),
+                        h(Pill, { tone: "good" }, "Ready")
+                    ),
+                    h("div", { className: "panel-body" },
+                        h("div", { className: "data-list" },
+                            rows.map(function (row) {
+                                return h("div", { className: "data-row", key: row[0] },
+                                    h("div", null,
+                                        h("div", { className: "data-name" }, row[0]),
+                                        h("div", { className: "data-value" }, row[1])
+                                    )
+                                );
+                            })
+                        ),
+                        h("div", { className: "data-row" },
+                            h("div", null,
+                                h("div", { className: "data-name" }, "Included stages"),
+                                h("div", { className: "data-value" }, mockData.kit.includedStages.join(", "))
+                            )
+                        )
+                    )
+                );
+            }
+
+            function WarningsPanel() {
+                return h("section", { className: "panel", "aria-label": "Warnings panel" },
+                    h("div", { className: "panel-header" },
+                        h("div", null,
+                            h("div", { className: "panel-label" }, "Warnings"),
+                            h("h2", { className: "panel-title" }, "Needs attention")
+                        ),
+                        h(Pill, { tone: "warn" }, mockData.warnings.length + " open")
+                    ),
+                    h("div", { className: "panel-body" },
+                        h("div", { className: "warning-list" },
+                            mockData.warnings.map(function (item) {
+                                return h("div", { className: "warning-row", key: item.title },
+                                    h("div", null,
+                                        h("div", { className: "warning-title" }, item.title),
+                                        h("div", { className: "warning-detail" }, item.detail)
+                                    ),
+                                    h(Pill, { tone: item.severity === "warn" ? "warn" : "neutral" }, item.severity === "warn" ? "Review" : "Info")
+                                );
+                            })
+                        )
+                    )
+                );
+            }
+
+            function NextStepPanel() {
+                return h("section", { className: "panel next-step", "aria-label": "Next recommended step card" },
+                    h("div", { className: "panel-header" },
+                        h("div", null,
+                            h("div", { className: "panel-label" }, "Next recommended step"),
+                            h("h2", { className: "panel-title" }, "Confirm ESXi media readback")
+                        ),
+                        h(Pill, { tone: "blue" }, "Next")
+                    ),
+                    h("div", { className: "panel-body" },
+                        h("div", { className: "next-step-title" }, "Wait for iLO to report the mounted image, then continue the real execution gate."),
+                        h("p", { className: "next-step-copy" }, "The main setup flow stays focused on operator decisions. Technical evidence and raw logs remain in the details panel below."),
+                        h("div", { className: "job-actions" },
+                            h("button", { className: "button button-primary", type: "button" }, "Mark reviewed"),
+                            h("button", { className: "button", type: "button" }, "Open log")
+                        )
+                    )
+                );
+            }
+
+            function RecentActivityPanel() {
+                return h("section", { className: "panel", "aria-label": "Recent activity list" },
+                    h("div", { className: "panel-header" },
+                        h("div", null,
+                            h("div", { className: "panel-label" }, "Recent activity"),
+                            h("h2", { className: "panel-title" }, "Latest run events")
+                        )
+                    ),
+                    h("div", { className: "panel-body" },
+                        h("div", { className: "activity-list" },
+                            mockData.activity.map(function (item) {
+                                return h("div", { className: "activity-row", key: item.title },
+                                    h("div", null,
+                                        h("div", { className: "activity-title" }, item.title),
+                                        h("div", { className: "activity-detail" }, item.detail)
+                                    ),
+                                    h("div", { className: "timeline-time" }, item.time)
+                                );
+                            })
+                        )
+                    )
+                );
+            }
+
+            function TechnicalDetailsPanel(props) {
+                const rows = [
+                    ["Selected stage", props.selectedStage.title],
+                    ["Stage state", props.selectedStage.label],
+                    ["Artifact", "artifacts/runs/Kit-01/preview-summary.yml"],
+                    ["Transport", "Redfish + local app server"],
+                    ["Public base URL", "http://lab-builder:8001"],
+                    ["Run scope", "included"]
+                ];
+                return h("section", {
+                    className: "panel technical-panel" + (props.open ? " technical-panel-open" : ""),
+                    "aria-label": "Technical details panel"
+                },
+                    h("div", { className: "panel-header" },
+                        h("div", null,
+                            h("div", { className: "panel-label" }, "Technical details"),
+                            h("h2", { className: "panel-title" }, "Diagnostics and raw evidence")
+                        ),
+                        h("button", { className: "button", type: "button", onClick: props.onToggle }, props.open ? "Collapse" : "Expand")
+                    ),
+                    h("div", { className: "technical-body" },
+                        h("div", { className: "selected-stage" },
+                            h("div", { className: "panel-label" }, "Selected timeline item"),
+                            h("h3", { className: "panel-title" }, props.selectedStage.title),
+                            h("p", { className: "panel-subtitle" }, props.selectedStage.detail),
+                            h("div", { className: "detail-grid" },
+                                rows.map(function (row) {
+                                    return h("div", { className: "detail-item", key: row[0] },
+                                        h("div", { className: "metric-label" }, row[0]),
+                                        h("div", { className: "detail-value" }, row[1])
+                                    );
+                                })
+                            )
+                        ),
+                        h("div", null,
+                            h("div", { className: "panel-label" }, "Technical log"),
+                            h("pre", { className: "log-box" }, mockData.logs.join("\n"))
+                        )
+                    )
+                );
+            }
+
+            function App() {
+                const initialStage = mockData.timeline.find(function (item) { return item.status === "running"; }) || mockData.timeline[0];
+                const state = React.useState(initialStage);
+                const selectedStage = state[0];
+                const setSelectedStage = state[1];
+                const detailsState = React.useState(true);
+                const detailsOpen = detailsState[0];
+                const setDetailsOpen = detailsState[1];
+                const toggleDetails = function () { setDetailsOpen(function (open) { return !open; }); };
+
+                return h("div", { className: "desktop-preview" },
+                    h(Sidebar),
+                    h("div", { className: "workspace-shell" },
+                        h(TopStatus),
+                        h("main", { className: "workspace" },
+                            h(WorkspaceHeading, { detailsOpen: detailsOpen, onToggleDetails: toggleDetails }),
+                            h(PurposeStrip),
+                            h("div", { className: "content-grid" },
+                                h("div", { className: "primary-stack" },
+                                    h(LiveJobPanel),
+                                    h(TimelinePanel, { selectedStage: selectedStage, onSelect: setSelectedStage }),
+                                    h(RecentActivityPanel)
+                                ),
+                                h("div", { className: "side-stack" },
+                                    h(KitSummaryPanel),
+                                    h(WarningsPanel),
+                                    h(NextStepPanel)
+                                )
+                            ),
+                            h(TechnicalDetailsPanel, {
+                                open: detailsOpen,
+                                selectedStage: selectedStage,
+                                onToggle: toggleDetails
+                            })
+                        )
+                    )
+                );
+            }
+
+            ReactDOM.createRoot(document.getElementById("react-preview-root")).render(h(App));
+        }());
+    </script>
+    <script src="/static/js/react-desktop-ui.js"></script>
+</body>
+</html>
