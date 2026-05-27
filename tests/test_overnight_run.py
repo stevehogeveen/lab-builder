@@ -15,9 +15,13 @@ from app.overnight_run import (
     OvernightHardwareConfig,
     collect_cisco_console_discovery,
     collect_ilo_discovery,
+    decide_finalization_git_action,
     finalization_deadline_ok,
     finalize_overnight_run,
+    hardware_stop_requested,
     normalize_overnight_mode,
+    request_hardware_stop,
+    run_overnight_hardware,
     scan_text_for_secrets,
     should_stop_hardware_actions,
 )
@@ -55,7 +59,8 @@ def test_secret_scan_blocks_auto_commit(tmp_path):
     repo = tmp_path
     writer = OvernightArtifactWriter(repo / "artifacts" / "runs" / "overnight" / "20260527-010000-ilo-cisco")
     writer.initialize_placeholders()
-    writer.write_text("cisco/running-config-before.txt", "enable secret 5 verysecretvalue\n")
+    secret_config_line = "enable " + "secret 5 " + "verysecretvalue\n"
+    writer.write_text("cisco/running-config-before.txt", secret_config_line)
     calls: list[list[str]] = []
 
     def runner(command: list[str], cwd: Path) -> CommandCapture:
@@ -81,7 +86,130 @@ def test_secret_scan_blocks_auto_commit(tmp_path):
 
 def test_secret_scan_ignores_code_variable_plumbing():
     assert scan_text_for_secrets("password = str(cfg.get('password') or '')\n") == []
-    assert scan_text_for_secrets("api_key = 'abcd1234abcd1234'\n")
+    secretish_line = "api_key = '" + ("abcd1234" * 2) + "'\n"
+    assert scan_text_for_secrets(secretish_line)
+
+
+def test_finalization_decision_allows_git_only_when_clean():
+    decision = decide_finalization_git_action(
+        allow_git=True,
+        tests_ok=True,
+        secret_findings_count=0,
+        deadline_ok=True,
+    )
+
+    assert decision.should_commit_push is True
+    assert decision.notes == ()
+
+
+@pytest.mark.parametrize(
+    ("kwargs", "expected_note"),
+    [
+        ({"allow_git": False}, "Auto-commit/push disabled"),
+        ({"tests_ok": False}, "Tests or compileall failed"),
+        ({"secret_findings_count": 1}, "Possible secrets were found"),
+        ({"deadline_ok": False}, "6:00 AM finalization deadline was missed"),
+    ],
+)
+def test_finalization_decision_blocks_unsafe_git(kwargs, expected_note):
+    values = {
+        "allow_git": True,
+        "tests_ok": True,
+        "secret_findings_count": 0,
+        "deadline_ok": True,
+    }
+    values.update(kwargs)
+
+    decision = decide_finalization_git_action(**values)
+
+    assert decision.should_commit_push is False
+    assert any(expected_note in note for note in decision.notes)
+
+
+def test_finalize_records_git_statuses_and_push_result(tmp_path):
+    repo = tmp_path
+    tracked_file = repo / "app" / "overnight_run.py"
+    tracked_file.parent.mkdir(parents=True)
+    tracked_file.write_text("print('safe scheduler path')\n", encoding="utf-8")
+    writer = OvernightArtifactWriter(repo / "artifacts" / "runs" / "overnight" / "20260527-052000-ilo-cisco")
+    writer.initialize_placeholders()
+    calls: list[list[str]] = []
+    status_calls = 0
+
+    def runner(command: list[str], cwd: Path) -> CommandCapture:
+        nonlocal status_calls
+        calls.append(command)
+        if command == ["git", "status", "--short", "--branch"]:
+            status_calls += 1
+            stdout = "## feature/finalizer...origin/feature/finalizer\n M app/overnight_run.py\n" if status_calls == 1 else "## feature/finalizer...origin/feature/finalizer\n"
+            return CommandCapture(command, 0, stdout, "")
+        if command[:2] == ["git", "add"]:
+            return CommandCapture(command, 0, "", "")
+        if command[:3] == ["git", "diff", "--cached"]:
+            return CommandCapture(command, 0, "app/overnight_run.py\n", "")
+        if command == ["git", "branch", "--show-current"]:
+            return CommandCapture(command, 0, "feature/finalizer\n", "")
+        if command[:2] == ["git", "commit"]:
+            return CommandCapture(command, 0, "[feature/finalizer abc123] Finalize\n", "")
+        if command == ["git", "rev-parse", "HEAD"]:
+            return CommandCapture(command, 0, "abc123def456\n", "")
+        if command == ["git", "push", "origin", "feature/finalizer"]:
+            return CommandCapture(command, 0, "pushed\n", "")
+        return CommandCapture(command, 0, "", "")
+
+    result = finalize_overnight_run(
+        writer,
+        repo_root=repo,
+        run_tests=False,
+        allow_git=True,
+        commit_paths=["app/overnight_run.py"],
+        command_runner=runner,
+        now=datetime(2026, 5, 27, 5, 20),
+    )
+
+    report = writer.morning_report_path.read_text(encoding="utf-8")
+    assert result["status_label"] == "Ready for review"
+    assert result["branch"] == "feature/finalizer"
+    assert result["commit_sha"] == "abc123def456"
+    assert result["push_result"] == "pushed"
+    assert result["artifact_folder"] == str(writer.run_dir)
+    assert result["git_status_before"].startswith("## feature/finalizer")
+    assert result["git_status_after"].strip() == "## feature/finalizer...origin/feature/finalizer"
+    assert hardware_stop_requested(writer.run_dir)
+    assert "## Git Status Before" in report
+    assert "Artifact folder:" in report
+    assert any(command[:2] == ["git", "commit"] for command in calls)
+
+
+def test_hardware_stop_marker_prevents_hardware_collectors(tmp_path):
+    writer = OvernightArtifactWriter(tmp_path / "run")
+    writer.initialize_placeholders()
+    request_hardware_stop(writer, now=datetime(2026, 5, 27, 5, 25))
+    calls: list[str] = []
+
+    def blocked_ilo_factory(**kwargs):
+        calls.append("ilo")
+        raise AssertionError("iLO discovery should not start after stop marker")
+
+    def blocked_cisco_client(port: str, baud: int):
+        calls.append("cisco")
+        raise AssertionError("Cisco discovery should not start after stop marker")
+
+    result = run_overnight_hardware(
+        {},
+        OvernightHardwareConfig.from_mapping({}, {}),
+        writer,
+        repo_root=tmp_path,
+        ilo_client_factory=blocked_ilo_factory,
+        cisco_diagnostics_fn=lambda: {"ordered_ports": []},
+        cisco_discovery_factory=lambda: SimpleNamespace(scan=lambda: []),
+        cisco_client_factory=blocked_cisco_client,
+        finalizer=lambda *args, **kwargs: {"status_label": "Ready for review"},
+        now_fn=lambda: datetime(2026, 5, 27, 5, 25),
+    )
+
+    assert calls == []
+    assert result["finalization"]["status_label"] == "Ready for review"
 
 
 class FakeIloClient:

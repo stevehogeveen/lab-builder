@@ -81,6 +81,31 @@ For each section: save settings, run preview/check actions, resolve validation w
 4. For real execution: check confirmation checkbox and type `EXECUTE`.
 5. Start execution and monitor live job logs/status.
 
+### Overnight Hardware Run Final Scheduler
+
+The Overnight Hardware Run has a local finalizer that can be called by `at`, `cron`, or `systemd` without starting new hardware work. Schedule it for 5:25 AM local time so it writes the hardware stop marker before 5:30 AM and still has time to run checks, write `MORNING_READY.md`, commit, and push before 6:00 AM.
+
+One-time `at` schedule:
+
+```bash
+cd /home/administrator/lab-builder-react
+printf 'cd /home/administrator/lab-builder-react && mkdir -p artifacts/runs/overnight && ./scripts/finalize-overnight-run >> artifacts/runs/overnight/finalizer.log 2>&1\n' | at 05:25 tomorrow
+```
+
+Daily `cron` entry:
+
+```cron
+25 5 * * * cd /home/administrator/lab-builder-react && mkdir -p artifacts/runs/overnight && ./scripts/finalize-overnight-run >> artifacts/runs/overnight/finalizer.log 2>&1
+```
+
+Manual command:
+
+```bash
+./scripts/finalize-overnight-run
+```
+
+The finalizer writes or updates the latest overnight run folder under `artifacts/runs/overnight/`, captures git status before and after, runs `python -m pytest -q` and `python -m compileall app`, scans the run artifacts and staged files for obvious secrets, and skips commit/push if tests fail, the 6:00 AM deadline is missed, or secrets are suspected.
+
 ## 6) Review Outputs And Reports
 
 - Use Reports page for config snapshots, run summaries, and exports.

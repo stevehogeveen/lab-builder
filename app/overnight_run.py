@@ -8,6 +8,7 @@ import json
 import os
 import re
 import subprocess
+import sys
 import time
 from typing import Any, Callable
 
@@ -23,10 +24,14 @@ OVERNIGHT_DEFAULT_MODE = "discovery_only"
 OVERNIGHT_ILO_HOST = "192.168.1.200"
 HARDWARE_STOP_TIME = datetime_time(5, 30)
 FINALIZATION_DEADLINE = datetime_time(6, 0)
-OVERNIGHT_COMMIT_MESSAGE = "Add overnight iLO and Cisco hardware run automation"
+HARDWARE_STOP_MARKER = "STOP_HARDWARE_WORK"
+OVERNIGHT_COMMIT_MESSAGE = "Finalize overnight hardware run"
 OVERNIGHT_COMMIT_PATHS = [
     "app/main.py",
     "app/overnight_run.py",
+    "app/overnight_finalize.py",
+    "scripts/finalize-overnight-run",
+    "docs/HOWTO.md",
     "templates/partials/main_content.html",
     "templates/partials/sidebar.html",
     "templates/partials/pages/overnight_hardware.html",
@@ -78,6 +83,14 @@ def should_stop_hardware_actions(now: datetime | None = None) -> bool:
 def finalization_deadline_ok(now: datetime | None = None) -> bool:
     current = now or datetime.now().astimezone()
     return current.timetz().replace(tzinfo=None) < FINALIZATION_DEADLINE
+
+
+def hardware_stop_marker_path(run_dir: Path) -> Path:
+    return Path(run_dir) / HARDWARE_STOP_MARKER
+
+
+def hardware_stop_requested(run_dir: Path) -> bool:
+    return hardware_stop_marker_path(run_dir).exists()
 
 
 def overnight_timestamp(now: datetime | None = None) -> str:
@@ -475,6 +488,34 @@ class CommandCapture:
         }
 
 
+@dataclass(frozen=True)
+class FinalizationGitDecision:
+    should_commit_push: bool
+    notes: tuple[str, ...] = ()
+
+
+def decide_finalization_git_action(
+    *,
+    allow_git: bool,
+    tests_ok: bool,
+    secret_findings_count: int,
+    deadline_ok: bool,
+) -> FinalizationGitDecision:
+    notes: list[str] = []
+    if secret_findings_count:
+        notes.append("Possible secrets were found. Auto-commit and push were skipped.")
+    if not tests_ok:
+        notes.append("Tests or compileall failed. Auto-commit and push were skipped.")
+    if not deadline_ok:
+        notes.append("Auto-commit/push skipped because the 6:00 AM finalization deadline was missed.")
+    if not allow_git:
+        notes.append("Auto-commit/push disabled for this run.")
+    return FinalizationGitDecision(
+        should_commit_push=allow_git and tests_ok and secret_findings_count == 0 and deadline_ok,
+        notes=tuple(notes),
+    )
+
+
 def run_command(command: list[str], *, cwd: Path, timeout: int = 1800) -> CommandCapture:
     try:
         proc = subprocess.run(command, cwd=str(cwd), capture_output=True, text=True, check=False, timeout=timeout)
@@ -530,12 +571,55 @@ def _command_dict(result: CommandCapture) -> dict[str, Any]:
     return result.as_dict()
 
 
+def _parse_git_branch(status_stdout: str) -> str:
+    if not status_stdout:
+        return ""
+    first_line = status_stdout.splitlines()[0]
+    if not first_line.startswith("##"):
+        return ""
+    return first_line.replace("##", "", 1).split("...", 1)[0].strip()
+
+
+def _existing_commit_paths(repo_root: Path, commit_paths: list[str]) -> list[str]:
+    paths: list[str] = []
+    for item in commit_paths:
+        relative = str(item or "").strip()
+        if not relative:
+            continue
+        if (Path(repo_root) / relative).exists():
+            paths.append(relative)
+    return paths
+
+
+def request_hardware_stop(writer: OvernightArtifactWriter, *, now: datetime | None = None) -> Path:
+    current = now or datetime.now().astimezone()
+    marker = hardware_stop_marker_path(writer.run_dir)
+    marker.write_text(
+        yaml.safe_dump(
+            {
+                "requested_at": current.isoformat(),
+                "reason": "finalization scheduler",
+                "deadline": HARDWARE_STOP_TIME.strftime("%H:%M"),
+            },
+            sort_keys=False,
+        ),
+        encoding="utf-8",
+    )
+    writer.trace(
+        stage="hardware_stop",
+        status="stopped",
+        progress=70,
+        message="Hardware stop marker written before finalization.",
+    )
+    return marker
+
+
 def _write_morning_report(writer: OvernightArtifactWriter, payload: dict[str, Any]) -> None:
     lines = [
         "# Morning Ready",
         "",
         f"Status: {payload.get('status_label', 'Needs attention')}",
-        f"Run folder: {writer.run_dir}",
+        f"Artifact folder: {payload.get('artifact_folder') or writer.run_dir}",
         f"Generated at: {datetime.now().astimezone().isoformat()}",
         "",
         "## Results",
@@ -544,6 +628,7 @@ def _write_morning_report(writer: OvernightArtifactWriter, payload: dict[str, An
         f"- Tests: {payload.get('test_result') or 'not run'}",
         f"- Push: {payload.get('push_result') or 'not run'}",
         f"- Secret scan: {payload.get('secret_scan_result') or 'not run'}",
+        f"- Hardware stop marker: {payload.get('hardware_stop_marker') or 'not written'}",
         "",
         "## Notes",
     ]
@@ -560,6 +645,9 @@ def _write_morning_report(writer: OvernightArtifactWriter, payload: dict[str, An
         lines.extend(["", "## Secret Findings"])
         for finding in payload["secret_findings"][:40]:
             lines.append(f"- {finding.get('path')}:{finding.get('line')} possible secret ({finding.get('excerpt')})")
+    if payload.get("git_status_before") or payload.get("git_status_after"):
+        lines.extend(["", "## Git Status Before", "```text", str(payload.get("git_status_before") or "").rstrip(), "```"])
+        lines.extend(["", "## Git Status After", "```text", str(payload.get("git_status_after") or "").rstrip(), "```"])
     writer.morning_report_path.write_text("\n".join(lines).rstrip() + "\n", encoding="utf-8")
 
 
@@ -569,92 +657,124 @@ def finalize_overnight_run(
     repo_root: Path,
     run_tests: bool = True,
     allow_git: bool = True,
+    commit_paths: list[str] | None = None,
+    commit_message: str = OVERNIGHT_COMMIT_MESSAGE,
+    python_executable: str | None = None,
     command_runner: Callable[[list[str], Path], CommandCapture] | None = None,
     now: datetime | None = None,
 ) -> dict[str, Any]:
     runner = command_runner or (lambda command, cwd: run_command(command, cwd=cwd))
+    started_at = now or datetime.now().astimezone()
+    stop_marker = request_hardware_stop(writer, now=started_at)
     writer.trace(stage="finalization", status="running", progress=72, message="Stopping hardware work and starting morning finalization.")
     commands: list[dict[str, Any]] = []
     notes: list[str] = []
     tests_ok = True
+    test_result = "not run"
 
     def run(command: list[str]) -> CommandCapture:
         result = runner(command, Path(repo_root))
         commands.append(_command_dict(result))
         return result
 
+    python_cmd = python_executable or sys.executable or "python"
+    status_before = run(["git", "status", "--short", "--branch"])
+    branch = _parse_git_branch(status_before.stdout)
+
     focused_path = Path(repo_root) / "tests" / "test_overnight_run.py"
     if run_tests and focused_path.exists():
-        focused = run(["python", "-m", "pytest", "-q", "tests/test_overnight_run.py"])
+        focused = run([python_cmd, "-m", "pytest", "-q", "tests/test_overnight_run.py"])
         tests_ok = tests_ok and focused.ok
     elif run_tests:
         notes.append("Focused overnight tests were not found.")
 
     if run_tests:
-        full = run(["python", "-m", "pytest", "-q"])
-        compileall = run(["python", "-m", "compileall", "app"])
+        full = run([python_cmd, "-m", "pytest", "-q"])
+        compileall = run([python_cmd, "-m", "compileall", "app"])
         tests_ok = tests_ok and full.ok and compileall.ok
-
-    status = run(["git", "status", "--short", "--branch"])
-    branch = ""
-    if status.stdout:
-        first_line = status.stdout.splitlines()[0]
-        branch = first_line.replace("##", "").split("...", 1)[0].strip()
+        test_result = "passed" if tests_ok else "failed"
 
     secret_findings = scan_paths_for_secrets([writer.run_dir])
     secret_scan_result = "clean" if not secret_findings else f"blocked ({len(secret_findings)} finding(s))"
-    if secret_findings:
-        notes.append("Possible secrets were found in run artifacts. Auto-commit and push were skipped.")
-    deadline_ok = finalization_deadline_ok(now)
-    if not deadline_ok:
-        notes.append("Finalization completed at or after 6:00 AM local time.")
-    if not tests_ok:
-        notes.append("Tests or compileall failed. Auto-commit and push were skipped.")
+    decision_time = now or datetime.now().astimezone()
+    deadline_ok = finalization_deadline_ok(decision_time)
+    if should_stop_hardware_actions(started_at):
+        notes.append("Hardware stop marker was written at or after 5:30 AM local time; verify no hardware action overran the stop window.")
+    decision = decide_finalization_git_action(
+        allow_git=allow_git,
+        tests_ok=tests_ok,
+        secret_findings_count=len(secret_findings),
+        deadline_ok=deadline_ok,
+    )
+    notes.extend(decision.notes)
 
     commit_sha = ""
     push_result = "not run"
     git_ok = not allow_git
-    if allow_git and tests_ok and not secret_findings and deadline_ok:
+    if decision.should_commit_push:
         git_ok = False
-        add_paths = [*OVERNIGHT_COMMIT_PATHS, str(writer.run_dir.relative_to(repo_root)) if writer.run_dir.is_relative_to(repo_root) else str(writer.run_dir)]
-        add_result = run(["git", "add", *add_paths])
-        staged_names = run(["git", "diff", "--cached", "--name-only", "--diff-filter=ACMRT"])
-        staged_paths = [Path(repo_root) / line.strip() for line in staged_names.stdout.splitlines() if line.strip()]
-        staged_findings = scan_paths_for_secrets(staged_paths)
-        if staged_findings:
-            secret_findings.extend(staged_findings)
-            secret_scan_result = f"blocked ({len(secret_findings)} finding(s))"
-            notes.append("Possible secrets were found in staged files. Auto-commit and push were skipped.")
-        elif not add_result.ok:
-            notes.append("git add failed. Auto-commit and push were skipped.")
+        add_paths = _existing_commit_paths(Path(repo_root), commit_paths or OVERNIGHT_COMMIT_PATHS)
+        if not add_paths:
+            notes.append("No configured commit paths exist. Auto-commit and push were skipped.")
         else:
-            commit = run(["git", "commit", "-m", OVERNIGHT_COMMIT_MESSAGE])
-            if commit.ok:
-                rev = run(["git", "rev-parse", "HEAD"])
-                commit_sha = rev.stdout.strip() if rev.ok else ""
+            add_result = run(["git", "add", *add_paths])
+            staged_names = run(["git", "diff", "--cached", "--name-only", "--diff-filter=ACMRT"])
+            staged_paths = [Path(repo_root) / line.strip() for line in staged_names.stdout.splitlines() if line.strip()]
+            staged_findings = scan_paths_for_secrets(staged_paths)
+            if staged_findings:
+                secret_findings.extend(staged_findings)
+                secret_scan_result = f"blocked ({len(secret_findings)} finding(s))"
+                notes.append("Possible secrets were found in staged files. Auto-commit and push were skipped.")
+            elif not add_result.ok:
+                notes.append("git add failed. Auto-commit and push were skipped.")
+            else:
                 branch_result = run(["git", "branch", "--show-current"])
                 branch_name = branch_result.stdout.strip() if branch_result.ok else branch
-                push = run(["git", "push", "origin", branch_name])
-                push_result = "pushed" if push.ok else f"failed ({push.returncode})"
-                git_ok = push.ok
-                if not push.ok:
-                    notes.append("git push failed. Review command output in MORNING_READY.md.")
-            else:
-                notes.append("git commit failed. Auto-push was skipped.")
-    elif not allow_git:
-        notes.append("Auto-commit/push disabled for this run.")
-    elif allow_git and not deadline_ok:
-        notes.append("Auto-commit/push skipped because the 6:00 AM finalization deadline was missed.")
+                if not staged_paths:
+                    rev = run(["git", "rev-parse", "HEAD"])
+                    commit_sha = rev.stdout.strip() if rev.ok else ""
+                    if branch_name:
+                        notes.append("No staged changes were present; pushing the current branch only.")
+                        push = run(["git", "push", "origin", branch_name])
+                        push_result = "pushed" if push.ok else f"failed ({push.returncode})"
+                        git_ok = push.ok
+                        if not push.ok:
+                            notes.append("git push failed. Review command output in MORNING_READY.md.")
+                    else:
+                        notes.append("Could not determine the current branch. Auto-push was skipped.")
+                else:
+                    commit = run(["git", "commit", "-m", commit_message])
+                    if commit.ok:
+                        rev = run(["git", "rev-parse", "HEAD"])
+                        commit_sha = rev.stdout.strip() if rev.ok else ""
+                        if branch_name:
+                            push = run(["git", "push", "origin", branch_name])
+                            push_result = "pushed" if push.ok else f"failed ({push.returncode})"
+                            git_ok = push.ok
+                            if not push.ok:
+                                notes.append("git push failed. Review command output in MORNING_READY.md.")
+                        else:
+                            notes.append("Could not determine the current branch. Auto-push was skipped.")
+                    else:
+                        notes.append("git commit failed. Auto-push was skipped.")
+
+    status_after = run(["git", "status", "--short", "--branch"])
+    if not branch:
+        branch = _parse_git_branch(status_after.stdout)
 
     status_label = "Ready for review" if tests_ok and not secret_findings and git_ok and deadline_ok else "Needs attention"
     payload = {
         "status_label": status_label,
         "branch": branch,
         "commit_sha": commit_sha,
-        "test_result": "passed" if tests_ok else "failed",
+        "test_result": test_result,
         "push_result": push_result,
         "secret_scan_result": secret_scan_result,
         "secret_findings": secret_findings,
+        "artifact_folder": str(writer.run_dir),
+        "hardware_stop_marker": str(stop_marker),
+        "git_status_before": status_before.stdout,
+        "git_status_after": status_after.stdout,
         "commands": commands,
         "notes": notes,
     }
@@ -696,13 +816,22 @@ def run_overnight_hardware(
     writer.trace(stage="run", status="running", progress=8, message=f"Overnight hardware mode is {run_config.mode}.")
     results: dict[str, Any] = {"mode": run_config.mode, "run_folder": str(writer.run_dir)}
 
-    if should_stop_hardware_actions(now()):
-        writer.trace(stage="hardware_stop", status="stopped", progress=70, message="Finalization window is already active; hardware actions were not started.")
+    def stop_reason() -> str:
+        if hardware_stop_requested(writer.run_dir):
+            return "Hardware stop marker is present; no additional hardware actions will start."
+        if should_stop_hardware_actions(now()):
+            return "Finalization window is active; no additional hardware actions will start."
+        return ""
+
+    reason = stop_reason()
+    if reason:
+        writer.trace(stage="hardware_stop", status="stopped", progress=70, message=reason)
     else:
         results["ilo"] = collect_ilo_discovery(cfg, run_config, writer, client_factory=ilo_client_factory)
 
-    if should_stop_hardware_actions(now()):
-        writer.trace(stage="hardware_stop", status="stopped", progress=70, message="Hardware actions stopped before Cisco console stage because the 5:30 AM window is active.")
+    reason = stop_reason()
+    if reason:
+        writer.trace(stage="hardware_stop", status="stopped", progress=70, message=reason)
     else:
         results["cisco"] = collect_cisco_console_discovery(
             cfg,
