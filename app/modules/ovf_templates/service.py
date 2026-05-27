@@ -1,9 +1,13 @@
 from __future__ import annotations
 
+import re
 from pathlib import Path
 from typing import Any
 
 from app.ovf import inspect_ovf_directory
+
+
+DISPLAY_SECRET_MASK = "********"
 
 
 class OvfTemplateService:
@@ -84,6 +88,15 @@ class OvfTemplateService:
         return normalized if normalized in {"local", "netapp", "esxi_datastore"} else "local"
 
     @staticmethod
+    def source_location_label(value: str) -> str:
+        location_type = OvfTemplateService.normalize_source_location_type(value)
+        if location_type == "netapp":
+            return "NetApp"
+        if location_type == "esxi_datastore":
+            return "ESXi datastore"
+        return "Local"
+
+    @staticmethod
     def source_readiness(cfg: dict[str, Any], source_location_type: str) -> dict[str, Any]:
         location_type = OvfTemplateService.normalize_source_location_type(source_location_type)
         if location_type == "local":
@@ -121,12 +134,40 @@ class OvfTemplateService:
 
     def refresh_template_readiness(self, cfg: dict[str, Any], template: dict[str, Any]) -> dict[str, Any]:
         item = dict(template)
-        item["readiness"] = self.source_readiness(cfg, str(item.get("source_location_type") or "local"))
+        source_location_type = str(item.get("source_location_type") or "local")
+        item["readiness"] = self.source_readiness(cfg, source_location_type)
+        item["source_location_label"] = self.source_location_label(source_location_type)
         return item
+
+    @staticmethod
+    def redact_display_text(value: str) -> str:
+        text = str(value or "")
+        text = re.sub(r"(?i)(https?://[^:/\s]+):([^@\s/]+)@", rf"\1:{DISPLAY_SECRET_MASK}@", text)
+        text = re.sub(
+            r"(?i)([?&](?:token|auth|password|passphrase|secret|api[_-]?key|apikey)=)[^&\s|,;]+",
+            rf"\1{DISPLAY_SECRET_MASK}",
+            text,
+        )
+        return re.sub(
+            r"(?i)(?<![A-Za-z0-9])[^/\\\s,;|]*?(?:secret|token)[^/\\\s,;|]*",
+            DISPLAY_SECRET_MASK,
+            text,
+        )
+
+    @classmethod
+    def redact_display_value(cls, value: Any) -> Any:
+        if isinstance(value, str):
+            return cls.redact_display_text(value)
+        if isinstance(value, dict):
+            return {key: cls.redact_display_value(item) for key, item in value.items()}
+        if isinstance(value, list):
+            return [cls.redact_display_value(item) for item in value]
+        return value
 
     def templates(self, cfg: dict[str, Any]) -> list[dict[str, Any]]:
         values = (cfg.get("ovf_templates") or {}).get("templates") or {}
-        return sorted([self.refresh_template_readiness(cfg, dict(item)) for item in values.values()], key=lambda item: str(item.get("name") or item.get("id") or ""))
+        display_items = [self.redact_display_value(self.refresh_template_readiness(cfg, dict(item))) for item in values.values()]
+        return sorted(display_items, key=lambda item: str(item.get("name") or item.get("id") or ""))
 
     def get_template(self, cfg: dict[str, Any], template_id: str) -> dict[str, Any] | None:
         templates = (cfg.get("ovf_templates") or {}).get("templates") or {}

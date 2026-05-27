@@ -39,7 +39,7 @@ def build_token_map(cfg: dict[str, Any], profile: dict[str, Any]) -> dict[str, s
     base = profile.get("base") or {}
     return {
         "KITID": site_name,
-        "SUBNET": str((ip_plan.get("subnet") or "10.10.8.0/24")).split("/")[0].rsplit(".", 1)[0],
+        "SUBNET": str((ip_plan.get("subnet") or "192.168.1.0/24")).split("/")[0].rsplit(".", 1)[0],
         "SUBNET_MASK": str(ip_plan.get("netmask") or "255.255.255.0"),
         "GATEWAY": str(ip_plan.get("gateway") or ""),
         "SVM_NAME": str(base.get("svm_name") or ""),

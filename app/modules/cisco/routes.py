@@ -9,6 +9,7 @@ import yaml
 from fastapi import APIRouter, FastAPI, Form, Request
 from fastapi.responses import HTMLResponse
 
+from app.cisco import mask_secrets
 from app.cisco_upgrade import build_cisco_upgrade_plan, execute_cisco_factory_reset, execute_cisco_upgrade
 from app.modules.cisco.service import CiscoModuleService
 from app.upgrade_helper import record_upgrade_inventory
@@ -248,25 +249,26 @@ async def cisco_discover_version(
         )
     context = {"cfg": cfg}
     result = service.discover_version_any(context)
+    safe_result = _redact_cisco_value(cisco_cfg, result, cfg)
     if result.get("ok"):
         version = str(result.get("version") or "").strip()
         cisco_cfg["last_discovered_version"] = version
         cisco_cfg["last_discovered_at"] = datetime.now(timezone.utc).isoformat()
-        cisco_cfg["last_show_version"] = str(result.get("raw_excerpt") or "").strip()
-        cisco_cfg["last_discovered_model"] = str(result.get("model") or "").strip()
-        cisco_cfg["last_discovered_platform"] = str(result.get("platform") or "").strip()
-        cisco_cfg["last_discovered_hostname"] = str(result.get("hostname") or "").strip()
+        cisco_cfg["last_show_version"] = str(safe_result.get("raw_excerpt") or "").strip()
+        cisco_cfg["last_discovered_model"] = str(safe_result.get("model") or "").strip()
+        cisco_cfg["last_discovered_platform"] = str(safe_result.get("platform") or "").strip()
+        cisco_cfg["last_discovered_hostname"] = str(safe_result.get("hostname") or "").strip()
         cisco_cfg["last_discovery_error"] = ""
         record_upgrade_inventory(
             cfg,
             "cisco_switch",
             current_version=version,
             source="Last Cisco discovery",
-            raw_version=version or str(result.get("raw_excerpt") or "").strip(),
+            raw_version=version or str(safe_result.get("raw_excerpt") or "").strip(),
             checked_at=cisco_cfg["last_discovered_at"],
-            model=str(result.get("model") or "").strip(),
-            platform=str(result.get("platform") or "").strip(),
-            hostname=str(result.get("hostname") or "").strip(),
+            model=str(safe_result.get("model") or "").strip(),
+            platform=str(safe_result.get("platform") or "").strip(),
+            hostname=str(safe_result.get("hostname") or "").strip(),
         )
         main.save_kit_config(cfg)
         feedback = main.build_action_feedback(
@@ -274,21 +276,21 @@ async def cisco_discover_version(
             f"Read the current switch software version by {str(result.get('source') or 'auto')} and cached it for Upgrade Helper.",
             tone="ready",
             outcomes=[
-                f"Target: {str(result.get('target') or '').strip() or 'Not set'}",
+                f"Target: {str(safe_result.get('target') or '').strip() or 'Not set'}",
                 f"Version: {version or 'Unknown'}",
-                f"Source: {str(result.get('source') or 'auto')}",
+                f"Source: {str(safe_result.get('source') or 'auto')}",
             ],
-            details=list(result.get("warnings") or []),
+            details=list(safe_result.get("warnings") or []),
         )
     else:
-        cisco_cfg["last_discovery_error"] = str(result.get("error") or "").strip()
+        cisco_cfg["last_discovery_error"] = str(safe_result.get("error") or "").strip()
         main.save_kit_config(cfg)
         feedback = main.build_action_feedback(
             "Cisco version read failed",
-            str(result.get("error") or "Cisco discovery failed."),
+            str(safe_result.get("error") or "Cisco discovery failed."),
             tone="pending",
-            outcomes=[f"Target: {str(result.get('target') or '').strip() or 'Not set'}"],
-            details=list(result.get("warnings") or []),
+            outcomes=[f"Target: {str(safe_result.get('target') or '').strip() or 'Not set'}"],
+            details=list(safe_result.get("warnings") or []),
         )
 
     page = str(return_page or "").strip().lower()
@@ -389,6 +391,50 @@ def _update_cisco_access_from_form(cisco_cfg: dict, form: dict[str, Any]) -> Non
         bootstrap_network_port=str(form.get("cisco_bootstrap_network_port") or ""),
         bootstrap_network_mode=str(form.get("cisco_bootstrap_network_mode") or ""),
     )
+
+
+def _cisco_secret_values(cisco_cfg: dict[str, Any], cfg: dict[str, Any] | None = None) -> list[str]:
+    values = [
+        str(cisco_cfg.get("password") or ""),
+        str(cisco_cfg.get("console_password") or ""),
+        str(cisco_cfg.get("enable_password") or cisco_cfg.get("enable_secret") or ""),
+    ]
+    for user in list(cisco_cfg.get("additional_local_users") or []):
+        if isinstance(user, dict):
+            values.append(str(user.get("password") or ""))
+    for snmp_cfg in [dict(cisco_cfg.get("snmp") or {}), dict((cfg or {}).get("shared_snmp") or {})]:
+        values.extend(
+            [
+                str(snmp_cfg.get("v3_auth_password") or snmp_cfg.get("auth_password") or ""),
+                str(snmp_cfg.get("v3_priv_password") or snmp_cfg.get("priv_password") or ""),
+                str(snmp_cfg.get("community") or snmp_cfg.get("ro_community") or snmp_cfg.get("rw_community") or ""),
+            ]
+        )
+        for user in list(snmp_cfg.get("users") or []):
+            if isinstance(user, dict):
+                values.extend(
+                    [
+                        str(user.get("v3_auth_password") or user.get("auth_password") or ""),
+                        str(user.get("v3_priv_password") or user.get("priv_password") or ""),
+                    ]
+                )
+    return list(dict.fromkeys(item for item in values if item))
+
+
+def _redact_cisco_text(cisco_cfg: dict[str, Any], value: Any, cfg: dict[str, Any] | None = None) -> str:
+    return mask_secrets(str(value or ""), _cisco_secret_values(cisco_cfg, cfg))
+
+
+def _redact_cisco_value(cisco_cfg: dict[str, Any], value: Any, cfg: dict[str, Any] | None = None) -> Any:
+    if isinstance(value, str):
+        return _redact_cisco_text(cisco_cfg, value, cfg)
+    if isinstance(value, list):
+        return [_redact_cisco_value(cisco_cfg, item, cfg) for item in value]
+    if isinstance(value, tuple):
+        return tuple(_redact_cisco_value(cisco_cfg, item, cfg) for item in value)
+    if isinstance(value, dict):
+        return {key: _redact_cisco_value(cisco_cfg, item, cfg) for key, item in value.items()}
+    return value
 
 
 def _clear_cisco_live_state_after_factory_reset(cisco_cfg: dict[str, Any]) -> None:
@@ -598,27 +644,31 @@ async def cisco_bootstrap_management(
 
     trunk_review_ack = _coerce_bool(form.get("cisco_trunk_review_ack"))
     result = service.bootstrap_management({"cfg": cfg}, trunk_review_ack=trunk_review_ack)
-    cisco_cfg["last_bootstrap"] = {key: value for key, value in result.items() if key not in {"status", "output"}}
-    cisco_cfg["last_serial_output"] = str(result.get("output") or cisco_cfg.get("last_serial_output") or "")
+    safe_result = _redact_cisco_value(cisco_cfg, result, cfg)
+    safe_output = _redact_cisco_text(cisco_cfg, result.get("output") or cisco_cfg.get("last_serial_output") or "", cfg)
+    cisco_cfg["last_bootstrap"] = {key: value for key, value in safe_result.items() if key not in {"status", "output"}}
+    cisco_cfg["last_serial_output"] = safe_output
     completed_at = datetime.now(timezone.utc).isoformat()
     cisco_cfg["last_bootstrap_at"] = completed_at
     bootstrap_check: dict[str, Any] = {}
     if result.get("ok"):
         check = service.verify_console_bootstrap({"cfg": cfg})
-        cisco_cfg["last_console_bootstrap_check"] = {key: value for key, value in check.items() if key not in {"status", "raw_output"}}
-        cisco_cfg["last_raw_console_bootstrap_check"] = str(check.get("raw_output") or "")
+        safe_check = _redact_cisco_value(cisco_cfg, check, cfg)
+        safe_check_output = _redact_cisco_text(cisco_cfg, check.get("raw_output") or "", cfg)
+        cisco_cfg["last_console_bootstrap_check"] = {key: value for key, value in safe_check.items() if key not in {"status", "raw_output"}}
+        cisco_cfg["last_raw_console_bootstrap_check"] = safe_check_output
         if check.get("raw_output"):
-            cisco_cfg["last_console_management_state"] = str(check.get("raw_output") or "")
+            cisco_cfg["last_console_management_state"] = safe_check_output
         cisco_cfg["connection_method"] = "ssh" if check.get("ok") else "console"
         bootstrap_check = dict(cisco_cfg.get("last_console_bootstrap_check") or {})
-    action_error = str(result.get("error") or bootstrap_check.get("error") or "")
+    action_error = _redact_cisco_text(cisco_cfg, result.get("error") or bootstrap_check.get("error") or "", cfg)
     action_ok = bool(result.get("ok")) and bool(bootstrap_check.get("ok"))
     cisco_cfg["last_cisco_action"] = {
         "mode": "bootstrap_management",
         "ok": action_ok,
         "error": action_error,
         "completed_at": completed_at,
-        "log_excerpt": "\n".join(str(result.get("output") or "").splitlines()[-18:]),
+        "log_excerpt": "\n".join(safe_output.splitlines()[-18:]),
     }
     main.save_kit_config(cfg)
     feedback = main.build_action_feedback(
@@ -627,10 +677,13 @@ async def cisco_bootstrap_management(
             if action_ok
             else ("Cisco Access Settings needs verification" if result.get("ok") else ("Cisco trunk review needed" if result.get("requires_trunk_review") else "Cisco console setup failed"))
         ),
-        "Access Settings completed through the console. Use Test SSH before running version discovery or upgrades." if action_ok else str(result.get("error") or bootstrap_check.get("error") or "Console bootstrap needs attention."),
+        "Access Settings completed through the console. Use Test SSH before running version discovery or upgrades." if action_ok else _redact_cisco_text(cisco_cfg, result.get("error") or bootstrap_check.get("error") or "Console bootstrap needs attention.", cfg),
         tone="ready" if result.get("ok") and bootstrap_check.get("ok") else ("pending" if result.get("ok") or result.get("requires_trunk_review") else "danger"),
         outcomes=[f"Management IP: {cisco_cfg.get('management_ip') or cisco_cfg.get('ip') or 'Not set'}", f"Console: {cisco_cfg.get('console_port') or 'Not selected'}"],
-        details=list(result.get("steps") or []) + list(result.get("warnings") or []) + list(bootstrap_check.get("warnings") or []),
+        details=[
+            _redact_cisco_text(cisco_cfg, item, cfg)
+            for item in list(result.get("steps") or []) + list(result.get("warnings") or []) + list(bootstrap_check.get("warnings") or [])
+        ],
     )
     return _render_cisco_page(request, cfg, action_feedback=feedback)
 
@@ -645,21 +698,23 @@ async def cisco_verify_console_bootstrap(request: Request):
     form = dict(await request.form())
     _update_cisco_access_from_form(cisco_cfg, form)
     result = service.verify_console_bootstrap({"cfg": cfg})
-    cisco_cfg["last_console_bootstrap_check"] = {key: value for key, value in result.items() if key not in {"status", "raw_output"}}
+    safe_result = _redact_cisco_value(cisco_cfg, result, cfg)
+    safe_output = _redact_cisco_text(cisco_cfg, result.get("raw_output") or "", cfg)
+    cisco_cfg["last_console_bootstrap_check"] = {key: value for key, value in safe_result.items() if key not in {"status", "raw_output"}}
     cisco_cfg["last_console_bootstrap_check"]["checked_at"] = datetime.now(timezone.utc).isoformat()
-    cisco_cfg["last_raw_console_bootstrap_check"] = str(result.get("raw_output") or "")
+    cisco_cfg["last_raw_console_bootstrap_check"] = safe_output
     if result.get("raw_output"):
-        cisco_cfg["last_console_management_state"] = str(result.get("raw_output") or "")
+        cisco_cfg["last_console_management_state"] = safe_output
     cisco_cfg["last_cisco_action"] = {
         "mode": "verify_console_bootstrap",
         "ok": bool(result.get("ok")),
-        "error": str(result.get("error") or ""),
+        "error": _redact_cisco_text(cisco_cfg, result.get("error") or "", cfg),
         "completed_at": datetime.now(timezone.utc).isoformat(),
     }
     main.save_kit_config(cfg)
     feedback = main.build_action_feedback(
         "Console bootstrap network is ready" if result.get("ok") else "Console bootstrap network needs attention",
-        "Management SVI and SSH look ready from the console." if result.get("ok") else str(result.get("error") or "Console bootstrap verification failed."),
+        "Management SVI and SSH look ready from the console." if result.get("ok") else _redact_cisco_text(cisco_cfg, result.get("error") or "Console bootstrap verification failed.", cfg),
         tone="ready" if result.get("ok") else "pending",
         outcomes=[
             f"VLAN {result.get('management_vlan') or cisco_cfg.get('management_vlan')}: {'exists' if result.get('vlan_exists') else 'missing'}",
@@ -668,7 +723,7 @@ async def cisco_verify_console_bootstrap(request: Request):
             f"SSH: {'enabled' if result.get('ssh_enabled') else 'not enabled'}",
             f"SCP: {'enabled' if result.get('scp_enabled') else 'not enabled'}",
         ],
-        details=list(result.get("warnings") or []),
+        details=[_redact_cisco_text(cisco_cfg, item, cfg) for item in list(result.get("warnings") or [])],
     )
     return _render_cisco_page(request, cfg, action_feedback=feedback)
 
@@ -752,16 +807,22 @@ async def cisco_test_ssh(
     form = dict(await request.form())
     _update_cisco_access_from_form(cisco_cfg, form)
     result = service.test_ssh({"cfg": cfg})
-    cisco_cfg["last_ssh_test"] = {"ok": bool(result.get("ok")), "host": str(result.get("host") or ""), "error": str(result.get("error") or ""), "tested_at": datetime.now(timezone.utc).isoformat()}
+    safe_result = _redact_cisco_value(cisco_cfg, result, cfg)
+    cisco_cfg["last_ssh_test"] = {
+        "ok": bool(result.get("ok")),
+        "host": str(safe_result.get("host") or ""),
+        "error": str(safe_result.get("error") or ""),
+        "tested_at": datetime.now(timezone.utc).isoformat(),
+    }
     if result.get("ok"):
         cisco_cfg["connection_method"] = "ssh"
-        cisco_cfg["last_show_version"] = str(result.get("raw_excerpt") or cisco_cfg.get("last_show_version") or "")
+        cisco_cfg["last_show_version"] = str(safe_result.get("raw_excerpt") or cisco_cfg.get("last_show_version") or "")
     main.save_kit_config(cfg)
     feedback = main.build_action_feedback(
         "Cisco SSH reachable" if result.get("ok") else "Cisco SSH test failed",
-        "SSH is reachable and can be used for normal configuration and upgrades." if result.get("ok") else str(result.get("error") or "SSH test failed."),
+        "SSH is reachable and can be used for normal configuration and upgrades." if result.get("ok") else str(safe_result.get("error") or "SSH test failed."),
         tone="ready" if result.get("ok") else "pending",
-        outcomes=[f"Target: {result.get('host') or 'Not set'}"],
+        outcomes=[f"Target: {safe_result.get('host') or 'Not set'}"],
     )
     if str(return_page or "").strip().lower() == "upgrade_helper":
         return main.render_page(request, cfg, active_page="upgrade_helper", action_feedback=feedback)
@@ -803,20 +864,21 @@ async def cisco_discover_ports(request: Request):
     form = dict(await request.form())
     _update_cisco_access_from_form(cisco_cfg, form)
     result = service.discover_ports({"cfg": cfg})
+    safe_result = _redact_cisco_value(cisco_cfg, result, cfg)
     if result.get("ok"):
-        discovery = dict(result.get("discovery") or {})
+        discovery = dict(safe_result.get("discovery") or {})
         cisco_cfg["last_port_discovery"] = discovery
         existing_ports = cisco_cfg.setdefault("ports", {})
         for interface in (discovery.get("interfaces") or {}):
             existing_ports.setdefault(interface, {"profile": "custom"})
-        cisco_cfg["last_raw_port_discovery"] = str(result.get("raw_output") or "")
-    cisco_cfg["last_cisco_action"] = {"mode": "discover", "ok": bool(result.get("ok")), "error": str(result.get("error") or ""), "completed_at": datetime.now(timezone.utc).isoformat()}
+        cisco_cfg["last_raw_port_discovery"] = str(safe_result.get("raw_output") or "")
+    cisco_cfg["last_cisco_action"] = {"mode": "discover", "ok": bool(result.get("ok")), "error": str(safe_result.get("error") or ""), "completed_at": datetime.now(timezone.utc).isoformat()}
     main.save_kit_config(cfg)
     feedback = main.build_action_feedback(
         "Cisco ports discovered" if result.get("ok") else "Cisco port discovery failed",
-        "Discovered interface names are now available in the port map." if result.get("ok") else str(result.get("error") or "Cisco port discovery failed."),
+        "Discovered interface names are now available in the port map." if result.get("ok") else str(safe_result.get("error") or "Cisco port discovery failed."),
         tone="ready" if result.get("ok") else "pending",
-        outcomes=[f"Target: {result.get('host') or cisco_cfg.get('management_ip') or 'Not set'}"],
+        outcomes=[f"Target: {safe_result.get('host') or cisco_cfg.get('management_ip') or 'Not set'}"],
     )
     return _render_cisco_page(request, cfg, action_feedback=feedback)
 
@@ -832,59 +894,62 @@ async def cisco_discover_state(request: Request):
     version_result = service.discover({"cfg": cfg})
     ports_result = service.discover_ports({"cfg": cfg}) if version_result.get("ok") else {"ok": False, "error": "Skipped because SSH version discovery did not succeed."}
     backup_result = service.backup_config({"cfg": cfg}) if version_result.get("ok") else {"ok": False, "error": "Skipped because SSH version discovery did not succeed."}
+    safe_version_result = _redact_cisco_value(cisco_cfg, version_result, cfg)
+    safe_ports_result = _redact_cisco_value(cisco_cfg, ports_result, cfg)
+    safe_backup_result = _redact_cisco_value(cisco_cfg, backup_result, cfg)
 
     if version_result.get("ok"):
         version = str(version_result.get("version") or "").strip()
         cisco_cfg["last_discovered_version"] = version
         cisco_cfg["last_discovered_at"] = datetime.now(timezone.utc).isoformat()
-        cisco_cfg["last_show_version"] = str(version_result.get("raw_excerpt") or "").strip()
-        cisco_cfg["last_discovered_model"] = str(version_result.get("model") or "").strip()
-        cisco_cfg["last_discovered_platform"] = str(version_result.get("platform") or "").strip()
-        cisco_cfg["last_discovered_hostname"] = str(version_result.get("hostname") or "").strip()
+        cisco_cfg["last_show_version"] = str(safe_version_result.get("raw_excerpt") or "").strip()
+        cisco_cfg["last_discovered_model"] = str(safe_version_result.get("model") or "").strip()
+        cisco_cfg["last_discovered_platform"] = str(safe_version_result.get("platform") or "").strip()
+        cisco_cfg["last_discovered_hostname"] = str(safe_version_result.get("hostname") or "").strip()
         cisco_cfg["last_discovery_error"] = ""
         record_upgrade_inventory(
             cfg,
             "cisco_switch",
             current_version=version,
             source="Last Cisco discovery",
-            raw_version=version or str(version_result.get("raw_excerpt") or "").strip(),
+            raw_version=version or str(safe_version_result.get("raw_excerpt") or "").strip(),
             checked_at=cisco_cfg["last_discovered_at"],
-            model=str(version_result.get("model") or "").strip(),
-            platform=str(version_result.get("platform") or "").strip(),
-            hostname=str(version_result.get("hostname") or "").strip(),
+            model=str(safe_version_result.get("model") or "").strip(),
+            platform=str(safe_version_result.get("platform") or "").strip(),
+            hostname=str(safe_version_result.get("hostname") or "").strip(),
         )
     else:
-        cisco_cfg["last_discovery_error"] = str(version_result.get("error") or "").strip()
+        cisco_cfg["last_discovery_error"] = str(safe_version_result.get("error") or "").strip()
 
     if ports_result.get("ok"):
-        discovery = dict(ports_result.get("discovery") or {})
+        discovery = dict(safe_ports_result.get("discovery") or {})
         cisco_cfg["last_port_discovery"] = discovery
-        cisco_cfg["last_raw_port_discovery"] = str(ports_result.get("raw_output") or "")
+        cisco_cfg["last_raw_port_discovery"] = str(safe_ports_result.get("raw_output") or "")
         for interface in (discovery.get("interfaces") or {}):
             cisco_cfg.setdefault("ports", {}).setdefault(interface, {"profile": "custom"})
 
     if backup_result.get("ok"):
-        cisco_cfg["last_running_config_backup"] = str(backup_result.get("running_config") or "")
+        cisco_cfg["last_running_config_backup"] = str(safe_backup_result.get("running_config") or "")
 
     cisco_cfg["last_cisco_action"] = {
         "mode": "discover_state",
         "ok": bool(version_result.get("ok")),
         "completed_at": datetime.now(timezone.utc).isoformat(),
-        "errors": [str(item) for item in [version_result.get("error"), ports_result.get("error"), backup_result.get("error")] if str(item or "").strip()],
+        "errors": [str(item) for item in [safe_version_result.get("error"), safe_ports_result.get("error"), safe_backup_result.get("error")] if str(item or "").strip()],
     }
     main.save_kit_config(cfg)
     details: list[str] = []
     if not version_result.get("ok"):
-        details.append(str(version_result.get("error") or "Cisco version discovery failed."))
+        details.append(str(safe_version_result.get("error") or "Cisco version discovery failed."))
     if version_result.get("ok") and not ports_result.get("ok"):
-        details.append(str(ports_result.get("error") or "Cisco port discovery failed."))
+        details.append(str(safe_ports_result.get("error") or "Cisco port discovery failed."))
     if version_result.get("ok") and not backup_result.get("ok"):
-        details.append(str(backup_result.get("error") or "Cisco backup failed."))
+        details.append(str(safe_backup_result.get("error") or "Cisco backup failed."))
     feedback = main.build_action_feedback(
         "Cisco live state read" if version_result.get("ok") else "Cisco live state read failed",
         "Read the current version, discovered live interfaces, and backed up the running config."
         if version_result.get("ok")
-        else str(version_result.get("error") or "Cisco state discovery failed."),
+        else str(safe_version_result.get("error") or "Cisco state discovery failed."),
         tone="ready" if version_result.get("ok") else "pending",
         outcomes=[
             f"Version: {cisco_cfg.get('last_discovered_version') or 'Unknown'}",
@@ -906,11 +971,12 @@ async def cisco_preview_config(request: Request, mode: str = Form("full")):
     _update_cisco_model_from_form(cisco_cfg, form, cfg)
     selected_ports = [str(item) for item in form_data.getlist("selected_ports") if str(item).strip()]
     result = service.preview_config({"cfg": cfg}, mode=mode, selected_ports=selected_ports)
-    cisco_cfg["last_config_preview"] = str(result.get("config") or "")
-    cisco_cfg["last_config_validation"] = dict(result.get("validation") or {})
+    safe_result = _redact_cisco_value(cisco_cfg, result, cfg)
+    cisco_cfg["last_config_preview"] = str(safe_result.get("config") or "")
+    cisco_cfg["last_config_validation"] = dict(safe_result.get("validation") or {})
     cisco_cfg["last_cisco_action"] = {"mode": "preview", "ok": bool(result.get("ok")), "completed_at": datetime.now(timezone.utc).isoformat()}
     main.save_kit_config(cfg)
-    validation = dict(result.get("validation") or {})
+    validation = dict(safe_result.get("validation") or {})
     feedback = main.build_action_feedback(
         "Cisco config preview ready" if result.get("ok") else "Cisco config needs attention",
         "Generated the requested Cisco configuration preview without applying it.",
@@ -932,13 +998,20 @@ async def cisco_apply_config(request: Request, mode: str = Form("full")):
     _update_cisco_model_from_form(cisco_cfg, form, cfg)
     selected_ports = [str(item) for item in form_data.getlist("selected_ports") if str(item).strip()]
     result = service.apply_config({"cfg": cfg}, mode=mode, selected_ports=selected_ports)
-    cisco_cfg["last_config_preview"] = str(result.get("config") or "")
-    cisco_cfg["last_cisco_action"] = {"mode": f"apply_{mode}", "ok": bool(result.get("ok")), "applied": bool(result.get("applied")), "error": str(result.get("error") or ""), "completed_at": datetime.now(timezone.utc).isoformat()}
+    safe_result = _redact_cisco_value(cisco_cfg, result, cfg)
+    cisco_cfg["last_config_preview"] = str(safe_result.get("config") or "")
+    cisco_cfg["last_cisco_action"] = {
+        "mode": f"apply_{mode}",
+        "ok": bool(result.get("ok")),
+        "applied": bool(result.get("applied")),
+        "error": str(safe_result.get("error") or ""),
+        "completed_at": datetime.now(timezone.utc).isoformat(),
+    }
     main.save_kit_config(cfg)
-    validation = dict(result.get("validation") or {})
+    validation = dict(safe_result.get("validation") or {})
     feedback = main.build_action_feedback(
         "Cisco config applied" if result.get("applied") else "Cisco config not applied",
-        "Applied the requested Cisco configuration over SSH." if result.get("applied") else str(result.get("error") or "Validation blocked the apply."),
+        "Applied the requested Cisco configuration over SSH." if result.get("applied") else str(safe_result.get("error") or "Validation blocked the apply."),
         tone="ready" if result.get("applied") else "danger",
         outcomes=[f"Mode: {mode}", f"Selected ports: {len(selected_ports) if selected_ports else 'all'}"],
         details=list(validation.get("errors") or []) + list(validation.get("warnings") or []),
@@ -956,8 +1029,9 @@ async def cisco_approve_config_plan(request: Request, mode: str = Form("full")):
     form = dict(form_data)
     _update_cisco_model_from_form(cisco_cfg, form, cfg)
     result = service.preview_config({"cfg": cfg}, mode=mode)
-    validation = dict(result.get("validation") or {})
-    cisco_cfg["last_config_preview"] = str(result.get("config") or "")
+    safe_result = _redact_cisco_value(cisco_cfg, result, cfg)
+    validation = dict(safe_result.get("validation") or {})
+    cisco_cfg["last_config_preview"] = str(safe_result.get("config") or "")
     cisco_cfg["last_config_validation"] = validation
 
     blockers: list[str] = []
@@ -1039,13 +1113,14 @@ async def cisco_backup_config(request: Request):
         management_ip=str(form.get("cisco_management_ip") or ""),
     )
     result = service.backup_config({"cfg": cfg})
+    safe_result = _redact_cisco_value(cisco_cfg, result, cfg)
     if result.get("ok"):
-        cisco_cfg["last_running_config_backup"] = str(result.get("running_config") or "")
-    cisco_cfg["last_cisco_action"] = {"mode": "backup_config", "ok": bool(result.get("ok")), "error": str(result.get("error") or ""), "completed_at": datetime.now(timezone.utc).isoformat()}
+        cisco_cfg["last_running_config_backup"] = str(safe_result.get("running_config") or "")
+    cisco_cfg["last_cisco_action"] = {"mode": "backup_config", "ok": bool(result.get("ok")), "error": str(safe_result.get("error") or ""), "completed_at": datetime.now(timezone.utc).isoformat()}
     main.save_kit_config(cfg)
     feedback = main.build_action_feedback(
         "Cisco config backed up" if result.get("ok") else "Cisco config backup failed",
-        "Captured the current running config for preview and audit." if result.get("ok") else str(result.get("error") or "Backup failed."),
+        "Captured the current running config for preview and audit." if result.get("ok") else str(safe_result.get("error") or "Backup failed."),
         tone="ready" if result.get("ok") else "pending",
     )
     return _render_cisco_page(request, cfg, action_feedback=feedback)
@@ -1081,18 +1156,20 @@ async def cisco_factory_reset(request: Request):
                 tone = "danger"
     if result.get("status") == "reload_issued":
         _clear_cisco_live_state_after_factory_reset(cisco_cfg)
+    safe_result = _redact_cisco_value(cisco_cfg, result, cfg)
+    safe_output = _redact_cisco_text(cisco_cfg, result.get("output") or "", cfg)
     if result.get("output"):
-        cisco_cfg["last_serial_output"] = str(result.get("output") or "")
-    cisco_cfg["last_factory_reset"] = {key: value for key, value in result.items() if key != "output"}
-    cisco_cfg["last_cisco_action"] = {"mode": "factory_reset", "ok": result.get("status") == "reload_issued", "error": str(result.get("error") or ""), "completed_at": datetime.now(timezone.utc).isoformat()}
+        cisco_cfg["last_serial_output"] = safe_output
+    cisco_cfg["last_factory_reset"] = {key: value for key, value in safe_result.items() if key != "output"}
+    cisco_cfg["last_cisco_action"] = {"mode": "factory_reset", "ok": result.get("status") == "reload_issued", "error": _redact_cisco_text(cisco_cfg, result.get("error") or "", cfg), "completed_at": datetime.now(timezone.utc).isoformat()}
     main.save_kit_config(cfg)
     source = str(result.get("source") or ("console" if cisco_cfg.get("console_port") else "ssh"))
     feedback = main.build_action_feedback(
         "Cisco factory reset issued" if result.get("status") == "reload_issued" else "Cisco factory reset blocked",
-        "Startup config and vlan.dat deletion were issued and the switch is reloading." if result.get("status") == "reload_issued" else str(result.get("error") or "Factory reset was not started."),
+        "Startup config and vlan.dat deletion were issued and the switch is reloading." if result.get("status") == "reload_issued" else _redact_cisco_text(cisco_cfg, result.get("error") or "Factory reset was not started.", cfg),
         tone=tone,
         outcomes=[f"Source: {source}", f"Console: {cisco_cfg.get('console_port') or 'not selected'}"],
-        details=list(result.get("steps") or []),
+        details=[_redact_cisco_text(cisco_cfg, item, cfg) for item in list(result.get("steps") or [])],
     )
     return _render_cisco_page(request, cfg, action_feedback=feedback)
 

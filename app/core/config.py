@@ -133,14 +133,14 @@ def validate_snmpv3_password(value: str, *, label: str, required: bool = True) -
 def default_config() -> dict[str, Any]:
     return KitConfigModel(
         ip_plan={
-            "gateway": "10.10.8.1",
-            "switch": "10.10.8.2",
-            "esxi": "10.10.8.10",
-            "ilo": "10.10.8.11",
-            "windows": "10.10.8.20",
-            "qnap": "10.10.8.30",
-            "iosafe": "10.10.8.31",
-            "netapp": "10.10.8.45",
+            "gateway": "192.168.1.1",
+            "switch": "192.168.1.2",
+            "esxi": "192.168.1.10",
+            "ilo": "192.168.1.11",
+            "windows": "192.168.1.20",
+            "qnap": "192.168.1.30",
+            "iosafe": "192.168.1.31",
+            "netapp": "192.168.1.45",
         },
         included={
             "ilo": True,
@@ -327,8 +327,8 @@ def default_config() -> dict[str, Any]:
             "bootstrap_network_mode": "trunk",
             "enable_password": "",
             "domain_name": "example.local",
-            "dns_servers": ["10.10.8.1"],
-            "ntp_servers": ["10.10.8.1", "10.10.8.2"],
+            "dns_servers": ["192.168.1.1"],
+            "ntp_servers": ["192.168.1.1"],
             "vlans": [
                 {"id": 10, "name": "MANAGEMENT", "svi_enabled": True, "description": "Management VLAN"},
                 {"id": 999, "name": "BLACK-HOLE", "svi_enabled": False, "description": "Black Hole VLAN"},
@@ -752,7 +752,7 @@ def calc_ip_plan(cfg: dict[str, Any]) -> dict[str, Any]:
     shared_network = cfg.get("shared_network", {})
     netapp_cfg = cfg.get("netapp", {}) or {}
     bootstrap_overrides = (netapp_cfg.get("bootstrap_overrides") or {}) if isinstance(netapp_cfg, dict) else {}
-    subnet = shared_network.get("subnet", "10.10.8.0/24")
+    subnet = shared_network.get("subnet", "192.168.1.0/24")
     details = subnet_details(subnet)
     plan = normalize_ip_plan(cfg, subnet)
     netapp_offsets = {

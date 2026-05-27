@@ -18,3 +18,5 @@ Implements iLO discovery, validation, preview, apply, status, and repair behavio
 ## Validation
 Run iLO preview/apply flow and verify readback checks and artifacts.
 
+## Manual Physical Testing
+Use `docs/ilo-physical-flow-checklist.md` when the real HPE iLO/server is available. Automated validation must keep using fake clients, fake inventory, route tests, and mocks.

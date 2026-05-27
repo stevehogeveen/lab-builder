@@ -6,15 +6,73 @@
     "areas": [],
     "raw_key_groups": [],
 }) %}
+{% set ilo_cfg = cfg.get("ilo", {}) %}
 {% set ilo_policy = cfg.get("ilo", {}).get("policy", {}) %}
-<section class="panel space-y-6" x-data='{"tab":"basic","users": {{ cfg.get("ilo", {}).get("additional_users", [])|tojson }} }'>
+{% set ilo_current_ip = ilo_cfg.get('current_ip', ilo_cfg.get('host', '')) %}
+{% set ilo_target_ip = ilo_cfg.get('target_ip', cfg.get('ip_plan', {}).get('ilo', '')) %}
+{% set ilo_username = ilo_cfg.get('username', '') %}
+{% set ilo_has_password = ilo_cfg.get('password') %}
+{% set ilo_saved_ready = ilo_current_ip and ilo_username and ilo_has_password %}
+{% if not ilo_current_ip %}
+    {% set ilo_next_step = 'Save current iLO access' %}
+{% elif not ilo_username or not ilo_has_password %}
+    {% set ilo_next_step = 'Add iLO credentials' %}
+{% elif not ilo_advanced.available %}
+    {% set ilo_next_step = 'Read current iLO' %}
+{% else %}
+    {% set ilo_next_step = 'Review storage setup' %}
+{% endif %}
+{% set ilo_completion_state = 'Current state captured' if ilo_advanced.available and ilo_saved_ready else ('Ready to read current state' if ilo_saved_ready else 'Needs saved access') %}
+{% set ilo_last_result = (ilo_latest_receipt.result if ilo_latest_receipt else 'Not run') %}
+{% set ilo_last_summary = (ilo_latest_receipt.human_summary if ilo_latest_receipt else 'No iLO run has finished for this kit yet.') %}
+{% set ilo_log_path = (ilo_latest_receipt.run_summary_path if ilo_latest_receipt and ilo_latest_receipt.run_summary_path else '') %}
+{% set ilo_log_label = (ilo_log_path.rsplit('/', 1)[-1] if ilo_log_path else 'No log yet') %}
+{% if ilo_log_path %}
+    {% set ilo_log_status = ilo_log_label %}
+{% elif ilo_advanced.available %}
+    {% set ilo_log_status = 'Current iLO read cached' %}
+{% elif ilo_saved_ready %}
+    {% set ilo_log_status = 'Ready to read current iLO' %}
+{% else %}
+    {% set ilo_log_status = 'Save access before reading iLO' %}
+{% endif %}
+{% set ilo_detected = namespace(model='', firmware='', source='', power='', last_read='') %}
+{% for item in ilo_advanced.summary_fields %}
+    {% if item.label == 'Detected iLO' %}{% set ilo_detected.model = item.value %}{% endif %}
+    {% if item.label == 'Firmware' %}{% set ilo_detected.firmware = item.value %}{% endif %}
+    {% if item.label == 'Source' %}{% set ilo_detected.source = item.value %}{% endif %}
+    {% if item.label == 'Power' %}{% set ilo_detected.power = item.value %}{% endif %}
+    {% if item.label == 'Last live read' %}{% set ilo_detected.last_read = item.value %}{% endif %}
+{% endfor %}
+{% set ilo_vm = namespace(devices='', insert='', eject='') %}
+{% for area in ilo_advanced.areas %}
+    {% if area.name == 'Virtual media and remote install' %}
+        {% for item in area["items"] %}
+            {% if item.label == 'Virtual media devices' %}{% set ilo_vm.devices = item.value %}{% endif %}
+            {% if item.label == 'Insert media actions' %}{% set ilo_vm.insert = item.value %}{% endif %}
+            {% if item.label == 'Eject media actions' %}{% set ilo_vm.eject = item.value %}{% endif %}
+        {% endfor %}
+    {% endif %}
+{% endfor %}
+{% set ilo_suggested_ip = cfg.get('ip_plan', {}).get('ilo', '') or '192.168.1.21' %}
+{% set ilo_suggested_gateway = cfg.get('ip_plan', {}).get('gateway', '') or '192.168.1.1' %}
+{% set ilo_discovery_range = '192.168.1.' ~ (ilo_policy.get('discover_start_octet', 21)) ~ '-' ~ (ilo_policy.get('discover_end_octet', 29)) %}
+{% set ilo_additional_users_for_form = [] %}
+{% for user in cfg.get("ilo", {}).get("additional_users", []) %}
+    {% set _ = ilo_additional_users_for_form.append({
+        "username": user.get("username", ""),
+        "password": "",
+        "role": user.get("role", "Administrator"),
+    }) %}
+{% endfor %}
+<section class="panel space-y-6" x-data='{"tab":"basic","users": {{ ilo_additional_users_for_form|tojson }} }'>
     <div>
         <h2 class="text-2xl font-bold title-with-icon"><span class="page-icon icon-tone-{{ page_precheck_summary.tone if page_precheck_summary else 'progress' }}" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="5" width="16" height="12" rx="2"/><path d="M8 20h8"/><path d="M9 9h6"/><path d="M9 13h3"/></svg></span><span>iLO setup</span></h2>
-        <div class="text-sm text-slate-400">Address and sign-in.</div>
+        <div class="text-sm text-slate-400">Address and sign-in. Connect to HPE iLO, capture current state, and prepare safe setup actions.</div>
         <div class="actions mt-4">
             <div class="workflow-tabs">
                 <button class="btn workflow-tab" type="button" :class="tab === 'basic' ? 'workflow-tab workflow-tab-active' : 'workflow-tab'" @click="tab = 'basic'">Basic setup</button>
-                <button class="btn workflow-tab" type="button" :class="tab === 'advanced' ? 'workflow-tab workflow-tab-active' : 'workflow-tab'" @click="tab = 'advanced'">Advanced</button>
+                <button class="btn workflow-tab" type="button" :class="tab === 'advanced' ? 'workflow-tab workflow-tab-active' : 'workflow-tab'" @click="tab = 'advanced'">Debug Mode</button>
             </div>
         </div>
     </div>
@@ -30,6 +88,60 @@
     ] %}
     {% include "partials/components/setup_strip.html" %}
 
+    <section class="card identity-soft-card" id="ilo-operator-mode">
+        <div class="flex flex-wrap items-start justify-between gap-3">
+            <div>
+                <div class="text-lg font-semibold">iLO operator checkpoint</div>
+                <div class="text-sm text-slate-400 mt-1">Saved access, live read status, and the next physical setup action.</div>
+            </div>
+            <div class="actions">
+                <span class="status progress">Operator Mode</span>
+                <a class="btn" href="#ilo-debug-details" @click="tab = 'advanced'">Open Debug Mode/details</a>
+            </div>
+        </div>
+        <div class="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-3 mt-4">
+            <div class="result" style="margin-top: 0;">
+                <div class="dashboard-kicker">Next step</div>
+                <div class="font-semibold">{{ ilo_next_step }}</div>
+            </div>
+            <div class="result" style="margin-top: 0;">
+                <div class="dashboard-kicker">Completion state</div>
+                <div class="font-semibold">{{ ilo_completion_state }}</div>
+            </div>
+            <div class="result" style="margin-top: 0;">
+                <div class="dashboard-kicker">Last result</div>
+                <div class="font-semibold">{{ ilo_last_result }}</div>
+                <div class="text-xs text-slate-400 mt-1 truncate-wrap" title="{{ ilo_last_summary }}">{{ ilo_last_summary }}</div>
+            </div>
+            <div class="result" style="margin-top: 0;">
+                <div class="dashboard-kicker">Logs/status</div>
+                <div class="font-semibold">{{ ilo_log_status }}</div>
+            </div>
+        </div>
+        <div class="grid grid-cols-1 lg:grid-cols-3 gap-3 mt-3">
+            <div class="result" style="margin-top: 0;">
+                <div class="dashboard-kicker">Saved Lab Builder kit config</div>
+                <div class="font-semibold">{{ ilo_current_ip or 'Not set' }}</div>
+                <div class="text-xs text-slate-400 mt-1 truncate-wrap">Target {{ ilo_target_ip or 'not set' }} | Host {{ ilo_cfg.get('hostname') or 'not set' }} | Credentials {{ 'saved' if ilo_username and ilo_has_password else 'missing' }}</div>
+            </div>
+            <div class="result" style="margin-top: 0;">
+                <div class="dashboard-kicker">Discovered/current iLO state</div>
+                <div class="font-semibold">{{ ilo_detected.source if ilo_advanced.available else 'Not checked yet' }}</div>
+                <div class="text-xs text-slate-400 mt-1 truncate-wrap">{{ ilo_detected.model or 'No live read' }}{% if ilo_detected.firmware %} / Firmware {{ ilo_detected.firmware }}{% endif %}{% if ilo_detected.power %} / Power {{ ilo_detected.power }}{% endif %}</div>
+                {% if ilo_vm.devices and ilo_vm.devices != 'None detected' %}
+                <div class="text-xs text-slate-400 mt-1 truncate-wrap">Virtual media {{ ilo_vm.devices }} {{ 'device' if ilo_vm.devices == '1' else 'devices' }} | Insert actions {{ ilo_vm.insert or 'not exposed' }} | Eject actions {{ ilo_vm.eject or 'not exposed' }}</div>
+                {% elif ilo_vm.devices %}
+                <div class="text-xs text-slate-400 mt-1 truncate-wrap">Virtual media none detected</div>
+                {% endif %}
+            </div>
+            <div class="result" style="margin-top: 0;">
+                <div class="dashboard-kicker">Planned/suggested values</div>
+                <div class="font-semibold">{{ ilo_target_ip or ilo_suggested_ip }}</div>
+                <div class="text-xs text-slate-400 mt-1 truncate-wrap">Gateway {{ ilo_cfg.get('gateway') or ilo_suggested_gateway }} | Discovery {{ ilo_discovery_range }}</div>
+            </div>
+        </div>
+    </section>
+
     {% set ilo_upgrade_entry = ((upgrade_helper_summary.get('planner', {}).get('entries', []) | selectattr('key', 'equalto', 'ilo') | list | first) | default({}, true)) if upgrade_helper_summary else {} %}
     {% set ilo_upgrade_override = upgrade_helper_summary.get('overrides', {}).get('ilo') if upgrade_helper_summary else false %}
     {% set ilo_upgrade_blocked = ilo_upgrade_entry and ilo_upgrade_entry.get('blocks_run') %}
@@ -41,7 +153,7 @@
     <div class="{% if ilo_upgrade_blocked and not ilo_upgrade_override %}upgrade-gated-content{% endif %}">
     <section class="card workflow-hero-card" x-show="tab === 'basic'">
         <div class="text-lg font-semibold mb-3">Save iLO setup</div>
-        <form hx-post="/save-ilo-settings" hx-target="#main-content" hx-swap="outerHTML" class="space-y-4" data-action-title="Saving iLO setup" data-action-start="Saving the latest iLO address and sign-in details." data-action-complete="iLO setup saved.">
+        <form id="ilo-save-form" hx-post="/save-ilo-settings" hx-target="#main-content" hx-swap="outerHTML" class="space-y-4" data-action-title="Saving iLO setup" data-action-start="Saving the latest iLO address and sign-in details." data-action-complete="iLO setup saved.">
             <input type="hidden" name="return_page" value="ilo">
             <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
                 <div>
@@ -78,99 +190,6 @@
                 </div>
             </div>
 
-            <details class="card card-compact">
-                <summary class="summary-row">
-                    <span class="text-sm font-bold text-slate-300">Standard iLO policy</span>
-                    <span class="status progress">policy</span>
-                </summary>
-                <div class="mt-4 space-y-4">
-                    <div class="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-4">
-                        <label class="check card card-compact"><input type="checkbox" name="ilo_policy_apply_standard_policy" {% if ilo_policy.get("apply_standard_policy") %}checked{% endif %}> Apply standard iLO policy</label>
-                        <label class="check card card-compact"><input type="checkbox" name="ilo_policy_enable_standard_accounts" {% if ilo_policy.get("enable_standard_accounts") %}checked{% endif %}> Standard local accounts</label>
-                        <label class="check card card-compact"><input type="checkbox" name="ilo_policy_enable_license_check" {% if ilo_policy.get("enable_license_check") %}checked{% endif %}> License check</label>
-                        <label class="check card card-compact"><input type="checkbox" name="ilo_policy_enable_auto_reset" {% if ilo_policy.get("enable_auto_reset") %}checked{% endif %}> Auto iLO reset</label>
-                        <label class="check card card-compact"><input type="checkbox" name="ilo_policy_enable_snmp_policy" {% if ilo_policy.get("enable_snmp_policy") %}checked{% endif %}> SNMP/SNMPv3 policy</label>
-                        <label class="check card card-compact"><input type="checkbox" name="ilo_policy_enable_alert_destinations" {% if ilo_policy.get("enable_alert_destinations") %}checked{% endif %}> SNMP alert destinations</label>
-                        <label class="check card card-compact"><input type="checkbox" name="ilo_policy_enable_ipv6_disable" {% if ilo_policy.get("enable_ipv6_disable") %}checked{% endif %}> Disable IPv6 policy</label>
-                        <label class="check card card-compact"><input type="checkbox" name="ilo_policy_enable_time_policy" {% if ilo_policy.get("enable_time_policy") %}checked{% endif %}> SNTP/time policy</label>
-                    </div>
-                    <div class="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-4">
-                        <div>
-                            <label class="block text-sm font-bold text-slate-300 mb-2">Discovery start octet</label>
-                            <input type="number" min="1" max="254" name="ilo_discover_start_octet" value="{{ ilo_policy.get('discover_start_octet', 21) }}" class="input">
-                        </div>
-                        <div>
-                            <label class="block text-sm font-bold text-slate-300 mb-2">Discovery end octet</label>
-                            <input type="number" min="1" max="254" name="ilo_discover_end_octet" value="{{ ilo_policy.get('discover_end_octet', 29) }}" class="input">
-                        </div>
-                        <div>
-                            <label class="block text-sm font-bold text-slate-300 mb-2">Shared admin username</label>
-                            <input type="text" name="ilo_policy_shared_admin_username" value="{{ ilo_policy.get('shared_admin_username', '765CS') }}" class="input">
-                        </div>
-                        <div>
-                            <label class="block text-sm font-bold text-slate-300 mb-2">SNMPv3 username</label>
-                            <input type="text" name="ilo_policy_snmpv3_username" value="{{ ilo_policy.get('snmpv3_username', '765CS') }}" class="input">
-                        </div>
-                        <div>
-                            <label class="block text-sm font-bold text-slate-300 mb-2">{{ cfg.get('site', {}).get('name', 'KIT')|upper }}_Admin password</label>
-                            <input type="password" name="ilo_policy_kit_admin_password" value="" placeholder="Saved - leave blank to keep" class="input">
-                        </div>
-                        <div>
-                            <label class="block text-sm font-bold text-slate-300 mb-2">{{ cfg.get('site', {}).get('name', 'KIT')|upper }}_OA password</label>
-                            <input type="password" name="ilo_policy_kit_operator_password" value="" placeholder="Saved - leave blank to keep" class="input">
-                        </div>
-                        <div>
-                            <label class="block text-sm font-bold text-slate-300 mb-2">765CS admin password</label>
-                            <input type="password" name="ilo_policy_shared_admin_password" value="" placeholder="Saved - leave blank to keep" class="input">
-                        </div>
-                        <div>
-                            <label class="block text-sm font-bold text-slate-300 mb-2">SNMP read community</label>
-                            <input type="password" name="ilo_policy_snmp_read_community" value="" placeholder="Saved - leave blank to keep" class="input">
-                        </div>
-                        <div>
-                            <label class="block text-sm font-bold text-slate-300 mb-2">SNMPv3 auth protocol</label>
-                            <select class="input" name="ilo_policy_snmpv3_auth_protocol">
-                                <option value="SHA" {% if ilo_policy.get('snmpv3_auth_protocol', 'SHA') == 'SHA' %}selected{% endif %}>SHA</option>
-                                <option value="MD5" {% if ilo_policy.get('snmpv3_auth_protocol', 'SHA') == 'MD5' %}selected{% endif %}>MD5</option>
-                            </select>
-                        </div>
-                        <div>
-                            <label class="block text-sm font-bold text-slate-300 mb-2">SNMPv3 auth passphrase</label>
-                            <input type="password" name="ilo_policy_snmpv3_auth_password" value="" placeholder="Saved - leave blank to keep" class="input">
-                        </div>
-                        <div>
-                            <label class="block text-sm font-bold text-slate-300 mb-2">SNMPv3 privacy protocol</label>
-                            <select class="input" name="ilo_policy_snmpv3_priv_protocol">
-                                <option value="AES" {% if ilo_policy.get('snmpv3_priv_protocol', 'AES') == 'AES' %}selected{% endif %}>AES</option>
-                                <option value="DES" {% if ilo_policy.get('snmpv3_priv_protocol', 'AES') == 'DES' %}selected{% endif %}>DES</option>
-                            </select>
-                        </div>
-                        <div>
-                            <label class="block text-sm font-bold text-slate-300 mb-2">SNMPv3 privacy passphrase</label>
-                            <input type="password" name="ilo_policy_snmpv3_priv_password" value="" placeholder="Saved - leave blank to keep" class="input">
-                        </div>
-                    </div>
-                    <div>
-                        <label class="block text-sm font-bold text-slate-300 mb-2">Alert destinations</label>
-                        <input type="text" name="ilo_policy_alert_destinations" value="{{ ', '.join(ilo_policy.get('alert_destinations', [])) }}" class="input">
-                        <div class="text-xs text-slate-400 mt-1">Comma or space separated. The standard policy defaults to `10.245.190.67` and `10.245.190.68`.</div>
-                    </div>
-                    {% if ilo_policy.get("discovered_hosts") %}
-                    <div class="space-y-2">
-                        <div class="font-semibold">Last discovery</div>
-                        <div class="grid grid-cols-1 xl:grid-cols-2 gap-3">
-                            {% for item in ilo_policy.get("discovered_hosts", []) %}
-                            <div class="ops-strip-card" style="margin-top: 0;">
-                                <div class="dashboard-kicker">{{ item.host }}</div>
-                                <div class="truncate-wrap" title="{% if item.reachable %}HTTPS reachable{% else %}Unreachable{% endif %}{% if item.latency_ms %} | {{ item.latency_ms }} ms{% endif %}{% if item.error %} | {{ item.error }}{% endif %}">{% if item.reachable %}HTTPS reachable{% else %}Unreachable{% endif %}{% if item.latency_ms %} | {{ item.latency_ms }} ms{% endif %}{% if item.error %} | {{ item.error }}{% endif %}</div>
-                            </div>
-                            {% endfor %}
-                        </div>
-                    </div>
-                    {% endif %}
-                </div>
-            </details>
-
             {% if ilo_input_review.errors or ilo_input_review.notes %}
             <div class="card card-compact">
                 <div class="font-semibold mb-2">Saved-value checks</div>
@@ -191,46 +210,6 @@
             </div>
             {% endif %}
 
-            <details class="card card-compact">
-                <summary class="summary-row">
-                    <span class="text-sm font-bold text-slate-300">More local iLO users</span>
-                    <span class="status progress">advanced</span>
-                </summary>
-                <div class="mt-4 space-y-3">
-                    <div class="flex items-center justify-between gap-3">
-                        <div class="text-sm text-slate-400">Use this only if you want the run to create or update extra local iLO users.</div>
-                        <button class="btn" type="button" @click="users.push({username: '', password: '', role: 'Administrator'})">+ Add user</button>
-                    </div>
-                    <template x-for="(user, index) in users" :key="index">
-                        <div class="card">
-                            <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
-                                <div>
-                                    <label class="block text-sm font-bold text-slate-300 mb-2">Username</label>
-                                    <input class="input" type="text" name="ilo_extra_username" x-model="user.username">
-                                    <div class="text-xs text-slate-400 mt-1">Single printable login name, 39 characters or less.</div>
-                                </div>
-                                <div>
-                                    <label class="block text-sm font-bold text-slate-300 mb-2">Password</label>
-                                    <input class="input" type="password" name="ilo_extra_password" x-model="user.password">
-                                    <div class="text-xs text-slate-400 mt-1">Printable only. Many iLO policies expect at least 8 characters and 3 character types.</div>
-                                </div>
-                                <div>
-                                    <label class="block text-sm font-bold text-slate-300 mb-2">Role</label>
-                                    <select class="input" name="ilo_extra_role" x-model="user.role">
-                                        <option value="Administrator">Administrator</option>
-                                        <option value="Operator">Operator</option>
-                                        <option value="ReadOnly">ReadOnly</option>
-                                    </select>
-                                </div>
-                            </div>
-                            <div class="actions mt-3">
-                                <button class="btn" type="button" @click="users.splice(index, 1)">Remove user</button>
-                            </div>
-                        </div>
-                    </template>
-                </div>
-            </details>
-
             <div class="actions">
                 <button class="btn btn-primary action-button" type="submit">Save iLO setup</button>
                 <a class="btn" href="/storage">Open storage setup</a>
@@ -243,12 +222,14 @@
         </form>
     </section>
 
-    <section class="card identity-soft-card ilo-advanced-shell" x-show="tab === 'advanced'">
+    <section class="card identity-soft-card ilo-advanced-shell" id="ilo-debug-details" x-show="tab === 'advanced'">
         <div class="flex items-center justify-between gap-3 mb-3 flex-wrap">
             <div>
-                <div class="text-lg font-semibold">Advanced iLO options</div>
-                <div class="text-sm text-slate-400">This tab shows the extra iLO features the last live read detected on this firmware version.</div>
+                <div class="dashboard-kicker">Advanced iLO options</div>
+                <div class="text-lg font-semibold">Debug Mode/details</div>
+                <div class="text-sm text-slate-400">Redfish endpoints, response summaries, artifacts, and recovery context from the latest safe read.</div>
             </div>
+            <span class="status progress ilo-capability-badge">logs/status</span>
             <span class="status progress ilo-capability-badge">{{ ilo_advanced.detected_label }}</span>
         </div>
         {% if ilo_advanced.available %}
@@ -318,6 +299,17 @@
             </div>
         </details>
         {% endif %}
+        <details class="card card-compact identity-soft-card mt-4">
+            <summary class="summary-row">
+                <span class="text-sm font-bold text-slate-300">Recovery suggestions</span>
+                <span class="status progress">Debug Mode</span>
+            </summary>
+            <div class="mt-4 space-y-2 text-sm">
+                <div class="ops-strip-card" style="margin-top: 0;">Read current iLO again after firmware changes or failed writes so endpoint paths and capability keys are fresh.</div>
+                <div class="ops-strip-card" style="margin-top: 0;">For reset or power flow, compare the current PowerState with the allowed ComputerSystem.Reset values before any manual operator-triggered action.</div>
+                <div class="ops-strip-card" style="margin-top: 0;">For virtual media issues, verify insert/eject action targets and clear stale media before mounting the ESXi installer.</div>
+            </div>
+        </details>
         {% else %}
         <div class="dashboard-empty-state">
             <div class="font-semibold">No live iLO read yet</div>
@@ -328,9 +320,143 @@
             <button class="btn action-button" type="submit">Read current iLO</button>
         </form>
         {% endif %}
+        <details class="card card-compact identity-soft-card mt-4">
+            <summary class="summary-row">
+                <span class="text-sm font-bold text-slate-300">Standard iLO policy</span>
+                <span class="status progress">Debug Mode</span>
+            </summary>
+            <div class="mt-4 space-y-4">
+                <div class="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-4">
+                    <label class="check card card-compact"><input type="checkbox" name="ilo_policy_apply_standard_policy" form="ilo-save-form" {% if ilo_policy.get("apply_standard_policy") %}checked{% endif %}> Apply standard iLO policy</label>
+                    <label class="check card card-compact"><input type="checkbox" name="ilo_policy_enable_standard_accounts" form="ilo-save-form" {% if ilo_policy.get("enable_standard_accounts") %}checked{% endif %}> Standard local accounts</label>
+                    <label class="check card card-compact"><input type="checkbox" name="ilo_policy_enable_license_check" form="ilo-save-form" {% if ilo_policy.get("enable_license_check") %}checked{% endif %}> License check</label>
+                    <label class="check card card-compact"><input type="checkbox" name="ilo_policy_enable_auto_reset" form="ilo-save-form" {% if ilo_policy.get("enable_auto_reset") %}checked{% endif %}> Allow iLO reset during manual apply <span class="status progress">manual only</span> <span class="status danger">disruptive</span></label>
+                    <label class="check card card-compact"><input type="checkbox" name="ilo_policy_enable_snmp_policy" form="ilo-save-form" {% if ilo_policy.get("enable_snmp_policy") %}checked{% endif %}> SNMP/SNMPv3 policy</label>
+                    <label class="check card card-compact"><input type="checkbox" name="ilo_policy_enable_alert_destinations" form="ilo-save-form" {% if ilo_policy.get("enable_alert_destinations") %}checked{% endif %}> SNMP alert destinations</label>
+                    <label class="check card card-compact"><input type="checkbox" name="ilo_policy_enable_ipv6_disable" form="ilo-save-form" {% if ilo_policy.get("enable_ipv6_disable") %}checked{% endif %}> Disable IPv6 policy</label>
+                    <label class="check card card-compact"><input type="checkbox" name="ilo_policy_enable_time_policy" form="ilo-save-form" {% if ilo_policy.get("enable_time_policy") %}checked{% endif %}> SNTP/time policy</label>
+                </div>
+                <div class="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-4">
+                    <div>
+                        <label class="block text-sm font-bold text-slate-300 mb-2">Discovery start octet</label>
+                        <input type="number" min="1" max="254" name="ilo_discover_start_octet" value="{{ ilo_policy.get('discover_start_octet', 21) }}" class="input" form="ilo-save-form">
+                    </div>
+                    <div>
+                        <label class="block text-sm font-bold text-slate-300 mb-2">Discovery end octet</label>
+                        <input type="number" min="1" max="254" name="ilo_discover_end_octet" value="{{ ilo_policy.get('discover_end_octet', 29) }}" class="input" form="ilo-save-form">
+                    </div>
+                    <div>
+                        <label class="block text-sm font-bold text-slate-300 mb-2">Shared admin username</label>
+                        <input type="text" name="ilo_policy_shared_admin_username" value="{{ ilo_policy.get('shared_admin_username', '765CS') }}" class="input" form="ilo-save-form">
+                    </div>
+                    <div>
+                        <label class="block text-sm font-bold text-slate-300 mb-2">SNMPv3 username</label>
+                        <input type="text" name="ilo_policy_snmpv3_username" value="{{ ilo_policy.get('snmpv3_username', '765CS') }}" class="input" form="ilo-save-form">
+                    </div>
+                    <div>
+                        <label class="block text-sm font-bold text-slate-300 mb-2">{{ cfg.get('site', {}).get('name', 'KIT')|upper }}_Admin password</label>
+                        <input type="password" name="ilo_policy_kit_admin_password" value="" placeholder="Saved - leave blank to keep" class="input" form="ilo-save-form">
+                    </div>
+                    <div>
+                        <label class="block text-sm font-bold text-slate-300 mb-2">{{ cfg.get('site', {}).get('name', 'KIT')|upper }}_OA password</label>
+                        <input type="password" name="ilo_policy_kit_operator_password" value="" placeholder="Saved - leave blank to keep" class="input" form="ilo-save-form">
+                    </div>
+                    <div>
+                        <label class="block text-sm font-bold text-slate-300 mb-2">765CS admin password</label>
+                        <input type="password" name="ilo_policy_shared_admin_password" value="" placeholder="Saved - leave blank to keep" class="input" form="ilo-save-form">
+                    </div>
+                    <div>
+                        <label class="block text-sm font-bold text-slate-300 mb-2">SNMP read community</label>
+                        <input type="password" name="ilo_policy_snmp_read_community" value="" placeholder="Saved - leave blank to keep" class="input" form="ilo-save-form">
+                    </div>
+                    <div>
+                        <label class="block text-sm font-bold text-slate-300 mb-2">SNMPv3 auth protocol</label>
+                        <select class="input" name="ilo_policy_snmpv3_auth_protocol" form="ilo-save-form">
+                            <option value="SHA" {% if ilo_policy.get('snmpv3_auth_protocol', 'SHA') == 'SHA' %}selected{% endif %}>SHA</option>
+                            <option value="MD5" {% if ilo_policy.get('snmpv3_auth_protocol', 'SHA') == 'MD5' %}selected{% endif %}>MD5</option>
+                        </select>
+                    </div>
+                    <div>
+                        <label class="block text-sm font-bold text-slate-300 mb-2">SNMPv3 auth passphrase</label>
+                        <input type="password" name="ilo_policy_snmpv3_auth_password" value="" placeholder="Saved - leave blank to keep" class="input" form="ilo-save-form">
+                    </div>
+                    <div>
+                        <label class="block text-sm font-bold text-slate-300 mb-2">SNMPv3 privacy protocol</label>
+                        <select class="input" name="ilo_policy_snmpv3_priv_protocol" form="ilo-save-form">
+                            <option value="AES" {% if ilo_policy.get('snmpv3_priv_protocol', 'AES') == 'AES' %}selected{% endif %}>AES</option>
+                            <option value="DES" {% if ilo_policy.get('snmpv3_priv_protocol', 'AES') == 'DES' %}selected{% endif %}>DES</option>
+                        </select>
+                    </div>
+                    <div>
+                        <label class="block text-sm font-bold text-slate-300 mb-2">SNMPv3 privacy passphrase</label>
+                        <input type="password" name="ilo_policy_snmpv3_priv_password" value="" placeholder="Saved - leave blank to keep" class="input" form="ilo-save-form">
+                    </div>
+                </div>
+                <div>
+                    <label class="block text-sm font-bold text-slate-300 mb-2">Alert destinations</label>
+                    <input type="text" name="ilo_policy_alert_destinations" value="{{ ', '.join(ilo_policy.get('alert_destinations', [])) }}" class="input" form="ilo-save-form">
+                    <div class="text-xs text-slate-400 mt-1">Comma or space separated. The standard policy defaults to `192.168.1.67` and `192.168.1.68` for the home/lab network.</div>
+                </div>
+                {% if ilo_policy.get("discovered_hosts") %}
+                <div class="space-y-2">
+                    <div class="font-semibold">Last discovery</div>
+                    <div class="grid grid-cols-1 xl:grid-cols-2 gap-3">
+                        {% for item in ilo_policy.get("discovered_hosts", []) %}
+                        <div class="ops-strip-card" style="margin-top: 0;">
+                            <div class="dashboard-kicker">{{ item.host }}</div>
+                            <div class="truncate-wrap" title="{% if item.reachable %}HTTPS reachable{% else %}Unreachable{% endif %}{% if item.latency_ms %} | {{ item.latency_ms }} ms{% endif %}{% if item.error %} | {{ item.error }}{% endif %}">{% if item.reachable %}HTTPS reachable{% else %}Unreachable{% endif %}{% if item.latency_ms %} | {{ item.latency_ms }} ms{% endif %}{% if item.error %} | {{ item.error }}{% endif %}</div>
+                        </div>
+                        {% endfor %}
+                    </div>
+                </div>
+                {% endif %}
+            </div>
+        </details>
+        <details class="card card-compact identity-soft-card mt-4">
+            <summary class="summary-row">
+                <span class="text-sm font-bold text-slate-300">More local iLO users</span>
+                <span class="status progress">Debug Mode</span>
+            </summary>
+            <div class="mt-4 space-y-3">
+                <div class="flex items-center justify-between gap-3">
+                    <div class="text-sm text-slate-400">Use this only if you want the run to create or update extra local iLO users.</div>
+                    <button class="btn" type="button" @click="users.push({username: '', password: '', role: 'Administrator'})">+ Add user</button>
+                </div>
+                <template x-for="(user, index) in users" :key="index">
+                    <div class="card">
+                        <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
+                            <div>
+                                <label class="block text-sm font-bold text-slate-300 mb-2">Username</label>
+                                <input class="input" type="text" name="ilo_extra_username" x-model="user.username" form="ilo-save-form">
+                                <div class="text-xs text-slate-400 mt-1">Single printable login name, 39 characters or less.</div>
+                            </div>
+                            <div>
+                                <label class="block text-sm font-bold text-slate-300 mb-2">Password</label>
+                                <input class="input" type="password" name="ilo_extra_password" x-model="user.password" form="ilo-save-form">
+                                <div class="text-xs text-slate-400 mt-1">Printable only. Many iLO policies expect at least 8 characters and 3 character types.</div>
+                            </div>
+                            <div>
+                                <label class="block text-sm font-bold text-slate-300 mb-2">Role</label>
+                                <select class="input" name="ilo_extra_role" x-model="user.role" form="ilo-save-form">
+                                    <option value="Administrator">Administrator</option>
+                                    <option value="Operator">Operator</option>
+                                    <option value="ReadOnly">ReadOnly</option>
+                                </select>
+                            </div>
+                        </div>
+                        <div class="actions mt-3">
+                            <button class="btn" type="button" @click="users.splice(index, 1)">Remove user</button>
+                        </div>
+                    </div>
+                </template>
+            </div>
+        </details>
+        <div class="actions mt-4">
+            <button class="btn action-button" type="submit" form="ilo-save-form">Save iLO setup</button>
+        </div>
     </section>
 
-    <details class="card identity-soft-card" open>
+    <details class="card identity-soft-card">
         <summary class="summary-row">
             <span class="text-lg font-semibold">What happened last</span>
             <span class="status progress">history</span>

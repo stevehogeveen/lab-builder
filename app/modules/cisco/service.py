@@ -31,6 +31,7 @@ from app.cisco import (
     render_management_config,
     serial_runtime_diagnostics,
     validate_cisco_config,
+    validate_cisco_wizard_password_policy,
 )
 
 
@@ -135,6 +136,38 @@ class CiscoModuleService:
 
     def _enable_secret(self, cisco_cfg: dict[str, Any]) -> str:
         return str(cisco_cfg.get("enable_secret") or cisco_cfg.get("enable_password") or "")
+
+    def _status_secret_values(self, cfg: dict[str, Any], cisco_cfg: dict[str, Any]) -> list[str]:
+        values = [
+            str(cisco_cfg.get("password") or ""),
+            str(cisco_cfg.get("console_password") or ""),
+            self._enable_secret(cisco_cfg),
+        ]
+        for source in (dict(cisco_cfg.get("snmp") or {}), dict(cfg.get("shared_snmp") or {})):
+            values.extend(
+                str(source.get(key) or "")
+                for key in (
+                    "community",
+                    "ro_community",
+                    "rw_community",
+                    "v2_community",
+                    "v3_auth_password",
+                    "v3_priv_password",
+                )
+            )
+            for user in list(source.get("users") or []):
+                user_data = dict(user or {})
+                values.extend(str(user_data.get(key) or "") for key in ("auth_password", "priv_password"))
+        return list(dict.fromkeys(item for item in values if item))
+
+    def _redact_status_value(self, value: Any, secrets: list[str]) -> Any:
+        if isinstance(value, str):
+            return mask_secrets(value, secrets)
+        if isinstance(value, dict):
+            return {key: self._redact_status_value(item, secrets) for key, item in value.items()}
+        if isinstance(value, list):
+            return [self._redact_status_value(item, secrets) for item in value]
+        return value
 
     def _management_ip(self, context: dict[str, Any]) -> str:
         cfg = dict(context.get("cfg") or {})
@@ -305,6 +338,7 @@ class CiscoModuleService:
         saved_kit_config = self._saved_kit_config(cfg, cisco_cfg)
         ready_to_apply = self._ready_to_apply_values(cfg, cisco_cfg)
         last_action_result = self._last_action_result(cisco_cfg)
+        secrets = self._status_secret_values(cfg, cisco_cfg)
         return {
             "target": self._target(context),
             "management_ip": self._management_ip(context),
@@ -328,22 +362,22 @@ class CiscoModuleService:
             "effective_bootstrap_network_mode": effective_bootstrap_mode,
             "last_discovered_version": str(cisco_cfg.get("last_discovered_version") or "").strip(),
             "last_discovered_at": str(cisco_cfg.get("last_discovered_at") or "").strip(),
-            "last_discovery_error": str(cisco_cfg.get("last_discovery_error") or "").strip(),
-            "last_show_version": str(cisco_cfg.get("last_show_version") or "").strip(),
-            "last_console_candidates": list(cisco_cfg.get("last_console_candidates") or []),
-            "last_console_probe_results": list(cisco_cfg.get("last_console_probe_results") or []),
-            "last_console_suggestions": list(cisco_cfg.get("last_console_suggestions") or []),
-            "last_serial_output": last_serial_output,
-            "last_bootstrap": last_bootstrap,
-            "last_ssh_test": dict(cisco_cfg.get("last_ssh_test") or {}),
-            "last_console_diagnostics": dict(cisco_cfg.get("last_console_diagnostics") or {}),
-            "last_console_management_state": str(cisco_cfg.get("last_console_management_state") or ""),
+            "last_discovery_error": self._redact_status_value(str(cisco_cfg.get("last_discovery_error") or "").strip(), secrets),
+            "last_show_version": self._redact_status_value(str(cisco_cfg.get("last_show_version") or "").strip(), secrets),
+            "last_console_candidates": self._redact_status_value(list(cisco_cfg.get("last_console_candidates") or []), secrets),
+            "last_console_probe_results": self._redact_status_value(list(cisco_cfg.get("last_console_probe_results") or []), secrets),
+            "last_console_suggestions": self._redact_status_value(list(cisco_cfg.get("last_console_suggestions") or []), secrets),
+            "last_serial_output": self._redact_status_value(last_serial_output, secrets),
+            "last_bootstrap": self._redact_status_value(last_bootstrap, secrets),
+            "last_ssh_test": self._redact_status_value(dict(cisco_cfg.get("last_ssh_test") or {}), secrets),
+            "last_console_diagnostics": self._redact_status_value(dict(cisco_cfg.get("last_console_diagnostics") or {}), secrets),
+            "last_console_management_state": self._redact_status_value(str(cisco_cfg.get("last_console_management_state") or ""), secrets),
             "port_map": port_map_rows(cisco_cfg),
             "port_profiles": dict(normalize_cisco_switch_config(cisco_cfg).get("port_profiles") or {}),
             "vlans": list(normalize_cisco_switch_config(cisco_cfg).get("vlans") or []),
             "apply_mode": str(cisco_cfg.get("apply_mode") or "initial_install"),
             "last_port_discovery": dict(cisco_cfg.get("last_port_discovery") or {}),
-            "last_raw_port_discovery": str(cisco_cfg.get("last_raw_port_discovery") or ""),
+            "last_raw_port_discovery": self._redact_status_value(str(cisco_cfg.get("last_raw_port_discovery") or ""), secrets),
             "discovered_interfaces": list(
                 {
                     "name": name,
@@ -358,17 +392,17 @@ class CiscoModuleService:
             ),
             "discovered_interface_count": len(dict((cisco_cfg.get("last_port_discovery") or {}).get("interfaces") or {})),
             "desired_port_count": len(dict(cisco_cfg.get("ports") or {})),
-            "last_config_preview": str(cisco_cfg.get("last_config_preview") or ""),
-            "last_cisco_action": dict(cisco_cfg.get("last_cisco_action") or {}),
-            "last_running_config_backup": str(cisco_cfg.get("last_running_config_backup") or ""),
-            "last_host_fix": dict(cisco_cfg.get("last_host_fix") or {}),
-            "last_console_bootstrap_check": dict(cisco_cfg.get("last_console_bootstrap_check") or {}),
+            "last_config_preview": self._redact_status_value(str(cisco_cfg.get("last_config_preview") or ""), secrets),
+            "last_cisco_action": self._redact_status_value(dict(cisco_cfg.get("last_cisco_action") or {}), secrets),
+            "last_running_config_backup": self._redact_status_value(str(cisco_cfg.get("last_running_config_backup") or ""), secrets),
+            "last_host_fix": self._redact_status_value(dict(cisco_cfg.get("last_host_fix") or {}), secrets),
+            "last_console_bootstrap_check": self._redact_status_value(dict(cisco_cfg.get("last_console_bootstrap_check") or {}), secrets),
             "config_approval": dict(cisco_cfg.get("config_approval") or {}),
             "discovered_current": discovered_current,
             "saved_kit_config": saved_kit_config,
             "ready_to_apply": ready_to_apply,
-            "last_action_result": last_action_result,
-            "operator_findings": self._operator_findings(cfg, cisco_cfg),
+            "last_action_result": self._redact_status_value(last_action_result, secrets),
+            "operator_findings": self._redact_status_value(self._operator_findings(cfg, cisco_cfg), secrets),
         }
 
     def _operator_findings(self, cfg: dict[str, Any], cisco_cfg: dict[str, Any]) -> list[dict[str, Any]]:
@@ -409,29 +443,35 @@ class CiscoModuleService:
                 actions=list(action.get("suggestions") or diagnostics.get("suggestions") or ["Check the console adapter and retry Test console access."]),
             )
 
+        def policy_gap_text(secret: str) -> str:
+            return ", ".join(validate_cisco_wizard_password_policy(secret))
+
         password = str(cisco_cfg.get("password") or "")
         enable_password = self._enable_secret(cisco_cfg)
-        if password and len(password) < 10:
+        password_policy_gaps = policy_gap_text(password)
+        if password and password_policy_gaps:
             add(
                 "warning",
                 "Cisco login password may fail modern password policy",
-                "The saved Cisco password is shorter than 10 characters. Newer IOS XE setup dialogs often reject weak secrets.",
+                f"The saved Cisco login password is missing: {password_policy_gaps}. Newer IOS XE setup dialogs often reject weak secrets.",
                 actions=["Use a stronger Cisco password before bootstrap.", "Keep a separate strong enable secret configured."],
             )
         if not enable_password:
             add(
                 "warning",
-                "Enable secret is missing",
+                "Enable credential is missing",
                 "Console bootstrap may stop at the Cisco setup dialog until a valid enable secret is supplied.",
                 actions=["Enter an enable secret in Access settings.", "Use 10-32 characters with upper/lower case and a digit."],
             )
-        elif len(enable_password) < 10 or not (re.search(r"[A-Z]", enable_password) and re.search(r"[a-z]", enable_password) and re.search(r"\d", enable_password)):
-            add(
-                "warning",
-                "Enable secret may be rejected by IOS XE",
-                "The saved enable secret does not appear to satisfy the common Cisco strength rule.",
-                actions=["Set a stronger enable secret before running console bootstrap."],
-            )
+        else:
+            enable_policy_gaps = policy_gap_text(enable_password)
+            if enable_policy_gaps:
+                add(
+                    "warning",
+                    "Enable credential may be rejected by IOS XE",
+                    f"The saved enable secret is missing: {enable_policy_gaps}.",
+                    actions=["Set a stronger enable secret before running console bootstrap."],
+                )
 
         if planned_switch_ip and management_ip and management_ip != planned_switch_ip:
             add(

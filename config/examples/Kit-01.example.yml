@@ -1,9 +1,9 @@
 site:
   name: Kit-01
 shared_network:
-  subnet: 10.10.8.0/24
+  subnet: 192.168.1.0/24
   dns_servers:
-    - 10.10.8.1
+    - 192.168.1.1
     - 1.1.1.1
     - ""
     - ""
@@ -20,13 +20,13 @@ shared_snmp:
       priv_protocol: AES
       priv_password: CHANGE_ME
 ip_plan:
-  gateway: 10.10.8.1
-  switch: 10.10.8.2
-  esxi: 10.10.8.10
-  ilo: 10.10.8.11
-  windows: 10.10.8.20
-  qnap: 10.10.8.30
-  iosafe: 10.10.8.31
+  gateway: 192.168.1.1
+  switch: 192.168.1.2
+  esxi: 192.168.1.10
+  ilo: 192.168.1.11
+  windows: 192.168.1.20
+  qnap: 192.168.1.30
+  iosafe: 192.168.1.31
 included:
   ilo: true
   esxi: true
@@ -36,13 +36,13 @@ included:
   cisco_switch: false
   storage: false
 ilo:
-  host: 10.10.8.11
-  current_ip: 10.10.8.11
-  target_ip: 10.10.8.11
+  host: 192.168.1.11
+  current_ip: 192.168.1.11
+  target_ip: 192.168.1.11
   subnet_mask: 255.255.255.0
-  gateway: 10.10.8.1
+  gateway: 192.168.1.1
   dns_servers:
-    - 10.10.8.1
+    - 192.168.1.1
     - 1.1.1.1
     - ""
     - ""
@@ -55,34 +55,34 @@ ilo:
       role: ReadOnly
 esxi:
   hostname: esxi01
-  management_ip: 10.10.8.10
+  management_ip: 192.168.1.10
   subnet_mask: 255.255.255.0
-  gateway: 10.10.8.1
+  gateway: 192.168.1.1
   dns_servers:
-    - 10.10.8.1
+    - 192.168.1.1
     - 1.1.1.1
   root_password: CHANGE_ME
 windows:
   vm_name: win2022-01
   admin_password: CHANGE_ME
-  ip_address: 10.10.8.20
+  ip_address: 192.168.1.20
   subnet_mask: 255.255.255.0
-  gateway: 10.10.8.1
+  gateway: 192.168.1.1
   dns_servers:
-    - 10.10.8.1
+    - 192.168.1.1
 qnap:
   hostname: qnap01
-  ip: 10.10.8.30
+  ip: 192.168.1.30
   username: admin
   password: CHANGE_ME
 iosafe:
   hostname: iosafe01
-  ip: 10.10.8.31
+  ip: 192.168.1.31
   username: admin
   password: CHANGE_ME
 cisco_switch:
   hostname: sw01
-  ip: 10.10.8.2
+  ip: 192.168.1.2
   username: admin
   password: CHANGE_ME
   connection_method: auto
@@ -90,14 +90,14 @@ cisco_switch:
   console_baud: 9600
   domain_name: example.local
   dns_servers:
-    - 10.10.8.1
+    - 192.168.1.1
   ntp_servers:
-    - 10.10.8.1
-    - 10.10.8.2
+    - 192.168.1.1
+    - 192.168.1.2
   management_vlan: 10
-  management_ip: 10.10.8.2
+  management_ip: 192.168.1.2
   subnet_mask: 255.255.255.0
-  gateway: 10.10.8.1
+  gateway: 192.168.1.1
   bootstrap_network_port: TenGigabitEthernet1/1/1
   bootstrap_network_mode: trunk
   enable_password: ""

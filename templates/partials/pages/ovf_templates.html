@@ -1,17 +1,104 @@
 <section class="panel">
     <div class="flex items-center justify-between mb-4">
         <div>
-            <h2 class="text-2xl font-bold title-with-icon"><span class="page-icon icon-tone-progress" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 5h16v14H4z"/><path d="M8 9h8"/><path d="M8 13h5"/><path d="M15 17h1"/></svg></span><span>OVF Templates</span></h2>
-            <div class="text-sm text-slate-400">Register reusable VM template folders for Windows, Ubuntu, and future VM workflows.</div>
+            <h2 class="text-2xl font-bold title-with-icon"><span class="page-icon icon-tone-progress" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 5h16v14H4z"/><path d="M8 9h8"/><path d="M8 13h5"/><path d="M15 17h1"/></svg></span><span>OVF/OVA Templates</span></h2>
+            <div class="text-sm text-slate-400">Register reusable OVF/OVA VM template folders for Windows, Ubuntu, and future VM workflows.</div>
         </div>
         <span class="status progress">Directory based</span>
     </div>
 
     {% set templates = (ovf_template_payload or {}).get('templates', []) %}
+    {% set ovf_last_template_id = (cfg.get('ovf_templates', {}) or {}).get('last_selected_template_id', '') %}
+    {% set ovf_last = namespace(item=None) %}
+    {% for item in templates %}
+        {% if item.get('id') == ovf_last_template_id %}
+            {% set ovf_last.item = item %}
+        {% endif %}
+    {% endfor %}
+    {% set ovf_selected_label = (ovf_last.item.get('name') or ovf_last.item.get('id')) if ovf_last.item else 'No template selected' %}
+    {% set ovf_selected_readiness = (ovf_last.item.get('readiness', {}) or {}) if ovf_last.item else {} %}
+    {% if not templates %}
+        {% set ovf_next_step = 'Register template directory' %}
+    {% elif ovf_last.item and not ovf_selected_readiness.get('ready') %}
+        {% set ovf_next_step = 'Resolve template readiness blockers' %}
+    {% elif ovf_last.item %}
+        {% set ovf_next_step = 'Open VM setup' %}
+    {% else %}
+        {% set ovf_next_step = 'Select template in VM setup' %}
+    {% endif %}
+    {% set ovf_completion_state = 'Template ready' if ovf_last.item and ovf_selected_readiness.get('ready') else ('Needs template' if not templates else ('Needs template selection' if not ovf_last.item else 'Needs readiness review')) %}
+    {% if action_feedback and action_feedback.tone != 'ready' %}
+        {% set ovf_log_status = 'Registration needs attention' %}
+    {% elif ovf_last.item %}
+        {% set ovf_log_status = ovf_selected_readiness.get('summary') or 'Readiness not checked yet' %}
+    {% elif templates %}
+        {% set ovf_log_status = 'Template registered; select one in VM setup' %}
+    {% else %}
+        {% set ovf_log_status = 'No templates registered yet' %}
+    {% endif %}
+    {% set ovf_last_result = action_feedback.title if action_feedback else ('OVF template registered' if ovf_last.item else 'No OVF template action recorded yet') %}
+    {% set ovf_last_summary = action_feedback.summary if action_feedback else (((ovf_last.item.get('name') or ovf_last.item.get('id')) ~ ' is selected for VM setup workflows.') if ovf_last.item else 'Register a full OVF directory once to create reusable VM source evidence.') %}
+    {% set ovf_saved_source_label = (ovf_last.item.get('source_location_label') or 'Local') if ovf_last.item else 'Local' %}
+    {% set ovf_saved_descriptor = ovf_last.item.get('descriptor_name') if ovf_last.item else '' %}
+    {% set ovf_discovered_files = ovf_last.item.get('file_count', 0) if ovf_last.item else 0 %}
+    {% set ovf_discovered_size = ovf_last.item.get('total_size_display', '0 B') if ovf_last.item else '0 B' %}
+    <section class="card identity-soft-card" id="ovf-operator-mode">
+        <div class="flex flex-wrap items-start justify-between gap-3">
+            <div>
+                <div class="text-lg font-semibold">OVF/OVA operator checkpoint</div>
+                <div class="text-sm text-slate-400 mt-1">Selected template, file validation state, and the next deployment-prep action.</div>
+            </div>
+            <div class="actions">
+                <span class="status progress">Operator Mode</span>
+                <a class="btn" href="#ovf-debug-details" onclick="const details = document.getElementById('ovf-debug-details'); if (details) { details.open = true; }">Open Debug Mode/details</a>
+            </div>
+        </div>
+        <div class="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-5 gap-3 mt-4">
+            <div class="result" style="margin-top: 0;">
+                <div class="dashboard-kicker">Selected template</div>
+                <div class="font-semibold">{{ ovf_selected_label }}</div>
+            </div>
+            <div class="result" style="margin-top: 0;">
+                <div class="dashboard-kicker">Next step</div>
+                <div class="font-semibold">{{ ovf_next_step }}</div>
+            </div>
+            <div class="result" style="margin-top: 0;">
+                <div class="dashboard-kicker">Completion state</div>
+                <div class="font-semibold">{{ ovf_completion_state }}</div>
+            </div>
+            <div class="result" style="margin-top: 0;">
+                <div class="dashboard-kicker">Last result</div>
+                <div class="font-semibold">{{ ovf_last_result }}</div>
+                <div class="text-xs text-slate-400 mt-1 truncate-wrap" title="{{ ovf_last_summary }}">{{ ovf_last_summary }}</div>
+            </div>
+            <div class="result" style="margin-top: 0;">
+                <div class="dashboard-kicker">Logs/status</div>
+                <div class="font-semibold">{{ ovf_log_status }}</div>
+            </div>
+        </div>
+        <div class="grid grid-cols-1 lg:grid-cols-3 gap-3 mt-3">
+            <div class="result" style="margin-top: 0;">
+                <div class="dashboard-kicker">Saved Lab Builder template selection</div>
+                <div class="font-semibold">{{ ovf_selected_label }}</div>
+                <div class="text-xs text-slate-400 mt-1 truncate-wrap">ID {{ ovf_last_template_id or 'not saved' }} | Source {{ ovf_saved_source_label }}</div>
+            </div>
+            <div class="result" style="margin-top: 0;">
+                <div class="dashboard-kicker">Discovered/current file state</div>
+                <div class="font-semibold">{{ ovf_selected_readiness.get('label') or 'Not checked yet' }}</div>
+                <div class="text-xs text-slate-400 mt-1 truncate-wrap">{{ ovf_saved_descriptor or 'No descriptor recorded' }} | {{ ovf_discovered_files }} file{% if ovf_discovered_files != 1 %}s{% endif %} | {{ ovf_discovered_size }}</div>
+            </div>
+            <div class="result" style="margin-top: 0;">
+                <div class="dashboard-kicker">Planned/suggested values</div>
+                <div class="font-semibold">{{ ovf_next_step }}</div>
+                <div class="text-xs text-slate-400 mt-1 truncate-wrap">Default local source media/ovf/example-template | Deployment prep stays dry-run until explicitly started</div>
+            </div>
+        </div>
+    </section>
+
     <div class="grid grid-cols-1 xl:grid-cols-2 gap-4">
         <div class="card workflow-hero-card">
             <div class="text-lg font-semibold mb-3">Register local template directory</div>
-            <div class="text-sm text-slate-400 mb-4">Point at the folder that contains the `.ovf` descriptor and its referenced files. ESXi/VMware needs the whole directory, not just one picked file.</div>
+            <div class="text-sm text-slate-400 mb-4">Point at the folder that contains the `.ovf` descriptor and referenced files, or one `.ova` package. ESXi/VMware needs the whole source folder, not just a copied disk.</div>
             <form hx-post="/modules/ovf-templates/register-directory" hx-target="#main-content" hx-swap="outerHTML" class="space-y-3" data-action-title="Registering OVF directory" data-action-start="Scanning the directory, descriptor, VMDK, NVRAM, and other referenced files." data-action-complete="OVF directory registration finished.">
                 <input type="hidden" name="return_page" value="ovf_templates">
                 <div>
@@ -43,8 +130,8 @@
                     </div>
                 </div>
                 <div>
-                    <label class="block text-sm font-bold text-slate-300 mb-2">OVF descriptor name, only needed if the folder has more than one</label>
-                    <input type="text" name="ovf_descriptor_name" placeholder="template.ovf" class="input">
+                    <label class="block text-sm font-bold text-slate-300 mb-2">OVF/OVA file name, only needed if the folder has more than one</label>
+                    <input type="text" name="ovf_descriptor_name" placeholder="template.ovf or appliance.ova" class="input">
                 </div>
                 <button class="btn btn-primary action-button" type="submit">Register directory</button>
             </form>
@@ -59,8 +146,8 @@
                     {% set readiness = item.get('readiness', {}) or {} %}
                     <div class="ops-row-copy">
                         <div class="font-semibold">{{ item.get('name') or item.get('id') }}</div>
-                        <div class="text-slate-400 truncate-wrap" title="{{ item.get('directory', '') }}">{{ item.get('descriptor_name') or 'No descriptor' }} | {{ item.get('file_count', 0) }} files | {{ item.get('total_size_display', '0 B') }}</div>
-                        <div class="text-slate-400 mt-1">{{ (item.get('source_location_type') or 'local')|replace('_', ' ')|title }} | {{ readiness.get('summary') or 'Readiness not checked' }}</div>
+                        <div class="text-slate-400 truncate-wrap" title="{{ item.get('directory', '') }}">{{ item.get('descriptor_name') or 'No descriptor' }} | {{ item.get('file_count', 0) }} file{% if item.get('file_count', 0) != 1 %}s{% endif %} | {{ item.get('total_size_display', '0 B') }}</div>
+                        <div class="text-slate-400 mt-1">{{ item.get('source_location_label') or 'Local' }} | {{ readiness.get('summary') or 'Readiness not checked' }}</div>
                     </div>
                     <div class="ops-row-meta"><span class="status {{ readiness.get('tone', 'progress') }}">{{ readiness.get('label', 'Review') }}</span></div>
                 </div>
@@ -75,35 +162,101 @@
         </div>
     </div>
 
-    {% set ovf_last_template_id = (cfg.get('ovf_templates', {}) or {}).get('last_selected_template_id', '') %}
-    {% set ovf_last = namespace(item=None) %}
-    {% for item in templates %}
-        {% if item.get('id') == ovf_last_template_id %}
-            {% set ovf_last.item = item %}
+    <details class="card identity-soft-card mt-4" id="ovf-debug-details">
+        <summary class="summary-row">
+            <span class="text-lg font-semibold">Debug Mode/details</span>
+            <span class="status progress">logs/status</span>
+        </summary>
+        <div class="text-sm text-slate-400 mt-4">Template registration validates local OVF/OVA files only. Deployment preparation continues in the VM workflow and stays dry-run unless a deployment target is available and explicitly started.</div>
+        {% if templates %}
+        <div class="grid grid-cols-1 xl:grid-cols-2 gap-4 mt-4">
+            {% for item in templates %}
+            {% set readiness = item.get('readiness', {}) or {} %}
+            <div class="card card-compact">
+                <div class="summary-row">
+                    <div>
+                        <div class="font-semibold">{{ item.get('name') or item.get('id') }}</div>
+                        <div class="text-sm text-slate-400 mt-1 truncate-wrap" title="{{ item.get('descriptor_path', '') }}">{{ item.get('descriptor_path') or 'Descriptor not recorded' }}</div>
+                    </div>
+                    <span class="status {{ readiness.get('tone', 'progress') }}">{{ readiness.get('label', 'Review') }}</span>
+                </div>
+                <div class="ops-strip-grid mt-3">
+                    <div class="ops-strip-card truncate-wrap" style="margin-top: 0;" title="{{ item.get('directory', '') }}">Directory: {{ item.get('directory') or 'Not recorded' }}</div>
+                    <div class="ops-strip-card" style="margin-top: 0;">Source: {{ item.get('source_location_label') or 'Local' }}</div>
+                    <div class="ops-strip-card" style="margin-top: 0;">Files: {{ item.get('file_count', 0) }} file{% if item.get('file_count', 0) != 1 %}s{% endif %} | {{ item.get('total_size_display', '0 B') }}</div>
+                    <div class="ops-strip-card truncate-wrap" style="margin-top: 0;" title="{{ (item.get('network_names') or [])|join(', ') }}">Networks: {{ (item.get('network_names') or [])|join(', ') or 'Not declared' }}</div>
+                </div>
+                <div class="text-sm text-slate-400 mt-3">{{ readiness.get('summary') or 'Readiness not checked' }}</div>
+                {% if readiness.get('blockers') %}
+                <div class="space-y-2 mt-3">
+                    {% for blocker in readiness.get('blockers') %}
+                    <div class="result" style="margin-top: 0;">{{ blocker }}</div>
+                    {% endfor %}
+                </div>
+                {% endif %}
+                {% if item.get('files') %}
+                <details class="mt-3">
+                    <summary class="summary-row"><span class="text-sm font-bold text-slate-300">Discovered files</span><span class="status progress">{{ item.get('files')|length }}</span></summary>
+                    <div class="ops-row-list text-sm mt-3">
+                        {% for file in item.get('files') %}
+                        <div class="ops-row-item">
+                            <div class="ops-row-copy">
+                                <div class="font-semibold">{{ file.get('name') or 'unnamed file' }}</div>
+                                <div class="text-slate-400 truncate-wrap" title="{{ file.get('path', '') }}">{{ file.get('role') or 'file' }} | {{ file.get('size_display') or '0 B' }}</div>
+                            </div>
+                            <div class="ops-row-meta"><span class="status {{ 'ready' if file.get('exists') else 'danger' }}">{{ 'present' if file.get('exists') else 'missing' }}</span></div>
+                        </div>
+                        {% endfor %}
+                    </div>
+                </details>
+                {% endif %}
+            </div>
+            {% endfor %}
+        </div>
+        {% else %}
+        <div class="ops-strip-card mt-4">
+            <div class="font-semibold">No debug details yet</div>
+            <div class="text-slate-400 mt-1">Register a local OVF directory to see descriptor, referenced files, readiness blockers, and deployment-prep limits.</div>
+        </div>
         {% endif %}
-    {% endfor %}
+        <details class="card card-compact identity-soft-card mt-4">
+            <summary class="summary-row">
+                <span class="text-sm font-bold text-slate-300">Recovery suggestions</span>
+                <span class="status progress">Debug Mode</span>
+            </summary>
+            <div class="mt-4 space-y-2 text-sm">
+                <div class="ops-strip-card" style="margin-top: 0;">If validation reports missing files, register the full directory that contains the OVF descriptor and every referenced disk or sidecar file, or select the intended OVA package.</div>
+                <div class="ops-strip-card" style="margin-top: 0;">For NetApp-backed sources, keep deployment prep blocked until the NetApp VMware/NFS datastore probe is ready.</div>
+                <div class="ops-strip-card" style="margin-top: 0;">If deployment infrastructure is unavailable, keep this page at registration and dry-run readiness evidence only.</div>
+            </div>
+        </details>
+    </details>
+
     <div class="card identity-soft-card mt-4">
         <div class="text-lg font-semibold mb-3">Reports and next step</div>
         <div class="ops-strip-card mb-3" style="margin-top: 0;">
             <div class="flex items-start justify-between gap-3">
                 <div>
                     <div class="dashboard-kicker">What happened last</div>
-                    {% if ovf_last.item %}
-                    <div class="font-semibold">OVF template registered</div>
-                    {% else %}
-                    <div class="font-semibold">No OVF template action recorded yet</div>
-                    {% endif %}
+                    <div class="font-semibold">{{ ovf_last_result }}</div>
                 </div>
-                {% if ovf_last.item %}
+                {% if action_feedback %}
+                    <span class="status {{ action_feedback.tone }}">{{ action_feedback.status_label }}</span>
+                {% elif ovf_last.item %}
                     {% set ovf_readiness = ovf_last.item.get('readiness', {}) or {} %}
                     <span class="status {{ ovf_readiness.get('tone', 'progress') }}">{{ ovf_readiness.get('label', 'Review') }}</span>
                 {% else %}
                     <span class="status pending">Not started</span>
                 {% endif %}
             </div>
-            {% if ovf_last.item %}
+            {% if action_feedback %}
+            <div class="text-sm text-slate-400 mt-2">{{ ovf_last_summary }}</div>
+                {% if ovf_last.item %}
+                <div class="text-sm text-slate-400 mt-1">{{ ovf_last.item.get('source_location_label') or 'Local' }} source | {{ ovf_last.item.get('file_count', 0) }} file{% if ovf_last.item.get('file_count', 0) != 1 %}s{% endif %} | {{ ovf_last.item.get('total_size_display', '0 B') }}</div>
+                {% endif %}
+            {% elif ovf_last.item %}
             <div class="text-sm text-slate-400 mt-2">{{ ovf_last.item.get('name') or ovf_last.item.get('id') }} is registered for VM setup workflows.</div>
-            <div class="text-sm text-slate-400 mt-1">{{ (ovf_last.item.get('source_location_type') or 'local')|replace('_', ' ')|title }} source | {{ ovf_last.item.get('file_count', 0) }} files | {{ ovf_last.item.get('total_size_display', '0 B') }}</div>
+            <div class="text-sm text-slate-400 mt-1">{{ ovf_last.item.get('source_location_label') or 'Local' }} source | {{ ovf_last.item.get('file_count', 0) }} file{% if ovf_last.item.get('file_count', 0) != 1 %}s{% endif %} | {{ ovf_last.item.get('total_size_display', '0 B') }}</div>
             {% else %}
             <div class="text-sm text-slate-400 mt-2">Register a full OVF directory once and the latest template status will stay here.</div>
             {% endif %}

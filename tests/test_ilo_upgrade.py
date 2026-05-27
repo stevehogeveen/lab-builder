@@ -5,8 +5,8 @@ from app.ilo_upgrade import build_ilo_upgrade_plan, execute_ilo_upgrade
 def test_build_ilo_upgrade_plan_requires_live_identity_and_matching_media():
     cfg = {
         "ilo": {
-            "current_ip": "10.10.8.50",
-            "host": "10.10.8.50",
+            "current_ip": "192.168.1.50",
+            "host": "192.168.1.50",
             "username": "Administrator",
             "password": "secret",
         },
@@ -38,8 +38,8 @@ def test_build_ilo_upgrade_plan_requires_live_identity_and_matching_media():
 def test_build_ilo_upgrade_plan_marks_current_firmware_as_noop():
     cfg = {
         "ilo": {
-            "current_ip": "10.10.8.50",
-            "host": "10.10.8.50",
+            "current_ip": "192.168.1.50",
+            "host": "192.168.1.50",
             "username": "Administrator",
             "password": "secret",
         },
@@ -71,8 +71,8 @@ def test_build_ilo_upgrade_plan_marks_current_firmware_as_noop():
 def test_execute_ilo_upgrade_noops_when_current_firmware_is_not_older():
     cfg = {
         "ilo": {
-            "current_ip": "10.10.8.50",
-            "host": "10.10.8.50",
+            "current_ip": "192.168.1.50",
+            "host": "192.168.1.50",
             "username": "Administrator",
             "password": "secret",
         },
@@ -109,8 +109,8 @@ def test_execute_ilo_upgrade_noops_when_current_firmware_is_not_older():
 def test_execute_ilo_upgrade_updates_cached_inventory():
     cfg = {
         "ilo": {
-            "current_ip": "10.10.8.50",
-            "host": "10.10.8.50",
+            "current_ip": "192.168.1.50",
+            "host": "192.168.1.50",
             "username": "Administrator",
             "password": "secret",
         },
@@ -167,8 +167,8 @@ def test_execute_ilo_upgrade_updates_cached_inventory():
 def test_execute_ilo_upgrade_waits_for_hpe_flash_and_resets_for_activation():
     cfg = {
         "ilo": {
-            "current_ip": "10.10.8.50",
-            "host": "10.10.8.50",
+            "current_ip": "192.168.1.50",
+            "host": "192.168.1.50",
             "username": "Administrator",
             "password": "secret",
         },

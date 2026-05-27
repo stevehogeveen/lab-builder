@@ -17,3 +17,5 @@ Handles ESXi installer media workflow (base ISO, custom ISO build, virtual media
 ## Validation
 Run ESXi install preview, verify generated ISO URL checks, and download artifact path.
 
+## Manual Physical Testing
+Use `docs/esxi-physical-install-checklist.md` when the real iLO/server is available. Automated validation must stay on mocks, fake iLO inventory, dry-runs, route tests, and template tests.

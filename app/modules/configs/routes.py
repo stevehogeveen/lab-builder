@@ -773,7 +773,7 @@ async def autofill_ip_plan_handler(
     request: Request,
     runtime: ConfigsRuntime,
     return_page: str = Form("configuration"),
-    shared_subnet: str = Form("10.10.8.0/24"),
+    shared_subnet: str = Form("192.168.1.0/24"),
 ):
     cfg = runtime["load_kit_config"]()
     try:

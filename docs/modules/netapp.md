@@ -18,3 +18,5 @@ Implements NetApp ONTAP discovery/config flow and protocol command-template beha
 ## Validation
 Save NetApp settings, run preview, and verify command-template output for selected protocol.
 
+## Manual Physical Testing
+Use `docs/netapp-tomorrow-manual-test-checklist.md` when a real NetApp is available. During no-NetApp windows, keep validation limited to mocks, dry-runs, route tests, and template tests.

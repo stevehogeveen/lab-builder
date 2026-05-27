@@ -2,6 +2,8 @@
 
 Use this checklist only with a real Cisco switch that is expected to be reset and rebuilt through the Lab Builder Cisco page. The active lab network for this run is `192.168.1.0/24`.
 
+Automated pytest tests for this flow must use fake console sessions, fake clients, mocks, dry-runs, route tests, or template tests. They must not open real serial ports, start SSH sessions, or touch the physical switch.
+
 ## Preconditions
 
 - Select the intended kit and confirm Cisco is included.
@@ -13,6 +15,21 @@ Use this checklist only with a real Cisco switch that is expected to be reset an
   - at least 1 lowercase letter
   - at least 1 digit
 - Confirm the desired switch IP, subnet mask, gateway, VLAN, domain, console port, baud, and management port mode are shown in Access Settings.
+
+## Operator Mode Checkpoint
+
+Before starting a real switch action, confirm Cisco Operator Mode shows:
+
+- `Operator Mode`
+- `Next step`
+- `Completion state`
+- `Last result`
+- `Logs/status`
+- `Open Debug Mode/details`
+
+## Shared Operator Flow
+
+Use this exact sequence for the factory-reset onboarding path: `Context -> Targets -> Credentials -> Current State -> Preflight -> Plan -> Execute -> Monitor -> Evidence -> Next Step`.
 
 ## Factory-Reset Onboarding Path
 
@@ -27,12 +44,20 @@ Use this checklist only with a real Cisco switch that is expected to be reset an
 - [ ] Confirm Access Settings are applied through normal CLI commands after the wizard fallback exits.
 - [ ] Confirm SSH is verified from the Lab Builder host to the saved Cisco management IP.
 - [ ] Confirm the final intended Lab Builder config is saved only after CLI configuration succeeds.
-- [ ] Confirm the Cisco page shows completed Access Settings with separate sections for discovered/current switch state, saved Lab Builder kit config, values ready to apply, and last action result/log.
+- [ ] Confirm the Cisco page shows completed Access Settings with separate sections for discovered/current switch state, saved Lab Builder kit config, planned/suggested values, and last action result.
+
+## Debug Mode Checklist
+
+- [ ] Logs/status appear in Debug Mode/details, not as raw console output in Operator Mode.
+- [ ] Raw console excerpts, command output, and setup wizard diagnostics are redacted before display.
+- [ ] Artifacts and test history are linked or named clearly when created.
+- [ ] Recovery suggestions explain the detected prompt, the last safe action, and the next manual fix.
+- [ ] Passwords, enable secrets, SNMP secrets, tokens, cookies, and private keys do not appear in page logs, artifacts, command output, or test output.
 
 ## Evidence To Capture
 
 - Console/bootstrap action result shows success without raw passwords or enable secrets.
 - Current console config shows the expected management VLAN, switch IP, gateway, SSH, and SCP state.
 - SSH test shows reachable for the saved Cisco management IP.
-- Last action result/log shows the latest setup or verification result.
+- Last action result shows the latest setup or verification result; raw log excerpts stay in Debug Mode/details.
 - If a discovered IP exists while saved config is missing, the page says `Discovered, not saved to this kit yet.` and offers `Use discovered values in this kit`.

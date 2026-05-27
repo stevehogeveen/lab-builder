@@ -38,6 +38,23 @@ Every workflow must expose this sequence:
 10. Next Step
    Show the one best page or action to continue the build.
 
+## Operator Mode Checkpoint
+
+Every physical setup page must expose a compact Operator Mode checkpoint before detailed controls. It must use these visible labels consistently:
+
+- `Operator Mode`
+- `Next step`
+- `Completion state`
+- `Last result`
+- `Logs/status`
+- `Open Debug Mode/details`
+
+Operator Mode is for the least information needed to complete the job. Saved kit config, discovered/current state, and planned or suggested values must be separated when they can differ. Debug Mode/details is where raw logs, Redfish or command/API detail, artifacts, test history, and recovery suggestions belong.
+
+## Saved Secret Rendering
+
+Saved secrets must never be rendered back into a page, including Operator Mode, Debug Mode/details, raw output, artifacts, hidden inputs, JavaScript/Alpine state, JSON blobs, logs, or action feedback. If a form needs to edit an existing secret, render a blank password field with copy such as `Saved - leave blank to keep`. If a dynamic client-side form needs saved rows, copy only non-secret fields into client-side state and initialize secret fields as empty strings.
+
 ## Standard States
 
 Use these state meanings across modules:

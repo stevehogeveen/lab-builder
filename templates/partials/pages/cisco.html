@@ -58,6 +58,45 @@
 {% set console_error_summary = console_diag.get('error_summary') or cisco.last_discovery_error or cisco.last_cisco_action.get('error') %}
 {% set console_suggestions = cisco.last_console_suggestions or console_diag.get('suggestions', []) %}
 {% set blocker_count = (approval.get('blockers', []) | length) + (danger_findings | length) + (upgrade_plan.get('blockers', []) | length) %}
+{% if not has_console %}
+    {% set cisco_next_step = 'Test console access' %}
+{% elif not ready_to_apply.get('ready') %}
+    {% set cisco_next_step = 'Complete Access Settings' %}
+{% elif not (ip_ready and ssh_ready and scp_ready) %}
+    {% set cisco_next_step = 'Run Setup Console' %}
+{% elif not has_ssh %}
+    {% set cisco_next_step = 'Test SSH' %}
+{% elif not has_version %}
+    {% set cisco_next_step = 'Check version' %}
+{% elif not upgrade_ready %}
+    {% set cisco_next_step = 'Resolve upgrade gate' %}
+{% elif approval.get('state') != 'approved' %}
+    {% set cisco_next_step = 'Approve config' %}
+{% else %}
+    {% set cisco_next_step = 'Open Run Center' %}
+{% endif %}
+{% if approval.get('state') == 'approved' %}
+    {% set cisco_completion_state = 'Approved for Run Center' %}
+{% elif run_ready %}
+    {% set cisco_completion_state = 'Ready for Run Center review' %}
+{% elif ip_ready and ssh_ready and scp_ready %}
+    {% set cisco_completion_state = 'Access Settings completed' %}
+{% elif has_console %}
+    {% set cisco_completion_state = 'Console selected' %}
+{% else %}
+    {% set cisco_completion_state = 'Needs console access' %}
+{% endif %}
+{% if last_action_result.get('log_excerpt') %}
+    {% set cisco_log_status = 'Action log captured' %}
+{% elif last_action_result.get('has_action') %}
+    {% set cisco_log_status = last_action_result.get('status_label') or 'Action recorded' %}
+{% elif console_check %}
+    {% set cisco_log_status = 'Current config check cached' %}
+{% elif has_console %}
+    {% set cisco_log_status = 'Console selected; no action log yet' %}
+{% else %}
+    {% set cisco_log_status = 'No Cisco action yet' %}
+{% endif %}
 {% set feedback_title = (action_feedback.title if action_feedback else '') | lower %}
 {% set feedback_area = '' %}
 {% if action_feedback %}
@@ -447,7 +486,7 @@
             </article>
             <article class="cisco-state-card">
                 <div class="cisco-state-card-title">
-                    <span>Values ready to apply</span>
+                    <span>Planned/suggested values</span>
                     <span class="status {{ 'ready' if ready_to_apply.get('ready') else 'pending' }}">{{ 'Ready' if ready_to_apply.get('ready') else 'Needs values' }}</span>
                 </div>
                 <div class="cisco-state-card-value">{{ ready_management_ip or 'Needs IP' }}</div>
@@ -457,30 +496,47 @@
             </article>
             <article class="cisco-state-card">
                 <div class="cisco-state-card-title">
-                    <span>Last action result/log</span>
+                    <span>Last action result</span>
                     <span class="status {{ last_action_result.get('tone') or 'pending' }}">{{ last_action_result.get('status_label') or 'Not run' }}</span>
                 </div>
                 <div class="cisco-state-card-value">{{ (last_action_result.get('mode') or 'not_run') | replace('_', ' ') }}</div>
                 <div class="cisco-state-card-note">{{ last_action_result.get('summary') or 'No Cisco action has run in this kit yet.' }}</div>
-                {% if last_action_result.get('log_excerpt') %}
-                <details class="mt-2">
-                    <summary class="text-xs text-slate-400">Last log excerpt</summary>
-                    <pre class="raw-output mt-2">{{ last_action_result.get('log_excerpt') }}</pre>
-                </details>
-                {% endif %}
             </article>
         </section>
 
-        <section class="card identity-soft-card" data-action-panel>
+        <section class="card identity-soft-card" id="cisco-operator-mode" data-action-panel>
             <div class="cisco-hero">
                 <div>
                     <div class="cisco-title-row">
-                        <h2 class="text-2xl font-bold">Bootstrap console, then approve</h2>
+                        <h2 class="text-2xl font-bold">Cisco operator checkpoint</h2>
                         <span class="status {{ 'ready' if run_ready else ('danger' if blocker_count else 'pending') }}">{{ 'Ready for Run Center' if run_ready else (blocker_count ~ ' blocker' ~ ('' if blocker_count == 1 else 's') if blocker_count else 'Needs review') }}</span>
+                        <span class="status progress">Operator Mode</span>
                     </div>
                     <div class="cisco-subtitle">
-                        Use the serial console to set the management VLAN, IP, SSH, and SCP before relying on network SSH checks.
+                        Bootstrap console, then approve Access Settings. Use the serial console to set the management VLAN, IP, SSH, and SCP before relying on network SSH checks.
                     </div>
+                </div>
+                <div class="cisco-action-stack">
+                    <a class="btn" href="#cisco-debug-details" onclick="const details = document.getElementById('cisco-debug-details'); if (details) { details.open = true; }">Open Debug Mode/details</a>
+                </div>
+            </div>
+            <div class="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-3 mt-4">
+                <div class="result" style="margin-top: 0;">
+                    <div class="dashboard-kicker">Next step</div>
+                    <div class="font-semibold">{{ cisco_next_step }}</div>
+                </div>
+                <div class="result" style="margin-top: 0;">
+                    <div class="dashboard-kicker">Completion state</div>
+                    <div class="font-semibold">{{ cisco_completion_state }}</div>
+                </div>
+                <div class="result" style="margin-top: 0;">
+                    <div class="dashboard-kicker">Last result</div>
+                    <div class="font-semibold">{{ last_action_result.get('status_label') or 'Not run' }}</div>
+                    <div class="text-xs text-slate-400 mt-1 truncate-wrap" title="{{ last_action_result.get('summary') or 'No Cisco action has run in this kit yet.' }}">{{ last_action_result.get('summary') or 'No Cisco action has run in this kit yet.' }}</div>
+                </div>
+                <div class="result" style="margin-top: 0;">
+                    <div class="dashboard-kicker">Logs/status</div>
+                    <div class="font-semibold">{{ cisco_log_status }}</div>
                 </div>
             </div>
         </section>
@@ -775,7 +831,7 @@
             {% endif %}
             <details class="card card-compact mt-4">
                 <summary class="summary-row"><span class="font-semibold">Config preview</span><span class="status progress">dry-run</span></summary>
-                <pre class="raw-output mt-3">{{ cisco_cfg.get('last_config_preview', 'No preview yet.') }}</pre>
+                <pre class="raw-output mt-3">{{ cisco.last_config_preview or 'No preview yet.' }}</pre>
             </details>
             <div class="text-sm text-slate-400 mt-4">
                 {% if approval.get('state') == 'approved' %}
@@ -821,8 +877,8 @@
             {% endif %}
         </section>
 
-        <details class="card identity-soft-card cisco-advanced">
-            <summary class="summary-row"><span class="font-semibold">Console probes and technical details</span><span class="status progress">collapsed</span></summary>
+        <details class="card identity-soft-card cisco-advanced" id="cisco-debug-details">
+            <summary class="summary-row"><span class="font-semibold">Debug Mode/details</span><span class="status progress">logs/status</span></summary>
             {% if cisco.last_console_probe_results %}
             <div class="cisco-console-table mt-4">
                 <table class="w-full text-sm">
@@ -856,11 +912,31 @@
             {% if cisco.last_console_probe_results %}<pre class="raw-output mt-4">{{ cisco.last_console_probe_results | tojson(indent=2) }}</pre>{% endif %}
             {% if cisco.last_raw_port_discovery %}<pre class="raw-output mt-4">{{ cisco.last_raw_port_discovery }}</pre>{% endif %}
             {% if cisco.last_running_config_backup %}<pre class="raw-output mt-4">{{ cisco.last_running_config_backup }}</pre>{% endif %}
+            {% if last_action_result.get('log_excerpt') %}
+            <details class="card card-compact identity-soft-card mt-4">
+                <summary class="summary-row">
+                    <span class="text-sm font-bold text-slate-300">Last action log excerpt</span>
+                    <span class="status progress">Debug Mode</span>
+                </summary>
+                <pre class="raw-output mt-3">{{ last_action_result.get('log_excerpt') }}</pre>
+            </details>
+            {% endif %}
+            <details class="card card-compact identity-soft-card mt-4">
+                <summary class="summary-row">
+                    <span class="text-sm font-bold text-slate-300">Recovery suggestions</span>
+                    <span class="status progress">Debug Mode</span>
+                </summary>
+                <div class="mt-4 space-y-2 text-sm">
+                    <div class="ops-strip-card" style="margin-top: 0;">If the setup dialog stalls, use a policy-compliant switch password and enable secret, answer the initial dialog with no, choose 0 at the final wizard menu, and never choose 2.</div>
+                    <div class="ops-strip-card" style="margin-top: 0;">If Access Settings apply fails, review the last serial output here; Lab Builder should not save startup config until CLI configuration succeeds.</div>
+                    <div class="ops-strip-card" style="margin-top: 0;">If SSH verification fails, compare discovered/current switch state with saved kit config, then use discovered values only when they match the intended lab network.</div>
+                </div>
+            </details>
         </details>
 
         <details class="card identity-soft-card cisco-advanced" style="border-color: color-mix(in srgb, var(--bad) 45%, var(--border));">
-            <summary class="summary-row"><span class="font-semibold">Factory reset switch</span><span class="status danger">destructive</span></summary>
-            <div class="text-sm text-slate-400 mt-3">Deletes startup-config and vlan.dat, then reloads the switch. Uses the selected console adapter first; SSH is only used when no console port is selected.</div>
+            <summary class="summary-row"><span class="font-semibold">Factory reset switch</span><span class="flex gap-2"><span class="status danger">manual only</span><span class="status danger">destructive</span></span></summary>
+            <div class="text-sm text-slate-400 mt-3">Manual operator-triggered action. Deletes startup-config and vlan.dat, then reloads the switch. Uses the selected console adapter first; SSH is only used when no console port is selected.</div>
             {% if cisco_cfg.get('last_factory_reset') %}
             <div class="cisco-facts mt-4">
                 <div class="cisco-fact"><span>Last reset</span><strong>{{ cisco_cfg.get('last_factory_reset', {}).get('status', 'unknown') | replace('_', ' ') }}</strong></div>

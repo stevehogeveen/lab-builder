@@ -1646,14 +1646,19 @@ def export_ilo_inventory_snapshot(
         "accounts": summary_data.get("accounts", []),
         "storage": summary_data.get("storage", {}),
     }
+    secrets = _ilo_profile_secret_values(cfg)
+    clean_summary = _redact_profile_value(clean_summary, secrets)
 
-    raw_payload = {
-        "export_timestamp": clean_summary["export_timestamp"],
-        "kit_name": kit_name,
-        "label": label.strip(),
-        "source_host": clean_summary["current_ilo_ip"],
-        "inventory": inventory,
-    }
+    raw_payload = _redact_profile_value(
+        {
+            "export_timestamp": clean_summary["export_timestamp"],
+            "kit_name": kit_name,
+            "label": label.strip(),
+            "source_host": clean_summary["current_ilo_ip"],
+            "inventory": inventory,
+        },
+        secrets,
+    )
 
     with open(raw_path, "w", encoding="utf-8") as f:
         json.dump(raw_payload, f, indent=2, sort_keys=False)
@@ -2431,6 +2436,88 @@ def build_hardware_identity(cfg: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+_DISPLAY_SECRET_MASK = "********"
+
+
+def _ilo_profile_secret_values(cfg: dict[str, Any]) -> list[str]:
+    ilo_cfg = dict((cfg or {}).get("ilo") or {})
+    policy = dict(ilo_cfg.get("policy") or {})
+    shared_snmp = dict((cfg or {}).get("shared_snmp") or {})
+    values = [
+        str(ilo_cfg.get("password") or ""),
+        str(policy.get("kit_admin_password") or ""),
+        str(policy.get("kit_operator_password") or ""),
+        str(policy.get("shared_admin_password") or ""),
+        str(policy.get("snmp_read_community") or ""),
+        str(policy.get("snmpv3_auth_password") or ""),
+        str(policy.get("snmpv3_priv_password") or ""),
+        str(shared_snmp.get("read_community") or ""),
+        str(shared_snmp.get("v3_auth_password") or ""),
+        str(shared_snmp.get("v3_priv_password") or ""),
+    ]
+    for user in list(ilo_cfg.get("additional_users") or []):
+        values.append(str(dict(user or {}).get("password") or ""))
+    for user in list(shared_snmp.get("users") or []):
+        user_data = dict(user or {})
+        values.extend(str(user_data.get(key) or "") for key in ("auth_password", "priv_password"))
+    return list(dict.fromkeys(value for value in values if value))
+
+
+def _esxi_profile_secret_values(cfg: dict[str, Any]) -> list[str]:
+    esxi_cfg = dict((cfg or {}).get("esxi") or {})
+    vmware_cfg = dict((cfg or {}).get("vmware") or {})
+    post_secrets = dict(esxi_cfg.get("post_config_secrets") or {})
+    values = [
+        str(esxi_cfg.get("root_password") or ""),
+        str(vmware_cfg.get("esxi_root_password") or ""),
+    ]
+    values.extend(str(value or "") for value in post_secrets.values())
+    values.extend(_ilo_profile_secret_values(cfg))
+    return list(dict.fromkeys(value for value in values if value))
+
+
+def _physical_receipt_secret_values(cfg: dict[str, Any]) -> list[str]:
+    cisco_cfg = dict((cfg or {}).get("cisco_switch") or {})
+    netapp_cfg = dict((cfg or {}).get("netapp") or {})
+    values = [
+        str(cisco_cfg.get("password") or ""),
+        str(cisco_cfg.get("console_password") or ""),
+        str(cisco_cfg.get("enable_password") or cisco_cfg.get("enable_secret") or ""),
+        str(netapp_cfg.get("password") or ""),
+        str(netapp_cfg.get("admin_password") or ""),
+    ]
+    values.extend(_esxi_profile_secret_values(cfg))
+    return list(dict.fromkeys(value for value in values if value))
+
+
+def _redact_profile_text(value: str, secrets: list[str]) -> str:
+    text = str(value or "")
+    for secret in secrets:
+        text = text.replace(secret, _DISPLAY_SECRET_MASK)
+    text = re.sub(r"(?i)(https?://[^:/\s]+):([^@\s/]+)@", rf"\1:{_DISPLAY_SECRET_MASK}@", text)
+    text = re.sub(
+        r"(?i)([?&](?:token|auth|password|passphrase|secret|api[_-]?key|apikey)=)[^&\s|,;]+",
+        rf"\1{_DISPLAY_SECRET_MASK}",
+        text,
+    )
+    text = re.sub(
+        r"(?i)\b(password|passphrase|secret|token|api[_ -]?key|community)\s*([:=])\s*[^,\s|;]+",
+        lambda match: f"{match.group(1)}{match.group(2)} {_DISPLAY_SECRET_MASK}",
+        text,
+    )
+    return re.sub(r"(?i)\b(?=[^\s,;|]*?(?:secret|token))[^\s,;|]+", _DISPLAY_SECRET_MASK, text)
+
+
+def _redact_profile_value(value: Any, secrets: list[str]) -> Any:
+    if isinstance(value, str):
+        return _redact_profile_text(value, secrets)
+    if isinstance(value, dict):
+        return {key: _redact_profile_value(item, secrets) for key, item in value.items()}
+    if isinstance(value, list):
+        return [_redact_profile_value(item, secrets) for item in value]
+    return value
+
+
 def build_ilo_advanced_profile(cfg: dict[str, Any]) -> dict[str, Any]:
     live_snapshot = load_latest_live_inventory_snapshot_for_cfg(cfg)
     if not live_snapshot:
@@ -2449,6 +2536,8 @@ def build_ilo_advanced_profile(cfg: dict[str, Any]) -> dict[str, Any]:
     inventory_raw = inventory.get("raw", {}) or {}
     manager_summary = inventory_summary.get("manager", {}) or {}
     manager_raw = inventory_raw.get("manager", {}) or {}
+    system_summary = inventory_summary.get("system", {}) or {}
+    system_raw = inventory_raw.get("system", {}) or {}
     network_protocol = inventory_summary.get("network_protocol", {}) or {}
     active_interface = inventory_summary.get("active_interface", {}) or {}
     accounts = inventory_summary.get("accounts", []) or []
@@ -2460,6 +2549,11 @@ def build_ilo_advanced_profile(cfg: dict[str, Any]) -> dict[str, Any]:
     network_protocol_keys = list(capability_dump.get("network_protocol_keys") or [])
     network_protocol_oem_hpe_keys = list(capability_dump.get("network_protocol_oem_hpe_keys") or [])
     reset_target = str((((manager_raw.get("Actions") or {}).get("#Manager.Reset") or {}).get("target")) or "").strip()
+    system_reset = ((system_raw.get("Actions") or {}).get("#ComputerSystem.Reset") or {}) if isinstance(system_raw, dict) else {}
+    system_reset_target = str(system_reset.get("target") or "").strip()
+    system_reset_allowed = [str(item).strip() for item in list(system_reset.get("ResetType@Redfish.AllowableValues") or []) if str(item).strip()]
+    power_state = str(system_summary.get("power_state") or system_raw.get("PowerState") or "").strip()
+    system_path = str(system_summary.get("path") or system_raw.get("@odata.id") or "").strip()
 
     def bool_label(value: bool) -> str:
         return "Available" if value else "Not exposed"
@@ -2563,6 +2657,20 @@ def build_ilo_advanced_profile(cfg: dict[str, Any]) -> dict[str, Any]:
             ],
         ),
         add_area(
+            "Power and safe reset",
+            bool(power_state or system_reset_target or system_reset_allowed),
+            "Latest live read captured server power state and supported ComputerSystem.Reset options.",
+            [
+                {"label": "Current PowerState", "value": power_state or "Not identified"},
+                {"label": "ComputerSystem.Reset target", "value": system_reset_target or "Not exposed"},
+                {"label": "Allowed reset types", "value": ", ".join(system_reset_allowed) or "Not exposed"},
+            ],
+            detail_rows=[
+                {"label": "System path", "value": system_path or "Not identified"},
+                {"label": "Expected safe power workflow", "value": "Discover PowerState, use only allowed ResetType values, then verify readback."},
+            ],
+        ),
+        add_area(
             "Virtual media and remote install",
             bool(virtual_media),
             f"The last live iLO read found {len(virtual_media)} virtual media device(s).",
@@ -2575,7 +2683,8 @@ def build_ilo_advanced_profile(cfg: dict[str, Any]) -> dict[str, Any]:
                 {
                     "label": f"Virtual media {index + 1}",
                     "value": (
-                        f"{item.get('Name') or item.get('Id') or 'Unknown'}"
+                        f"{item.get('@odata.id') or 'Unknown path'}"
+                        f" | {item.get('Name') or item.get('Id') or 'Unknown'}"
                         f" | inserted={item.get('Inserted', 'Not identified')}"
                         f" | image={item.get('Image') or '(none)'}"
                     ),
@@ -2647,11 +2756,13 @@ def build_ilo_advanced_profile(cfg: dict[str, Any]) -> dict[str, Any]:
     summary_fields = [
         {"label": "Detected iLO", "value": detected_label},
         {"label": "Firmware", "value": _first_non_empty(summary.get("ilo_firmware_version"), manager_summary.get("firmware"), inventory_raw.get("manager", {}).get("FirmwareVersion")) or "Not identified"},
+        {"label": "Redfish version", "value": _first_non_empty(summary.get("redfish_version"), inventory_summary.get("service_root", {}).get("redfish_version")) or "Not identified"},
         {"label": "Source", "value": _first_non_empty(summary.get("current_ilo_ip"), cfg.get("ilo", {}).get("current_ip"), cfg.get("ilo", {}).get("host")) or "Not set"},
+        {"label": "Power", "value": power_state or "Not identified"},
         {"label": "Last live read", "value": str(summary.get("export_timestamp") or "Not recorded")},
     ]
 
-    return {
+    profile = {
         "available": True,
         "detected_label": detected_label,
         "subtitle": "Detected from the latest live iLO read for this app. Read current iLO again after a firmware change to refresh this list.",
@@ -2659,6 +2770,7 @@ def build_ilo_advanced_profile(cfg: dict[str, Any]) -> dict[str, Any]:
         "areas": areas,
         "raw_key_groups": raw_key_groups,
     }
+    return _redact_profile_value(profile, _ilo_profile_secret_values(cfg))
 
 
 def build_live_job_story(job: dict[str, Any]) -> dict[str, str]:
@@ -2864,10 +2976,14 @@ def latest_scope_receipt(cfg: dict[str, Any], history: list[dict[str, Any]], sco
     for bundle in build_run_bundles(cfg, history):
         bundle_scope = str(bundle.get("scope") or "")
         if bundle_scope in scope_set or any(bundle_scope.startswith(f"{scope}:") for scope in scope_set):
-            return {
+            receipt = {
                 **bundle,
                 "cta_label": "Open log" if bundle.get("run_summary_path") else "",
             }
+            secrets = _physical_receipt_secret_values(cfg)
+            for key in ("name", "target", "summary", "human_summary", "highlights", "result"):
+                receipt[key] = _redact_profile_value(receipt.get(key), secrets)
+            return receipt
     return None
 def build_storage_page_readiness(
     storage_review: dict[str, Any],
@@ -2988,6 +3104,12 @@ def build_esxi_page_review(cfg: dict[str, Any]) -> dict[str, Any]:
         "validation_notes": list(values["validation_notes"]),
         "post_config_preview": post_config_preview,
         "post_config_validation": post_config_validation,
+        "post_config_form": {
+            "hostname_override": str(cfg.get("esxi", {}).get("post_config_hostname_override") or ""),
+            "domain_override": str(cfg.get("esxi", {}).get("post_config_domain_override") or ""),
+            "dns1_override": str(cfg.get("esxi", {}).get("post_config_dns1_override") or ""),
+            "dns2_override": str(cfg.get("esxi", {}).get("post_config_dns2_override") or ""),
+        },
         "netapp_dependency": dict(((post_config_preview.get("plan") or {}).get("netapp_nfs")) or {}),
     }
     try:
@@ -2997,11 +3119,29 @@ def build_esxi_page_review(cfg: dict[str, Any]) -> dict[str, Any]:
         review["base_iso_ready"] = True
     except Exception as e:
         review["base_iso_error"] = str(e).splitlines()[0]
-    return review
+    return _redact_profile_value(review, _esxi_profile_secret_values(cfg))
 
 
 def build_esxi_advanced_profile(cfg: dict[str, Any], review: dict[str, Any] | None = None) -> dict[str, Any]:
     review = dict(review or build_esxi_page_review(cfg) or {})
+    live_snapshot = load_latest_live_inventory_snapshot_for_cfg(cfg)
+    live_inventory = ((live_snapshot.get("raw", {}) or {}).get("inventory", {}) or {}) if live_snapshot else {}
+    live_summary = live_inventory.get("summary", {}) or {}
+    live_raw = live_inventory.get("raw", {}) or {}
+    live_system_summary = live_summary.get("system", {}) or {}
+    live_system_raw = live_raw.get("system", {}) or {}
+    live_virtual_media = list(live_raw.get("virtual_media") or [])
+    live_boot = live_system_raw.get("Boot", {}) if isinstance(live_system_raw, dict) else {}
+    live_reset = ((live_system_raw.get("Actions") or {}).get("#ComputerSystem.Reset") or {}) if isinstance(live_system_raw, dict) else {}
+    live_power_state = str(live_system_summary.get("power_state") or live_system_raw.get("PowerState") or "").strip()
+    live_system_path = str(live_system_summary.get("path") or live_system_raw.get("@odata.id") or "").strip()
+    live_reset_target = str(live_reset.get("target") or "").strip()
+    live_reset_allowed = [str(item).strip() for item in list(live_reset.get("ResetType@Redfish.AllowableValues") or []) if str(item).strip()]
+    live_vm_insert_count = sum(1 for item in live_virtual_media if ((item.get("Actions") or {}).get("#VirtualMedia.InsertMedia") or {}).get("target"))
+    live_vm_eject_count = sum(1 for item in live_virtual_media if ((item.get("Actions") or {}).get("#VirtualMedia.EjectMedia") or {}).get("target"))
+    live_first_vm_path = str((live_virtual_media[0] or {}).get("@odata.id") or "").strip() if live_virtual_media else ""
+    live_boot_target = str(live_boot.get("BootSourceOverrideTarget") or live_boot.get("BootSourceOverrideTarget@Redfish.AllowableValues") or "").strip()
+    live_boot_enabled = str(live_boot.get("BootSourceOverrideEnabled") or "").strip()
 
     def yes_no(value: bool) -> str:
         return "Yes" if value else "No"
@@ -3011,6 +3151,7 @@ def build_esxi_advanced_profile(cfg: dict[str, Any], review: dict[str, Any] | No
         {"label": "Source", "value": str(review.get("source_label") or "Saved kit values")},
         {"label": "Base ISO ready", "value": "Ready" if review.get("base_iso_ready") else "Missing"},
         {"label": "Root password saved", "value": yes_no(bool(review.get("root_password_saved")))},
+        {"label": "iLO power", "value": live_power_state or "No live iLO read"},
         {"label": "Run stamp", "value": str(review.get("run_stamp") or "Not set")},
     ]
 
@@ -3075,6 +3216,26 @@ def build_esxi_advanced_profile(cfg: dict[str, Any], review: dict[str, Any] | No
             ],
         ),
         area(
+            "iLO virtual media and boot path",
+            "Ready" if live_vm_insert_count and live_reset_target else "Needs iLO read",
+            "ready" if live_vm_insert_count and live_reset_target else "pending",
+            "Latest live iLO read details used to troubleshoot ESXi media mount, boot override, and power handling.",
+            [
+                {"label": "PowerState", "value": live_power_state or "Not captured"},
+                {"label": "Virtual media devices", "value": str(len(live_virtual_media)) if live_virtual_media else "No live iLO read"},
+                {"label": "Insert media actions", "value": str(live_vm_insert_count) if live_virtual_media else "No live iLO read"},
+                {"label": "Eject media actions", "value": str(live_vm_eject_count) if live_virtual_media else "No live iLO read"},
+                {"label": "Boot override", "value": f"{live_boot_enabled or 'unknown'} / {live_boot_target or 'unknown'}" if live_boot else "Not captured"},
+                {"label": "Allowed reset types", "value": ", ".join(live_reset_allowed) or "Not captured"},
+            ],
+            detail_rows=[
+                {"label": "System path", "value": live_system_path or "Not captured"},
+                {"label": "ComputerSystem.Reset target", "value": live_reset_target or "Not captured"},
+                {"label": "First virtual media path", "value": live_first_vm_path or "Not captured"},
+                {"label": "Recovery suggestion", "value": "Read current iLO before a real ESXi install, then verify virtual media insert/eject and allowed reset types."},
+            ],
+        ),
+        area(
             "Readiness",
             "Ready" if not missing_fields and review.get("base_iso_ready") and not review.get("validation_errors") else "Needs attention",
             "ready" if not missing_fields and review.get("base_iso_ready") and not review.get("validation_errors") else "pending",
@@ -3091,13 +3252,14 @@ def build_esxi_advanced_profile(cfg: dict[str, Any], review: dict[str, Any] | No
         ),
     ]
 
-    return {
+    profile = {
         "available": True,
         "detected_label": "Saved install profile",
         "subtitle": "These values come from the current kit and the ESXi builder path the app will use in Run Center.",
         "summary_fields": summary_fields,
         "areas": areas,
     }
+    return _redact_profile_value(profile, _esxi_profile_secret_values(cfg))
 
 
 def validation_check(
@@ -12389,6 +12551,13 @@ def run_esxi_real(cfg: dict, run_stamp: str | None = None):
                 build_summary = yaml.safe_load(build_summary_path.read_text(encoding="utf-8")) or {}
             except Exception:
                 build_summary = {}
+            raw_build_summary = dict(build_summary)
+            build_summary = _redact_profile_value(build_summary, _esxi_profile_secret_values(cfg))
+            if build_summary != raw_build_summary:
+                try:
+                    build_summary_path.write_text(yaml.safe_dump(build_summary, sort_keys=False), encoding="utf-8")
+                except Exception:
+                    pass
             trace_payload["builder_summary_path"] = str(build_summary_path)
             trace_payload["builder_summary"] = build_summary
             job["esxi_builder_summary_path"] = str(build_summary_path)
@@ -16564,7 +16733,7 @@ async def populate_setup_sections_route(request: Request):
     if site_name:
         cfg["site"]["name"] = sanitize_kit_name(site_name)
 
-    shared_subnet = str(form.get("shared_subnet") or cfg["shared_network"].get("subnet") or "10.10.8.0/24").strip()
+    shared_subnet = str(form.get("shared_subnet") or cfg["shared_network"].get("subnet") or "192.168.1.0/24").strip()
     cfg["shared_network"]["subnet"] = shared_subnet
     if any(field in form for field in ("dns1", "dns2", "dns3", "dns4")):
         cfg["shared_network"]["dns_servers"] = [
@@ -16664,7 +16833,7 @@ async def save_ilo_settings_route(
     ilo_policy_snmpv3_auth_password: str = Form(""),
     ilo_policy_snmpv3_priv_protocol: str = Form("AES"),
     ilo_policy_snmpv3_priv_password: str = Form(""),
-    ilo_policy_alert_destinations: str = Form("10.245.190.67, 10.245.190.68"),
+    ilo_policy_alert_destinations: str = Form("192.168.1.67, 192.168.1.68"),
 ):
     return await save_ilo_settings_handler(
         request,
@@ -16951,7 +17120,7 @@ async def save_qnap_settings_route(
 async def autofill_ip_plan(
     request: Request,
     return_page: str = Form("configuration"),
-    shared_subnet: str = Form("10.10.8.0/24"),
+    shared_subnet: str = Form("192.168.1.0/24"),
 ):
     return await autofill_ip_plan_handler(
         request,

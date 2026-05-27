@@ -61,7 +61,7 @@ async def save_ilo_settings_handler(
     ilo_policy_snmpv3_auth_password: str = Form(""),
     ilo_policy_snmpv3_priv_protocol: str = Form("AES"),
     ilo_policy_snmpv3_priv_password: str = Form(""),
-    ilo_policy_alert_destinations: str = Form("10.245.190.67, 10.245.190.68"),
+    ilo_policy_alert_destinations: str = Form("192.168.1.67, 192.168.1.68"),
 ):
     cfg = runtime["load_kit_config"]()
     form = await request.form()

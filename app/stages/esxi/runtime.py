@@ -520,7 +520,7 @@ def _default_esxi_post_config_policy() -> dict[str, Any]:
         "allow_datastore_create": False,
         "configure_only_no_reboot": True,
         "reboot_confirmed": False,
-        "wug_snmp_target": "10.10.10.10@162/wutvpmonitor/priv/trap",
+        "wug_snmp_target": "192.168.1.63@162/wutvpmonitor/priv/trap",
         "wug_notraps": "tcp,udp,vmkernel,hostd,vpxa",
         "wug_account_username": "WUGMon",
         "virtual_managers_role_name": "VirtualManagers",

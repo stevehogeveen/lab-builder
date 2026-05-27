@@ -10,6 +10,7 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from app.ilo import ILOClient, ILOConfig, ILOError
+from app.cisco import default_cisco_switch_config
 from app.windows import VsphereClient
 from app.esxi.kickstart import build_kickstart, redact_kickstart_text
 from app.core.config import build_default_ip_plan
@@ -22,6 +23,9 @@ from app.core.registry import (
 )
 from app.core.stage_registry import StageRegistry, CallableStagePlugin
 from app.stages.ilo.runtime import build_snmp_readback_checks, current_snmp_matches, verify_final_ilo_state
+from app.plan_renderer import build_token_map
+from app.storage_profiles import build_protocol_profile
+from app.vmware import build_vmware_plan
 import app.ilo as ilo_module
 import app.main as main
 import app.modules.cisco.routes as cisco_module_routes
@@ -33,6 +37,12 @@ def fake_esxi_base_iso(tmp_path: Path) -> Path:
     path = tmp_path / "base-esxi.iso"
     path.write_text("iso", encoding="utf-8")
     return path
+
+
+def use_legacy_10_network(cfg: dict[str, Any]) -> dict[str, Any]:
+    cfg["shared_network"]["subnet"] = "10.10.8.0/24"
+    cfg["ip_plan"] = build_default_ip_plan("10.10.8.0/24")
+    return cfg
 
 
 def test_validate_execution_scope_blocks_on_upgrade_gate(monkeypatch):
@@ -1697,6 +1707,54 @@ def test_apply_ip_plan_allows_netapp_cluster_mgmt_alias_to_match_netapp_host():
 
     plan = main.apply_ip_plan(cfg)["ip_plan"]
 
+    assert plan["netapp"] == "192.168.1.45"
+    assert plan["netapp_cluster_mgmt"] == "192.168.1.45"
+    assert plan["cluster_mgmt_ip"] == "192.168.1.45"
+
+
+def test_default_config_uses_home_network_for_new_kit_defaults():
+    cfg = main.default_config()
+
+    assert cfg["shared_network"]["subnet"] == "192.168.1.0/24"
+    assert cfg["ip_plan"]["gateway"] == "192.168.1.1"
+    assert cfg["ip_plan"]["switch"] == "192.168.1.2"
+    assert cfg["ip_plan"]["esxi"] == "192.168.1.10"
+    assert cfg["ip_plan"]["ilo"] == "192.168.1.11"
+    assert cfg["ip_plan"]["netapp"] == "192.168.1.45"
+    assert cfg["cisco_switch"]["dns_servers"] == ["192.168.1.1"]
+    assert cfg["cisco_switch"]["ntp_servers"] == ["192.168.1.1"]
+    assert cfg["ilo"]["policy"]["alert_destinations"] == ["192.168.1.67", "192.168.1.68"]
+    assert main.ensure_esxi_post_config_policy(cfg)["wug_snmp_target"] == "192.168.1.63@162/wutvpmonitor/priv/trap"
+
+
+def test_home_network_fallback_helpers_use_home_subnet_defaults(client):
+    response = client.post("/autofill-ip-plan", data={"return_page": "configuration"})
+
+    assert response.status_code == 200
+    cfg = main.load_kit_config("Kit-01")
+    assert cfg["shared_network"]["subnet"] == "192.168.1.0/24"
+    assert cfg["ip_plan"]["gateway"] == "192.168.1.1"
+    assert cfg["ip_plan"]["ilo"] == "192.168.1.11"
+
+    cisco_defaults = default_cisco_switch_config()
+    assert cisco_defaults["dns_servers"] == ["192.168.1.1"]
+    assert cisco_defaults["ntp_servers"] == ["192.168.1.1"]
+    assert build_token_map({"ip_plan": {}}, {"base": {}})["SUBNET"] == "192.168.1"
+    profile = build_protocol_profile({"site": {"name": "Fallback Kit"}, "netapp": {}})
+    assert profile["base"]["management_subnet"]["cidr"] == "192.168.1.0/24"
+    vmware_plan = build_vmware_plan({"site": {"name": "Fallback Kit"}, "vmware": {}}, storage_protocol="iscsi")
+    assert vmware_plan["esxi_hosts"][:3] == ["192.168.1.31", "192.168.1.32", "192.168.1.33"]
+
+
+def test_apply_ip_plan_preserves_explicit_saved_network_values():
+    cfg = main.default_config()
+    use_legacy_10_network(cfg)
+
+    plan = main.apply_ip_plan(cfg)["ip_plan"]
+
+    assert plan["gateway"] == "10.10.8.1"
+    assert plan["ilo"] == "10.10.8.11"
+    assert plan["esxi"] == "10.10.8.10"
     assert plan["netapp"] == "10.10.8.45"
     assert plan["netapp_cluster_mgmt"] == "10.10.8.45"
     assert plan["cluster_mgmt_ip"] == "10.10.8.45"
@@ -1712,6 +1770,7 @@ def test_export_ilo_config_writes_dated_yaml_snapshot(client, monkeypatch):
 
     monkeypatch.setattr(main.time, "strftime", fake_strftime)
     cfg = main.default_config()
+    use_legacy_10_network(cfg)
     cfg["site"]["name"] = "My Kit"
     cfg["ilo"]["hostname"] = "ilo-prod"
     cfg["ilo"]["current_ip"] = "10.10.8.50"
@@ -1978,8 +2037,8 @@ def test_save_global_settings_persists_additional_snmp_users(client):
 
 def test_save_ilo_settings_updates_only_ilo_page_fields(client):
     cfg = main.default_config()
+    use_legacy_10_network(cfg)
     cfg["site"]["name"] = "Ilo Page Kit"
-    cfg["ip_plan"]["gateway"] = "10.10.8.1"
     main.save_kit_config(cfg)
 
     response = client.post(
@@ -2085,8 +2144,8 @@ def test_save_config_preserves_existing_secret_fields_when_blank(client):
 
 def test_save_ilo_settings_persists_standard_policy_fields(client):
     cfg = main.default_config()
+    use_legacy_10_network(cfg)
     cfg["site"]["name"] = "Ilo Policy Kit"
-    cfg["ip_plan"]["gateway"] = "10.10.8.1"
     main.save_kit_config(cfg)
 
     response = client.post(
@@ -2139,8 +2198,8 @@ def test_save_ilo_settings_persists_standard_policy_fields(client):
 
 def test_save_ilo_settings_normalizes_invalid_hostname(client):
     cfg = main.default_config()
+    use_legacy_10_network(cfg)
     cfg["site"]["name"] = "Ilo Hostname Kit"
-    cfg["ip_plan"]["gateway"] = "10.10.8.1"
     main.save_kit_config(cfg)
 
     response = client.post(
@@ -2164,8 +2223,8 @@ def test_save_ilo_settings_normalizes_invalid_hostname(client):
 
 def test_save_ilo_settings_returns_validation_error_for_duplicate_ip(client):
     cfg = main.default_config()
+    use_legacy_10_network(cfg)
     cfg["site"]["name"] = "Ilo Duplicate Kit"
-    cfg["ip_plan"]["gateway"] = "10.10.8.1"
     cfg["ip_plan"]["esxi"] = "10.10.8.15"
     cfg["ip_plan"]["ilo"] = "10.10.8.11"
     main.save_kit_config(cfg)
@@ -2196,8 +2255,8 @@ def test_save_ilo_settings_returns_validation_error_for_duplicate_ip(client):
 
 def test_save_ilo_settings_persists_additional_users(client):
     cfg = main.default_config()
+    use_legacy_10_network(cfg)
     cfg["site"]["name"] = "Ilo User Kit"
-    cfg["ip_plan"]["gateway"] = "10.10.8.1"
     main.save_kit_config(cfg)
 
     response = client.post(
@@ -2537,6 +2596,39 @@ def test_build_esxi_iso_url_prefers_runtime_request_url(monkeypatch, tmp_path):
     url = main.build_esxi_iso_url(cfg, tmp_path / "esxi-runtime.iso", "10.10.8.90")
 
     assert url == "http://192.168.1.26:8001/esxi-built-iso/Runtime-URL-Kit/esxi-runtime.iso"
+
+
+def test_esxi_page_review_redaction_does_not_feed_install_review(monkeypatch, tmp_path):
+    secret = "BoundaryRoot1!"
+    public_base_url = f"http://operator:{secret}@192.168.1.26:8000"
+    cfg = main.default_config()
+    cfg["site"]["name"] = "Boundary ESXi Kit"
+    cfg["ilo"]["current_ip"] = "192.168.1.90"
+    cfg["ilo"]["host"] = "192.168.1.90"
+    cfg["_runtime"] = {"public_base_url": public_base_url}
+    cfg["esxi"].update(
+        {
+            "hostname": "esxi-boundary",
+            "management_ip": "192.168.1.30",
+            "subnet_mask": "255.255.255.0",
+            "gateway": "192.168.1.1",
+            "dns_servers": ["192.168.1.1"],
+            "root_password": secret,
+            "base_iso_path": str(fake_esxi_base_iso(tmp_path)),
+        }
+    )
+    monkeypatch.setattr(main, "BASE_DIR", tmp_path)
+    monkeypatch.setattr(main, "EXPORTS_DIR", tmp_path / "exports")
+
+    page_review = main.build_esxi_page_review(cfg)
+    install_review = main.build_esxi_install_review(cfg, run_stamp="20260526-225200")
+
+    assert secret not in repr(page_review)
+    assert page_review["root_password_saved"] is True
+    assert page_review["virtual_media_url"].startswith("http://operator:********@192.168.1.26:8000/")
+    assert secret in install_review["virtual_media_url"]
+    assert install_review["virtual_media_url"].startswith(f"{public_base_url}/esxi-built-iso/Boundary-ESXi-Kit/")
+    assert install_review["output_iso_path"].endswith("esxi-20260526-225200/esxi-20260526-225200.iso")
 
 
 def test_esxi_runtime_status_explains_powered_off_server(monkeypatch):
@@ -4538,7 +4630,7 @@ def test_prepare_execute_enables_real_launch_for_esxi_scope(client, monkeypatch,
     assert "Review one part" not in response.text
     assert "Review run" in response.text
     assert "Saved kit values from the ESXi Setup page and shared defaults" in response.text
-    assert "Management IP: 10.10.8.10" in response.text
+    assert "Management IP: 192.168.1.10" in response.text
     assert "Root password: Saved" in response.text
     assert "Built ISO path:" in response.text
     assert "esxi-20260416-121500/esxi-20260416-121500.iso" in response.text
@@ -4549,7 +4641,7 @@ def test_prepare_execute_enables_real_launch_for_esxi_scope(client, monkeypatch,
     assert "Manual test defaults: Manual test script defaults are not used by Run Center" in response.text
     assert 'name="esxi_run_stamp" value="20260416-121500"' in response.text
     assert "Management IP" in response.text
-    assert "10.10.8.10" in response.text
+    assert "192.168.1.10" in response.text
     assert "Base ISO path" in response.text
     stage_section = response.text.split("Stages that will run", 1)[1].split("Run for real", 1)[0]
     assert "iLO" not in stage_section
@@ -5068,7 +5160,8 @@ def test_run_esxi_real_builds_iso_and_starts_virtual_media_boot(monkeypatch, tmp
                             "iso_path": "/KS.CFG",
                             "inspection_path": str(built_iso.parent / "inspection" / "KS.CFG"),
                             "redacted_preview_path": str(built_iso.parent / "KS.CFG.redacted.txt"),
-                            "preview_redacted": "rootpw [REDACTED]\nreboot\n",
+                            "preview_redacted": "rootpw Valid1Pass!\nreboot\n",
+                            "diagnostic_excerpt": "builder echoed Valid1Pass! before redaction",
                             "debug_no_reboot": False,
                         },
                         "boot_cfg": {"patched": True},
@@ -5296,12 +5389,19 @@ def test_run_esxi_real_builds_iso_and_starts_virtual_media_boot(monkeypatch, tmp
     assert trace["artifacts"]["output_iso_path"] == str(built_iso)
     assert trace["artifacts"]["virtual_media_url"].endswith("/esxi-built-iso/Real-ESXi-Run-Kit/esxi-20260416-120000.iso")
     assert trace["builder_summary"]["generation"]["boot_cfg"]["patched"] is True
+    assert "Valid1Pass!" not in repr(job)
+    assert "Valid1Pass!" not in trace_path.read_text(encoding="utf-8")
+    build_summary_text = (built_iso.parent / "build-summary.yml").read_text(encoding="utf-8")
+    assert "Valid1Pass!" not in build_summary_text
+    assert "********" in build_summary_text
     assert summary["esxi_run_summary"]["install_values"]["hostname"] == "esxi-lab"
     assert summary["esxi_run_summary"]["artifacts"]["base_iso_path"] == str(spec.base_iso_path)
     assert summary["esxi_run_summary"]["artifacts"]["built_iso_path"] == str(built_iso)
     assert summary["esxi_run_summary"]["artifacts"]["virtual_media_url"].endswith("/esxi-built-iso/Real-ESXi-Run-Kit/esxi-20260416-120000.iso")
     assert summary["esxi_run_summary"]["builder_generation"]["boot_cfg"]["patched"] is True
-    assert summary["esxi_run_summary"]["ks_cfg"]["preview_redacted"] == "rootpw [REDACTED]\nreboot\n"
+    assert "Valid1Pass!" not in repr(summary["esxi_run_summary"]["builder_generation"])
+    assert summary["esxi_run_summary"]["ks_cfg"]["preview_redacted"] == "rootpw ********\nreboot\n"
+    assert summary["esxi_run_summary"]["ks_cfg"]["diagnostic_excerpt"] == "builder echoed ******** before redaction"
     assert summary["esxi_run_summary"]["install_target"]["kickstart_line"] == "install --firstdisk --overwritevmfs"
     assert summary["esxi_run_summary"]["builder_self_check"]["output_boot_report"]["uefi_entry_present"] is True
     assert summary["esxi_run_summary"]["boot_override"]["matched"] is True
@@ -6883,9 +6983,9 @@ def test_build_kickstart_uses_explicit_management_network_fields():
         base_iso_path=main.Path("/tmp/base.iso"),
         output_name="esxi-test",
         hostname="esxi-lab",
-        management_ip="10.10.8.10",
+        management_ip="192.168.1.10",
         subnet_mask="255.255.255.0",
-        gateway="10.10.8.1",
+        gateway="192.168.1.1",
         dns_servers=["1.1.1.1", "8.8.8.8"],
         root_password="Valid1Pass!",
         vlan_id="123",
@@ -6894,9 +6994,9 @@ def test_build_kickstart_uses_explicit_management_network_fields():
     kickstart = build_kickstart(spec)
 
     assert "--device=vmnic0" in kickstart
-    assert "--ip=10.10.8.10" in kickstart
+    assert "--ip=192.168.1.10" in kickstart
     assert "--netmask=255.255.255.0" in kickstart
-    assert "--gateway=10.10.8.1" in kickstart
+    assert "--gateway=192.168.1.1" in kickstart
     assert "--nameserver=1.1.1.1,8.8.8.8" in kickstart
     assert "--hostname=esxi-lab" in kickstart
     assert "--addvmportgroup=0" in kickstart
@@ -6904,7 +7004,7 @@ def test_build_kickstart_uses_explicit_management_network_fields():
     assert "Lab Builder first boot network check" in kickstart
     assert "UPLINK=$(esxcli network nic list | awk 'NR>2 && $5 == \"Up\" {print $1; exit}')" in kickstart
     assert "esxcli network vswitch standard uplink add --uplink-name=\"$UPLINK\" --vswitch-name=vSwitch0" in kickstart
-    assert "esxcli network ip interface ipv4 set --interface-name=vmk0 --ipv4=10.10.8.10 --netmask=255.255.255.0 --type=static" in kickstart
+    assert "esxcli network ip interface ipv4 set --interface-name=vmk0 --ipv4=192.168.1.10 --netmask=255.255.255.0 --type=static" in kickstart
 
 
 def test_build_kickstart_debug_no_reboot_omits_reboot_and_redacts_preview():

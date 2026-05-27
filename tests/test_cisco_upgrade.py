@@ -4,7 +4,7 @@ from app.cisco_upgrade import build_cisco_upgrade_plan, execute_cisco_upgrade
 
 def test_build_cisco_upgrade_plan_uses_discovered_version_and_media():
     cfg = {
-        "ip_plan": {"switch": "10.10.8.5"},
+        "ip_plan": {"switch": "192.168.1.5"},
         "cisco_switch": {"username": "admin", "password": "secret"},
         "upgrade_inventory": {
             "cisco_switch": {
@@ -26,12 +26,12 @@ def test_build_cisco_upgrade_plan_uses_discovered_version_and_media():
 
     assert plan["current_version"] == "17.03.01"
     assert plan["media_version"] == "17.09.04"
-    assert plan["host"] == "10.10.8.5"
+    assert plan["host"] == "192.168.1.5"
 
 
 def test_execute_cisco_upgrade_enables_scp_before_transfer(monkeypatch):
     cfg = {
-        "ip_plan": {"switch": "10.10.8.5"},
+        "ip_plan": {"switch": "192.168.1.5"},
         "cisco_switch": {"username": "admin", "password": "secret", "last_ssh_test": {"ok": True}},
         "upgrade_inventory": {
             "cisco_switch": {
@@ -87,7 +87,7 @@ def test_cisco_upgrade_error_keeps_real_scp_reason(monkeypatch):
     class Proc:
         returncode = 1
         stdout = ""
-        stderr = "Warning: Permanently added '10.10.8.5' (RSA) to the list of known hosts.\nAdministratively disabled.\n"
+        stderr = "Warning: Permanently added '192.168.1.5' (RSA) to the list of known hosts.\nAdministratively disabled.\n"
 
     monkeypatch.setattr(cisco_upgrade.subprocess, "run", lambda *args, **kwargs: Proc())
 
@@ -100,7 +100,7 @@ def test_cisco_upgrade_error_keeps_real_scp_reason(monkeypatch):
 
 def test_execute_cisco_upgrade_skips_upload_when_flash_image_matches(monkeypatch):
     cfg = {
-        "ip_plan": {"switch": "10.10.8.5"},
+        "ip_plan": {"switch": "192.168.1.5"},
         "cisco_switch": {"username": "admin", "password": "secret", "last_ssh_test": {"ok": True}},
         "upgrade_inventory": {
             "cisco_switch": {
@@ -141,7 +141,7 @@ def test_execute_cisco_upgrade_skips_upload_when_flash_image_matches(monkeypatch
 
 def test_execute_cisco_upgrade_reloads_when_packages_conf_is_prepared(monkeypatch):
     cfg = {
-        "ip_plan": {"switch": "10.10.8.5"},
+        "ip_plan": {"switch": "192.168.1.5"},
         "cisco_switch": {"username": "admin", "password": "secret", "last_ssh_test": {"ok": True}},
         "upgrade_inventory": {
             "cisco_switch": {

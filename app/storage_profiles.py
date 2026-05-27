@@ -84,7 +84,7 @@ def build_protocol_profile(cfg: dict[str, Any]) -> dict[str, Any]:
     desired = netapp_cfg.get("desired") or {}
     protocol = normalize_protocol(netapp_cfg.get("storage_protocol") or "iscsi")
     ip_plan = cfg.get("ip_plan") or {}
-    management_cidr = str(((cfg.get("shared_network") or {}).get("subnet") or ip_plan.get("subnet") or "10.10.8.0/24")).strip()
+    management_cidr = str(((cfg.get("shared_network") or {}).get("subnet") or ip_plan.get("subnet") or "192.168.1.0/24")).strip()
     management = subnet_metadata(management_cidr)
     nfs_lifs = normalize_lifs(((netapp_cfg.get("nfs") or {}).get("lifs")) or ((desired.get("nfs") or {}).get("lifs")))
     iscsi_lifs = normalize_lifs(((netapp_cfg.get("iscsi") or {}).get("lifs")) or ((desired.get("iscsi") or {}).get("lifs")))

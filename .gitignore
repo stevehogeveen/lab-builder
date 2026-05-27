@@ -23,3 +23,14 @@ media/
 .env.*
 secrets/
 *.secret
+
+# Codex raw run logs can get huge. Keep summaries/checklists/contracts instead.
+artifacts/codex-runs/*cycle*.txt
+artifacts/codex-runs/*pytest*.txt
+artifacts/codex-runs/*compileall*.txt
+artifacts/codex-runs/*git-status*.txt
+artifacts/codex-runs/*diffstat*.txt
+!artifacts/codex-runs/*summary*.md
+!artifacts/codex-runs/*handoff*.md
+!artifacts/codex-runs/*checklist*.md
+!artifacts/codex-runs/*contract*.md

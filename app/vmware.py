@@ -136,7 +136,7 @@ def _resolved_esxi_targets(cfg: dict[str, Any], config: VMwareConfig, subnet_cid
 def build_vmware_plan(cfg: dict[str, Any], *, storage_protocol: str, discovery: dict[str, Any] | None = None) -> dict[str, Any]:
     vmware_cfg = cfg.get("vmware") or {}
     esxi_cfg = cfg.get("esxi") or {}
-    subnet = str(((cfg.get("shared_network") or {}).get("subnet") or (cfg.get("ip_plan") or {}).get("subnet") or "10.10.8.0/24")).strip()
+    subnet = str(((cfg.get("shared_network") or {}).get("subnet") or (cfg.get("ip_plan") or {}).get("subnet") or "192.168.1.0/24")).strip()
     site_name = str(((cfg.get("site") or {}).get("name") or "Kit-01")).strip()
     config = VMwareConfig(
         vcenter_ip=str(vmware_cfg.get("vcenter_ip") or "").strip(),

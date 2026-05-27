@@ -42,7 +42,7 @@ def _safe_name(value: str, fallback: str) -> str:
 
 
 def _subnet(cfg: dict[str, Any]) -> str:
-    return _clean(_as_dict(cfg.get("shared_network")).get("subnet") or _as_dict(cfg.get("ip_plan")).get("subnet") or "10.10.8.0/24")
+    return _clean(_as_dict(cfg.get("shared_network")).get("subnet") or _as_dict(cfg.get("ip_plan")).get("subnet") or "192.168.1.0/24")
 
 
 def _ip_at_offset(subnet_cidr: str, offset: int) -> str:

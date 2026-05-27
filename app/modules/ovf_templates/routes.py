@@ -10,6 +10,10 @@ router = APIRouter()
 service = OvfTemplateService()
 
 
+def _redact_feedback_lines(lines: list[str]) -> list[str]:
+    return [service.redact_display_text(str(line)) for line in lines]
+
+
 def _render_ovf_page(request: Request, cfg: dict, *, action_feedback: dict | None = None, error_message: str = "") -> HTMLResponse:
     from app import main
 
@@ -60,7 +64,7 @@ async def register_ovf_template_directory(
             "OVF template not registered",
             "Fix the directory or descriptor choice, then submit the form again.",
             tone="pending",
-            details=details,
+            details=_redact_feedback_lines(details),
         )
         return _render_ovf_page(request, cfg, action_feedback=feedback)
 
@@ -70,14 +74,14 @@ async def register_ovf_template_directory(
         "OVF template registered",
         "Validated the whole local template directory and saved it for VM workflows.",
         tone="ready",
-        outcomes=[
+        outcomes=_redact_feedback_lines([
             f"Template: {template.get('name') or template.get('id')}",
             f"Descriptor: {template.get('descriptor_name') or 'Not set'}",
             f"Files: {template.get('file_count', 0)}",
             f"Size: {template.get('total_size_display') or '0 B'}",
-            f"Source: {str(template.get('source_location_type') or 'local').replace('_', ' ').title()}",
-        ],
-        details=list(((template.get("readiness") or {}).get("blockers") or [])),
+            f"Source: {service.source_location_label(str(template.get('source_location_type') or 'local'))}",
+        ]),
+        details=_redact_feedback_lines(list(((template.get("readiness") or {}).get("blockers") or []))),
     )
     page = str(return_page or "ovf_templates").strip().lower()
     if page == "windows":

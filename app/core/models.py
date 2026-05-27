@@ -6,7 +6,7 @@ from pydantic import BaseModel, Field, ConfigDict
 
 
 class NetworkConfigModel(BaseModel):
-    subnet: str = "10.10.8.0/24"
+    subnet: str = "192.168.1.0/24"
     dns_servers: list[str] = Field(default_factory=lambda: ["", "", "", ""])
     netapp_sp_a_offset: int = 13
     netapp_sp_b_offset: int = 14
@@ -41,7 +41,7 @@ class IloPolicyModel(BaseModel):
     snmp_system_contact: str = "765 DSS"
     snmp_system_role: str = "iLO"
     snmp_location_source: str = "kit_id"
-    alert_destinations: list[str] = Field(default_factory=lambda: ["10.245.190.67", "10.245.190.68"])
+    alert_destinations: list[str] = Field(default_factory=lambda: ["192.168.1.67", "192.168.1.68"])
     alert_protocol: str = "SNMPv3Inform"
     timezone: str = "Bogota, Lima, Quito, Eastern Time(US & Canada)"
     discovered_hosts: list[dict[str, Any]] = Field(default_factory=list)

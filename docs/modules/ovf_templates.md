@@ -15,3 +15,6 @@ Registers reusable local OVF/OVA template directories for VM workflows.
 
 ## Validation
 Use the OVF Templates page to register a directory, then select that template from Windows and run the Windows dry-run install plan.
+
+## Manual Prep Testing
+Use `docs/ovf-ova-prep-checklist.md` for server-tied OVF/OVA registration and deployment-prep checks. Keep unavailable deployment targets in dry-run/prep mode until the operator explicitly starts a real deployment.

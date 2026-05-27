@@ -5,14 +5,62 @@
     "summary_fields": [],
     "areas": [],
 }) %}
+{% set esxi_saved_ready = esxi_page_review.base_iso_ready and esxi_page_review.root_password_saved and esxi_page_review.hostname_valid and not esxi_page_review.validation_errors %}
+{% if not esxi_page_review.base_iso_ready %}
+    {% set esxi_next_step = 'Fix installer ISO' %}
+{% elif not esxi_page_review.root_password_saved %}
+    {% set esxi_next_step = 'Save root password' %}
+{% elif esxi_page_review.validation_errors %}
+    {% set esxi_next_step = 'Fix saved ESXi values' %}
+{% else %}
+    {% set esxi_next_step = 'Review Run Center manual install plan' %}
+{% endif %}
+{% set esxi_completion_state = 'Ready for manual install review' if esxi_saved_ready else 'Needs setup values' %}
+{% set esxi_last_result = (esxi_latest_receipt.result if esxi_latest_receipt else 'Not run') %}
+{% set esxi_last_summary = (esxi_latest_receipt.human_summary if esxi_latest_receipt else 'No ESXi run has finished for this kit yet.') %}
+{% set esxi_log_path = (esxi_latest_receipt.run_summary_path if esxi_latest_receipt and esxi_latest_receipt.run_summary_path else '') %}
+{% set esxi_log_label = (esxi_log_path.rsplit('/', 1)[-1] if esxi_log_path else 'No log yet') %}
+{% if esxi_log_path %}
+    {% set esxi_log_status = esxi_log_label %}
+{% elif esxi_saved_ready %}
+    {% set esxi_log_status = 'Manual install plan ready' %}
+{% elif not esxi_page_review.base_iso_ready %}
+    {% set esxi_log_status = 'Base ISO needs attention' %}
+{% elif not esxi_page_review.root_password_saved %}
+    {% set esxi_log_status = 'Root password missing' %}
+{% else %}
+    {% set esxi_log_status = 'Saved ESXi values need review' %}
+{% endif %}
+{% set esxi_detected = namespace(source='', iso_ready='', root_saved='', ilo_power='', run_stamp='') %}
+{% for item in esxi_advanced.summary_fields %}
+    {% if item.label == 'Source' %}{% set esxi_detected.source = item.value %}{% endif %}
+    {% if item.label == 'Base ISO ready' %}{% set esxi_detected.iso_ready = item.value %}{% endif %}
+    {% if item.label == 'Root password saved' %}{% set esxi_detected.root_saved = item.value %}{% endif %}
+    {% if item.label == 'iLO power' %}{% set esxi_detected.ilo_power = item.value %}{% endif %}
+    {% if item.label == 'Run stamp' %}{% set esxi_detected.run_stamp = item.value %}{% endif %}
+{% endfor %}
+{% set esxi_media = namespace(devices='', insert='', eject='', boot='') %}
+{% for area in esxi_advanced.areas %}
+    {% if area.name == 'iLO virtual media and boot path' %}
+        {% for item in area["items"] %}
+            {% if item.label == 'Virtual media devices' %}{% set esxi_media.devices = item.value %}{% endif %}
+            {% if item.label == 'Insert media actions' %}{% set esxi_media.insert = item.value %}{% endif %}
+            {% if item.label == 'Eject media actions' %}{% set esxi_media.eject = item.value %}{% endif %}
+            {% if item.label == 'Boot override' %}{% set esxi_media.boot = item.value %}{% endif %}
+        {% endfor %}
+    {% endif %}
+{% endfor %}
+{% set esxi_suggested_ip = esxi_page_review.management_ip or cfg.get('ip_plan', {}).get('esxi', '') or '192.168.1.10' %}
+{% set esxi_suggested_gateway = esxi_page_review.gateway or cfg.get('ip_plan', {}).get('gateway', '') or '192.168.1.1' %}
+{% set esxi_media_status = 'Base ISO ready' if esxi_page_review.base_iso_ready else 'Base ISO needs attention' %}
 <section class="panel space-y-6" x-data='{"tab":"basic"}'>
     <div>
         <h2 class="text-2xl font-bold title-with-icon"><span class="page-icon icon-tone-{{ page_precheck_summary.tone if page_precheck_summary else 'progress' }}" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="5" width="16" height="6" rx="2"/><rect x="4" y="13" width="16" height="6" rx="2"/><path d="M8 8h.01"/><path d="M8 16h.01"/><path d="M12 8h4"/><path d="M12 16h4"/></svg></span><span>ESXi setup</span></h2>
-        <div class="text-sm text-slate-400">Installer version, ISO, name, and password.</div>
+        <div class="text-sm text-slate-400">Installer version, ISO, name, and password. Build media, mount through iLO, and start the physical install only from Run Center.</div>
         <div class="actions mt-4">
             <div class="workflow-tabs">
                 <button class="btn workflow-tab" type="button" :class="tab === 'basic' ? 'workflow-tab workflow-tab-active' : 'workflow-tab'" @click="tab = 'basic'">Basic setup</button>
-                <button class="btn workflow-tab" type="button" :class="tab === 'advanced' ? 'workflow-tab workflow-tab-active' : 'workflow-tab'" @click="tab = 'advanced'">Advanced</button>
+                <button class="btn workflow-tab" type="button" :class="tab === 'advanced' ? 'workflow-tab workflow-tab-active' : 'workflow-tab'" @click="tab = 'advanced'">Debug Mode</button>
             </div>
         </div>
     </div>
@@ -27,6 +75,61 @@
         {"label": "Next", "value": 'Build and review installer' if esxi_page_review.base_iso_ready else 'Fix installer inputs', "note": "Run Center uses this saved profile"},
     ] %}
     {% include "partials/components/setup_strip.html" %}
+
+    <section class="card identity-soft-card" id="esxi-operator-mode">
+        <div class="flex flex-wrap items-start justify-between gap-3">
+            <div>
+                <div class="text-lg font-semibold">ESXi operator checkpoint</div>
+                <div class="text-sm text-slate-400 mt-1">Saved installer inputs, current readiness, and the next manual install-prep action.</div>
+            </div>
+            <div class="actions">
+                <span class="status progress">Operator Mode</span>
+                <a class="btn" href="#esxi-debug-details" @click="tab = 'advanced'">Open Debug Mode/details</a>
+            </div>
+        </div>
+        <div class="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-3 mt-4">
+            <div class="result" style="margin-top: 0;">
+                <div class="dashboard-kicker">Next step</div>
+                <div class="font-semibold">{{ esxi_next_step }}</div>
+            </div>
+            <div class="result" style="margin-top: 0;">
+                <div class="dashboard-kicker">Completion state</div>
+                <div class="font-semibold">{{ esxi_completion_state }}</div>
+            </div>
+            <div class="result" style="margin-top: 0;">
+                <div class="dashboard-kicker">Last result</div>
+                <div class="font-semibold">{{ esxi_last_result }}</div>
+                <div class="text-xs text-slate-400 mt-1 truncate-wrap" title="{{ esxi_last_summary }}">{{ esxi_last_summary }}</div>
+            </div>
+            <div class="result" style="margin-top: 0;">
+                <div class="dashboard-kicker">Logs/status</div>
+                <div class="font-semibold">{{ esxi_log_status }}</div>
+            </div>
+        </div>
+        <div class="grid grid-cols-1 lg:grid-cols-3 gap-3 mt-3">
+            <div class="result" style="margin-top: 0;">
+                <div class="dashboard-kicker">Saved Lab Builder kit config</div>
+                <div class="font-semibold">{{ esxi_page_review.hostname or 'Not set' }}</div>
+                <div class="text-xs text-slate-400 mt-1 truncate-wrap">ESXi {{ esxi_page_review.version or '7' }} | IP {{ esxi_page_review.management_ip or 'not set' }} | Root password {{ 'saved' if esxi_page_review.root_password_saved else 'missing' }}</div>
+            </div>
+            <div class="result" style="margin-top: 0;">
+                <div class="dashboard-kicker">Discovered/current install state</div>
+                <div class="font-semibold">{{ esxi_detected.ilo_power or 'No live iLO read' }}</div>
+                <div class="text-xs text-slate-400 mt-1 truncate-wrap">ISO {{ esxi_detected.iso_ready or 'unknown' }} | Source {{ esxi_detected.source or 'saved profile' }}</div>
+                {% if esxi_media.devices and esxi_media.devices != 'No live iLO read' %}
+                <div class="text-xs text-slate-400 mt-1 truncate-wrap">Virtual media {{ esxi_media.devices }} {{ 'device' if esxi_media.devices == '1' else 'devices' }} | Insert actions {{ esxi_media.insert or 'not exposed' }} | Eject actions {{ esxi_media.eject or 'not exposed' }}</div>
+                {% if esxi_media.boot and esxi_media.boot != 'Not captured' %}
+                <div class="text-xs text-slate-400 mt-1 truncate-wrap">Boot override {{ esxi_media.boot }}</div>
+                {% endif %}
+                {% endif %}
+            </div>
+            <div class="result" style="margin-top: 0;">
+                <div class="dashboard-kicker">Planned/suggested values</div>
+                <div class="font-semibold">{{ esxi_suggested_ip }}</div>
+                <div class="text-xs text-slate-400 mt-1 truncate-wrap">Gateway {{ esxi_suggested_gateway }} | Media {{ esxi_media_status }}</div>
+            </div>
+        </div>
+    </section>
 
     {% set netapp_dep = esxi_page_review.netapp_dependency or {} %}
     {% if netapp_dep.get('required') %}
@@ -63,7 +166,7 @@
 
     <section class="card workflow-hero-card" x-show="tab === 'basic'">
         <div class="text-lg font-semibold mb-3">Save ESXi setup</div>
-        <form hx-post="/save-esxi-settings" hx-target="#main-content" hx-swap="outerHTML" class="space-y-4" data-action-title="Saving ESXi setup" data-action-start="Saving the ESXi installer and post-config settings." data-action-complete="ESXi setup saved.">
+        <form id="esxi-save-form" hx-post="/save-esxi-settings" hx-target="#main-content" hx-swap="outerHTML" class="space-y-4" data-action-title="Saving ESXi setup" data-action-start="Saving the ESXi installer and post-config settings." data-action-complete="ESXi setup saved.">
             <input type="hidden" name="return_page" value="esxi">
             <div class="grid grid-cols-1 md:grid-cols-2 gap-3">
                 <div>
@@ -83,22 +186,6 @@
                     </select>
                 </div>
             </div>
-            <details class="card card-compact">
-                <summary class="summary-row">
-                    <span class="text-sm font-bold text-slate-300">Installer details</span>
-                    <span class="status progress">optional</span>
-                </summary>
-                <div class="ops-strip-grid mt-3">
-                    <div class="ops-strip-card" style="margin-top: 0;">Version: ESXi {{ esxi_page_review.version or '7' }}</div>
-                    <div class="ops-strip-card truncate-wrap" style="margin-top: 0;" title="{{ esxi_page_review.base_iso_path or esxi_page_review.selected_base_iso_path or 'Auto-select not resolved' }}">ISO path: <span class="artifact-path">{{ esxi_page_review.base_iso_path or esxi_page_review.selected_base_iso_path or 'Auto-select not resolved' }}</span></div>
-                    {% if esxi_page_review.base_iso_error %}
-                    <div class="field-error mt-2">{{ esxi_page_review.base_iso_error }}</div>
-                    {% endif %}
-                    <div class="ops-strip-card truncate-wrap" style="margin-top: 0;" title="{{ esxi_page_review.install_target.kickstart_line }}">Kickstart target: {{ esxi_page_review.install_target.kickstart_line }}</div>
-                    <div class="ops-strip-card truncate-wrap" style="margin-top: 0;" title="{{ esxi_page_review.install_target.preferred_target }}">Preferred target: {{ esxi_page_review.install_target.preferred_target }}</div>
-                </div>
-                <div class="text-xs text-slate-400 mt-2">{{ esxi_page_review.install_target.safety_note }}</div>
-            </details>
             <label class="check card card-compact">
                 <input type="checkbox" name="esxi_debug_no_reboot" {% if esxi_page_review.debug_no_reboot %}checked{% endif %}>
                 <span>
@@ -106,85 +193,6 @@
                     <span class="block text-xs text-slate-400 mt-1">Leave the installer visible on the iLO console.</span>
                 </span>
             </label>
-            <details class="card card-compact">
-                <summary class="summary-row">
-                    <span class="text-sm font-bold text-slate-300">Post-install policy</span>
-                    <span class="status progress">preview</span>
-                </summary>
-                {% set post_policy = esxi_page_review.post_config_preview.policy if esxi_page_review.post_config_preview else {} %}
-                <div class="grid grid-cols-1 md:grid-cols-2 gap-3 mt-3">
-                    <div>
-                        <label class="block text-sm font-bold text-slate-300 mb-2">Post-config transport</label>
-                        <select name="esxi_post_transport" class="input">
-                            {% set post_transport = cfg.get('esxi', {}).get('post_config_transport', 'dry_run') %}
-                            <option value="dry_run" {% if post_transport != 'ssh' %}selected{% endif %}>Dry run (plan only)</option>
-                            <option value="ssh" {% if post_transport == 'ssh' %}selected{% endif %}>Live SSH apply</option>
-                        </select>
-                    </div>
-                    <div>
-                        <label class="block text-sm font-bold text-slate-300 mb-2">Discovery start octet</label>
-                        <input type="text" name="esxi_post_discovery_start_octet" value="{{ post_policy.get('discovery_start_octet', 31) }}" class="input">
-                    </div>
-                    <div>
-                        <label class="block text-sm font-bold text-slate-300 mb-2">Discovery end octet</label>
-                        <input type="text" name="esxi_post_discovery_end_octet" value="{{ post_policy.get('discovery_end_octet', 33) }}" class="input">
-                    </div>
-                    <div>
-                        <label class="block text-sm font-bold text-slate-300 mb-2">Hostname override (optional)</label>
-                        <input type="text" name="esxi_post_hostname_override" value="{{ cfg.get('esxi', {}).get('post_config_hostname_override', '') }}" class="input">
-                    </div>
-                    <div>
-                        <label class="block text-sm font-bold text-slate-300 mb-2">Domain override (optional)</label>
-                        <input type="text" name="esxi_post_domain_override" value="{{ cfg.get('esxi', {}).get('post_config_domain_override', '') }}" class="input">
-                    </div>
-                    <div>
-                        <label class="block text-sm font-bold text-slate-300 mb-2">DNS 1 override (optional)</label>
-                        <input type="text" name="esxi_post_dns1_override" value="{{ cfg.get('esxi', {}).get('post_config_dns1_override', '') }}" class="input">
-                    </div>
-                    <div>
-                        <label class="block text-sm font-bold text-slate-300 mb-2">DNS 2 override (optional)</label>
-                        <input type="text" name="esxi_post_dns2_override" value="{{ cfg.get('esxi', {}).get('post_config_dns2_override', '') }}" class="input">
-                    </div>
-                    <div class="md:col-span-2">
-                        <label class="block text-sm font-bold text-slate-300 mb-2">WUG SNMPv3 target</label>
-                        <input type="text" name="esxi_post_wug_snmp_target" value="{{ post_policy.get('wug_snmp_target', '') }}" class="input">
-                    </div>
-                    <div class="md:col-span-2">
-                        <label class="block text-sm font-bold text-slate-300 mb-2">WUG notraps</label>
-                        <input type="text" name="esxi_post_wug_notraps" value="{{ post_policy.get('wug_notraps', '') }}" class="input">
-                    </div>
-                    <div>
-                        <label class="block text-sm font-bold text-slate-300 mb-2">WUGMon password (optional update)</label>
-                        <input type="password" name="esxi_post_secret_wug_password" value="" class="input" placeholder="Leave blank to keep saved value">
-                    </div>
-                    <div>
-                        <label class="block text-sm font-bold text-slate-300 mb-2">SNMPv3 auth password (optional update)</label>
-                        <input type="password" name="esxi_post_secret_snmpv3_auth_password" value="" class="input" placeholder="Leave blank to keep saved value">
-                    </div>
-                    <div>
-                        <label class="block text-sm font-bold text-slate-300 mb-2">SNMPv3 privacy password (optional update)</label>
-                        <input type="password" name="esxi_post_secret_snmpv3_priv_password" value="" class="input" placeholder="Leave blank to keep saved value">
-                    </div>
-                    <div>
-                        <label class="block text-sm font-bold text-slate-300 mb-2">Kit root password (optional update)</label>
-                        <input type="password" name="esxi_post_secret_kit_root_password" value="" class="input" placeholder="Leave blank to keep saved value">
-                    </div>
-                    <div>
-                        <label class="block text-sm font-bold text-slate-300 mb-2">S-VMSERVICE password (optional update)</label>
-                        <input type="password" name="esxi_post_secret_svmservice_password" value="" class="input" placeholder="Leave blank to keep saved value">
-                    </div>
-                    <div>
-                        <label class="block text-sm font-bold text-slate-300 mb-2">LocalTech password (optional update)</label>
-                        <input type="password" name="esxi_post_secret_localtech_password" value="" class="input" placeholder="Leave blank to keep saved value">
-                    </div>
-                </div>
-                <div class="space-y-2 mt-3">
-                    <label class="check card card-compact"><input type="checkbox" name="esxi_post_allow_datastore_create" {% if post_policy.get('allow_datastore_create') %}checked{% endif %}><span>Create LOCAL-S2 only when eligible disk rules are met</span></label>
-                    <label class="check card card-compact"><input type="checkbox" name="esxi_post_allow_single_mgmt_uplink_override" {% if post_policy.get('allow_single_mgmt_uplink_override') %}checked{% endif %}><span>Allow single management uplink override</span></label>
-                    <label class="check card card-compact"><input type="checkbox" name="esxi_post_configure_only_no_reboot" {% if post_policy.get('configure_only_no_reboot') %}checked{% endif %}><span>Configure-only mode (do not auto reboot)</span></label>
-                    <label class="check card card-compact"><input type="checkbox" name="esxi_post_reboot_confirmed" {% if post_policy.get('reboot_confirmed') %}checked{% endif %}><span>Reboot approved after post-config apply</span></label>
-                </div>
-            </details>
             <div>
                 <label class="block text-sm font-bold text-slate-300 mb-2">Server name</label>
                 {% if esxi_field_errors.hostname %}
@@ -238,12 +246,14 @@
         </form>
     </section>
 
-    <section class="card identity-soft-card ilo-advanced-shell" x-show="tab === 'advanced'">
+    <section class="card identity-soft-card ilo-advanced-shell" id="esxi-debug-details" x-show="tab === 'advanced'">
         <div class="flex items-center justify-between gap-3 mb-3 flex-wrap">
             <div>
-                <div class="text-lg font-semibold">Advanced ESXi installer view</div>
-                <div class="text-sm text-slate-400">This shows the deeper install and builder details the app will use later in Run Center.</div>
+                <div class="dashboard-kicker">Advanced ESXi installer view</div>
+                <div class="text-lg font-semibold">Debug Mode/details</div>
+                <div class="text-sm text-slate-400">Installer artifacts, kickstart inputs, iLO virtual media, boot override, power state, and recovery context.</div>
             </div>
+            <span class="status progress ilo-capability-badge">logs/status</span>
             <span class="status progress ilo-capability-badge">{{ esxi_advanced.detected_label }}</span>
         </div>
         {% if esxi_advanced.available %}
@@ -318,6 +328,116 @@
             {% endif %}
         </div>
         {% endif %}
+        <details class="card card-compact identity-soft-card mt-4">
+            <summary class="summary-row">
+                <span class="text-sm font-bold text-slate-300">Installer details</span>
+                <span class="status progress">Debug Mode</span>
+            </summary>
+            <div class="ops-strip-grid mt-3">
+                <div class="ops-strip-card" style="margin-top: 0;">Version: ESXi {{ esxi_page_review.version or '7' }}</div>
+                <div class="ops-strip-card truncate-wrap" style="margin-top: 0;" title="{{ esxi_page_review.base_iso_path or esxi_page_review.selected_base_iso_path or 'Auto-select not resolved' }}">ISO path: <span class="artifact-path">{{ esxi_page_review.base_iso_path or esxi_page_review.selected_base_iso_path or 'Auto-select not resolved' }}</span></div>
+                {% if esxi_page_review.base_iso_error %}
+                <div class="field-error mt-2">{{ esxi_page_review.base_iso_error }}</div>
+                {% endif %}
+                <div class="ops-strip-card truncate-wrap" style="margin-top: 0;" title="{{ esxi_page_review.install_target.kickstart_line }}">Kickstart target: {{ esxi_page_review.install_target.kickstart_line }}</div>
+                <div class="ops-strip-card truncate-wrap" style="margin-top: 0;" title="{{ esxi_page_review.install_target.preferred_target }}">Preferred target: {{ esxi_page_review.install_target.preferred_target }}</div>
+            </div>
+            <div class="text-xs text-slate-400 mt-2">{{ esxi_page_review.install_target.safety_note }}</div>
+        </details>
+        <details class="card card-compact identity-soft-card mt-4">
+            <summary class="summary-row">
+                <span class="text-sm font-bold text-slate-300">Post-install policy</span>
+                <span class="status progress">Debug Mode</span>
+            </summary>
+            {% set post_policy = esxi_page_review.post_config_preview.policy if esxi_page_review.post_config_preview else {} %}
+            {% set post_form = esxi_page_review.post_config_form or {} %}
+            <div class="grid grid-cols-1 md:grid-cols-2 gap-3 mt-3">
+                <div>
+                    <label class="block text-sm font-bold text-slate-300 mb-2">Post-config transport</label>
+                    <select name="esxi_post_transport" class="input" form="esxi-save-form">
+                        {% set post_transport = cfg.get('esxi', {}).get('post_config_transport', 'dry_run') %}
+                        <option value="dry_run" {% if post_transport != 'ssh' %}selected{% endif %}>Dry run (plan only)</option>
+                        <option value="ssh" {% if post_transport == 'ssh' %}selected{% endif %}>Live SSH apply</option>
+                    </select>
+                </div>
+                <div>
+                    <label class="block text-sm font-bold text-slate-300 mb-2">Discovery start octet</label>
+                    <input type="text" name="esxi_post_discovery_start_octet" value="{{ post_policy.get('discovery_start_octet', 31) }}" class="input" form="esxi-save-form">
+                </div>
+                <div>
+                    <label class="block text-sm font-bold text-slate-300 mb-2">Discovery end octet</label>
+                    <input type="text" name="esxi_post_discovery_end_octet" value="{{ post_policy.get('discovery_end_octet', 33) }}" class="input" form="esxi-save-form">
+                </div>
+                <div>
+                    <label class="block text-sm font-bold text-slate-300 mb-2">Hostname override (optional)</label>
+                    <input type="text" name="esxi_post_hostname_override" value="{{ post_form.get('hostname_override', '') }}" class="input" form="esxi-save-form">
+                </div>
+                <div>
+                    <label class="block text-sm font-bold text-slate-300 mb-2">Domain override (optional)</label>
+                    <input type="text" name="esxi_post_domain_override" value="{{ post_form.get('domain_override', '') }}" class="input" form="esxi-save-form">
+                </div>
+                <div>
+                    <label class="block text-sm font-bold text-slate-300 mb-2">DNS 1 override (optional)</label>
+                    <input type="text" name="esxi_post_dns1_override" value="{{ post_form.get('dns1_override', '') }}" class="input" form="esxi-save-form">
+                </div>
+                <div>
+                    <label class="block text-sm font-bold text-slate-300 mb-2">DNS 2 override (optional)</label>
+                    <input type="text" name="esxi_post_dns2_override" value="{{ post_form.get('dns2_override', '') }}" class="input" form="esxi-save-form">
+                </div>
+                <div class="md:col-span-2">
+                    <label class="block text-sm font-bold text-slate-300 mb-2">WUG SNMPv3 target</label>
+                    <input type="text" name="esxi_post_wug_snmp_target" value="{{ post_policy.get('wug_snmp_target', '') }}" class="input" form="esxi-save-form">
+                </div>
+                <div class="md:col-span-2">
+                    <label class="block text-sm font-bold text-slate-300 mb-2">WUG notraps</label>
+                    <input type="text" name="esxi_post_wug_notraps" value="{{ post_policy.get('wug_notraps', '') }}" class="input" form="esxi-save-form">
+                </div>
+                <div>
+                    <label class="block text-sm font-bold text-slate-300 mb-2">WUGMon password (optional update)</label>
+                    <input type="password" name="esxi_post_secret_wug_password" value="" class="input" placeholder="Leave blank to keep saved value" form="esxi-save-form">
+                </div>
+                <div>
+                    <label class="block text-sm font-bold text-slate-300 mb-2">SNMPv3 auth password (optional update)</label>
+                    <input type="password" name="esxi_post_secret_snmpv3_auth_password" value="" class="input" placeholder="Leave blank to keep saved value" form="esxi-save-form">
+                </div>
+                <div>
+                    <label class="block text-sm font-bold text-slate-300 mb-2">SNMPv3 privacy password (optional update)</label>
+                    <input type="password" name="esxi_post_secret_snmpv3_priv_password" value="" class="input" placeholder="Leave blank to keep saved value" form="esxi-save-form">
+                </div>
+                <div>
+                    <label class="block text-sm font-bold text-slate-300 mb-2">Kit root password (optional update)</label>
+                    <input type="password" name="esxi_post_secret_kit_root_password" value="" class="input" placeholder="Leave blank to keep saved value" form="esxi-save-form">
+                </div>
+                <div>
+                    <label class="block text-sm font-bold text-slate-300 mb-2">S-VMSERVICE password (optional update)</label>
+                    <input type="password" name="esxi_post_secret_svmservice_password" value="" class="input" placeholder="Leave blank to keep saved value" form="esxi-save-form">
+                </div>
+                <div>
+                    <label class="block text-sm font-bold text-slate-300 mb-2">LocalTech password (optional update)</label>
+                    <input type="password" name="esxi_post_secret_localtech_password" value="" class="input" placeholder="Leave blank to keep saved value" form="esxi-save-form">
+                </div>
+            </div>
+            <div class="space-y-2 mt-3">
+                <label class="check card card-compact"><input type="checkbox" name="esxi_post_allow_datastore_create" form="esxi-save-form" {% if post_policy.get('allow_datastore_create') %}checked{% endif %}><span>Create LOCAL-S2 only when eligible disk rules are met</span></label>
+                <label class="check card card-compact"><input type="checkbox" name="esxi_post_allow_single_mgmt_uplink_override" form="esxi-save-form" {% if post_policy.get('allow_single_mgmt_uplink_override') %}checked{% endif %}><span>Allow single management uplink override</span></label>
+                <label class="check card card-compact"><input type="checkbox" name="esxi_post_configure_only_no_reboot" form="esxi-save-form" {% if post_policy.get('configure_only_no_reboot') %}checked{% endif %}><span>Configure-only mode (do not auto reboot)</span></label>
+                <label class="check card card-compact"><input type="checkbox" name="esxi_post_reboot_confirmed" form="esxi-save-form" {% if post_policy.get('reboot_confirmed') %}checked{% endif %}><span>Reboot approved after post-config apply <span class="status progress">manual only</span> <span class="status danger">disruptive</span></span></label>
+            </div>
+        </details>
+        <div class="actions mt-4">
+            <button class="btn action-button" type="submit" form="esxi-save-form">Save ESXi setup</button>
+        </div>
+        <details class="card card-compact identity-soft-card mt-4">
+            <summary class="summary-row">
+                <span class="text-sm font-bold text-slate-300">Recovery suggestions</span>
+                <span class="status progress">Debug Mode</span>
+            </summary>
+            <div class="mt-4 space-y-2 text-sm">
+                <div class="ops-strip-card" style="margin-top: 0;">Verify the selected base ISO path, generated ISO path, and virtual media URL before starting the physical install.</div>
+                <div class="ops-strip-card" style="margin-top: 0;">Read current iLO before install prep so virtual media insert/eject actions, boot override readback, and allowed reset types are current.</div>
+                <div class="ops-strip-card" style="margin-top: 0;">Start the physical ESXi install only from an explicit operator action in Run Center, then use the log and artifacts here for troubleshooting.</div>
+            </div>
+        </details>
     </section>
 
     <details class="card identity-soft-card">

@@ -734,13 +734,15 @@ class CiscoConsoleBootstrapStateMachine:
         if self.password_policy_failure_detected:
             return "Set a policy-compliant Cisco password and enable secret in Access settings, then rerun Setup Console."
         if self.enable_password_prompt_reached:
+            if self.final_menu_seen:
+                return "Verify the saved enable secret, manually confirm enable reaches Switch#, and if the setup final menu appears again choose 0 and never choose 2, then rerun Setup Console."
             return "Verify the saved enable secret, manually confirm enable reaches Switch#, then rerun Setup Console."
         if self.final_menu_seen:
-            return "On the console, choose 0 at the setup final menu, wait for an IOS CLI prompt, then rerun Setup Console."
+            return "On the console, choose 0 at the setup final menu, never choose 2, wait for an IOS CLI prompt, then rerun Setup Console."
         if self.forced_setup_wizard_detected:
-            return "On the console, complete the remaining setup prompts without saving the wizard config, choose 0 at the final menu, then rerun Setup Console."
+            return "On the console, complete the remaining setup prompts without saving the wizard config, choose 0 at the final menu, never choose 2, then rerun Setup Console."
         if self.initial_dialog_answered_no:
-            return "Press RETURN on the console until the IOS CLI prompt appears; if setup prompts continue, use a policy-compliant enable secret and choose 0 at the final menu."
+            return "Press RETURN on the console until the IOS CLI prompt appears; if setup prompts continue, use a policy-compliant enable secret, choose 0 at the final menu, and never choose 2."
         if prompt_type == "rommon":
             return "Boot IOS from ROMMON or recover the switch image, then rerun Setup Console after an IOS prompt appears."
         return "Connect to the console, press RETURN, note the visible prompt, and rerun Setup Console after the switch shows Switch#."
@@ -1247,8 +1249,8 @@ def default_cisco_switch_config() -> dict[str, Any]:
         "console_baud": 9600,
         "trusted_console_adapter": False,
         "domain_name": "example.local",
-        "dns_servers": ["10.10.8.1"],
-        "ntp_servers": ["10.10.8.1", "10.10.8.2"],
+        "dns_servers": ["192.168.1.1"],
+        "ntp_servers": ["192.168.1.1"],
         "management_vlan": 10,
         "management_ip": "",
         "subnet_mask": "255.255.255.0",

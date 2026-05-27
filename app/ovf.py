@@ -147,29 +147,41 @@ def inspect_ovf_directory(directory_path: str | Path, ovf_name: str = "") -> dic
             "warnings": ["OVF template directory is missing."],
             "candidates": [],
         }
-    candidates = sorted(path for path in directory.iterdir() if path.is_file() and path.suffix.lower() == ".ovf")
+    ovf_candidates = sorted(path for path in directory.iterdir() if path.is_file() and path.suffix.lower() == ".ovf")
+    ova_candidates = sorted(path for path in directory.iterdir() if path.is_file() and path.suffix.lower() == ".ova")
+    candidates = ovf_candidates + ova_candidates
     if ovf_name:
         selected = directory / Path(ovf_name).name
         if selected not in candidates:
             return {
                 "ok": False,
                 "directory": str(directory),
-                "warnings": [f"Requested OVF descriptor was not found in the template directory: {Path(ovf_name).name}"],
+                "warnings": [f"Requested OVF/OVA file was not found in the template directory: {Path(ovf_name).name}"],
                 "candidates": [path.name for path in candidates],
             }
         return inspect_ovf_source(selected)
+    if ovf_candidates:
+        if len(ovf_candidates) > 1:
+            return {
+                "ok": False,
+                "directory": str(directory),
+                "warnings": ["Multiple .ovf descriptors were found. Enter the descriptor file name to use."],
+                "candidates": [path.name for path in candidates],
+            }
+        return inspect_ovf_source(ovf_candidates[0])
+    if ova_candidates:
+        if len(ova_candidates) > 1:
+            return {
+                "ok": False,
+                "directory": str(directory),
+                "warnings": ["Multiple .ova files were found. Enter the OVA file name to use."],
+                "candidates": [path.name for path in candidates],
+            }
+        return inspect_ovf_source(ova_candidates[0])
     if not candidates:
         return {
             "ok": False,
             "directory": str(directory),
-            "warnings": ["No .ovf descriptor was found in the template directory."],
+            "warnings": ["No .ovf descriptor or .ova source was found in the template directory."],
             "candidates": [],
         }
-    if len(candidates) > 1:
-        return {
-            "ok": False,
-            "directory": str(directory),
-            "warnings": ["Multiple .ovf descriptors were found. Enter the descriptor file name to use."],
-            "candidates": [path.name for path in candidates],
-        }
-    return inspect_ovf_source(candidates[0])
