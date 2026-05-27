@@ -74,7 +74,7 @@
                     <label class="block text-sm font-bold text-slate-300 mb-2">Administrator password</label>
                     <input type="password" name="windows_admin_password" value="{{ cfg.get('windows', {}).get('admin_password', '') }}" class="input">
                 </div>
-                <div class="grid grid-cols-1 md:grid-cols-2 gap-3">
+                <div id="vcenter-settings" class="grid grid-cols-1 md:grid-cols-2 gap-3">
                     <div>
                         <label class="block text-sm font-bold text-slate-300 mb-2">vSphere / ESXi host</label>
                         <input type="text" name="windows_vsphere_host" value="{{ cfg.get('windows', {}).get('vsphere_host', '') }}" class="input">

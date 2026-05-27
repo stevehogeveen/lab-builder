@@ -3299,24 +3299,220 @@ def build_dashboard_overview(
         }
 
     module_rows = []
-    for item in cards:
+    card_by_key = {str(item.get("key") or ""): item for item in cards}
+
+    def setup_row_from_card(
+        key: str,
+        *,
+        name: str = "",
+        href: str = "",
+        included: bool = True,
+        configure_href: str = "",
+        configure_label: str = "",
+        target: str = "",
+        summary: str = "",
+    ) -> dict[str, Any]:
+        item = dict(card_by_key.get(key) or {})
+        context = workflow_contexts.get(key, {}) or {}
+        row_name = name or str(item.get("name") or context.get("name") or key.replace("_", " ").title())
+        row_href = href or str(item.get("href") or context.get("review_href") or f"/{key}")
+        row_target = target or str(item.get("target") or context.get("target") or "")
+        if not included:
+            module_rows.append({
+                "key": key,
+                "name": row_name,
+                "label": "Not included",
+                "tone": "muted",
+                "href": configure_href or row_href,
+                "checks_ready": 0,
+                "total_checks": 0,
+                "blockers": 0,
+                "ready": True,
+                "included": False,
+                "summary": summary or (f"Target {row_target}." if row_target and row_target != "Not set" else "Available to configure when this kit needs it."),
+                "configure_href": configure_href or row_href,
+                "configure_label": configure_label or "Configure",
+            })
+            return
+
         blockers = int(item.get("blockers") or 0)
+        checks_ready = int(item.get("checks_ready") or 0)
+        total = int(item.get("total_checks") or 0)
         module_rows.append(
             {
-                "name": item.get("name") or "Module",
+                "key": key,
+                "name": row_name,
                 "label": item.get("state_label") or item.get("label") or "Review",
                 "tone": item.get("tone") or "progress",
-                "href": item.get("href") or "/dashboard",
-                "checks_ready": int(item.get("checks_ready") or 0),
-                "total_checks": int(item.get("total_checks") or 0),
+                "href": row_href,
+                "checks_ready": checks_ready,
+                "total_checks": total,
                 "blockers": blockers,
+                "ready": blockers == 0 and (total == 0 or checks_ready == total),
+                "included": True,
                 "summary": (
                     item.get("next_blocker", {}).get("label")
                     if blockers and isinstance(item.get("next_blocker"), dict)
-                    else workflow_contexts.get(str(item.get("key") or ""), {}).get("planned_summary", "Review saved setup.")
+                    else summary or context.get("planned_summary", "Review saved setup.")
                 ),
+                "configure_href": configure_href or row_href,
+                "configure_label": configure_label or "Configure",
             }
         )
+
+    def append_static_setup_row(
+        *,
+        key: str,
+        name: str,
+        label: str,
+        tone: str,
+        href: str,
+        summary: str,
+        configure_href: str = "",
+        configure_label: str = "",
+        ready: bool = True,
+    ) -> None:
+        module_rows.append(
+            {
+                "key": key,
+                "name": name,
+                "label": label,
+                "tone": tone,
+                "href": href,
+                "checks_ready": 1 if ready else 0,
+                "total_checks": 1,
+                "blockers": 0 if ready else 1,
+                "ready": ready,
+                "included": True,
+                "summary": summary,
+                "configure_href": configure_href or href,
+                "configure_label": configure_label or "Open",
+            }
+        )
+
+    included = cfg.get("included", {}) or {}
+    ip_plan = cfg.get("ip_plan", {}) or {}
+    shared_network = cfg.get("shared_network", {}) or {}
+    shared_ready = bool(str(shared_network.get("subnet") or "").strip() and str(ip_plan.get("gateway") or "").strip())
+    append_static_setup_row(
+        key="global_settings",
+        name="Global Settings",
+        label="Shared defaults" if shared_ready else "Needs defaults",
+        tone="ready" if shared_ready else "pending",
+        href="/global-settings",
+        summary="Subnet, gateway, DNS, module IP assignments, and shared SNMP defaults.",
+        configure_href="/global-settings#address-plan",
+        configure_label="Configure IPs",
+        ready=shared_ready,
+    )
+
+    setup_row_from_card(
+        "ilo",
+        name="iLO",
+        href="/ilo",
+        included=True,
+        configure_href="/ilo",
+        configure_label="Configure IP",
+        target=str((cfg.get("ilo") or {}).get("target_ip") or ip_plan.get("ilo") or (cfg.get("ilo") or {}).get("current_ip") or "Not set"),
+    )
+    setup_row_from_card(
+        "storage",
+        name="Storage setup",
+        href="/storage",
+        included=bool(included.get("storage")),
+        configure_href="/storage",
+        configure_label="Configure target",
+        target=str(resolve_storage_target_host(cfg).get("resolved") or "Not set"),
+        summary="Storage / RAID discovery, target access, current layout, and approval.",
+    )
+    setup_row_from_card(
+        "esxi",
+        name="ESXi setup",
+        href="/esxi",
+        included=bool(included.get("esxi", True)),
+        configure_href="/global-settings#address-plan",
+        configure_label="Configure IP",
+        target=str((cfg.get("esxi") or {}).get("management_ip") or ip_plan.get("esxi") or "Not set"),
+    )
+
+    windows_cfg = cfg.get("windows", {}) or {}
+    vcenter_host = str(windows_cfg.get("vsphere_host") or "").strip()
+    append_static_setup_row(
+        key="vcenter",
+        name="vCenter / vSphere",
+        label="Target saved" if vcenter_host else "Host not set",
+        tone="ready" if vcenter_host else "pending",
+        href="/windows#vcenter-settings",
+        summary=f"VMware endpoint used for template deployment: {vcenter_host or 'not set'}.",
+        configure_href="/windows#vcenter-settings",
+        configure_label="Configure host",
+        ready=bool(vcenter_host),
+    )
+    setup_row_from_card(
+        "windows",
+        name="Windows",
+        href="/windows",
+        included=bool(included.get("windows")),
+        configure_href="/global-settings#address-plan",
+        configure_label="Configure IP",
+        target=str(windows_cfg.get("ip_address") or ip_plan.get("windows") or "Not set"),
+        summary="Windows VM identity, guest IP, vSphere target, WinRM, and install plan.",
+    )
+
+    registered_ovfs = len((((cfg.get("ovf_templates") or {}).get("templates") or {})))
+    append_static_setup_row(
+        key="ovf_templates",
+        name="OVF Templates",
+        label=f"{registered_ovfs} registered" if registered_ovfs else "None registered",
+        tone="ready" if registered_ovfs else "progress",
+        href="/modules/ovf-templates#registered-templates",
+        summary="Register reusable OVF/OVA directories before VM workflows select them.",
+        configure_href="/modules/ovf-templates#register-ovf",
+        configure_label="Register OVF",
+        ready=registered_ovfs > 0,
+    )
+
+    if included.get("qnap"):
+        setup_row_from_card(
+            "qnap",
+            name="QNAP",
+            href="/qnap",
+            included=True,
+            configure_href="/global-settings#address-plan",
+            configure_label="Configure IP",
+            target=str((cfg.get("qnap") or {}).get("ip") or ip_plan.get("qnap") or "Not set"),
+        )
+    setup_row_from_card(
+        "netapp",
+        name="NetApp",
+        href="/modules/netapp",
+        included=bool(included.get("netapp")),
+        configure_href="/global-settings#address-plan",
+        configure_label="Configure IP",
+        target=str((cfg.get("netapp") or {}).get("host") or ip_plan.get("netapp") or "Not set"),
+        summary="ONTAP bootstrap, protocol target, VMware datastore planning, and safe apply.",
+    )
+    setup_row_from_card(
+        "cisco_switch",
+        name="Cisco",
+        href="/cisco",
+        included=bool(included.get("cisco_switch")),
+        configure_href="/global-settings#address-plan",
+        configure_label="Configure IP",
+        target=str((cfg.get("cisco_switch") or {}).get("management_ip") or (cfg.get("cisco_switch") or {}).get("ip") or ip_plan.get("switch") or "Not set"),
+        summary="Console access, management IP, SSH proof, and approved switch config.",
+    )
+    upgrade_card = build_upgrade_helper_card(cfg)
+    card_by_key["upgrade_helper"] = upgrade_card
+    setup_row_from_card(
+        "upgrade_helper",
+        name="Upgrade Helper",
+        href="/upgrade-helper",
+        included=True,
+        configure_href="/upgrade-helper",
+        configure_label="Review gates",
+        summary="Firmware/media gates before execution.",
+    )
 
     return {
         "headline": headline,

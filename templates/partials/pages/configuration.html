@@ -47,6 +47,46 @@
             </div>
         </section>
 
+        <section class="card identity-soft-card" id="address-plan">
+            <div class="flex items-start justify-between gap-3 flex-wrap mb-3">
+                <div>
+                    <div class="text-lg font-semibold">Address plan</div>
+                    <div class="text-sm text-slate-400 mt-1">Set module target addresses before opening each setup page. These values feed the setup pages and Run Center.</div>
+                </div>
+                <button class="btn" type="button" hx-post="/autofill-ip-plan" hx-include="closest form" hx-target="#main-content" hx-swap="outerHTML" data-action-title="Autofilling IP plan" data-action-start="Rebuilding default module addresses from the saved subnet.">Autofill default IPs</button>
+            </div>
+            <div class="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
+                <div>
+                    <label class="block text-sm font-bold text-slate-300 mb-2">iLO target IP</label>
+                    <input type="text" name="ilo_target_ip" value="{{ cfg.get('ilo', {}).get('target_ip', '') or cfg.get('ip_plan', {}).get('ilo', '') }}" class="input">
+                </div>
+                <div>
+                    <label class="block text-sm font-bold text-slate-300 mb-2">ESXi management IP</label>
+                    <input type="text" name="esxi_ip" value="{{ cfg.get('esxi', {}).get('management_ip', '') or cfg.get('ip_plan', {}).get('esxi', '') }}" class="input">
+                </div>
+                <div>
+                    <label class="block text-sm font-bold text-slate-300 mb-2">Windows guest IP</label>
+                    <input type="text" name="windows_ip" value="{{ cfg.get('windows', {}).get('ip_address', '') or cfg.get('ip_plan', {}).get('windows', '') }}" class="input">
+                </div>
+                <div>
+                    <label class="block text-sm font-bold text-slate-300 mb-2">Cisco management IP</label>
+                    <input type="text" name="switch_ip" value="{{ cfg.get('cisco_switch', {}).get('management_ip', '') or cfg.get('cisco_switch', {}).get('ip', '') or cfg.get('ip_plan', {}).get('switch', '') }}" class="input">
+                </div>
+                <div>
+                    <label class="block text-sm font-bold text-slate-300 mb-2">NetApp cluster IP</label>
+                    <input type="text" name="netapp_ip" value="{{ cfg.get('netapp', {}).get('host', '') or cfg.get('ip_plan', {}).get('netapp', '') }}" class="input">
+                </div>
+                <div>
+                    <label class="block text-sm font-bold text-slate-300 mb-2">QNAP IP</label>
+                    <input type="text" name="qnap_ip" value="{{ cfg.get('qnap', {}).get('ip', '') or cfg.get('ip_plan', {}).get('qnap', '') }}" class="input">
+                </div>
+                <div>
+                    <label class="block text-sm font-bold text-slate-300 mb-2">ioSafe IP</label>
+                    <input type="text" name="iosafe_ip" value="{{ cfg.get('iosafe', {}).get('ip', '') or cfg.get('ip_plan', {}).get('iosafe', '') }}" class="input">
+                </div>
+            </div>
+        </section>
+
         <section class="card identity-soft-card">
             <div class="text-lg font-semibold mb-3">Shared DNS and alerts</div>
             <div class="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">

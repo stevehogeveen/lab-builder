@@ -2355,11 +2355,17 @@ def test_global_settings_and_workflow_pages_show_defaults_and_dependencies(clien
     assert "Use a single printable name, 32 characters or less." in global_response.text
     assert "Global Settings" in global_response.text
     assert "Shared DNS and alerts" in global_response.text
+    assert "Address plan" in global_response.text
+    assert "Autofill default IPs" in global_response.text
     assert "Advanced SNMPv3 users" in global_response.text
     assert "Save shared defaults" in global_response.text
     assert "Default addresses" not in global_response.text
     assert "Advanced kit pages" not in global_response.text
-    assert 'name="esxi_ip"' not in global_response.text
+    assert 'name="ilo_target_ip"' in global_response.text
+    assert 'name="esxi_ip"' in global_response.text
+    assert 'name="windows_ip"' in global_response.text
+    assert 'name="switch_ip"' in global_response.text
+    assert 'name="netapp_ip"' in global_response.text
     assert 'name="netapp_host"' not in global_response.text
     assert 'name="cisco_switch_hostname"' not in global_response.text
     assert "Open reports &amp; technical details" not in global_response.text
@@ -11261,6 +11267,22 @@ def test_dashboard_shows_recommended_next_step_and_workflow_cards(client):
     assert "Open next step" in response.text
     assert "Build path" in response.text
     assert "No hidden steps" in response.text
+    assert "Filter build path" in response.text
+    assert "Needs attention" in response.text
+    assert 'data-dashboard-filter="ready"' in response.text
+    assert "dashboard-path-progress" in response.text
+    assert "data-dashboard-path-row" in response.text
+    assert "Storage setup" in response.text
+    assert "vCenter / vSphere" in response.text
+    assert "OVF Templates" in response.text
+    assert "Open Run Center" in response.text
+    assert "Configure IPs" in response.text
+    assert "Configure target" in response.text
+    assert "Configure host" in response.text
+    assert "Register OVF" in response.text
+    assert "/global-settings#address-plan" in response.text
+    assert "/windows#vcenter-settings" in response.text
+    assert "/modules/ovf-templates" in response.text
     assert "Configure. Prove. Approve." in response.text
     assert "Collect evidence" in response.text
     assert "Kit state" in response.text

@@ -91,44 +91,65 @@
 
     <section class="dashboard-guidance-grid">
         <div class="dashboard-path-panel">
-            <div class="dashboard-panel-heading">
+            <div class="dashboard-panel-heading dashboard-panel-heading-with-tools">
                 <div>
                     <div class="dashboard-kicker">Continue setup</div>
                     <div class="text-lg font-semibold">Build path</div>
                     <div class="text-sm text-slate-400 mt-1">No hidden steps: configure, prove, approve, then run.</div>
                 </div>
-                <span class="status {{ dashboard_overview.tone }}">{{ dashboard_overview.headline }}</span>
+                <div class="dashboard-path-tools" data-dashboard-filter-controls>
+                    <span class="status {{ dashboard_overview.tone }}">{{ dashboard_overview.headline }}</span>
+                    <div class="dashboard-filter-toolbar" role="group" aria-label="Filter build path">
+                        <button class="dashboard-filter-button is-active" type="button" data-dashboard-filter="all" aria-pressed="true">All</button>
+                        <button class="dashboard-filter-button" type="button" data-dashboard-filter="attention" aria-pressed="false">Needs attention</button>
+                        <button class="dashboard-filter-button" type="button" data-dashboard-filter="ready" aria-pressed="false">Ready</button>
+                    </div>
+                    <div class="dashboard-filter-count" data-dashboard-filter-count>{{ dashboard_overview.module_rows | length + 1 }} steps shown</div>
+                </div>
             </div>
             <div class="dashboard-path-list">
                 {% for item in dashboard_overview.module_rows %}
                 {% set is_next_step = item.href == recommended_next_step.href %}
-                <a class="dashboard-path-step dashboard-path-step-{{ item.tone }}{% if is_next_step %} dashboard-path-step-active{% endif %}" href="{{ item.href }}">
-                    <span class="dashboard-path-index">{{ loop.index }}</span>
-                    <span class="dashboard-path-copy">
-                        <span class="dashboard-path-title">{{ item.name }}</span>
-                        <span class="dashboard-path-summary truncate-single" title="{{ item.summary }}">{{ item.summary }}</span>
-                    </span>
+                {% set path_progress = ((item.checks_ready / item.total_checks) * 100) | round(0, 'floor') if item.total_checks else 0 %}
+                <div class="dashboard-path-step dashboard-path-step-{{ item.tone }}{% if is_next_step %} dashboard-path-step-active{% endif %}" data-dashboard-path-row data-dashboard-tone="{{ item.tone }}" data-dashboard-blockers="{{ item.blockers }}" data-dashboard-ready="{{ 'true' if item.ready else 'false' }}" data-dashboard-active="{{ 'true' if is_next_step else 'false' }}">
+                    <a class="dashboard-path-main" href="{{ item.href }}">
+                        <span class="dashboard-path-index">{{ loop.index }}</span>
+                        <span class="dashboard-path-copy">
+                            <span class="dashboard-path-title">{{ item.name }}</span>
+                            <span class="dashboard-path-summary truncate-single" title="{{ item.summary }}">{{ item.summary }}</span>
+                            <span class="dashboard-path-progress" style="--path-progress: {{ path_progress }}%;" aria-hidden="true"><span></span></span>
+                        </span>
+                    </a>
                     <span class="dashboard-path-meta">
                         {% if is_next_step %}
                         <span class="status progress">Next</span>
                         {% endif %}
                         <span class="status {{ item.tone }}">{{ item.label }}</span>
+                        {% if item.configure_href %}
+                        <a class="btn dashboard-path-action" href="{{ item.configure_href }}">{{ item.configure_label or 'Configure' }}</a>
+                        {% endif %}
                     </span>
-                </a>
+                </div>
                 {% endfor %}
-                <a class="dashboard-path-step dashboard-path-step-progress{% if recommended_next_step.href == '/execution' %} dashboard-path-step-active{% endif %}" href="/execution">
-                    <span class="dashboard-path-index">{{ dashboard_overview.module_rows | length + 1 }}</span>
-                    <span class="dashboard-path-copy">
-                        <span class="dashboard-path-title">Run Center</span>
-                        <span class="dashboard-path-summary">Review the approved plan, launch the run, and watch live proof.</span>
-                    </span>
+                {% set run_center_ready = dashboard_overview.total_blockers == 0 %}
+                <div class="dashboard-path-step dashboard-path-step-{{ 'ready' if run_center_ready else 'progress' }}{% if recommended_next_step.href == '/execution' %} dashboard-path-step-active{% endif %}" data-dashboard-path-row data-dashboard-tone="{{ 'ready' if run_center_ready else 'progress' }}" data-dashboard-blockers="0" data-dashboard-ready="{{ 'true' if run_center_ready else 'false' }}" data-dashboard-active="{{ 'true' if recommended_next_step.href == '/execution' else 'false' }}">
+                    <a class="dashboard-path-main" href="/execution">
+                        <span class="dashboard-path-index">{{ dashboard_overview.module_rows | length + 1 }}</span>
+                        <span class="dashboard-path-copy">
+                            <span class="dashboard-path-title">Run Center</span>
+                            <span class="dashboard-path-summary">Review the approved plan, launch the run, and watch live proof.</span>
+                            <span class="dashboard-path-progress" style="--path-progress: {{ dashboard_overview.readiness_percent }}%;" aria-hidden="true"><span></span></span>
+                        </span>
+                    </a>
                     <span class="dashboard-path-meta">
                         {% if recommended_next_step.href == '/execution' %}
                         <span class="status progress">Next</span>
                         {% endif %}
                         <span class="status progress">Approve</span>
+                        <a class="btn dashboard-path-action" href="/execution">Open Run Center</a>
                     </span>
-                </a>
+                </div>
+                <div class="dashboard-path-empty" data-dashboard-filter-empty hidden>No build-path rows match this lens.</div>
             </div>
         </div>
 

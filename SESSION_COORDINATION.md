@@ -134,6 +134,8 @@ Copy this block and update it in place.
   - 2026-05-15 America/Toronto - Added command palette, compact-view toggle, skip link, and UX product-principles notes.
   - 2026-05-15 America/Toronto - Claimed app-wide readiness issue drawer slice.
   - 2026-05-15 America/Toronto - Added global readiness issue drawer with blocker summaries and page navigation; full regression passed.
+  - 2026-05-27 12:58 EDT - Claimed dashboard visual-reference pass: build-path filtering, small microinteractions, progressive disclosure notes, and focused tests.
+  - 2026-05-27 13:05 EDT - Added dashboard build-path lenses, per-row progress bars, UX reference notes, and verified tests/browser smoke checks.
 - Next intended change:
   - Continue with standardized empty-state copy and exact-field issue anchors when safe.
 
