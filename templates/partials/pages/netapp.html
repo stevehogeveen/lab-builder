@@ -7,7 +7,6 @@
     {% set bootstrap = settings.get('bootstrap', payload.get('bootstrap', {})) %}
     {% set bootstrap_checklist = settings.get('bootstrap_checklist', payload.get('bootstrap_checklist', [])) %}
     {% set bootstrap_warnings = settings.get('bootstrap_warnings', payload.get('bootstrap_warnings', [])) %}
-    {% set raw = discovery.get('raw', {}) %}
     {% set node_details = discovery.get('node_details', []) %}
     {% set disk_inventory = discovery.get('disk_inventory', []) %}
     {% set lif_details = discovery.get('lif_details', []) %}
@@ -28,7 +27,6 @@
     {% set vmware_probe = payload.get('vmware_probe', vmware_checks.get('nfs_mount', {})) %}
     {% set upgrade = adaptive.get('upgrade_posture', {}) %}
     {% set capability_matrix = adaptive.get('capability_matrix', []) %}
-    {% set capability_status = adaptive.get('capability_status', {}) %}
     {% set selected_protocol = (plan.get('storage_protocol') or cfg.get('netapp', {}).get('storage_protocol', 'nfs')) %}
     {% set export_paths = netapp_export_paths or {} %}
     {% set has_snapshot = discovery.get('cluster_name') or discovery.get('node_count') or discovery.get('disk_count') %}
@@ -39,7 +37,6 @@
     {% set planned_cluster_mgmt_ip = bootstrap.get('cluster_mgmt_ip') or '' %}
     {% set planned_node_01_mgmt_ip = bootstrap.get('node_01_mgmt_ip') or '' %}
     {% set planned_node_02_mgmt_ip = bootstrap.get('node_02_mgmt_ip') or '' %}
-    {% set connection_target_ip = cfg.get('netapp', {}).get('host', '') %}
     {% set discovered_cluster_name = discovery.get('cluster_name') or '' %}
     {% set discovered_cluster_mgmt_ip = discovery.get('discovered_cluster_mgmt_ip') or '' %}
     {% set discovered_node_mgmt_ips = discovery.get('discovered_node_mgmt_ip_list', []) %}
@@ -51,7 +48,6 @@
     {% set node_mgmt_mismatch = (planned_node_01_mgmt_ip and discovered_node_mgmt_map and discovered_node_mgmt_ips and planned_node_01_mgmt_ip not in discovered_node_mgmt_ips) or (planned_node_02_mgmt_ip and discovered_node_mgmt_map and discovered_node_mgmt_ips and planned_node_02_mgmt_ip not in discovered_node_mgmt_ips) %}
     {% set active_protocols = discovery.get('enabled_protocols', []) %}
     {% set legacy_warning_ns = namespace(value='') %}
-    {% set shared_upgrade_entry = (upgrade_helper_summary.get('planner', {}).get('entries', []) | selectattr('key', 'equalto', 'netapp') | list | first) if upgrade_helper_summary else {} %}
     {% for warning in bootstrap_warnings %}
         {% if '.40/.41/.42/.43' in warning %}
             {% set legacy_warning_ns.value = warning %}
@@ -59,54 +55,69 @@
     {% endfor %}
     {% set legacy_convention_warning = legacy_warning_ns.value %}
 
-    <div class="flex items-start justify-between gap-4">
+    <div class="flex items-start justify-between gap-4 flex-wrap">
         <div>
             <h2 class="text-2xl font-bold title-with-icon"><span class="page-icon icon-tone-{{ page_precheck_summary.tone if page_precheck_summary else ('ready' if bootstrap_complete else 'pending') }}" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><ellipse cx="12" cy="6" rx="7" ry="3"/><path d="M5 6v6c0 1.7 3.1 3 7 3s7-1.3 7-3V6"/><path d="M8 12.5h8"/><path d="M9 17.5h6"/></svg></span><span>NetApp setup</span></h2>
-            <div class="text-sm text-slate-400 mt-1">{{ 'Separate the bootstrap plan, API target, and discovered reality.' if bootstrap_complete or has_snapshot else 'Finish bootstrap so the app can talk to ONTAP.' }}</div>
+            <div class="text-sm text-slate-400 mt-1">Keep this page simple: connect, read, review, then apply. The noisy proof stays in the detail drawer.</div>
         </div>
-        <span class="status {{ 'ready' if bootstrap_complete else 'pending' }}">{{ 'Bootstrap complete' if bootstrap_complete else 'Bootstrap required' }}</span>
+        <span class="status {{ 'ready' if bootstrap_complete else 'pending' }}">{{ 'Bootstrap complete' if bootstrap_complete else 'Bootstrap needed' }}</span>
     </div>
 
     {% set precheck_summary = page_precheck_summary %}
     {% include "partials/components/precheck_summary.html" %}
 
+    <section class="card workflow-hero-card">
+        <div class="flex items-start justify-between gap-4 flex-wrap">
+            <div>
+                <div class="text-lg font-semibold">What to do next</div>
+                <div class="text-sm text-slate-400 mt-1">
+                    {% if not cfg.get('netapp', {}).get('host') %}
+                    Enter the cluster management IP and test the connection.
+                    {% elif not bootstrap_complete %}
+                    Finish the console/bootstrap IPs, then mark bootstrap complete.
+                    {% elif not has_snapshot %}
+                    Read the current NetApp so the app knows what is really there.
+                    {% elif warnings or bootstrap_warnings or cluster_name_mismatch or cluster_mgmt_mismatch or node_mgmt_mismatch %}
+                    Review the warning shown below before applying changes.
+                    {% else %}
+                    Review the simple summary, then apply safe NetApp changes when ready.
+                    {% endif %}
+                </div>
+            </div>
+            <div class="actions">
+                {% if has_snapshot %}<span class="status ready">Read complete</span>{% else %}<span class="status progress">Waiting for read</span>{% endif %}
+            </div>
+        </div>
+    </section>
+
     <div class="ops-metric-grid">
         <div class="ops-metric-card">
             <div class="dashboard-kicker">Cluster</div>
             <div class="font-semibold">{{ discovered_cluster_name or planned_cluster_name or 'Not set' }}</div>
-            <div class="mt-2">
-                <span class="status {{ 'danger' if cluster_name_mismatch else ('ready' if discovered_cluster_name else 'progress') }}">{{ 'Mismatch' if cluster_name_mismatch else ('Discovered' if discovered_cluster_name else 'Planned') }}</span>
-            </div>
+            <div class="mt-2"><span class="status {{ 'danger' if cluster_name_mismatch else ('ready' if discovered_cluster_name else 'progress') }}">{{ 'Mismatch' if cluster_name_mismatch else ('Discovered' if discovered_cluster_name else 'Planned') }}</span></div>
         </div>
         <div class="ops-metric-card">
-            <div class="dashboard-kicker">Cluster mgmt</div>
-            <div class="font-semibold">{{ discovered_cluster_mgmt_ip or planned_cluster_mgmt_ip or 'Not set' }}</div>
-            <div class="mt-2">
-                <span class="status {{ 'danger' if cluster_mgmt_mismatch else ('ready' if discovered_cluster_mgmt_ip else 'progress') }}">{{ 'Mismatch' if cluster_mgmt_mismatch else ('Discovered' if discovered_cluster_mgmt_ip else 'Planned') }}</span>
-            </div>
-        </div>
-        <div class="ops-metric-card">
-            <div class="dashboard-kicker">Node mgmt</div>
-            <div class="font-semibold">{{ discovered_node_mgmt_ips | join(' / ') if discovered_node_mgmt_ips else ((planned_node_01_mgmt_ip or '?') ~ ' / ' ~ (planned_node_02_mgmt_ip or '?')) }}</div>
-            <div class="mt-2">
-                <span class="status {{ 'danger' if node_mgmt_mismatch else ('ready' if discovered_node_mgmt_ips else 'progress') }}">{{ 'Mismatch' if node_mgmt_mismatch else ('Discovered' if discovered_node_mgmt_ips else 'Planned') }}</span>
-            </div>
-        </div>
-        <div class="ops-metric-card">
-            <div class="dashboard-kicker">Protocol</div>
-            <div class="font-semibold">{{ selected_protocol | upper }}{% if active_protocols %} / {{ active_protocols | join(', ') | upper }}{% endif %}</div>
+            <div class="dashboard-kicker">API / Cluster mgmt</div>
+            <div class="font-semibold">{{ cfg.get('netapp', {}).get('host') or discovered_cluster_mgmt_ip or planned_cluster_mgmt_ip or 'Not set' }}</div>
+            <div class="mt-2"><span class="status {{ 'danger' if cluster_mgmt_mismatch else ('ready' if discovered_cluster_mgmt_ip else 'progress') }}">{{ 'Mismatch' if cluster_mgmt_mismatch else ('Discovered' if discovered_cluster_mgmt_ip else 'Planned') }}</span></div>
         </div>
         <div class="ops-metric-card">
             <div class="dashboard-kicker">Nodes</div>
-            <div class="font-semibold">{{ discovery.get('node_count') or 0 }}</div>
+            <div class="font-semibold">{{ discovery.get('node_count') or (discovered_node_mgmt_ips|length) or 0 }}</div>
+            <div class="mt-2"><span class="status {{ 'danger' if node_mgmt_mismatch else ('ready' if discovered_node_mgmt_ips else 'progress') }}">{{ 'Mismatch' if node_mgmt_mismatch else ('Discovered' if discovered_node_mgmt_ips else 'Planned') }}</span></div>
+        </div>
+        <div class="ops-metric-card">
+            <div class="dashboard-kicker">Protocol</div>
+            <div class="font-semibold">{{ selected_protocol | upper }}</div>
+            <div class="text-xs text-slate-400 mt-2">{{ active_protocols | join(', ') | upper if active_protocols else 'Not read yet' }}</div>
         </div>
         <div class="ops-metric-card">
             <div class="dashboard-kicker">Disks</div>
             <div class="font-semibold">{{ discovery.get('disk_count') or 0 }}</div>
         </div>
         <div class="ops-metric-card">
-            <div class="dashboard-kicker">Warnings</div>
-            <div class="font-semibold">{{ (warnings|length) if has_snapshot else (bootstrap_warnings|length) }}</div>
+            <div class="dashboard-kicker">Needs attention</div>
+            <div class="font-semibold">{{ (warnings|length) + (bootstrap_warnings|length) + (1 if cluster_name_mismatch else 0) + (1 if cluster_mgmt_mismatch else 0) + (1 if node_mgmt_mismatch else 0) }}</div>
         </div>
     </div>
 
@@ -121,13 +132,14 @@
     <div class="{% if netapp_upgrade_blocked and not netapp_upgrade_override %}upgrade-gated-content{% endif %}">
     <form hx-post="/modules/netapp/save-settings" hx-target="#main-content" hx-swap="outerHTML" class="space-y-4">
         <input type="hidden" name="bootstrap_complete" value="{{ 'true' if bootstrap_complete else 'false' }}">
-        <section class="card workflow-hero-card">
-            <div class="text-lg font-semibold mb-3">Connection Target</div>
+
+        <section class="card">
+            <div class="text-lg font-semibold mb-2">1. Connect to ONTAP</div>
+            <div class="text-sm text-slate-400 mb-4">The app talks to NetApp through the cluster management IP.</div>
             <div class="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-3">
                 <div>
-                    <label class="block text-sm font-bold text-slate-300 mb-2">ONTAP API / Cluster Management IP</label>
+                    <label class="block text-sm font-bold text-slate-300 mb-2">Cluster management IP</label>
                     <input class="input" name="netapp_host" value="{{ cfg.get('netapp', {}).get('host', '') }}" placeholder="10.10.10.45">
-                    <div class="text-xs text-slate-400 mt-2">Current API target. This is the address the app uses to talk to ONTAP.</div>
                 </div>
                 <div>
                     <label class="block text-sm font-bold text-slate-300 mb-2">Username</label>
@@ -138,7 +150,7 @@
                     <input class="input" type="password" name="netapp_password" value="" placeholder="Enter password">
                 </div>
                 <div>
-                    <label class="block text-sm font-bold text-slate-300 mb-2">Storage protocol</label>
+                    <label class="block text-sm font-bold text-slate-300 mb-2">Storage type</label>
                     <select class="input" name="netapp_storage_protocol">
                         <option value="nfs" {% if selected_protocol == 'nfs' %}selected{% endif %}>NFS</option>
                         <option value="iscsi" {% if selected_protocol == 'iscsi' %}selected{% endif %}>iSCSI</option>
@@ -146,99 +158,73 @@
                 </div>
             </div>
             <div class="actions mt-4">
-                <button class="btn" formaction="/modules/netapp/test-connection" formmethod="post" type="submit">Test ONTAP API connection</button>
+                <button class="btn btn-primary action-button" formaction="/modules/netapp/test-connection" formmethod="post" type="submit">Test connection</button>
                 {% if bootstrap_complete %}
                 <button class="btn action-button" formaction="/modules/netapp/discover-page" formmethod="post" type="submit">Read current NetApp</button>
-                <button class="btn" formaction="/modules/netapp/validate-page" formmethod="post" type="submit">Validate plan</button>
+                <button class="btn" formaction="/modules/netapp/validate-page" formmethod="post" type="submit">Check plan</button>
                 <button class="btn" formaction="/modules/netapp/export-plan" formmethod="post" type="submit">Export plan</button>
-                <button class="btn" formaction="/modules/netapp/apply-page" formmethod="post" type="submit">Apply safe NetApp changes</button>
+                <button class="btn btn-primary action-button" formaction="/modules/netapp/apply-page" formmethod="post" type="submit">Apply safe changes</button>
                 {% endif %}
             </div>
             {% if connection_test %}
             <div class="result mt-4">
-                <div class="font-semibold">API connection test</div>
-                <div class="text-sm text-slate-400 mt-1">Target {{ connection_test.get('target_host') or 'not set' }} | Auth {{ 'ok' if connection_test.get('api_auth_ok') else 'failed' }}{% if connection_test.get('cluster_name') %} | Cluster {{ connection_test.get('cluster_name') }}{% endif %}</div>
+                <div class="font-semibold">Last connection test</div>
+                <div class="text-sm text-slate-400 mt-1">Target {{ connection_test.get('target_host') or 'not set' }} | Auth {{ 'OK' if connection_test.get('api_auth_ok') else 'failed' }}{% if connection_test.get('cluster_name') %} | Cluster {{ connection_test.get('cluster_name') }}{% endif %}</div>
             </div>
             {% endif %}
         </section>
 
         {% if cfg.get('included', {}).get('netapp') %}
-        <section class="card workflow-hero-card">
-            <div class="flex items-start justify-between gap-4 mb-3">
+        <section class="card">
+            <div class="flex items-start justify-between gap-4 flex-wrap mb-3">
                 <div>
-                    <div class="text-lg font-semibold">Bootstrap Plan</div>
-                    <div class="text-sm text-slate-200 mt-1">These are planned manual console-stage IPs from the kit subnet. They are not treated as discovered ONTAP reality.</div>
+                    <div class="text-lg font-semibold">2. Console/bootstrap IPs</div>
+                    <div class="text-sm text-slate-400 mt-1">Use these only to get the cluster reachable. After that, the app uses ONTAP API.</div>
                 </div>
-                <span class="status {{ 'ready' if bootstrap_complete else 'pending' }}">{{ 'Complete' if bootstrap_complete else 'Manual' }}</span>
+                <span class="status {{ 'ready' if bootstrap_complete else 'pending' }}">{{ 'Done' if bootstrap_complete else 'Manual step' }}</span>
             </div>
-            <div class="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-6 gap-3">
-                <div>
-                    <label class="block text-sm font-bold text-slate-300 mb-1">{{ bootstrap.get('controller_a_name') or 'Controller A' }} {{ bootstrap.get('sp_port_name') or 'SP/BMC' }}</label>
-                    <input class="input" name="netapp_sp_a_ip" value="{{ bootstrap.get('sp_a_ip') or '' }}">
-                </div>
-                <div>
-                    <label class="block text-sm font-bold text-slate-300 mb-1">{{ bootstrap.get('controller_b_name') or 'Controller B' }} {{ bootstrap.get('sp_port_name') or 'SP/BMC' }}</label>
-                    <input class="input" name="netapp_sp_b_ip" value="{{ bootstrap.get('sp_b_ip') or '' }}">
-                </div>
-                <div>
-                    <label class="block text-sm font-bold text-slate-300 mb-1">Cluster Management ({{ bootstrap.get('cluster_mgmt_port_name') or 'e0M' }})</label>
-                    <input class="input" name="netapp_cluster_mgmt_ip" value="{{ bootstrap.get('cluster_mgmt_ip') or '' }}">
-                </div>
-                <div>
-                    <label class="block text-sm font-bold text-slate-300 mb-1">{{ bootstrap.get('controller_a_name') or 'Controller A' }} Management ({{ bootstrap.get('node_mgmt_port_name') or 'e0M' }})</label>
-                    <input class="input" name="netapp_node_01_mgmt_ip" value="{{ bootstrap.get('node_01_mgmt_ip') or '' }}">
-                </div>
-                <div>
-                    <label class="block text-sm font-bold text-slate-300 mb-1">{{ bootstrap.get('controller_b_name') or 'Controller B' }} Management ({{ bootstrap.get('node_mgmt_port_name') or 'e0M' }})</label>
-                    <input class="input" name="netapp_node_02_mgmt_ip" value="{{ bootstrap.get('node_02_mgmt_ip') or '' }}">
-                </div>
-                <div>
-                    <label class="block text-sm font-bold text-slate-300 mb-1">SVM Management ({{ bootstrap.get('svm_mgmt_port_name') or 'e0M' }})</label>
-                    <input class="input" name="netapp_svm_mgmt_ip" value="{{ bootstrap.get('svm_mgmt_ip') or '' }}">
-                </div>
-            </div>
-            <div class="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-3 mt-3">
-                <div><div class="dashboard-kicker">SP A / SP B</div><div class="font-semibold">{{ bootstrap.get('sp_a_ip') or '?' }} / {{ bootstrap.get('sp_b_ip') or '?' }}</div></div>
-                <div><div class="dashboard-kicker">Cluster / Nodes</div><div class="font-semibold">{{ bootstrap.get('cluster_mgmt_ip') or '?' }} / {{ bootstrap.get('node_01_mgmt_ip') or '?' }} / {{ bootstrap.get('node_02_mgmt_ip') or '?' }}</div></div>
-                <div><div class="dashboard-kicker">SVM Management</div><div class="font-semibold">{{ bootstrap.get('svm_mgmt_ip') or 'Not set' }}</div></div>
-                <div><div class="dashboard-kicker">Admin password</div><div class="font-semibold">{{ bootstrap.get('admin_password_masked') or 'Not set' }}</div></div>
+            <div class="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-3">
+                <div><label class="block text-sm font-bold text-slate-300 mb-1">Controller A SP</label><input class="input" name="netapp_sp_a_ip" value="{{ bootstrap.get('sp_a_ip') or '' }}"></div>
+                <div><label class="block text-sm font-bold text-slate-300 mb-1">Controller B SP</label><input class="input" name="netapp_sp_b_ip" value="{{ bootstrap.get('sp_b_ip') or '' }}"></div>
+                <div><label class="block text-sm font-bold text-slate-300 mb-1">Cluster management</label><input class="input" name="netapp_cluster_mgmt_ip" value="{{ bootstrap.get('cluster_mgmt_ip') or '' }}"></div>
+                <div><label class="block text-sm font-bold text-slate-300 mb-1">Controller A management</label><input class="input" name="netapp_node_01_mgmt_ip" value="{{ bootstrap.get('node_01_mgmt_ip') or '' }}"></div>
+                <div><label class="block text-sm font-bold text-slate-300 mb-1">Controller B management</label><input class="input" name="netapp_node_02_mgmt_ip" value="{{ bootstrap.get('node_02_mgmt_ip') or '' }}"></div>
+                <div><label class="block text-sm font-bold text-slate-300 mb-1">SVM management</label><input class="input" name="netapp_svm_mgmt_ip" value="{{ bootstrap.get('svm_mgmt_ip') or '' }}"></div>
             </div>
             <div class="actions mt-4">
-                <button class="btn" formaction="/modules/netapp/bootstrap-test/sp_a" formmethod="post" type="submit">Ping planned SP A</button>
-                <button class="btn" formaction="/modules/netapp/bootstrap-test/sp_b" formmethod="post" type="submit">Ping planned SP B</button>
-                <button class="btn" formaction="/modules/netapp/bootstrap-test/node_01_mgmt" formmethod="post" type="submit">Ping planned Node 1 management</button>
-                <button class="btn" formaction="/modules/netapp/bootstrap-test/node_02_mgmt" formmethod="post" type="submit">Ping planned Node 2 management</button>
+                <button class="btn" formaction="/modules/netapp/bootstrap-test/sp_a" formmethod="post" type="submit">Ping SP A</button>
+                <button class="btn" formaction="/modules/netapp/bootstrap-test/sp_b" formmethod="post" type="submit">Ping SP B</button>
+                <button class="btn" formaction="/modules/netapp/bootstrap-test/node_01_mgmt" formmethod="post" type="submit">Ping Node A</button>
+                <button class="btn" formaction="/modules/netapp/bootstrap-test/node_02_mgmt" formmethod="post" type="submit">Ping Node B</button>
+                <button class="btn btn-primary" formaction="/modules/netapp/bootstrap-complete" formmethod="post" name="bootstrap_complete" value="{{ 'false' if bootstrap_complete else 'true' }}" type="submit">{{ 'Mark not done' if bootstrap_complete else 'Mark done' }}</button>
             </div>
-            <div class="actions mt-3">
-                <button class="btn" formaction="/modules/netapp/bootstrap-complete" formmethod="post" name="bootstrap_complete" value="{{ 'false' if bootstrap_complete else 'true' }}" type="submit">{{ 'Mark bootstrap incomplete' if bootstrap_complete else 'Mark bootstrap complete' }}</button>
+            {% if bootstrap_test %}
+            <div class="result mt-4">
+                <div class="font-semibold">Last ping</div>
+                <div class="text-sm text-slate-400 mt-1">{{ bootstrap_test.get('target', '') | replace('_', ' ') | title }} | {{ bootstrap_test.get('host') or 'Not set' }} | {{ 'Reachable' if bootstrap_test.get('reachable') else 'No response' }}</div>
             </div>
-            {% if legacy_convention_warning %}
-            <div class="result mt-4" style="border-color: rgba(251, 191, 36, 0.35);">
-                <div class="font-semibold">Legacy NetApp convention</div>
-                <div class="text-sm text-slate-300 mt-1">{{ legacy_convention_warning }}</div>
-                <div class="actions mt-3">
-                    <button class="btn" formaction="/modules/netapp/update-convention" formmethod="post" type="submit">Update to current NetApp convention</button>
+            {% endif %}
+            {% if legacy_convention_warning or cluster_mgmt_mismatch %}
+            <details class="mt-4">
+                <summary class="summary-row"><span class="text-sm font-bold text-slate-300">Bootstrap warnings</span><span class="status danger">review</span></summary>
+                <div class="ops-list mt-3">
+                    {% if legacy_convention_warning %}<div class="result" style="margin-top: 0;">{{ legacy_convention_warning }}<div class="actions mt-3"><button class="btn" formaction="/modules/netapp/update-convention" formmethod="post" type="submit">Update to current convention</button></div></div>{% endif %}
+                    {% if cluster_mgmt_mismatch %}<div class="result" style="margin-top: 0;">Planned cluster management IP is {{ planned_cluster_mgmt_ip }}, but ONTAP says {{ discovered_cluster_mgmt_ip }}.</div>{% endif %}
                 </div>
-            </div>
+            </details>
             {% endif %}
-            {% if cluster_mgmt_mismatch %}
-            <div class="result mt-4" style="border-color: rgba(251, 191, 36, 0.35);">
-                <div class="font-semibold">Cluster management mismatch</div>
-                <div class="text-sm text-slate-300 mt-1">Planned cluster management IP is {{ planned_cluster_mgmt_ip }}, but discovered cluster_mgmt LIF is {{ discovered_cluster_mgmt_ip }}. Use discovered IP for API connection or update the kit IP plan.</div>
-            </div>
-            {% endif %}
-            <details class="card card-compact mt-4">
-                <summary class="summary-row"><span class="text-sm font-bold text-slate-300">Generated bootstrap checklist</span><span class="status progress">expand</span></summary>
+            <details class="mt-4">
+                <summary class="summary-row"><span class="text-sm font-bold text-slate-300">Show manual checklist</span><span class="status progress">optional</span></summary>
                 <div class="ops-detail-grid mt-4">
                     {% for section in bootstrap_checklist %}
                     <div class="card card-compact">
                         <div class="font-semibold">{{ section.get('title') }}</div>
                         <div class="text-sm text-slate-200 mt-2 space-y-1">
-                            {% for item in section.get('items', []) %}
-                            <div>{{ item }}</div>
-                            {% endfor %}
+                            {% for item in section.get('items', []) %}<div>{{ item }}</div>{% endfor %}
                         </div>
                     </div>
+                    {% else %}
+                    <div class="text-sm text-slate-300">No checklist has been generated yet.</div>
                     {% endfor %}
                 </div>
             </details>
@@ -246,392 +232,221 @@
         {% endif %}
 
         {% if bootstrap_complete and has_snapshot %}
-        <section class="card identity-soft-card ops-card-tight">
-            <div class="flex items-start justify-between gap-4 mb-3">
+        <section class="card">
+            <div class="flex items-start justify-between gap-4 flex-wrap mb-3">
                 <div>
-                    <div class="font-semibold">Discovered Reality</div>
-                    <div class="text-sm text-slate-400 mt-1">These values came from ONTAP after the API connection succeeded.</div>
+                    <div class="text-lg font-semibold">3. What the app found</div>
+                    <div class="text-sm text-slate-400 mt-1">Simple read-only summary from ONTAP.</div>
                 </div>
-                <div class="actions">
-                    <button class="btn" formaction="/modules/netapp/use-discovered-values" formmethod="post" type="submit">Use discovered values</button>
-                </div>
+                <div class="actions"><button class="btn" formaction="/modules/netapp/use-discovered-values" formmethod="post" type="submit">Use discovered values</button></div>
             </div>
-            <div class="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-3">
-                <div><div class="dashboard-kicker">Discovered cluster</div><div class="font-semibold">{{ discovered_cluster_name or 'Not found' }}</div></div>
-                <div><div class="dashboard-kicker">Discovered cluster mgmt</div><div class="font-semibold">{{ discovered_cluster_mgmt_ip or 'Not found' }}</div></div>
-                <div><div class="dashboard-kicker">Discovered node mgmt</div><div class="font-semibold">{{ discovered_node_mgmt_ips | join(' / ') if discovered_node_mgmt_ips else 'Not found' }}</div></div>
-                <div><div class="dashboard-kicker">Discovered SVMs</div><div class="font-semibold">{{ discovery.get('svms', []) | join(', ') if discovery.get('svms') else 'None' }}</div></div>
+            <div class="ops-detail-grid">
+                <div class="card card-compact"><div class="dashboard-kicker">Cluster</div><div class="font-semibold">{{ discovered_cluster_name or 'Not found' }}</div></div>
+                <div class="card card-compact"><div class="dashboard-kicker">Cluster management</div><div class="font-semibold">{{ discovered_cluster_mgmt_ip or 'Not found' }}</div></div>
+                <div class="card card-compact"><div class="dashboard-kicker">Node management</div><div class="font-semibold">{{ discovered_node_mgmt_ips | join(' / ') if discovered_node_mgmt_ips else 'Not found' }}</div></div>
+                <div class="card card-compact"><div class="dashboard-kicker">SVMs</div><div class="font-semibold">{{ discovery.get('svms', []) | join(', ') if discovery.get('svms') else 'None' }}</div></div>
             </div>
-            <div class="grid grid-cols-1 md:grid-cols-2 gap-3 mt-3">
+            <div class="ops-detail-grid mt-3">
                 <div class="card card-compact">
-                    <div class="font-semibold mb-2">Discovered NFS LIFs</div>
+                    <div class="font-semibold mb-2">NFS LIFs</div>
                     <div class="ops-list">
-                        {% for lif in discovered_nfs_lifs %}
-                        <div class="text-sm text-slate-300">{{ lif.get('name') }} | {{ lif.get('address') or 'no IP' }} | {{ lif.get('home_node') or '?' }}:{{ lif.get('home_port') or '?' }}</div>
-                        {% else %}
-                        <div class="text-sm text-slate-400">No NFS LIFs discovered.</div>
-                        {% endfor %}
+                        {% for lif in discovered_nfs_lifs %}<div class="text-sm text-slate-300">{{ lif.get('name') }} | {{ lif.get('address') or 'no IP' }} | {{ lif.get('home_node') or '?' }}:{{ lif.get('home_port') or '?' }}</div>{% else %}<div class="text-sm text-slate-400">No NFS LIFs found.</div>{% endfor %}
                     </div>
                 </div>
                 <div class="card card-compact">
-                    <div class="font-semibold mb-2">Discovered iSCSI LIFs</div>
+                    <div class="font-semibold mb-2">iSCSI LIFs</div>
                     <div class="ops-list">
-                        {% for lif in discovered_iscsi_lifs %}
-                        <div class="text-sm text-slate-300">{{ lif.get('name') }} | {{ lif.get('address') or 'no IP' }} | {{ lif.get('home_node') or '?' }}:{{ lif.get('home_port') or '?' }}</div>
-                        {% else %}
-                        <div class="text-sm text-slate-400">No iSCSI LIFs discovered.</div>
-                        {% endfor %}
+                        {% for lif in discovered_iscsi_lifs %}<div class="text-sm text-slate-300">{{ lif.get('name') }} | {{ lif.get('address') or 'no IP' }} | {{ lif.get('home_node') or '?' }}:{{ lif.get('home_port') or '?' }}</div>{% else %}<div class="text-sm text-slate-400">No iSCSI LIFs found.</div>{% endfor %}
                     </div>
                 </div>
             </div>
         </section>
 
-        <section class="ops-detail-grid">
-            <section class="card identity-soft-card ops-card-tight">
-                <div class="font-semibold mb-3">Controllers</div>
-                <div class="ops-list">
-                    {% for node in node_details %}
-                    <div class="result" style="margin-top: 0;">
-                        <div class="font-semibold">{{ node.get('name') }} {{ node.get('model') or '' }}</div>
-                        <div class="text-sm text-slate-400 mt-1">Serial {{ node.get('serial_number') or 'unknown' }} | ONTAP {{ node.get('ontap_version') or 'unknown' }} | {{ node.get('state') or 'unknown' }}</div>
+        <section class="card">
+            <div class="text-lg font-semibold mb-2">4. ESXi storage setup</div>
+            <div class="text-sm text-slate-400 mb-4">Only edit these when the defaults are wrong.</div>
+            <details>
+                <summary class="summary-row"><span class="text-sm font-bold text-slate-300">Edit desired storage values</span><span class="status progress">optional</span></summary>
+                <div class="space-y-4 mt-4">
+                    <div class="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-3">
+                        <div><label class="block text-sm font-bold text-slate-300 mb-2">Cluster name</label><input class="input" name="cluster_name" value="{{ desired.get('cluster_name', '') }}"></div>
+                        <div><label class="block text-sm font-bold text-slate-300 mb-2">SVM name</label><input class="input" name="svm_name" value="{{ desired.get('svm_name', '') }}"></div>
+                        <div><label class="block text-sm font-bold text-slate-300 mb-2">SVM mgmt IP</label><input class="input" name="svm_mgmt_ip" value="{{ desired.get('svm_mgmt_ip', '') }}"></div>
+                        <div><label class="block text-sm font-bold text-slate-300 mb-2">Export policy</label><input class="input" name="nfs_export_policy" value="{{ nfs.get('export_policy', 'esxi_nfs_policy') }}"></div>
                     </div>
-                    {% else %}
-                    <div class="text-sm text-slate-300">No controller details discovered.</div>
-                    {% endfor %}
+                    <div class="grid grid-cols-1 md:grid-cols-2 gap-3">
+                        <div><label class="block text-sm font-bold text-slate-300 mb-2">NFS LIFs</label><textarea class="input" name="nfs_lifs" rows="5" placeholder="name,ip,node,port">{% for lif in nfs.get('lifs', []) %}{{ lif.get('name', '') }},{{ lif.get('ip', '') }},{{ lif.get('node', '') }},{{ lif.get('port', '') }}{% if not loop.last %}
+{% endif %}{% endfor %}</textarea></div>
+                        <div><label class="block text-sm font-bold text-slate-300 mb-2">iSCSI LIFs</label><textarea class="input" name="iscsi_lifs" rows="5" placeholder="name,ip,node,port">{% for lif in iscsi.get('lifs', []) %}{{ lif.get('name', '') }},{{ lif.get('ip', '') }},{{ lif.get('node', '') }},{{ lif.get('port', '') }}{% if not loop.last %}
+{% endif %}{% endfor %}</textarea></div>
+                    </div>
+                    <div class="grid grid-cols-1 md:grid-cols-2 gap-3">
+                        <div><label class="block text-sm font-bold text-slate-300 mb-2">iSCSI volumes</label><textarea class="input" name="iscsi_volumes" rows="6" placeholder="volume_name,lun_name,aggregate,lun_id,lun_size,description">{% for item in iscsi.get('volumes', []) %}{{ item.get('volume_name', '') }},{{ item.get('lun_name', '') }},{{ item.get('aggregate', '') }},{{ item.get('lun_id', '') }},{{ item.get('lun_size', '') }},{{ item.get('description', '') }}{% if not loop.last %}
+{% endif %}{% endfor %}</textarea></div>
+                        <div><label class="block text-sm font-bold text-slate-300 mb-2">{{ 'NFS mount targets' if selected_protocol == 'nfs' else 'iSCSI IQNs' }}</label><textarea class="input" name="{{ 'nfs_esxi_mount_targets' if selected_protocol == 'nfs' else 'iscsi_iqns' }}" rows="6">{{ ((nfs.get('esxi_mount_targets') if selected_protocol == 'nfs' else iscsi.get('iqns')) or []) | join('\n') }}</textarea></div>
+                    </div>
                 </div>
-            </section>
+            </details>
 
-            <section class="card identity-soft-card ops-card-tight">
-                <div class="font-semibold mb-3">Ports and current IPs</div>
-                <div class="ops-list">
-                    {% for lif in lif_details %}
-                    <div class="result" style="margin-top: 0;">
-                        <div class="font-semibold">{{ lif.get('home_node') or '?' }}:{{ lif.get('home_port') or '?' }}</div>
-                        <div class="text-sm text-slate-400 mt-1">{{ lif.get('name') }} | {{ lif.get('address') or 'no IP' }} | {{ lif.get('svm') or 'cluster' }}</div>
+            {% if selected_protocol == 'nfs' %}
+            <div class="card card-compact mt-4">
+                <div class="flex items-start justify-between gap-4 flex-wrap">
+                    <div>
+                        <div class="font-semibold">NFS datastore plan</div>
+                        <div class="text-sm text-slate-400 mt-1">Datastore {{ ((vmware_plan.get('nfs_context') or {}).get('datastore_name')) or 'Not set' }} | SVM {{ ((vmware_plan.get('nfs_context') or {}).get('svm_name')) or 'Not set' }}</div>
                     </div>
-                    {% else %}
-                    <div class="text-sm text-slate-300">No interface IPs discovered.</div>
-                    {% endfor %}
+                    <div class="actions"><button class="btn" formaction="/modules/netapp/probe-vmware-nfs" formmethod="post" type="submit">Probe ESXi and NFS</button></div>
                 </div>
-            </section>
+                {% if vmware_probe %}
+                <div class="result mt-3">
+                    <div class="font-semibold">Probe {{ 'ready' if vmware_probe.get('ready') else 'needs review' }}</div>
+                    <div class="text-sm text-slate-400 mt-1">Hosts {{ (vmware_probe.get('esxi_hosts') or []) | join(', ') or 'None' }} | NFS servers {{ (vmware_probe.get('server_ips') or []) | join(', ') or 'None' }}</div>
+                </div>
+                {% endif %}
+            </div>
+            {% endif %}
         </section>
 
-        <section class="card identity-soft-card ops-card-tight">
-            <div class="font-semibold mb-3">Disks</div>
-            <div class="ops-row-list">
-                {% for disk in disk_inventory[:24] %}
-                <div class="ops-row-item">
-                    <div class="ops-row-copy">
-                        <div class="font-semibold">{{ disk.get('name') }} {{ disk.get('vendor') or '' }} {{ disk.get('model') or '' }}</div>
-                        <div class="text-sm text-slate-400 mt-1">{{ disk.get('node') or 'unassigned node' }} | {{ disk.get('type') or 'unknown' }} | {{ disk.get('state') or 'unknown' }}{% if disk.get('firmware_revision') %} | FW {{ disk.get('firmware_revision') }}{% endif %}</div>
-                    </div>
-                </div>
-                {% else %}
-                <div class="text-sm text-slate-300">No disk inventory discovered.</div>
-                {% endfor %}
+        <section class="card">
+            <div class="text-lg font-semibold mb-2">5. Review and run</div>
+            <div class="text-sm text-slate-400 mb-4">Warnings stay visible here. The full proof is under Technical details.</div>
+            {% if warnings or bootstrap_warnings or cluster_name_mismatch or cluster_mgmt_mismatch or node_mgmt_mismatch %}
+            <div class="ops-list mb-4">
+                {% for item in bootstrap_warnings + warnings %}<div class="result" style="margin-top: 0; border-color: color-mix(in srgb, var(--warn) 45%, var(--border)); background: color-mix(in srgb, var(--warn) 10%, transparent);">{{ item }}</div>{% endfor %}
+                {% if cluster_name_mismatch %}<div class="result" style="margin-top: 0;">Planned cluster name is {{ planned_cluster_name }}, but discovered cluster is {{ discovered_cluster_name }}.</div>{% endif %}
+                {% if cluster_mgmt_mismatch %}<div class="result" style="margin-top: 0;">Planned cluster management IP is {{ planned_cluster_mgmt_ip }}, but ONTAP says {{ discovered_cluster_mgmt_ip }}.</div>{% endif %}
+                {% if node_mgmt_mismatch %}<div class="result" style="margin-top: 0;">Planned node management IPs do not match the discovered node management IPs.</div>{% endif %}
+            </div>
+            {% else %}
+            <div class="result mb-4">No warnings from the last read.</div>
+            {% endif %}
+            <div class="actions">
+                <button class="btn" formaction="/modules/netapp/validate-page" formmethod="post" type="submit">Check again</button>
+                <button class="btn" formaction="/modules/netapp/export-plan" formmethod="post" type="submit">Export plan</button>
+                <button class="btn btn-primary action-button" formaction="/modules/netapp/apply-page" formmethod="post" type="submit">Apply safe NetApp changes</button>
             </div>
         </section>
-
-        <details class="card card-compact">
-            <summary class="summary-row"><span class="text-sm font-bold text-slate-300">Edit desired IPs and storage details</span><span class="status progress">expand</span></summary>
-            <div class="space-y-4 mt-4">
-                <div class="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-3">
-                    <div><label class="block text-sm font-bold text-slate-300 mb-2">Cluster name</label><input class="input" name="cluster_name" value="{{ desired.get('cluster_name', '') }}"></div>
-                    <div><label class="block text-sm font-bold text-slate-300 mb-2">SVM name</label><input class="input" name="svm_name" value="{{ desired.get('svm_name', '') }}"></div>
-                    <div><label class="block text-sm font-bold text-slate-300 mb-2">SVM mgmt IP</label><input class="input" name="svm_mgmt_ip" value="{{ desired.get('svm_mgmt_ip', '') }}"></div>
-                    <div><label class="block text-sm font-bold text-slate-300 mb-2">Export policy</label><input class="input" name="nfs_export_policy" value="{{ nfs.get('export_policy', 'esxi_nfs_policy') }}"></div>
-                </div>
-                <div class="grid grid-cols-1 md:grid-cols-2 gap-3">
-                    <div><label class="block text-sm font-bold text-slate-300 mb-2">NFS LIFs</label><textarea class="input" name="nfs_lifs" rows="5" placeholder="name,ip,node,port">{% for lif in nfs.get('lifs', []) %}{{ lif.get('name', '') }},{{ lif.get('ip', '') }},{{ lif.get('node', '') }},{{ lif.get('port', '') }}{% if not loop.last %}
-{% endif %}{% endfor %}</textarea></div>
-                    <div><label class="block text-sm font-bold text-slate-300 mb-2">iSCSI LIFs</label><textarea class="input" name="iscsi_lifs" rows="5" placeholder="name,ip,node,port">{% for lif in iscsi.get('lifs', []) %}{{ lif.get('name', '') }},{{ lif.get('ip', '') }},{{ lif.get('node', '') }},{{ lif.get('port', '') }}{% if not loop.last %}
-{% endif %}{% endfor %}</textarea></div>
-                </div>
-                <div class="grid grid-cols-1 md:grid-cols-2 gap-3">
-                    <div><label class="block text-sm font-bold text-slate-300 mb-2">iSCSI volumes</label><textarea class="input" name="iscsi_volumes" rows="6" placeholder="volume_name,lun_name,aggregate,lun_id,lun_size,description">{% for item in iscsi.get('volumes', []) %}{{ item.get('volume_name', '') }},{{ item.get('lun_name', '') }},{{ item.get('aggregate', '') }},{{ item.get('lun_id', '') }},{{ item.get('lun_size', '') }},{{ item.get('description', '') }}{% if not loop.last %}
-{% endif %}{% endfor %}</textarea></div>
-                    <div><label class="block text-sm font-bold text-slate-300 mb-2">{{ 'NFS mount targets' if selected_protocol == 'nfs' else 'iSCSI IQNs' }}</label><textarea class="input" name="{{ 'nfs_esxi_mount_targets' if selected_protocol == 'nfs' else 'iscsi_iqns' }}" rows="6">{{ ((nfs.get('esxi_mount_targets') if selected_protocol == 'nfs' else iscsi.get('iqns')) or []) | join('\n') }}</textarea></div>
-                </div>
-            </div>
-        </details>
-
-        <details class="card card-compact">
-            <summary class="summary-row"><span class="text-sm font-bold text-slate-300">Validation findings</span><span class="status progress">expand</span></summary>
-            <div class="ops-list mt-4">
-                {% for check in validation_checks %}
-                <div class="result" style="margin-top: 0;">
-                    <div class="font-semibold">{{ check.get('name', '') | replace('_', ' ') | title }}</div>
-                    <div class="text-sm text-slate-400 mt-1">{{ 'OK' if check.get('ok') else 'Needs review' }}</div>
-                </div>
-                {% else %}
-                <div class="text-sm text-slate-300">No validation findings yet.</div>
-                {% endfor %}
-            </div>
-        </details>
-
-        <details class="card card-compact">
-            <summary class="summary-row"><span class="text-sm font-bold text-slate-300">Protocol object inventory</span><span class="status progress">expand</span></summary>
-            <div class="ops-detail-grid mt-4">
-                <div class="card card-compact">
-                    <div class="font-semibold mb-2">NFS</div>
-                    <div class="ops-row-list">
-                        {% for policy in export_policy_details %}
-                        <div class="ops-row-item">
-                            <div class="ops-row-copy">
-                                <div class="font-semibold">{{ policy.get('name') }}</div>
-                                <div class="text-sm text-slate-400 mt-1">SVM {{ policy.get('svm') or 'unknown' }} | Rules {{ policy.get('rule_count') or 0 }}</div>
-                            </div>
-                        </div>
-                        {% else %}
-                        <div class="text-sm text-slate-300">No export policies discovered.</div>
-                        {% endfor %}
-                    </div>
-                </div>
-                <div class="card card-compact">
-                    <div class="font-semibold mb-2">iSCSI</div>
-                    <div class="ops-row-list">
-                        {% for igroup in igroup_details %}
-                        <div class="ops-row-item"><div class="ops-row-copy"><div class="font-semibold">{{ igroup.get('name') }}</div><div class="text-sm text-slate-400 mt-1">Igroup | {{ igroup.get('protocol') or 'unknown' }} | {{ igroup.get('os_type') or 'unknown' }}</div></div></div>
-                        {% endfor %}
-                        {% for portset in portset_details %}
-                        <div class="ops-row-item"><div class="ops-row-copy"><div class="font-semibold">{{ portset.get('name') }}</div><div class="text-sm text-slate-400 mt-1">Portset | {{ portset.get('protocol') or 'unknown' }}</div></div></div>
-                        {% endfor %}
-                        {% for lun in lun_details %}
-                        <div class="ops-row-item"><div class="ops-row-copy"><div class="font-semibold">{{ lun.get('name') }}</div><div class="text-sm text-slate-400 mt-1">LUN | {{ lun.get('state') or 'unknown' }} | {{ lun.get('os_type') or 'unknown' }}</div></div></div>
-                        {% endfor %}
-                        {% for mapping in lun_map_details %}
-                        <div class="ops-row-item"><div class="ops-row-copy"><div class="font-semibold">{{ mapping.get('lun') or 'unknown lun' }}</div><div class="text-sm text-slate-400 mt-1">Mapped to {{ mapping.get('igroup') or 'unknown igroup' }}{% if mapping.get('lun_id') is not none %} | LUN ID {{ mapping.get('lun_id') }}{% endif %}</div></div></div>
-                        {% endfor %}
-                        {% if not igroup_details and not portset_details and not lun_details and not lun_map_details %}
-                        <div class="text-sm text-slate-300">No SAN protocol objects discovered.</div>
-                        {% endif %}
-                    </div>
-                </div>
-            </div>
-        </details>
-
-        {% if selected_protocol == 'nfs' %}
-        <details class="card card-compact">
-            <summary class="summary-row"><span class="text-sm font-bold text-slate-300">VMware NFS datastore plan</span><span class="status progress">expand</span></summary>
-            <div class="space-y-4 mt-4">
-                <div class="ops-detail-grid">
-                    <div class="card card-compact">
-                        <div class="font-semibold mb-2">Datastore target</div>
-                        <div class="text-sm text-slate-300">Datastore {{ ((vmware_plan.get('nfs_context') or {}).get('datastore_name')) or 'Not set' }}</div>
-                        <div class="text-sm text-slate-400 mt-1">SVM {{ ((vmware_plan.get('nfs_context') or {}).get('svm_name')) or 'Not set' }} | Export {{ ((vmware_plan.get('nfs_context') or {}).get('export_path')) or 'Not set' }}</div>
-                        <div class="text-sm text-slate-400 mt-1">NFS servers {{ (((vmware_plan.get('nfs_context') or {}).get('lif_ips')) or []) | join(', ') or 'None' }}</div>
-                    </div>
-                    <div class="card card-compact">
-                        <div class="font-semibold mb-2">ESXi mount mode</div>
-                        <div class="text-sm text-slate-300">{{ 'Standalone ESXi' if vmware_plan.get('connection_mode') == 'standalone_esxi' else 'vCenter' }}</div>
-                        <div class="text-sm text-slate-400 mt-1">Hosts {{ (vmware_plan.get('esxi_hosts') or []) | join(', ') or 'None' }}</div>
-                        <div class="text-sm text-slate-400 mt-1">Version {{ ((((cfg.get('vmware') or {}).get('nfs')) or {}).get('nfs_version')) or '4.1' }}</div>
-                    </div>
-                    <div class="card card-compact">
-                        <div class="font-semibold mb-2">Mount readiness</div>
-                        {% set nfs_validate = ((vmware_plan.get('steps') or []) | selectattr('name', 'equalto', 'validate_nfs_mount_inputs') | list | first) or {} %}
-                        <div class="text-sm text-slate-300">{{ 'Ready' if nfs_validate.get('status') == 'ok' else 'Blocked' }}</div>
-                        <div class="text-sm text-slate-400 mt-1">
-                            {% if vmware_plan.get('connection_mode') == 'standalone_esxi' %}
-                                ESXi root user {{ (((nfs_validate.get('details') or {}).get('esxi_root_user')) or 'root') }} | password {{ 'saved' if ((nfs_validate.get('details') or {}).get('has_esxi_root_password')) else 'missing' }}
-                            {% else %}
-                                vCenter {{ (((nfs_validate.get('details') or {}).get('vcenter_ip')) or 'Not set') }} | password {{ 'saved' if ((nfs_validate.get('details') or {}).get('has_password')) else 'missing' }}
-                            {% endif %}
-                        </div>
-                    </div>
-                    <div class="card card-compact">
-                        <div class="font-semibold mb-2">ESXi hosts</div>
-                        <div class="text-sm text-slate-300">{{ (vmware_plan.get('esxi_hosts') or []) | join(', ') or 'None' }}</div>
-                    </div>
-                </div>
-                <div class="card card-compact">
-                    <div class="flex items-start justify-between gap-4">
-                        <div>
-                            <div class="font-semibold">Standalone ESXi / NFS probe</div>
-                            <div class="text-sm text-slate-400 mt-1">Checks ESXi management ports and NFS port 2049 on the discovered NFS LIFs.</div>
-                        </div>
-                        <div class="actions">
-                            <button class="btn" formaction="/modules/netapp/probe-vmware-nfs" formmethod="post" type="submit">Probe ESXi and NFS targets</button>
-                        </div>
-                    </div>
-                    {% if vmware_probe %}
-                    <div class="ops-detail-grid mt-4">
-                        <div class="card card-compact">
-                            <div class="font-semibold mb-2">Probe status</div>
-                            <div class="text-sm text-slate-300">{{ 'Ready' if vmware_probe.get('ready') else 'Needs review' }}</div>
-                            <div class="text-sm text-slate-400 mt-1">{{ (vmware_probe.get('connection_mode') or 'unknown') | replace('_', ' ') | title }}</div>
-                        </div>
-                        <div class="card card-compact">
-                            <div class="font-semibold mb-2">Export target</div>
-                            <div class="text-sm text-slate-300">{{ vmware_probe.get('datastore_name') or 'Not set' }}</div>
-                            <div class="text-sm text-slate-400 mt-1">{{ vmware_probe.get('export_path') or 'Not set' }} | {{ vmware_probe.get('svm_name') or 'No SVM' }}</div>
-                        </div>
-                        <div class="card card-compact">
-                            <div class="font-semibold mb-2">ESXi hosts</div>
-                            <div class="text-sm text-slate-300">{{ (vmware_probe.get('esxi_hosts') or []) | join(', ') or 'None' }}</div>
-                        </div>
-                        <div class="card card-compact">
-                            <div class="font-semibold mb-2">NFS servers</div>
-                            <div class="text-sm text-slate-300">{{ (vmware_probe.get('server_ips') or []) | join(', ') or 'None' }}</div>
-                        </div>
-                    </div>
-                    <div class="ops-row-list mt-4">
-                        {% for item in vmware_probe.get('checks', []) %}
-                        <div class="ops-row-item">
-                            <div class="ops-row-copy">
-                                <div class="font-semibold">{{ item.get('label') }}</div>
-                                <div class="text-sm text-slate-400 mt-1">{{ item.get('host') }} | {{ 'Reachable' if item.get('reachable') else 'No response' }} | Ports {{ item.get('ports_tested', []) | join(', ') }}</div>
-                                {% if item.get('error') %}
-                                <div class="text-xs text-slate-500 mt-1">{{ item.get('error') }}</div>
-                                {% endif %}
-                            </div>
-                        </div>
-                        {% else %}
-                        <div class="text-sm text-slate-300">No probe results yet.</div>
-                        {% endfor %}
-                    </div>
-                    {% endif %}
-                </div>
-                <div class="card card-compact">
-                    <div class="font-semibold mb-2">Planned mounts</div>
-                    <div class="ops-row-list">
-                        {% for item in ((((vmware_plan.get('steps') or []) | selectattr('name', 'equalto', 'plan_nfs_datastore_mounts') | list | first) or {}).get('details', {}).get('mount_plan', [])) %}
-                        <div class="ops-row-item">
-                            <div class="ops-row-copy">
-                                <div class="font-semibold">{{ item.get('host') }} -> {{ item.get('datastore_name') }}</div>
-                                <div class="text-sm text-slate-400 mt-1">{{ item.get('server') }}:{{ item.get('export_path') }} | NFS {{ item.get('nfs_version') }}</div>
-                                {% if item.get('alternate_servers') %}
-                                <div class="text-xs text-slate-500 mt-1">Alternates {{ item.get('alternate_servers') | join(', ') }}</div>
-                                {% endif %}
-                            </div>
-                        </div>
-                        {% else %}
-                        <div class="text-sm text-slate-300">No NFS mount plan could be generated yet.</div>
-                        {% endfor %}
-                    </div>
-                </div>
-                <div class="card card-compact">
-                    <div class="font-semibold mb-2">Candidate commands</div>
-                    <div class="ops-list">
-                        {% for item in ((((vmware_plan.get('steps') or []) | selectattr('name', 'equalto', 'plan_nfs_datastore_mounts') | list | first) or {}).get('details', {}).get('mount_plan', [])) %}
-                        <div class="result" style="margin-top: 0;">
-                            <div class="font-semibold">{{ item.get('host') }}</div>
-                            {% if vmware_plan.get('connection_mode') == 'standalone_esxi' %}
-                            <div class="text-sm text-slate-400 mt-1">{{ item.get('esxcli_command') }}</div>
-                            {% endif %}
-                            <div class="text-sm text-slate-500 mt-1">{{ item.get('powercli_command') }}</div>
-                        </div>
-                        {% else %}
-                        <div class="text-sm text-slate-300">No candidate datastore mount commands yet.</div>
-                        {% endfor %}
-                    </div>
-                </div>
-            </div>
-        </details>
-        {% endif %}
-
-        <details class="card card-compact">
-            <summary class="summary-row"><span class="text-sm font-bold text-slate-300">Advanced details</span><span class="status progress">expand</span></summary>
-            <div class="ops-list mt-4">
-                <div class="result" style="margin-top: 0;">
-                    <div class="font-semibold">Upgrade posture</div>
-                    <div class="text-sm text-slate-400 mt-1">{{ (upgrade.get('status') or 'unknown') | replace('_', ' ') | title }} | {{ upgrade.get('current_version') or 'unknown' }} | target {{ upgrade.get('target_version') or 'unknown' }}</div>
-                </div>
-                {% for item in capability_matrix %}
-                <div class="result" style="margin-top: 0;">
-                    <div class="font-semibold">{{ item.get('label') }}</div>
-                    <div class="text-sm text-slate-400 mt-1">Current {{ item.get('status') or 'unknown' }}</div>
-                </div>
-                {% endfor %}
-                <div class="result" style="margin-top: 0;">
-                    <div class="font-semibold">Volumes</div>
-                    <div class="text-sm text-slate-400 mt-1">{{ volume_details | length }} discovered</div>
-                </div>
-            </div>
-        </details>
         {% endif %}
     </form>
     </div>
 
-    {% if payload.get('error') %}
-    <section class="card card-compact">
-        <div class="font-semibold mb-3">Last result</div>
-        <div class="result" style="margin-top:0; border-color: color-mix(in srgb, var(--warn) 45%, var(--border)); background: color-mix(in srgb, var(--warn) 10%, transparent);">{{ payload.get('error') }}</div>
-    </section>
-    {% endif %}
+    {% if payload.get('error') or payload.get('apply') or suggestions or export_paths or validation_checks or has_snapshot %}
+    <details class="card" id="netapp-technical-details">
+        <summary class="summary-row"><span class="text-lg font-semibold">Technical details, logs, and files</span><span class="status progress">open when troubleshooting</span></summary>
+        <div class="space-y-4 mt-4">
+            <div class="result">Everything below is kept for error analysis, support, and Codex debugging. Operators do not need it for a normal run.</div>
 
-    {% if bootstrap_test %}
-    <section class="card card-compact">
-        <div class="font-semibold mb-3">Bootstrap connectivity result</div>
-        <div class="ops-list">
-            <div class="result" style="margin-top:0;">
-                <div class="font-semibold">{{ bootstrap_test.get('target', '') | replace('_', ' ') | title }}</div>
-                <div class="text-sm text-slate-400 mt-1">{{ bootstrap_test.get('host') or 'Not set' }} | {{ 'Reachable' if bootstrap_test.get('reachable') else 'No response' }}</div>
-            </div>
-        </div>
-    </section>
-    {% endif %}
+            {% if payload.get('error') %}
+            <section class="card card-compact">
+                <div class="font-semibold mb-3">Last error</div>
+                <div class="result" style="margin-top:0; border-color: color-mix(in srgb, var(--warn) 45%, var(--border)); background: color-mix(in srgb, var(--warn) 10%, transparent);">{{ payload.get('error') }}</div>
+            </section>
+            {% endif %}
 
-    {% if payload.get('apply') %}
-    <section class="card card-compact">
-        <div class="font-semibold mb-3">Apply result</div>
-        <div class="ops-list">
-            <div class="result" style="margin-top:0;">
-                <div class="font-semibold">{{ payload.get('apply', {}).get('result', 'unknown') | replace('_', ' ') | title }}</div>
-                <div class="text-sm text-slate-400 mt-1">{{ payload.get('apply', {}).get('execution_mode') or 'safe_apply' }}</div>
-            </div>
-            {% for item in payload.get('apply', {}).get('logs', []) %}
-            <div class="result" style="margin-top:0;">{{ item }}</div>
-            {% endfor %}
-        </div>
-    </section>
-    {% endif %}
+            {% if payload.get('apply') %}
+            <section class="card card-compact">
+                <div class="font-semibold mb-3">Apply result and logs</div>
+                <div class="ops-list">
+                    <div class="result" style="margin-top:0;"><div class="font-semibold">{{ payload.get('apply', {}).get('result', 'unknown') | replace('_', ' ') | title }}</div><div class="text-sm text-slate-400 mt-1">{{ payload.get('apply', {}).get('execution_mode') or 'safe_apply' }}</div></div>
+                    {% for item in payload.get('apply', {}).get('logs', []) %}<div class="result" style="margin-top:0;">{{ item }}</div>{% endfor %}
+                </div>
+            </section>
+            {% endif %}
 
-    {% if connection_test %}
-    <section class="card card-compact">
-        <div class="font-semibold mb-3">Last NetApp read result</div>
-        <div class="ops-list">
-            <div class="result" style="margin-top:0;">
-                <div class="font-semibold">{{ connection_test.get('target_host') or 'Not set' }}</div>
-                <div class="text-sm text-slate-400 mt-1">{{ 'API auth OK' if connection_test.get('api_auth_ok') else 'API auth failed' }}</div>
-            </div>
-        </div>
-    </section>
-    {% endif %}
+            {% if validation_checks %}
+            <section class="card card-compact">
+                <div class="font-semibold mb-3">Validation findings</div>
+                <div class="ops-list">
+                    {% for check in validation_checks %}<div class="result" style="margin-top: 0;"><div class="font-semibold">{{ check.get('name', '') | replace('_', ' ') | title }}</div><div class="text-sm text-slate-400 mt-1">{{ 'OK' if check.get('ok') else 'Needs review' }}</div></div>{% endfor %}
+                </div>
+            </section>
+            {% endif %}
 
-    {% if bootstrap_warnings or warnings %}
-    <section class="card card-compact">
-        <div class="font-semibold mb-3">Warnings</div>
-        <div class="ops-list">
-            {% for item in bootstrap_warnings + warnings %}
-            <div class="result" style="margin-top:0; border-color: color-mix(in srgb, var(--warn) 45%, var(--border)); background: color-mix(in srgb, var(--warn) 10%, transparent);">{{ item }}</div>
-            {% endfor %}
-        </div>
-    </section>
-    {% endif %}
+            {% if has_snapshot %}
+            <section class="ops-detail-grid">
+                <section class="card card-compact">
+                    <div class="font-semibold mb-3">Controllers</div>
+                    <div class="ops-list">
+                        {% for node in node_details %}<div class="result" style="margin-top: 0;"><div class="font-semibold">{{ node.get('name') }} {{ node.get('model') or '' }}</div><div class="text-sm text-slate-400 mt-1">Serial {{ node.get('serial_number') or 'unknown' }} | ONTAP {{ node.get('ontap_version') or 'unknown' }} | {{ node.get('state') or 'unknown' }}</div></div>{% else %}<div class="text-sm text-slate-300">No controller details discovered.</div>{% endfor %}
+                    </div>
+                </section>
+                <section class="card card-compact">
+                    <div class="font-semibold mb-3">Ports and current IPs</div>
+                    <div class="ops-list">
+                        {% for lif in lif_details %}<div class="result" style="margin-top: 0;"><div class="font-semibold">{{ lif.get('home_node') or '?' }}:{{ lif.get('home_port') or '?' }}</div><div class="text-sm text-slate-400 mt-1">{{ lif.get('name') }} | {{ lif.get('address') or 'no IP' }} | {{ lif.get('svm') or 'cluster' }}</div></div>{% else %}<div class="text-sm text-slate-300">No interface IPs discovered.</div>{% endfor %}
+                    </div>
+                </section>
+            </section>
 
-    {% if suggestions %}
-    <details class="card card-compact">
-        <summary class="summary-row"><span class="text-sm font-bold text-slate-300">Suggestions</span><span class="status progress">expand</span></summary>
-        <div class="ops-list mt-4">
-            {% for item in suggestions %}
-            <div class="result" style="margin-top: 0;">{{ item }}</div>
-            {% endfor %}
+            <section class="card card-compact">
+                <div class="font-semibold mb-3">Disks</div>
+                <div class="ops-row-list">
+                    {% for disk in disk_inventory[:48] %}
+                    <div class="ops-row-item"><div class="ops-row-copy"><div class="font-semibold">{{ disk.get('name') }} {{ disk.get('vendor') or '' }} {{ disk.get('model') or '' }}</div><div class="text-sm text-slate-400 mt-1">{{ disk.get('node') or 'unassigned node' }} | {{ disk.get('type') or 'unknown' }} | {{ disk.get('state') or 'unknown' }}{% if disk.get('firmware_revision') %} | FW {{ disk.get('firmware_revision') }}{% endif %}</div></div></div>
+                    {% else %}<div class="text-sm text-slate-300">No disk inventory discovered.</div>{% endfor %}
+                </div>
+            </section>
+
+            <section class="card card-compact">
+                <div class="font-semibold mb-3">Protocol object inventory</div>
+                <div class="ops-detail-grid">
+                    <div class="card card-compact">
+                        <div class="font-semibold mb-2">NFS</div>
+                        <div class="ops-row-list">
+                            {% for policy in export_policy_details %}<div class="ops-row-item"><div class="ops-row-copy"><div class="font-semibold">{{ policy.get('name') }}</div><div class="text-sm text-slate-400 mt-1">SVM {{ policy.get('svm') or 'unknown' }} | Rules {{ policy.get('rule_count') or 0 }}</div></div></div>{% else %}<div class="text-sm text-slate-300">No export policies discovered.</div>{% endfor %}
+                        </div>
+                    </div>
+                    <div class="card card-compact">
+                        <div class="font-semibold mb-2">iSCSI</div>
+                        <div class="ops-row-list">
+                            {% for igroup in igroup_details %}<div class="ops-row-item"><div class="ops-row-copy"><div class="font-semibold">{{ igroup.get('name') }}</div><div class="text-sm text-slate-400 mt-1">Igroup | {{ igroup.get('protocol') or 'unknown' }} | {{ igroup.get('os_type') or 'unknown' }}</div></div></div>{% endfor %}
+                            {% for portset in portset_details %}<div class="ops-row-item"><div class="ops-row-copy"><div class="font-semibold">{{ portset.get('name') }}</div><div class="text-sm text-slate-400 mt-1">Portset | {{ portset.get('protocol') or 'unknown' }}</div></div></div>{% endfor %}
+                            {% for lun in lun_details %}<div class="ops-row-item"><div class="ops-row-copy"><div class="font-semibold">{{ lun.get('name') }}</div><div class="text-sm text-slate-400 mt-1">LUN | {{ lun.get('state') or 'unknown' }} | {{ lun.get('os_type') or 'unknown' }}</div></div></div>{% endfor %}
+                            {% for mapping in lun_map_details %}<div class="ops-row-item"><div class="ops-row-copy"><div class="font-semibold">{{ mapping.get('lun') or 'unknown lun' }}</div><div class="text-sm text-slate-400 mt-1">Mapped to {{ mapping.get('igroup') or 'unknown igroup' }}{% if mapping.get('lun_id') is not none %} | LUN ID {{ mapping.get('lun_id') }}{% endif %}</div></div></div>{% endfor %}
+                            {% if not igroup_details and not portset_details and not lun_details and not lun_map_details %}<div class="text-sm text-slate-300">No SAN protocol objects discovered.</div>{% endif %}
+                        </div>
+                    </div>
+                </div>
+            </section>
+            {% endif %}
+
+            {% if selected_protocol == 'nfs' and vmware_plan %}
+            <section class="card card-compact">
+                <div class="font-semibold mb-3">VMware NFS datastore plan</div>
+                <div class="ops-list">
+                    <div class="result" style="margin-top:0;">Datastore {{ ((vmware_plan.get('nfs_context') or {}).get('datastore_name')) or 'Not set' }} | Export {{ ((vmware_plan.get('nfs_context') or {}).get('export_path')) or 'Not set' }} | NFS servers {{ (((vmware_plan.get('nfs_context') or {}).get('lif_ips')) or []) | join(', ') or 'None' }}</div>
+                    {% for item in ((((vmware_plan.get('steps') or []) | selectattr('name', 'equalto', 'plan_nfs_datastore_mounts') | list | first) or {}).get('details', {}).get('mount_plan', [])) %}
+                    <div class="result" style="margin-top:0;">{{ item.get('host') }} -> {{ item.get('datastore_name') }} | {{ item.get('server') }}:{{ item.get('export_path') }} | NFS {{ item.get('nfs_version') }}</div>
+                    {% endfor %}
+                </div>
+            </section>
+            {% endif %}
+
+            <section class="card card-compact">
+                <div class="font-semibold mb-3">Advanced ONTAP posture</div>
+                <div class="ops-list">
+                    <div class="result" style="margin-top: 0;"><div class="font-semibold">Upgrade posture</div><div class="text-sm text-slate-400 mt-1">{{ (upgrade.get('status') or 'unknown') | replace('_', ' ') | title }} | {{ upgrade.get('current_version') or 'unknown' }} | target {{ upgrade.get('target_version') or 'unknown' }}</div></div>
+                    {% for item in capability_matrix %}<div class="result" style="margin-top: 0;"><div class="font-semibold">{{ item.get('label') }}</div><div class="text-sm text-slate-400 mt-1">Current {{ item.get('status') or 'unknown' }}</div></div>{% endfor %}
+                    <div class="result" style="margin-top: 0;"><div class="font-semibold">Volumes</div><div class="text-sm text-slate-400 mt-1">{{ volume_details | length }} discovered</div></div>
+                </div>
+            </section>
+
+            {% if suggestions %}
+            <section class="card card-compact">
+                <div class="font-semibold mb-3">Suggestions</div>
+                <div class="ops-list">{% for item in suggestions %}<div class="result" style="margin-top: 0;">{{ item }}</div>{% endfor %}</div>
+            </section>
+            {% endif %}
+
+            {% if export_paths %}
+            <section class="card card-compact">
+                <div class="font-semibold mb-3">Generated plan output</div>
+                <div class="ops-list">
+                    {% for label, path in export_paths.items() %}<div class="result" style="margin-top: 0;"><div class="font-semibold">{{ label | upper }}</div><div class="text-sm text-slate-400 mt-1">{{ path }}</div></div>{% endfor %}
+                </div>
+            </section>
+            {% endif %}
         </div>
     </details>
-    {% endif %}
-
-    {% if export_paths %}
-    <section class="card card-compact">
-        <div class="font-semibold mb-3">Generated plan output</div>
-        <div class="ops-list">
-            {% for label, path in export_paths.items() %}
-            <div class="result" style="margin-top: 0;">
-                <div class="font-semibold">{{ label | upper }}</div>
-                <div class="text-sm text-slate-400 mt-1">{{ path }}</div>
-            </div>
-            {% endfor %}
-        </div>
-    </section>
     {% endif %}
 </section>
