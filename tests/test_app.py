@@ -1362,9 +1362,30 @@ def test_react_ui_app_state_api_exposes_desktop_shell_state(client):
     assert payload["kit"]["name"] == "Kit-01"
     assert any(page["key"] == "dashboard" and page["legacy_href"] == "/dashboard" for page in payload["pages"])
     assert any(page["key"] == "ilo" and page["legacy_href"] == "/ilo" for page in payload["pages"])
+    assert any(page["key"] == "action-map" for page in payload["pages"])
     assert any(module["key"] == "ilo" for module in payload["modules"])
     assert payload["actions"]["ilo"][0]["route"] == "/api/ui/ilo"
+    assert payload["action_catalog"]["coverage"]["total_routes"] > 20
     assert "status" in payload["job"]
+
+
+def test_react_ui_action_catalog_exposes_legacy_and_react_routes(client):
+    response = client.get("/api/ui/action-catalog")
+
+    assert response.status_code == 200
+    payload = response.json()
+    routes = payload["routes"]
+    paths = {route["path"] for route in routes}
+    assert "/api/ui/app-state" in paths
+    assert "/api/ui/action-catalog" in paths
+    assert "/save-ilo-settings" in paths
+    assert "/modules/netapp/save-settings" in paths
+    assert "/execution" in paths
+    assert "/ws/job/{kit_name}" in paths
+    assert payload["coverage"]["react_api_routes"] >= 9
+    assert payload["coverage"]["legacy_routes"] > 20
+    assert any(route["path"] == "/save-ilo-settings" and route["mode"] == "legacy-html" for route in routes)
+    assert any(route["path"] == "/api/ui/action-catalog" and route["mode"] == "json" for route in routes)
 
 
 def test_react_ui_ilo_settings_api_reuses_backend_save_logic(client):

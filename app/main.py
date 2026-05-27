@@ -14300,6 +14300,7 @@ def react_ui_page_specs() -> list[dict[str, str]]:
         {"key": "cisco", "label": "Cisco setup", "group": "Setup", "legacy_href": "/cisco"},
         {"key": "configuration", "label": "Configuration / Kits", "group": "Manage", "legacy_href": "/configuration"},
         {"key": "reports", "label": "Reports / History", "group": "Manage", "legacy_href": "/configs"},
+        {"key": "action-map", "label": "Action catalog", "group": "Manage", "legacy_href": "/configuration"},
         {"key": "technical", "label": "Technical details", "group": "Operate", "legacy_href": "/configs"},
     ]
 
@@ -14307,46 +14308,246 @@ def react_ui_page_specs() -> list[dict[str, str]]:
 def react_ui_action_inventory() -> dict[str, list[dict[str, str]]]:
     return {
         "dashboard": [
+            {"label": "Open Run Center", "method": "GET", "route": "/execution", "mode": "legacy-html"},
             {"label": "Prepare run review", "method": "POST", "route": "/prepare-execute", "mode": "legacy-html"},
             {"label": "Start preview run", "method": "POST", "route": "/execute-preview", "mode": "legacy-html"},
             {"label": "Start real run", "method": "POST", "route": "/execute", "mode": "legacy-html"},
+            {"label": "Retry storage stage", "method": "POST", "route": "/retry-storage-stage", "mode": "legacy-html"},
         ],
         "ilo": [
             {"label": "Load iLO state", "method": "GET", "route": "/api/ui/ilo", "mode": "json"},
             {"label": "Save iLO setup", "method": "POST", "route": "/api/ui/ilo/settings", "mode": "json"},
             {"label": "Legacy save iLO setup", "method": "POST", "route": "/save-ilo-settings", "mode": "legacy-html"},
+            {"label": "Export iLO config", "method": "POST", "route": "/export-ilo-config", "mode": "legacy-html"},
             {"label": "Export iLO inventory", "method": "POST", "route": "/export-ilo-inventory", "mode": "legacy-html"},
+            {"label": "View iLO config snapshot", "method": "POST", "route": "/view-ilo-config-snapshot", "mode": "legacy-html"},
+            {"label": "Plan iLO firmware upgrade", "method": "POST", "route": "/plan-ilo-upgrade", "mode": "legacy-html"},
+            {"label": "Run iLO firmware upgrade", "method": "POST", "route": "/run-ilo-upgrade", "mode": "legacy-html"},
         ],
         "esxi": [
             {"label": "Save ESXi setup", "method": "POST", "route": "/save-esxi-settings", "mode": "legacy-html"},
             {"label": "Prepare ESXi run", "method": "POST", "route": "/prepare-execute", "mode": "legacy-html"},
+            {"label": "Preview ESXi run", "method": "POST", "route": "/execute-preview", "mode": "legacy-html"},
+            {"label": "Start ESXi run", "method": "POST", "route": "/execute", "mode": "legacy-html"},
         ],
         "netapp": [
             {"label": "Module status", "method": "GET", "route": "/modules/netapp/status", "mode": "json"},
             {"label": "Save NetApp settings", "method": "POST", "route": "/modules/netapp/save-settings", "mode": "legacy-html"},
+            {"label": "Test NetApp connection", "method": "POST", "route": "/modules/netapp/test-connection", "mode": "legacy-html"},
+            {"label": "Discover NetApp", "method": "POST", "route": "/modules/netapp/discover", "mode": "json"},
+            {"label": "Discover NetApp page", "method": "POST", "route": "/modules/netapp/discover-page", "mode": "legacy-html"},
+            {"label": "Mark bootstrap complete", "method": "POST", "route": "/modules/netapp/bootstrap-complete", "mode": "legacy-html"},
             {"label": "Plan NetApp", "method": "POST", "route": "/modules/netapp/plan", "mode": "json"},
             {"label": "Validate NetApp", "method": "POST", "route": "/modules/netapp/validate", "mode": "json"},
             {"label": "Safe apply NetApp", "method": "POST", "route": "/modules/netapp/apply", "mode": "json"},
+            {"label": "Apply NetApp page", "method": "POST", "route": "/modules/netapp/apply-page", "mode": "legacy-html"},
+            {"label": "Plan ONTAP upgrade", "method": "POST", "route": "/modules/netapp/plan-upgrade", "mode": "legacy-html"},
+            {"label": "Run ONTAP upgrade", "method": "POST", "route": "/modules/netapp/run-upgrade", "mode": "legacy-html"},
         ],
         "cisco": [
+            {"label": "Discover Cisco version", "method": "POST", "route": "/modules/cisco/discover-version", "mode": "legacy-html"},
+            {"label": "Discover Cisco console", "method": "POST", "route": "/modules/cisco/discover-console", "mode": "legacy-html"},
+            {"label": "Bootstrap management", "method": "POST", "route": "/modules/cisco/bootstrap-management", "mode": "legacy-html"},
+            {"label": "Verify console bootstrap", "method": "POST", "route": "/modules/cisco/verify-console-bootstrap", "mode": "legacy-html"},
             {"label": "Test SSH", "method": "POST", "route": "/modules/cisco/test-ssh", "mode": "legacy-html"},
+            {"label": "Save port map", "method": "POST", "route": "/modules/cisco/save-port-map", "mode": "legacy-html"},
+            {"label": "Discover ports", "method": "POST", "route": "/modules/cisco/discover-ports", "mode": "legacy-html"},
             {"label": "Preview config", "method": "POST", "route": "/modules/cisco/preview-config", "mode": "legacy-html"},
             {"label": "Apply config", "method": "POST", "route": "/modules/cisco/apply-config", "mode": "legacy-html"},
+            {"label": "Approve config plan", "method": "POST", "route": "/modules/cisco/approve-config-plan", "mode": "legacy-html"},
+            {"label": "Backup config", "method": "POST", "route": "/modules/cisco/backup-config", "mode": "legacy-html"},
+            {"label": "Plan Cisco upgrade", "method": "POST", "route": "/modules/cisco/plan-upgrade", "mode": "legacy-html"},
+            {"label": "Run Cisco upgrade", "method": "POST", "route": "/modules/cisco/run-upgrade", "mode": "legacy-html"},
         ],
         "configuration": [
             {"label": "Save global settings", "method": "POST", "route": "/save-global-settings", "mode": "legacy-html"},
             {"label": "Load kit", "method": "POST", "route": "/load-kit", "mode": "legacy-html"},
             {"label": "Create kit", "method": "POST", "route": "/new-kit", "mode": "legacy-html"},
+            {"label": "Save kit config", "method": "POST", "route": "/save-config", "mode": "legacy-html"},
+            {"label": "Autofill IP plan", "method": "POST", "route": "/autofill-ip-plan", "mode": "legacy-html"},
+            {"label": "Upload firmware media", "method": "POST", "route": "/upload-upgrade-media", "mode": "legacy-html"},
+            {"label": "View current kit config", "method": "POST", "route": "/view-current-kit-config", "mode": "legacy-html"},
+            {"label": "Import kit config", "method": "POST", "route": "/import-kit-config", "mode": "legacy-html"},
+        ],
+        "storage": [
+            {"label": "Save storage target", "method": "POST", "route": "/save-storage-target", "mode": "legacy-html"},
+            {"label": "Read current storage", "method": "POST", "route": "/read-current-storage", "mode": "legacy-html"},
+            {"label": "Plan RAID layout", "method": "POST", "route": "/plan-raid-layout", "mode": "legacy-html"},
+            {"label": "Approve storage plan", "method": "POST", "route": "/approve-storage-plan", "mode": "legacy-html"},
+            {"label": "Apply storage layout", "method": "POST", "route": "/apply-storage-layout", "mode": "legacy-html"},
+            {"label": "Reboot storage now", "method": "POST", "route": "/reboot-storage-now", "mode": "legacy-html"},
+        ],
+        "windows": [
+            {"label": "Save Windows setup", "method": "POST", "route": "/save-windows-settings", "mode": "legacy-html"},
+            {"label": "Upload Windows image", "method": "POST", "route": "/upload-windows-image", "mode": "legacy-html"},
+            {"label": "Plan Windows install", "method": "POST", "route": "/plan-windows-install", "mode": "legacy-html"},
+            {"label": "Probe vSphere", "method": "POST", "route": "/probe-windows-vsphere", "mode": "legacy-html"},
+            {"label": "Probe WinRM", "method": "POST", "route": "/probe-windows-winrm", "mode": "legacy-html"},
+            {"label": "Register OVF path", "method": "POST", "route": "/register-windows-ovf-path", "mode": "legacy-html"},
         ],
         "reports": [
             {"label": "Run history API", "method": "GET", "route": "/api/ui/run-history", "mode": "json"},
             {"label": "View run summary", "method": "POST", "route": "/view-run-summary", "mode": "legacy-html"},
+            {"label": "Download run summary", "method": "POST", "route": "/download-run-summary", "mode": "download"},
+            {"label": "View report", "method": "POST", "route": "/view-report", "mode": "legacy-html"},
+            {"label": "Download report", "method": "POST", "route": "/download-report", "mode": "download"},
+            {"label": "View latest live summary", "method": "POST", "route": "/view-latest-live-summary", "mode": "legacy-html"},
             {"label": "Download debug bundle", "method": "GET", "route": "/debug-bundles/latest", "mode": "download"},
         ],
         "technical": [
             {"label": "Technical events API", "method": "GET", "route": "/api/ui/technical-events", "mode": "json"},
             {"label": "Live job websocket", "method": "WS", "route": "/ws/job/{kit_name}", "mode": "websocket"},
         ],
+        "action-map": [
+            {"label": "React action catalog", "method": "GET", "route": "/api/ui/action-catalog", "mode": "json"},
+        ],
+    }
+
+
+def react_ui_route_category(path: str) -> str:
+    rules = [
+        ("/api/ui", "React API"),
+        ("/modules/netapp", "NetApp"),
+        ("/modules/cisco", "Cisco"),
+        ("/modules/ovf-templates", "OVF templates"),
+        ("/ws/", "Live job stream"),
+        ("/ilo", "iLO"),
+        ("/save-ilo", "iLO"),
+        ("/export-ilo", "iLO"),
+        ("/plan-ilo", "iLO"),
+        ("/run-ilo", "iLO"),
+        ("/esxi", "ESXi"),
+        ("/save-esxi", "ESXi"),
+        ("/storage", "Storage"),
+        ("/save-storage", "Storage"),
+        ("/read-current-storage", "Storage"),
+        ("/plan-raid", "Storage"),
+        ("/approve-storage", "Storage"),
+        ("/apply-storage", "Storage"),
+        ("/reboot-storage", "Storage"),
+        ("/windows", "Windows"),
+        ("/save-windows", "Windows"),
+        ("/upload-windows", "Windows"),
+        ("/plan-windows", "Windows"),
+        ("/probe-windows", "Windows"),
+        ("/register-windows", "Windows"),
+        ("/select-windows", "Windows"),
+        ("/qnap", "QNAP"),
+        ("/save-qnap", "QNAP"),
+        ("/configuration", "Configuration"),
+        ("/global-settings", "Configuration"),
+        ("/configs", "Configuration"),
+        ("/kits", "Configuration"),
+        ("/load-kit", "Configuration"),
+        ("/new-kit", "Configuration"),
+        ("/save-config", "Configuration"),
+        ("/save-global", "Configuration"),
+        ("/import-kit", "Configuration"),
+        ("/upload-upgrade", "Configuration"),
+        ("/upgrade-helper", "Upgrade helper"),
+        ("/save-upgrade", "Upgrade helper"),
+        ("/dashboard", "Run Center"),
+        ("/execution", "Run Center"),
+        ("/prepare-execute", "Run Center"),
+        ("/execute", "Run Center"),
+        ("/retry-storage-stage", "Run Center"),
+        ("/history", "Reports"),
+        ("/view-report", "Reports"),
+        ("/download-report", "Reports"),
+        ("/view-run-summary", "Reports"),
+        ("/download-run-summary", "Reports"),
+        ("/debug-bundles", "Reports"),
+        ("/view-latest", "Reports"),
+        ("/download-latest", "Reports"),
+        ("/react-preview", "React shell"),
+        ("/health", "System"),
+    ]
+    for prefix, category in rules:
+        if path == prefix or path.startswith(prefix):
+            return category
+    if path == "/":
+        return "Run Center"
+    return "Other"
+
+
+def react_ui_route_mode(path: str, methods: list[str], response_class: Any) -> str:
+    if methods == ["WS"]:
+        return "websocket"
+    if path.startswith("/api/ui"):
+        return "json"
+    if path in {
+        "/modules/netapp/discover",
+        "/modules/netapp/plan",
+        "/modules/netapp/validate",
+        "/modules/netapp/apply",
+        "/modules/netapp/status",
+        "/modules/netapp/repair/{issue_id}",
+    }:
+        return "json"
+    if "download" in path or path.startswith("/debug-bundles"):
+        return "download"
+    response_name = getattr(response_class, "__name__", "")
+    if response_name == "HTMLResponse":
+        return "legacy-html"
+    return "backend"
+
+
+def react_ui_route_migration_status(path: str, mode: str) -> str:
+    if path.startswith("/api/ui"):
+        return "React JSON API"
+    if path == "/react-preview":
+        return "React shell"
+    if mode == "legacy-html":
+        return "Legacy fallback"
+    if mode == "download":
+        return "Shared download"
+    if mode == "websocket":
+        return "Shared live stream"
+    return "Shared backend"
+
+
+def react_ui_action_catalog() -> dict[str, Any]:
+    docs_paths = {"/openapi.json", "/docs", "/docs/oauth2-redirect", "/redoc"}
+    mapped_routes = {action["route"] for actions in react_ui_action_inventory().values() for action in actions}
+    routes = []
+    for route in app.routes:
+        path = str(getattr(route, "path", "") or "")
+        if not path or path in docs_paths or path.startswith("/static"):
+            continue
+        raw_methods = sorted(str(method) for method in (getattr(route, "methods", None) or []) if str(method) not in {"HEAD", "OPTIONS"})
+        methods = raw_methods or (["WS"] if path.startswith("/ws/") else [])
+        if not methods:
+            continue
+        response_class = getattr(route, "response_class", None)
+        mode = react_ui_route_mode(path, methods, response_class)
+        routes.append(
+            {
+                "path": path,
+                "methods": methods,
+                "method": "/".join(methods),
+                "name": str(getattr(route, "name", "") or ""),
+                "category": react_ui_route_category(path),
+                "mode": mode,
+                "migration_status": react_ui_route_migration_status(path, mode),
+                "mapped": path in mapped_routes,
+            }
+        )
+    routes.sort(key=lambda item: (item["category"], item["path"], item["method"]))
+    category_names = sorted({str(item["category"]) for item in routes})
+    coverage = {
+        "total_routes": len(routes),
+        "react_api_routes": sum(1 for item in routes if str(item["path"]).startswith("/api/ui")),
+        "legacy_routes": sum(1 for item in routes if item["mode"] == "legacy-html"),
+        "download_routes": sum(1 for item in routes if item["mode"] == "download"),
+        "websocket_routes": sum(1 for item in routes if item["mode"] == "websocket"),
+        "mapped_actions": sum(1 for item in routes if item["mapped"]),
+        "categories": len(category_names),
+    }
+    return {
+        "coverage": coverage,
+        "categories": category_names,
+        "routes": routes,
+        "actions": react_ui_action_inventory(),
     }
 
 
@@ -14461,6 +14662,7 @@ def build_react_ui_state() -> dict[str, Any]:
         },
         "pages": react_ui_page_specs(),
         "actions": react_ui_action_inventory(),
+        "action_catalog": react_ui_action_catalog(),
         "job": react_ui_job_payload(job),
         "dashboard": dashboard_overview,
         "modules": react_ui_module_summaries(cfg, workflow_contexts),
@@ -14579,6 +14781,11 @@ async def api_ui_modules():
             "actions": react_ui_action_inventory(),
         }
     )
+
+
+@app.get("/api/ui/action-catalog")
+async def api_ui_action_catalog():
+    return jsonable_encoder(react_ui_action_catalog())
 
 
 @app.get("/api/ui/run-history")

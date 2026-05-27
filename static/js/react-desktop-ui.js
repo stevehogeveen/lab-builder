@@ -46,6 +46,12 @@
             what: "Review run history, operator events, reports, summaries, and generated artifacts.",
             legacy: "/configs",
         },
+        "action-map": {
+            title: "Action catalog",
+            eyebrow: "Coverage",
+            what: "Map React screens to preserved backend routes, legacy forms, downloads, and live streams.",
+            legacy: "/configuration",
+        },
         technical: {
             title: "Technical details",
             eyebrow: "Diagnostics",
@@ -167,6 +173,17 @@
             groups[page.group] = groups[page.group] || [];
             groups[page.group].push(page);
         });
+        const icons = {
+            dashboard: "RC",
+            ilo: "IL",
+            esxi: "EX",
+            netapp: "NA",
+            cisco: "CS",
+            configuration: "CF",
+            reports: "RP",
+            "action-map": "AM",
+            technical: "TD",
+        };
         return h("aside", { className: "app-sidebar", "aria-label": "React desktop navigation" },
             h("div", { className: "brand-row" },
                 h("div", { className: "brand-mark" }, "LB"),
@@ -181,7 +198,7 @@
                     h("nav", { className: "nav-list" },
                         groups[group].map(function (page) {
                             const active = props.activePage === page.key;
-                            const icon = page.key === "dashboard" ? "RC" : page.key.slice(0, 2).toUpperCase();
+                            const icon = icons[page.key] || page.key.slice(0, 2).toUpperCase();
                             return h("a", {
                                 key: page.key,
                                 className: "nav-item" + (active ? " nav-item-active" : ""),
@@ -247,6 +264,72 @@
         );
     }
 
+    function CommandBar(props) {
+        const state = props.appState || {};
+        const query = String(props.query || "").trim().toLowerCase();
+        const pages = state.pages || [];
+        const routes = (((state.action_catalog || {}).routes) || []);
+        const pageResults = query ? pages.filter(function (page) {
+            return (page.label + " " + page.key + " " + page.legacy_href).toLowerCase().indexOf(query) >= 0;
+        }).slice(0, 4) : [];
+        const routeResults = query ? routes.filter(function (route) {
+            return (route.path + " " + route.method + " " + route.category + " " + route.migration_status).toLowerCase().indexOf(query) >= 0;
+        }).slice(0, 6) : [];
+        const coverage = (state.action_catalog || {}).coverage || {};
+        return h("section", { className: "command-bar", "aria-label": "Workspace command bar" },
+            h("div", { className: "command-main" },
+                h("div", { className: "command-search" },
+                    h("span", { className: "command-search-label" }, "Search"),
+                    h("input", {
+                        className: "command-input",
+                        value: props.query || "",
+                        onChange: function (event) { props.onSearch(event.target.value); },
+                        placeholder: "Pages, routes, actions",
+                    })
+                ),
+                h("div", { className: "command-actions" },
+                    h(Button, { onClick: function () { props.onNavigate("dashboard"); } }, "Run Center"),
+                    h(Button, { onClick: function () { props.onNavigate("action-map"); } }, "Action catalog"),
+                    h(Button, { onClick: props.onToggleTechnical }, "Technical details")
+                )
+            ),
+            query ? h("div", { className: "command-results" },
+                pageResults.map(function (page) {
+                    return h("button", {
+                        className: "command-result",
+                        key: "page-" + page.key,
+                        type: "button",
+                        onClick: function () {
+                            props.onNavigate(page.key);
+                            props.onSearch("");
+                        },
+                    },
+                        h("span", { className: "command-result-title" }, page.label),
+                        h("span", { className: "command-result-meta" }, page.legacy_href)
+                    );
+                }),
+                routeResults.map(function (route) {
+                    return h("button", {
+                        className: "command-result",
+                        key: "route-" + route.method + route.path,
+                        type: "button",
+                        onClick: function () {
+                            props.onNavigate("action-map");
+                        },
+                    },
+                        h("span", { className: "command-result-title" }, route.method + " " + route.path),
+                        h("span", { className: "command-result-meta" }, route.category + " - " + route.migration_status)
+                    );
+                }),
+                !pageResults.length && !routeResults.length ? h("div", { className: "command-empty" }, "No matching page or route.") : null
+            ) : h("div", { className: "command-summary" },
+                h("span", null, String(coverage.total_routes || 0) + " backend routes"),
+                h("span", null, String(coverage.legacy_routes || 0) + " legacy fallbacks"),
+                h("span", null, String(coverage.react_api_routes || 0) + " React APIs")
+            )
+        );
+    }
+
     function LiveJobPanel(props) {
         const job = props.job || {};
         const total = job.total_steps || 0;
@@ -300,6 +383,111 @@
         );
     }
 
+    function JobTimelinePanel(props) {
+        const job = props.job || {};
+        const modules = props.modules || [];
+        const stageStatuses = job.stage_statuses || {};
+        let items = Object.keys(stageStatuses).map(function (key) {
+            return {
+                key: key,
+                title: key.replace(/_/g, " "),
+                status: String(stageStatuses[key] || "waiting"),
+                detail: key === job.current_stage ? (job.last_message || "Current stage") : "Stage status from the active job.",
+            };
+        });
+        if (!items.length) {
+            items = modules.slice(0, 5).map(function (module) {
+                return {
+                    key: module.key,
+                    title: module.label,
+                    status: module.state_label || "Review",
+                    detail: module.planned_summary || module.last_summary || "Review setup readiness.",
+                };
+            });
+        }
+        function rowClass(status) {
+            const value = String(status || "").toLowerCase();
+            if (value.indexOf("complete") >= 0 || value.indexOf("ready") >= 0) return "timeline-done";
+            if (value.indexOf("run") >= 0 || value.indexOf("progress") >= 0) return "timeline-running";
+            if (value.indexOf("fail") >= 0 || value.indexOf("block") >= 0 || value.indexOf("warn") >= 0) return "timeline-warn";
+            return "";
+        }
+        return h(Panel, { label: "Progress", title: "Timeline", subtitle: job.current_stage || "Stages appear here as runs update." },
+            h("div", { className: "timeline" }, items.map(function (item, index) {
+                return h("div", { className: "timeline-item " + rowClass(item.status), key: item.key },
+                    h("div", { className: "timeline-marker" }, String(index + 1)),
+                    h("div", null,
+                        h("div", { className: "timeline-title" }, item.title),
+                        h("div", { className: "timeline-detail" }, item.detail)
+                    ),
+                    h("div", { className: "timeline-time" }, item.status)
+                );
+            }))
+        );
+    }
+
+    function WarningsPanel(props) {
+        const modules = props.modules || [];
+        const blockers = [];
+        modules.forEach(function (module) {
+            (module.blockers || []).forEach(function (blocker) {
+                blockers.push({
+                    key: module.key + "-" + blocker.label,
+                    title: module.label + ": " + (blocker.label || "Review required"),
+                    detail: blocker.fix || blocker.details || "Review the legacy page for the full form state.",
+                });
+            });
+        });
+        return h(Panel, { label: "Warnings", title: "Operator attention", subtitle: blockers.length ? String(blockers.length) + " item(s) need review before a clean run." : "No blocking warnings are reported by the summary API." },
+            blockers.length ? h("div", { className: "warning-list" }, blockers.slice(0, 8).map(function (item) {
+                return h("div", { className: "warning-row", key: item.key },
+                    h("div", null,
+                        h("div", { className: "warning-title" }, item.title),
+                        h("div", { className: "warning-detail" }, item.detail)
+                    ),
+                    h(Pill, { tone: "warn" }, "Review")
+                );
+            })) : h("div", { className: "empty-state" }, "Run readiness checks are clean for the currently summarized modules.")
+        );
+    }
+
+    function RecentActivityPanel(props) {
+        const activity = props.activity || [];
+        return h(Panel, { label: "Recent activity", title: "Latest operator and run events", subtitle: activity.length ? "Most recent events for the active kit." : "No events recorded for this kit yet." },
+            activity.length ? h("div", { className: "activity-list" }, activity.slice(0, 8).map(function (item, index) {
+                return h("div", { className: "activity-row", key: index },
+                    h("div", null,
+                        h("div", { className: "activity-title" }, item.display_title || item.title || item.event || "Activity"),
+                        h("div", { className: "activity-detail" }, item.display_summary || item.summary || item.status || "")
+                    ),
+                    h("div", { className: "timeline-time" }, item.time || item.created_at || "")
+                );
+            })) : h("div", { className: "empty-state" }, "No activity has been recorded yet.")
+        );
+    }
+
+    function KitSummaryPanel(props) {
+        const kit = props.kit || {};
+        const site = kit.site || {};
+        const included = kit.included || {};
+        const includedNames = Object.keys(included).filter(function (key) { return included[key]; }).join(", ") || "None";
+        function summaryRow(label, value) {
+            return h("div", { className: "data-row" },
+                h("div", null,
+                    h("div", { className: "data-name" }, label),
+                    h("div", { className: "data-value" }, value || "Not set")
+                )
+            );
+        }
+        return h(Panel, { label: "Active kit", title: kit.name || "Current kit", subtitle: site.location || site.customer || "Kit configuration loaded from the backend." },
+            h("div", { className: "data-list" },
+                summaryRow("Site", site.name || kit.name),
+                summaryRow("Network", (kit.ip_plan || {}).subnet),
+                summaryRow("Included", includedNames)
+            )
+        );
+    }
+
     function DashboardPage(props) {
         const state = props.appState || {};
         const dashboard = state.dashboard || {};
@@ -332,7 +520,12 @@
                     h("div", { className: "module-grid" }, modules.map(function (module) {
                         return h(ModuleCard, { key: module.key, module: module, onNavigate: props.onNavigate });
                     }))
-                )
+                ),
+                h("div", { className: "dashboard-lower-grid" },
+                    h(JobTimelinePanel, { job: state.job, modules: modules }),
+                    h(WarningsPanel, { modules: modules })
+                ),
+                h(RecentActivityPanel, { activity: state.recent_activity || [] })
             ),
             h(ContextPanel, { activePage: "dashboard", appState: state, onNavigate: props.onNavigate })
         );
@@ -457,6 +650,57 @@
         );
     }
 
+    function ConfigurationPage(props) {
+        const state = props.appState || {};
+        const kit = state.kit || {};
+        const actions = ((state.actions || {}).configuration || []);
+        const available = kit.available || [];
+        const included = kit.included || {};
+        const includedItems = Object.keys(included).filter(function (key) { return included[key]; });
+        function configRow(label, value) {
+            return h("div", { className: "data-row" },
+                h("div", null,
+                    h("div", { className: "data-name" }, label),
+                    h("div", { className: "data-value" }, value || "Not set")
+                )
+            );
+        }
+        return h("div", { className: "page-layout" },
+            h("div", { className: "page-main" },
+                h(SetupStrip, {
+                    what: pageCopy.configuration.what,
+                    next: "Use the legacy Configuration page for saves until each form receives a JSON endpoint.",
+                    last: available.length ? String(available.length) + " kit(s) are available." : "No saved kit list is available.",
+                }),
+                h(Panel, { label: "Kit", title: kit.name || "Current kit", subtitle: "Read from /api/ui/app-state." },
+                    h("div", { className: "section-grid" },
+                        h("div", { className: "setup-card" }, h("div", { className: "metric-label" }, "Kit"), h("div", { className: "strip-value" }, kit.name || "Not set")),
+                        h("div", { className: "setup-card" }, h("div", { className: "metric-label" }, "Available kits"), h("div", { className: "strip-value" }, String(available.length))),
+                        h("div", { className: "setup-card" }, h("div", { className: "metric-label" }, "Included modules"), h("div", { className: "strip-value" }, String(includedItems.length)))
+                    ),
+                    h("div", { className: "data-list config-data-list" },
+                        configRow("Subnet", (kit.ip_plan || {}).subnet),
+                        configRow("Gateway", (kit.ip_plan || {}).gateway),
+                        configRow("Included", includedItems.join(", ") || "None")
+                    )
+                ),
+                h(Panel, { label: "Kit library", title: "Saved kits", subtitle: "The React shell lists kits; create/load/import still goes through the existing forms." },
+                    available.length ? h("div", { className: "kit-list" }, available.map(function (name) {
+                        return h("div", { className: "kit-row", key: name },
+                            h("div", null,
+                                h("div", { className: "data-name" }, name),
+                                h("div", { className: "data-value" }, name === kit.name ? "Active" : "Available")
+                            ),
+                            h(Pill, { tone: name === kit.name ? "ready" : "blue" }, name === kit.name ? "Active" : "Saved")
+                        );
+                    })) : h("div", { className: "empty-state" }, "No kits found.")
+                ),
+                h(ActionInventoryPanel, { actions: actions })
+            ),
+            h(ContextPanel, { activePage: "configuration", appState: state, actions: actions, onNavigate: props.onNavigate })
+        );
+    }
+
     function ReportsPage(props) {
         const state = props.appState || {};
         return h("div", { className: "page-layout" },
@@ -526,6 +770,90 @@
         );
     }
 
+    function ActionCatalogPage(props) {
+        const state = props.appState || {};
+        const catalog = state.action_catalog || {};
+        const coverage = catalog.coverage || {};
+        const queryHook = React.useState("");
+        const query = queryHook[0];
+        const setQuery = queryHook[1];
+        const selectedHook = React.useState("All");
+        const selectedCategory = selectedHook[0];
+        const setSelectedCategory = selectedHook[1];
+        const routes = catalog.routes || [];
+        const categories = ["All"].concat(catalog.categories || []);
+        const needle = String(query || "").trim().toLowerCase();
+        const filtered = routes.filter(function (route) {
+            const categoryMatches = selectedCategory === "All" || route.category === selectedCategory;
+            if (!categoryMatches) return false;
+            if (!needle) return true;
+            return (route.path + " " + route.method + " " + route.name + " " + route.mode + " " + route.migration_status).toLowerCase().indexOf(needle) >= 0;
+        });
+        return h("div", { className: "page-layout" },
+            h("div", { className: "page-main" },
+                h(SetupStrip, {
+                    what: pageCopy["action-map"].what,
+                    next: "Move one high-use legacy action at a time behind a JSON endpoint, then keep the old page as fallback.",
+                    last: String(coverage.mapped_actions || 0) + " mapped action routes out of " + String(coverage.total_routes || 0) + " registered backend routes.",
+                }),
+                h(Panel, { label: "Coverage", title: "Backend route surface", subtitle: "Generated from FastAPI's registered routes at request time." },
+                    h("div", { className: "coverage-strip" },
+                        [["Total routes", coverage.total_routes || 0], ["React APIs", coverage.react_api_routes || 0], ["Legacy fallbacks", coverage.legacy_routes || 0], ["Mapped actions", coverage.mapped_actions || 0], ["Downloads", coverage.download_routes || 0], ["Streams", coverage.websocket_routes || 0]].map(function (item) {
+                            return h("div", { className: "coverage-item", key: item[0] },
+                                h("div", { className: "metric-label" }, item[0]),
+                                h("div", { className: "coverage-value" }, String(item[1]))
+                            );
+                        })
+                    )
+                ),
+                h(Panel, {
+                    label: "Routes",
+                    title: "Action and route catalog",
+                    subtitle: "Legacy behavior remains available while React pages move to JSON APIs.",
+                    action: h(Button, { href: "/configuration" }, "Legacy configuration")
+                },
+                    h("div", { className: "catalog-tools" },
+                        h("input", {
+                            className: "text-input",
+                            value: query,
+                            onChange: function (event) { setQuery(event.target.value); },
+                            placeholder: "Filter routes",
+                        }),
+                        h("select", {
+                            className: "select-input",
+                            value: selectedCategory,
+                            onChange: function (event) { setSelectedCategory(event.target.value); },
+                        }, categories.map(function (category) {
+                            return h("option", { key: category, value: category }, category);
+                        }))
+                    ),
+                    h("div", { className: "route-table" },
+                        h("div", { className: "route-row route-row-head" },
+                            h("div", null, "Route"),
+                            h("div", null, "Category"),
+                            h("div", null, "Mode"),
+                            h("div", null, "Status")
+                        ),
+                        filtered.slice(0, 120).map(function (route) {
+                            return h("div", { className: "route-row", key: route.method + route.path },
+                                h("div", null,
+                                    h("div", { className: "route-path" }, route.method + " " + route.path),
+                                    h("div", { className: "route-name" }, route.name || "unnamed")
+                                ),
+                                h("div", null, route.category),
+                                h("div", null, h(Pill, { tone: route.mode === "json" ? "ready" : route.mode === "legacy-html" ? "blue" : "warn" }, route.mode)),
+                                h("div", null, route.mapped ? h(Pill, { tone: "ready" }, "Mapped") : h(Pill, { tone: "warn" }, route.migration_status))
+                            );
+                        })
+                    ),
+                    filtered.length > 120 ? h("div", { className: "field-help catalog-note" }, "Showing first 120 matching routes.") : null,
+                    !filtered.length ? h("div", { className: "empty-state" }, "No routes match the current filter.") : null
+                )
+            ),
+            h(ContextPanel, { activePage: "action-map", appState: state, actions: ((state.actions || {})["action-map"] || []), onNavigate: props.onNavigate })
+        );
+    }
+
     function ContextPanel(props) {
         const state = props.appState || {};
         const copy = pageCopy[props.activePage] || pageCopy.dashboard;
@@ -538,6 +866,7 @@
                     h(Button, { href: copy.legacy }, "Legacy page")
                 )
             ),
+            h(KitSummaryPanel, { kit: state.kit || {} }),
             h(Panel, { label: "Page context", title: copy.title, subtitle: copy.what },
                 h("div", { className: "data-list" },
                     h("div", { className: "data-row" }, h("div", null, h("div", { className: "data-name" }, "Fallback"), h("div", { className: "data-value" }, copy.legacy))),
@@ -602,6 +931,9 @@
         const drawerHook = React.useState(false);
         const technicalOpen = drawerHook[0];
         const setTechnicalOpen = drawerHook[1];
+        const commandSearchHook = React.useState("");
+        const commandSearch = commandSearchHook[0];
+        const setCommandSearch = commandSearchHook[1];
 
         function navigate(page) {
             setActivePage(page);
@@ -737,6 +1069,10 @@
             pageContent = h(IloPage, { appState: appState, iloState: iloState, iloForm: iloForm, onIloChange: onIloChange, onSaveIlo: saveIlo, savingIlo: savingIlo, message: message, onNavigate: navigate });
         } else if (activePage === "reports") {
             pageContent = h(ReportsPage, { appState: appState, onNavigate: navigate });
+        } else if (activePage === "configuration") {
+            pageContent = h(ConfigurationPage, { appState: appState, onNavigate: navigate });
+        } else if (activePage === "action-map") {
+            pageContent = h(ActionCatalogPage, { appState: appState, onNavigate: navigate });
         } else if (activePage === "technical") {
             pageContent = h(TechnicalPage, { appState: appState, technical: technical, onNavigate: navigate });
         } else {
@@ -749,6 +1085,13 @@
                 h(TopStatus, { kit: appState.kit, job: appState.job }),
                 h("main", { className: "workspace" },
                     h(WorkspaceHeading, { activePage: activePage, onRefresh: refreshAll, onToggleTechnical: function () { setTechnicalOpen(!technicalOpen); }, technicalOpen: technicalOpen }),
+                    h(CommandBar, {
+                        appState: appState,
+                        query: commandSearch,
+                        onSearch: setCommandSearch,
+                        onNavigate: navigate,
+                        onToggleTechnical: function () { setTechnicalOpen(!technicalOpen); },
+                    }),
                     message && activePage !== "ilo" ? h("div", { className: "message " + (message.ok ? "message-good" : "message-warn") }, message.text) : null,
                     pageContent,
                     h(TechnicalDrawer, { open: technicalOpen, appState: appState, onClose: function () { setTechnicalOpen(false); } })
