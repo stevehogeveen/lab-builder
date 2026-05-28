@@ -76,6 +76,19 @@ def test_overnight_hardware_stop_and_finalization_deadline():
     assert finalization_deadline_ok(datetime(2026, 5, 27, 5, 59, 59)) is True
     assert finalization_deadline_ok(datetime(2026, 5, 27, 6, 0)) is False
 
+    evening_start = datetime(2026, 5, 27, 17, 57)
+    assert should_stop_hardware_actions(datetime(2026, 5, 27, 20, 31), run_started_at=evening_start) is False
+    assert finalization_deadline_ok(datetime(2026, 5, 27, 20, 31), run_started_at=evening_start) is True
+    assert should_stop_hardware_actions(datetime(2026, 5, 28, 5, 30), run_started_at=evening_start) is True
+    assert finalization_deadline_ok(datetime(2026, 5, 28, 5, 59, 59), run_started_at=evening_start) is True
+    assert finalization_deadline_ok(datetime(2026, 5, 28, 6, 0), run_started_at=evening_start) is False
+
+    morning_start = datetime(2026, 5, 27, 5, 20)
+    assert should_stop_hardware_actions(datetime(2026, 5, 27, 5, 29, 59), run_started_at=morning_start) is False
+    assert should_stop_hardware_actions(datetime(2026, 5, 27, 5, 30), run_started_at=morning_start) is True
+    assert finalization_deadline_ok(datetime(2026, 5, 27, 5, 59, 59), run_started_at=morning_start) is True
+    assert finalization_deadline_ok(datetime(2026, 5, 27, 6, 0), run_started_at=morning_start) is False
+
 
 def test_secret_scan_blocks_auto_commit(tmp_path):
     repo = tmp_path
@@ -217,6 +230,55 @@ def test_finalize_records_git_statuses_and_push_result(tmp_path):
     assert "## Git Status Before" in report
     assert "Artifact folder:" in report
     assert "- Compile: not run" in report
+    assert any(command[:2] == ["git", "commit"] for command in calls)
+
+
+def test_evening_finalize_uses_next_morning_deadline(tmp_path):
+    repo = tmp_path
+    tracked_file = repo / "app" / "overnight_run.py"
+    tracked_file.parent.mkdir(parents=True)
+    tracked_file.write_text("print('safe scheduler path')\n", encoding="utf-8")
+    writer = OvernightArtifactWriter(repo / "artifacts" / "runs" / "overnight" / "20260527-175700-ilo-cisco")
+    writer.initialize_placeholders()
+    write_complete_nonsecret_artifacts(writer)
+    calls: list[list[str]] = []
+    status_calls = 0
+
+    def runner(command: list[str], cwd: Path) -> CommandCapture:
+        nonlocal status_calls
+        calls.append(command)
+        if command == ["git", "status", "--short", "--branch"]:
+            status_calls += 1
+            stdout = "## feature/evening...origin/feature/evening\n M app/overnight_run.py\n" if status_calls == 1 else "## feature/evening...origin/feature/evening\n"
+            return CommandCapture(command, 0, stdout, "")
+        if command[:2] == ["git", "add"]:
+            return CommandCapture(command, 0, "", "")
+        if command[:3] == ["git", "diff", "--cached"]:
+            return CommandCapture(command, 0, "app/overnight_run.py\n", "")
+        if command == ["git", "branch", "--show-current"]:
+            return CommandCapture(command, 0, "feature/evening\n", "")
+        if command[:2] == ["git", "commit"]:
+            return CommandCapture(command, 0, "[feature/evening abc123] Finalize\n", "")
+        if command == ["git", "rev-parse", "HEAD"]:
+            return CommandCapture(command, 0, "abc123def456\n", "")
+        if command == ["git", "push", "origin", "feature/evening"]:
+            return CommandCapture(command, 0, "pushed\n", "")
+        return CommandCapture(command, 0, "", "")
+
+    result = finalize_overnight_run(
+        writer,
+        repo_root=repo,
+        run_tests=False,
+        allow_git=True,
+        commit_paths=["app/overnight_run.py"],
+        command_runner=runner,
+        now=datetime(2026, 5, 27, 20, 31),
+    )
+
+    assert result["status_label"] == "Ready for review"
+    assert result["push_result"] == "pushed"
+    assert not any("deadline was missed" in reason for reason in result["needs_attention_reasons"])
+    assert not any("at or after 5:30 AM" in note for note in result["notes"])
     assert any(command[:2] == ["git", "commit"] for command in calls)
 
 

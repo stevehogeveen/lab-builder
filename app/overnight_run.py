@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from datetime import datetime, time as datetime_time
+from datetime import date, datetime, time as datetime_time, timedelta
 from pathlib import Path
 import glob
 import json
@@ -70,6 +70,35 @@ REQUIRED_ARTIFACTS = [
 PENDING_ARTIFACT_VALUES = {"", "pending", "status: pending"}
 
 
+def _local_wall_datetime(value: datetime | None = None) -> datetime:
+    current = value or datetime.now().astimezone()
+    if current.tzinfo is not None:
+        current = current.astimezone()
+    return current.replace(tzinfo=None)
+
+
+def overnight_run_started_at(run_dir: Path | str) -> datetime | None:
+    match = re.search(r"(\d{8})-(\d{6})", Path(run_dir).name)
+    if not match:
+        return None
+    try:
+        return datetime.strptime("".join(match.groups()), "%Y%m%d%H%M%S")
+    except ValueError:
+        return None
+
+
+def _overnight_finalization_date(run_started_at: datetime) -> date:
+    started = _local_wall_datetime(run_started_at)
+    if started.time() < FINALIZATION_DEADLINE:
+        return started.date()
+    return started.date() + timedelta(days=1)
+
+
+def _overnight_cutoff_at(cutoff: datetime_time, current: datetime, run_started_at: datetime | None) -> datetime:
+    cutoff_date = _overnight_finalization_date(run_started_at) if run_started_at else current.date()
+    return datetime.combine(cutoff_date, cutoff)
+
+
 def normalize_overnight_mode(value: str | None) -> str:
     mode = str(value or OVERNIGHT_DEFAULT_MODE).strip().lower()
     if mode not in OVERNIGHT_MODES:
@@ -77,14 +106,14 @@ def normalize_overnight_mode(value: str | None) -> str:
     return mode
 
 
-def should_stop_hardware_actions(now: datetime | None = None) -> bool:
-    current = now or datetime.now().astimezone()
-    return current.timetz().replace(tzinfo=None) >= HARDWARE_STOP_TIME
+def should_stop_hardware_actions(now: datetime | None = None, *, run_started_at: datetime | None = None) -> bool:
+    current = _local_wall_datetime(now)
+    return current >= _overnight_cutoff_at(HARDWARE_STOP_TIME, current, run_started_at)
 
 
-def finalization_deadline_ok(now: datetime | None = None) -> bool:
-    current = now or datetime.now().astimezone()
-    return current.timetz().replace(tzinfo=None) < FINALIZATION_DEADLINE
+def finalization_deadline_ok(now: datetime | None = None, *, run_started_at: datetime | None = None) -> bool:
+    current = _local_wall_datetime(now)
+    return current < _overnight_cutoff_at(FINALIZATION_DEADLINE, current, run_started_at)
 
 
 def hardware_stop_marker_path(run_dir: Path) -> Path:
@@ -872,6 +901,7 @@ def finalize_overnight_run(
 ) -> dict[str, Any]:
     runner = command_runner or (lambda command, cwd: run_command(command, cwd=cwd))
     started_at = now or datetime.now().astimezone()
+    run_started_at = overnight_run_started_at(writer.run_dir)
     stop_marker = request_hardware_stop(writer, now=started_at)
     writer.trace(stage="finalization", status="running", progress=72, message="Stopping hardware work and starting morning finalization.")
     commands: list[dict[str, Any]] = []
@@ -932,8 +962,8 @@ def finalize_overnight_run(
     secret_findings = scan_paths_for_secrets([writer.run_dir])
     secret_scan_result = "clean" if not secret_findings else f"blocked ({len(secret_findings)} finding(s))"
     decision_time = now or datetime.now().astimezone()
-    deadline_ok = finalization_deadline_ok(decision_time)
-    if should_stop_hardware_actions(started_at):
+    deadline_ok = finalization_deadline_ok(decision_time, run_started_at=run_started_at)
+    if should_stop_hardware_actions(started_at, run_started_at=run_started_at):
         notes.append("Hardware stop marker was written at or after 5:30 AM local time; verify no hardware action overran the stop window.")
     decision = decide_finalization_git_action(
         allow_git=allow_git,
@@ -1063,6 +1093,7 @@ def run_overnight_hardware(
     on_event: Callable[[dict[str, Any]], None] | None = None,
 ) -> dict[str, Any]:
     now = now_fn or (lambda: datetime.now().astimezone())
+    run_started_at = overnight_run_started_at(writer.run_dir)
     original_trace = writer.trace
 
     def traced(*, stage: str, status: str, progress: int, message: str) -> dict[str, Any]:
@@ -1078,7 +1109,7 @@ def run_overnight_hardware(
     def stop_reason() -> str:
         if hardware_stop_requested(writer.run_dir):
             return "Hardware stop marker is present; no additional hardware actions will start."
-        if should_stop_hardware_actions(now()):
+        if should_stop_hardware_actions(now(), run_started_at=run_started_at):
             return "Finalization window is active; no additional hardware actions will start."
         return ""
 
