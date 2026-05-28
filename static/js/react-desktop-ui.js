@@ -230,6 +230,7 @@
             "/qnap": "qnap",
             "/modules/netapp": "netapp",
             "/cisco": "cisco",
+            "/modules/cisco": "cisco",
             "/execution": "execution",
             "/configuration": "configuration",
             "/configs": "reports",

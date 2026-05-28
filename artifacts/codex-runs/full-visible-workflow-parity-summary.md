@@ -35,6 +35,7 @@ Latest follow-up:
 - React Global Settings now updates the NetApp cluster-management bootstrap override when the global NetApp IP changes, so Setup IP, app-state, saved config, and NetApp management values stay aligned.
 - React Setup IP now fills NetApp SP, cluster, node, and SVM management address fields from the saved default IP plan when no explicit bootstrap override exists.
 - React JSON save responses for Global Settings and iLO setup now say the values were saved locally and that reachability has not been verified, matching the Operator Mode wording.
+- React-aware navigation now maps the legacy `/modules/cisco` page alias back into the Cisco React page, matching the existing NetApp and OVF module aliases.
 
 Remaining gaps:
 - No unmatched original visible actions are currently listed in artifacts/codex-runs/full-visible-workflow-missing-controls.md.
@@ -55,6 +56,7 @@ Validation:
 - Latest compile/diff checks after NetApp propagation fix: /home/administrator/lab-builder/.venv/bin/python -m compileall app passed; git diff --check passed
 - Latest NetApp setup-IP default validation: /home/administrator/lab-builder/.venv/bin/python -m pytest -q tests/test_full_visible_workflow_parity.py tests/test_full_ui_parity_contract.py tests/test_app.py::test_react_ui_app_state_api_exposes_desktop_shell_state tests/test_app.py::test_react_ui_setup_ip_state_defaults_netapp_bootstrap_addresses_from_plan tests/test_app.py::test_react_ui_global_settings_updates_netapp_cluster_management_override: 36 passed
 - Latest local-save wording validation: /home/administrator/lab-builder/.venv/bin/python -m pytest -q tests/test_full_visible_workflow_parity.py tests/test_full_ui_parity_contract.py tests/test_app.py::test_react_ui_global_settings_api_saves_editable_shared_defaults tests/test_app.py::test_react_ui_ilo_settings_api_reuses_backend_save_logic tests/test_app.py::test_react_ui_setup_ip_state_defaults_netapp_bootstrap_addresses_from_plan tests/test_app.py::test_react_ui_global_settings_updates_netapp_cluster_management_override: 37 passed
+- Latest React-aware module alias validation: /home/administrator/lab-builder/.venv/bin/python -m pytest -q tests/test_full_ui_parity_contract.py::test_react_aware_navigation_includes_legacy_module_aliases tests/test_full_ui_parity_contract.py tests/test_full_visible_workflow_parity.py: 34 passed; node --check static/js/react-desktop-ui.js passed
 
 Hardware safety:
 - No hardware actions were executed by tests or validation.

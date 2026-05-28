@@ -171,6 +171,13 @@ def test_expected_operator_controls_are_present_in_react_bundle():
         assert label in js
 
 
+def test_react_aware_navigation_includes_legacy_module_aliases():
+    js = Path("static/js/react-desktop-ui.js").read_text(encoding="utf-8")
+    assert '"/modules/cisco": "cisco"' in js
+    assert '"/modules/netapp": "netapp"' in js
+    assert '"/modules/ovf-templates": "ovf_templates"' in js
+
+
 def test_overnight_hardware_feature_is_removed_from_routes_and_nav():
     paths = route_paths()
     assert "/overnight-hardware" not in paths
