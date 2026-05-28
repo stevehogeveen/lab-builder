@@ -1709,7 +1709,7 @@
         }
         function isGuarded(action) {
             const text = String((action.label || "") + " " + (action.route || "")).toLowerCase();
-            return text.includes("factory reset") || text.includes("start real") || text.includes("run for real") || text.includes("run-upgrade") || text.includes("reboot") || text.includes("apply config") || text.includes("apply netapp page") || text.includes("apply storage") || text.includes("safe apply");
+            return text.includes("factory reset") || text.includes("start real") || text.includes("run for real") || text.includes("run-upgrade") || text.includes("reboot") || text.includes("apply config") || text.includes("apply cluster") || text.includes("apply netapp page") || text.includes("apply storage") || text.includes("safe apply");
         }
         function needsOriginalFormContext(action) {
             const route = String((action || {}).route || "");

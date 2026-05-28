@@ -18,6 +18,7 @@ Latest follow-up:
 - React app-state execution review is passive and does not run ESXi runtime reachability probes during normal Operator Mode polling.
 - NetApp now exposes the explicit guarded "Factory reset NetApp" label in addition to reset readiness, matching the original visible control while still opening the original confirmation form.
 - React execution-review fallback now scopes missing ESXi ISO/media blockers to the ESXi stage instead of making every included stage look blocked by the same ESXi issue.
+- A follow-up NetApp template scan restored additional original console and cluster management IP action labels in React: save selected console, read current NetApp config, preview/apply console cluster IP, and preview/apply cluster management IP.
 
 Remaining gaps:
 - No unmatched original visible actions are currently listed in artifacts/codex-runs/full-visible-workflow-missing-controls.md.

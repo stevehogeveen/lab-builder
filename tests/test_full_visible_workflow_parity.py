@@ -102,9 +102,16 @@ EXPECTED_VISIBLE_WORKFLOWS = {
         "Save NetApp settings",
         "Test NetApp connection",
         "Read current ONTAP",
+        "Read current NetApp config",
+        "Discover NetApp console",
         "Check console ports",
+        "Save selected console",
         "Read console state",
+        "Preview console IP commands",
+        "Apply cluster IP by console",
         "Setup NetApp IP",
+        "Preview cluster IP command",
+        "Apply cluster management IP",
         "Ping all NetApp IPs",
         "Use discovered values",
         "Probe ESXi and NFS",
@@ -160,6 +167,8 @@ GUARDED_LABELS = {
     "Apply NetApp page",
     "Safe apply NetApp",
     "Factory reset NetApp",
+    "Apply cluster IP by console",
+    "Apply cluster management IP",
     "Apply storage layout",
     "Reboot storage now",
 }
@@ -186,7 +195,14 @@ CONTEXT_REQUIRED_LABELS = {
     "Setup Cisco IP",
     "Save NetApp settings",
     "Read current ONTAP",
+    "Read current NetApp config",
+    "Discover NetApp console",
+    "Save selected console",
+    "Preview console IP commands",
+    "Apply cluster IP by console",
     "Setup NetApp IP",
+    "Preview cluster IP command",
+    "Apply cluster management IP",
     "View run summary",
     "Download run summary",
     "View report",
@@ -329,6 +345,7 @@ def test_guarded_hardware_actions_do_not_auto_submit_from_action_inventory():
     js = Path("static/js/react-desktop-ui.js").read_text(encoding="utf-8")
     guarded_branch = js.split("function actionControl(action)", 1)[1].split('if (action.method === "GET"', 1)[0]
     assert "Open confirmation" in guarded_branch
+    assert "apply cluster" in js
     for route in guarded_routes:
         assert route in {action["route"] for actions in inventory.values() for action in actions}
 
