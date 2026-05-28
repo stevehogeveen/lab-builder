@@ -315,9 +315,12 @@ def test_react_legacy_html_posts_surface_in_page_warnings_as_failures():
 def test_netapp_setup_ip_copy_matches_placeholder_backend_behavior():
     js = Path("static/js/react-desktop-ui.js").read_text(encoding="utf-8")
     panel_body = js.split("function NetAppSetupIpPanel", 1)[1].split("function ActionLogPanel", 1)[0]
+    handler_body = js.split("function setupNetAppIp", 1)[1].split("function storagePathFields", 1)[0]
     assert "live NetApp IP apply is not implemented yet" in panel_body
     assert "Save setup IP values" in panel_body
     assert "Applying..." not in panel_body
+    assert "NetApp IP setup was not applied" in handler_body
+    assert 'appendSetupAction("NetApp setup IP", message, false, "warn")' in handler_body
 
 
 def test_legacy_post_actions_render_as_visible_operator_forms():

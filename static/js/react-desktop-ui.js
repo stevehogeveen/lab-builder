@@ -2362,10 +2362,16 @@
                 netapp_node_01_mgmt_ip: netapp.node_01_mgmt_ip || "",
                 netapp_node_02_mgmt_ip: netapp.node_02_mgmt_ip || "",
                 netapp_svm_mgmt_ip: netapp.svm_mgmt_ip || "",
-            }).then(function () {
+            }).then(function (text) {
                 setSetupIpWorking(false);
-                setMessage({ ok: true, tone: "info", text: "NetApp setup request returned. Reachability has not been verified by this action." });
-                appendSetupAction("NetApp setup IP", "NetApp Apply IP setup route returned without reachability verification.", true, "blue");
+                if (String(text || "").indexOf("NetApp IP setup apply backend is not implemented yet") >= 0) {
+                    const message = "NetApp IP setup was not applied. The backend saved the values but did not send NetApp commands.";
+                    setMessage({ ok: false, text: message });
+                    appendSetupAction("NetApp setup IP", message, false, "warn");
+                } else {
+                    setMessage({ ok: true, tone: "info", text: "NetApp setup request returned. Reachability has not been verified by this action." });
+                    appendSetupAction("NetApp setup IP", "NetApp Apply IP setup route returned without reachability verification.", true, "blue");
+                }
                 return refreshAll();
             }).catch(function (error) {
                 setSetupIpWorking(false);
