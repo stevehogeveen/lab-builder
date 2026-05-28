@@ -37,6 +37,9 @@ Validation:
 - /home/administrator/lab-builder/.venv/bin/python -m compileall app: passed
 - git diff --check: passed
 - Latest focused validation: /home/administrator/lab-builder/.venv/bin/python -m pytest -q tests/test_full_visible_workflow_parity.py tests/test_full_ui_parity_contract.py: 31 passed
+- Latest current-head focused validation: /home/administrator/lab-builder/.venv/bin/python -m pytest -q tests/test_full_visible_workflow_parity.py tests/test_full_ui_parity_contract.py: 33 passed
+- Latest current-head full validation: /home/administrator/lab-builder/.venv/bin/python -m pytest -q: 457 passed
+- Latest current-head compile/JS/diff checks: compileall app passed; node --check static/js/react-desktop-ui.js passed; git diff --check passed
 
 Hardware safety:
 - No hardware actions were executed by tests or validation.
