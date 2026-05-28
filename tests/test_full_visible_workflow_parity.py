@@ -292,6 +292,18 @@ def test_report_center_panel_has_view_and_download_forms():
     assert 'name: "report_path"' in report_body
 
 
+def test_execution_page_has_dedicated_scope_review_and_preview_forms():
+    js = Path("static/js/react-desktop-ui.js").read_text(encoding="utf-8")
+    assert "function ExecutionPage" in js
+    execution_body = js.split("function ExecutionPage", 1)[1].split("function ReportCenterPanel", 1)[0]
+    assert '"/prepare-execute"' in execution_body
+    assert '"/execute-preview"' in execution_body
+    assert 'name: "selected_scopes"' in execution_body
+    assert "Open full confirmation" in execution_body
+    app_switch = js.split('} else if (activePage === "storage")', 1)[1].split('} else if (activePage === "reports")', 1)[0]
+    assert "ExecutionPage" in app_switch
+
+
 def test_react_app_state_exposes_saved_setup_values_for_generic_pages():
     state = main.build_react_ui_state()
     setup_values = state.get("setup_values") or {}

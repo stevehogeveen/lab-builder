@@ -1480,6 +1480,80 @@
         );
     }
 
+    function ExecutionPage(props) {
+        const state = props.appState || {};
+        const actions = ((state.actions || {}).execution || []);
+        const included = ((state.kit || {}).included || {});
+        const scopes = [
+            ["included", "Whole run", true],
+            ["ilo", "iLO", included.ilo],
+            ["storage", "Storage", included.storage],
+            ["esxi", "ESXi", included.esxi],
+            ["windows", "Windows", included.windows],
+            ["qnap", "QNAP", included.qnap],
+            ["iosafe", "ioSafe", included.iosafe],
+            ["cisco_switch", "Cisco Switch", included.cisco_switch],
+            ["netapp", "NetApp", included.netapp],
+        ];
+        function scopeInputs() {
+            return scopes.map(function (scope) {
+                return h("label", { className: "toggle-field run-scope-toggle", key: scope[0] },
+                    h("input", { type: "checkbox", name: "selected_scopes", value: scope[0], defaultChecked: scope[0] === "included", disabled: scope[0] !== "included" && !scope[2] }),
+                    h("span", null,
+                        h("strong", null, scope[1]),
+                        h("small", null, scope[0] === "included" ? "Use currently included kit stages" : (scope[2] ? "Included" : "Not included"))
+                    )
+                );
+            });
+        }
+        function runForm(action, label, primary) {
+            return h("form", { className: "run-center-form", action: action, method: "post" },
+                h("input", { type: "hidden", name: "return_page", value: "execution" }),
+                h("div", { className: "run-scope-grid" }, scopeInputs()),
+                h("div", { className: "job-actions" },
+                    h("button", { className: "button" + (primary ? " button-primary" : ""), type: "submit" }, label)
+                )
+            );
+        }
+        return h("div", { className: "page-layout" },
+            h("div", { className: "page-main" },
+                h(SetupStrip, {
+                    what: pageCopy.execution.what,
+                    next: "Choose a scope, review the run, then start a preview. Real execution stays behind the full confirmation form.",
+                    last: ((state.job || {}).last_message || (state.dashboard || {}).latest_result && (state.dashboard || {}).latest_result.label) || "No run has started yet.",
+                }),
+                h(LiveJobPanel, { job: state.job },
+                    h("div", { className: "job-actions" },
+                        h(Button, { onClick: props.onRefresh }, "Refresh"),
+                        h(Button, { href: "/execution" }, "Open full confirmation")
+                    )
+                ),
+                h(Panel, { label: "Run controls", title: "Choose run scope", subtitle: "These forms post to the original Run Center routes with the selected scope values." },
+                    h("div", { className: "execution-form-grid" },
+                        h("div", { className: "setup-card run-tool-card" },
+                            h("div", { className: "data-name" }, "Review run"),
+                            h("div", { className: "data-value" }, "Validate readiness and build the confirmation state."),
+                            runForm("/prepare-execute", "Review run", true)
+                        ),
+                        h("div", { className: "setup-card run-tool-card" },
+                            h("div", { className: "data-name" }, "Preview only"),
+                            h("div", { className: "data-value" }, "Start a safety preview without making real hardware changes."),
+                            runForm("/execute-preview", "Start preview run", false)
+                        )
+                    )
+                ),
+                h(Panel, { label: "Real execution", title: "Confirmation required", subtitle: "The real run keeps the original checkbox and EXECUTE phrase gates." },
+                    h("div", { className: "job-actions" },
+                        h(Button, { href: "/execution" }, "Open full confirmation"),
+                        h(Button, { href: "/debug-bundles/latest" }, "Download latest debug bundle")
+                    )
+                ),
+                h(ActionInventoryPanel, { activePage: "execution", appState: state, actions: actions, onNavigate: props.onNavigate })
+            ),
+            h(ContextPanel, { activePage: "execution", appState: state, actions: actions, onNavigate: props.onNavigate })
+        );
+    }
+
     function ReportCenterPanel(props) {
         const center = props.reportCenter || {};
         const bundles = center.latest_bundles || [];
@@ -2462,6 +2536,8 @@
                 onRebootNow: rebootStorageNow,
                 onNavigate: navigate,
             });
+        } else if (activePage === "execution") {
+            pageContent = h(ExecutionPage, { appState: appState, onNavigate: navigate, onRefresh: refreshAll });
         } else if (activePage === "reports") {
             pageContent = h(ReportsPage, { appState: appState, onNavigate: navigate });
         } else if (activePage === "configuration") {
