@@ -68,6 +68,7 @@ REQUIRED_ARTIFACTS = [
 ]
 
 PENDING_ARTIFACT_VALUES = {"", "pending", "status: pending"}
+SKIPPED_ARTIFACT_VALUES = {"skipped", "status: skipped"}
 SAFE_SECRET_METADATA_KEYS = {"secret_scan_result", "secret_findings_count"}
 
 
@@ -328,22 +329,36 @@ def _artifact_placeholder_status(path: Path) -> str:
     except OSError:
         return "unreadable"
     stripped = text.strip()
-    if stripped.lower() in PENDING_ARTIFACT_VALUES:
+    lowered = stripped.lower()
+    if lowered in PENDING_ARTIFACT_VALUES:
         return "pending"
+    if lowered in SKIPPED_ARTIFACT_VALUES:
+        return "skipped"
+    first_line = next((line.strip().lower() for line in stripped.splitlines() if line.strip()), "")
+    if first_line.endswith("skipped.") or first_line.endswith("skipped") or " discovery skipped" in first_line:
+        return "skipped"
     if path.suffix == ".json":
         try:
             parsed = json.loads(stripped or "{}")
         except json.JSONDecodeError:
             parsed = None
-        if isinstance(parsed, dict) and str(parsed.get("status") or "").lower() == "pending":
-            return "pending"
+        if isinstance(parsed, dict):
+            status = str(parsed.get("status") or "").lower()
+            if status == "pending":
+                return "pending"
+            if status == "skipped":
+                return "skipped"
     if path.suffix in {".yml", ".yaml"}:
         try:
             parsed = yaml.safe_load(stripped) if stripped else {}
         except yaml.YAMLError:
             parsed = None
-        if isinstance(parsed, dict) and str(parsed.get("status") or "").lower() == "pending":
-            return "pending"
+        if isinstance(parsed, dict):
+            status = str(parsed.get("status") or "").lower()
+            if status == "pending":
+                return "pending"
+            if status == "skipped":
+                return "skipped"
     return "present"
 
 
@@ -351,6 +366,7 @@ def inspect_overnight_artifacts(run_dir: Path) -> dict[str, Any]:
     items: list[dict[str, Any]] = []
     missing: list[str] = []
     pending: list[str] = []
+    skipped: list[str] = []
     unreadable: list[str] = []
     for relative in REQUIRED_ARTIFACTS:
         path = Path(run_dir) / relative
@@ -366,6 +382,8 @@ def inspect_overnight_artifacts(run_dir: Path) -> dict[str, Any]:
             missing.append(relative)
         elif status == "pending":
             pending.append(relative)
+        elif status == "skipped":
+            skipped.append(relative)
         elif status in {"unreadable", "not_file"}:
             unreadable.append(relative)
     return {
@@ -373,8 +391,9 @@ def inspect_overnight_artifacts(run_dir: Path) -> dict[str, Any]:
         "items": items,
         "missing": missing,
         "pending": pending,
+        "skipped": skipped,
         "unreadable": unreadable,
-        "ok": not missing and not pending and not unreadable,
+        "ok": not missing and not pending and not skipped and not unreadable,
     }
 
 
@@ -954,13 +973,13 @@ def _write_morning_report(writer: OvernightArtifactWriter, payload: dict[str, An
     if artifact_health:
         lines.extend(["", "## Artifact Health"])
         any_issue = False
-        for key, label in (("missing", "Missing"), ("pending", "Still pending"), ("unreadable", "Unreadable")):
+        for key, label in (("missing", "Missing"), ("pending", "Still pending"), ("skipped", "Skipped"), ("unreadable", "Unreadable")):
             values = list(artifact_health.get(key) or [])
             if values:
                 any_issue = True
                 lines.append(f"- {label}: {', '.join(values)}")
         if not any_issue:
-            lines.append("- Required artifacts are present and no placeholders remain.")
+            lines.append("- Required artifacts are present; no placeholders or skipped evidence remain.")
     if payload.get("git_status_before") or payload.get("git_status_after"):
         lines.extend(["", "## Git Status Before", "```text", str(payload.get("git_status_before") or "").rstrip(), "```"])
         lines.extend(["", "## Git Status After", "```text", str(payload.get("git_status_after") or "").rstrip(), "```"])
@@ -1111,7 +1130,12 @@ def finalize_overnight_run(
 
     writer.write_summary({"status": "finalization_running", "finalization": {"status_label": "Running"}})
     artifact_health = inspect_overnight_artifacts(writer.run_dir)
-    artifact_issues = bool(artifact_health.get("missing") or artifact_health.get("pending") or artifact_health.get("unreadable"))
+    artifact_issues = bool(
+        artifact_health.get("missing")
+        or artifact_health.get("pending")
+        or artifact_health.get("skipped")
+        or artifact_health.get("unreadable")
+    )
     needs_attention_reasons: list[str] = []
     if not tests_ok:
         needs_attention_reasons.append("Pytest did not pass; review command output in MORNING_READY.md.")
@@ -1125,6 +1149,8 @@ def finalize_overnight_run(
         needs_attention_reasons.append("Expected artifacts are missing: " + ", ".join(artifact_health["missing"]))
     if artifact_health.get("pending"):
         needs_attention_reasons.append("Expected artifacts still contain placeholders: " + ", ".join(artifact_health["pending"]))
+    if artifact_health.get("skipped"):
+        needs_attention_reasons.append("Expected artifacts were skipped: " + ", ".join(artifact_health["skipped"]))
     if artifact_health.get("unreadable"):
         needs_attention_reasons.append("Expected artifacts could not be read: " + ", ".join(artifact_health["unreadable"]))
     if decision.should_commit_push and not git_ok and not secret_findings:
@@ -1267,6 +1293,8 @@ def list_overnight_run_artifacts(artifacts_root: Path) -> list[dict[str, Any]]:
         )
         if str(morning.get("status") or "").lower() == "pending" and not needs_attention_reasons:
             needs_attention_reasons = ["MORNING_READY.md is still pending; finalization did not record a completed result."]
+        if not needs_attention_reasons and artifact_health.get("skipped"):
+            needs_attention_reasons = ["Expected artifacts were skipped: " + ", ".join(artifact_health["skipped"])]
         runs.append(
             {
                 "name": run_dir.name,

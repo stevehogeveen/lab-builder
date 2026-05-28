@@ -28,6 +28,8 @@ from app.overnight_run import (
     run_overnight_hardware,
     scan_text_for_secrets,
     should_stop_hardware_actions,
+    write_cisco_skipped_artifacts,
+    write_ilo_skipped_artifacts,
 )
 
 
@@ -178,6 +180,61 @@ def test_missing_and_pending_artifacts_are_reported_clearly(tmp_path):
     assert health["ok"] is False
     assert "ilo/discovery.json" in health["missing"]
     assert "cisco/initial-session.txt" in health["pending"]
+
+
+def test_skipped_artifacts_are_reported_clearly(tmp_path):
+    writer = OvernightArtifactWriter(tmp_path / "run")
+    writer.initialize_placeholders()
+    writer.write_config_snapshot({}, OvernightHardwareConfig.from_mapping({}, {}))
+    writer.write_text("live-job.log", "hardware stopped\n")
+    writer.write_yaml("trace.yml", {"events": []})
+    writer.write_yaml("summary.yml", {"status": "Needs attention"})
+    writer.write_text("MORNING_READY.md", "# Morning Ready\n\nStatus: Needs attention\n")
+    reason = "Hardware stop marker is present; no additional hardware actions will start."
+
+    write_ilo_skipped_artifacts(writer, reason, now=datetime(2026, 5, 27, 5, 25))
+    write_cisco_skipped_artifacts(writer, reason, now=datetime(2026, 5, 27, 5, 25))
+    health = inspect_overnight_artifacts(writer.run_dir)
+
+    assert health["ok"] is False
+    assert not health["pending"]
+    assert len(health["skipped"]) == 11
+    assert "ilo/discovery.json" in health["skipped"]
+    assert "cisco/initial-session.txt" in health["skipped"]
+
+
+def test_finalize_records_skipped_artifacts_as_needs_attention(tmp_path):
+    repo = tmp_path
+    writer = OvernightArtifactWriter(repo / "artifacts" / "runs" / "overnight" / "20260527-052500-ilo-cisco")
+    writer.initialize_placeholders()
+    writer.write_config_snapshot({}, OvernightHardwareConfig.from_mapping({}, {}))
+    writer.write_text("live-job.log", "hardware stopped\n")
+    writer.write_yaml("trace.yml", {"events": []})
+    reason = "Hardware stop marker is present; no additional hardware actions will start."
+    write_ilo_skipped_artifacts(writer, reason, now=datetime(2026, 5, 27, 5, 25))
+    write_cisco_skipped_artifacts(writer, reason, now=datetime(2026, 5, 27, 5, 25))
+
+    def runner(command: list[str], cwd: Path) -> CommandCapture:
+        if command == ["git", "status", "--short", "--branch"]:
+            return CommandCapture(command, 0, "## feature/skipped\n", "")
+        return CommandCapture(command, 0, "", "")
+
+    result = finalize_overnight_run(
+        writer,
+        repo_root=repo,
+        run_tests=False,
+        allow_git=False,
+        command_runner=runner,
+        now=datetime(2026, 5, 27, 5, 25),
+    )
+
+    report = writer.morning_report_path.read_text(encoding="utf-8")
+
+    assert result["status_label"] == "Needs attention"
+    assert any(reason.startswith("Expected artifacts were skipped:") for reason in result["needs_attention_reasons"])
+    assert len(result["artifact_health"]["skipped"]) == 11
+    assert "- Skipped: ilo/discovery.json" in report
+    assert "Expected artifacts still contain placeholders" not in report
 
 
 def test_finalization_decision_allows_git_only_when_clean():
@@ -650,6 +707,37 @@ def test_overnight_operator_mode_summarizes_pending_artifact_details(client):
     assert "ilo/discovery.json" not in payload["operator"]["needs_attention"]
     assert payload["operator"]["needs_attention_reasons"] == ["Hardware evidence is still pending (3 artifacts)."]
     assert payload["debug"]["latest_run"]["needs_attention_reasons"] == [raw_reason]
+
+
+def test_overnight_operator_mode_summarizes_skipped_artifact_details(client):
+    run_dir = main.ARTIFACTS_DIR / "runs" / "overnight" / "20260527-061500-ilo-cisco"
+    writer = OvernightArtifactWriter(run_dir)
+    writer.initialize_placeholders()
+    writer.write_config_snapshot({}, OvernightHardwareConfig.from_mapping({}, {}))
+    writer.write_text("live-job.log", "hardware stopped\n")
+    writer.write_yaml("trace.yml", {"events": []})
+    reason = "Hardware stop marker is present; no additional hardware actions will start."
+    write_ilo_skipped_artifacts(writer, reason, now=datetime(2026, 5, 27, 5, 35))
+    write_cisco_skipped_artifacts(writer, reason, now=datetime(2026, 5, 27, 5, 35))
+    writer.write_summary(
+        {
+            "status": "Needs attention",
+            "finalization": {
+                "status_label": "Needs attention",
+                "needs_attention_reasons": [],
+            },
+        }
+    )
+    writer.morning_report_path.write_text("# Morning Ready\n\nStatus: Needs attention\n", encoding="utf-8")
+
+    response = client.get("/api/ui/overnight-hardware")
+    payload = response.json()
+
+    assert response.status_code == 200
+    assert payload["operator"]["needs_attention"] == "Hardware evidence was skipped (11 artifacts)."
+    assert payload["operator"]["next"] == "Start a new discovery_only run before the hardware stop window to collect the skipped hardware evidence."
+    assert len(payload["debug"]["latest_run"]["artifact_health"]["skipped"]) == 11
+    assert "ilo/discovery.json" in payload["debug"]["latest_run"]["artifact_health"]["skipped"]
 
 
 def test_overnight_operator_mode_reconciles_stale_running_job(client):

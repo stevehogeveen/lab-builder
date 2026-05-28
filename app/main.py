@@ -14264,6 +14264,7 @@ def _count_artifacts_from_reason(reason: str) -> int:
 def _compact_overnight_operator_reasons(reasons: list[str], artifact_health: dict[str, Any]) -> list[str]:
     compacted: list[str] = []
     pending_count = len(list(artifact_health.get("pending") or []))
+    skipped_count = len(list(artifact_health.get("skipped") or []))
     missing_count = len(list(artifact_health.get("missing") or []))
     unreadable_count = len(list(artifact_health.get("unreadable") or []))
     for reason in reasons:
@@ -14272,6 +14273,9 @@ def _compact_overnight_operator_reasons(reasons: list[str], artifact_health: dic
         if lowered.startswith("expected artifacts still contain placeholders:"):
             count = _count_artifacts_from_reason(text) or pending_count
             text = f"Hardware evidence is still pending ({_artifact_count_text(count)})." if count else "Hardware evidence is still pending."
+        elif lowered.startswith("expected artifacts were skipped:"):
+            count = _count_artifacts_from_reason(text) or skipped_count
+            text = f"Hardware evidence was skipped ({_artifact_count_text(count)})." if count else "Hardware evidence was skipped."
         elif lowered.startswith("expected artifacts are missing:"):
             count = _count_artifacts_from_reason(text) or missing_count
             text = f"Required overnight artifacts are missing ({_artifact_count_text(count)})." if count else "Required overnight artifacts are missing."
@@ -14326,6 +14330,8 @@ def build_overnight_hardware_state(cfg: dict[str, Any], job: dict[str, Any] | No
             needs_attention_reasons.append("Expected artifacts are missing: " + ", ".join(artifact_health.get("missing") or []))
         if artifact_health.get("pending"):
             needs_attention_reasons.append("Expected artifacts still contain placeholders: " + ", ".join(artifact_health.get("pending") or []))
+        if artifact_health.get("skipped"):
+            needs_attention_reasons.append("Expected artifacts were skipped: " + ", ".join(artifact_health.get("skipped") or []))
     operator_attention_reasons = _compact_overnight_operator_reasons(needs_attention_reasons, artifact_health)
     raw_active_status = str(active_job.get("status") or "")
     active_run_id = str(active_job.get("run_id") or "")
@@ -14352,6 +14358,7 @@ def build_overnight_hardware_state(cfg: dict[str, Any], job: dict[str, Any] | No
         operator_completion = 100
         operator_last = f"Latest run finalized as {finalized_display_status}."
     pending_artifacts = bool(artifact_health.get("pending"))
+    skipped_artifacts = bool(artifact_health.get("skipped"))
     incomplete_artifacts = bool(artifact_health.get("missing") or artifact_health.get("unreadable"))
     if not latest:
         next_action = "Start discovery_only for the safe default pass."
@@ -14359,6 +14366,8 @@ def build_overnight_hardware_state(cfg: dict[str, Any], job: dict[str, Any] | No
         next_action = "Let the current finalization finish, then review MORNING_READY.md."
     elif pending_artifacts:
         next_action = "Start a new discovery_only run before the hardware stop window to collect the pending artifacts."
+    elif skipped_artifacts:
+        next_action = "Start a new discovery_only run before the hardware stop window to collect the skipped hardware evidence."
     elif incomplete_artifacts:
         next_action = "Review Debug Mode, preserve diagnostics, then rerun the finalizer for the last folder."
     elif needs_attention_reasons or morning_status.lower() in {"needs attention", "pending", "missing", "unreadable"}:

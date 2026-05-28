@@ -1,27 +1,27 @@
 # Continuous Improvement Cycle Summary
 
-Status: No repair needed this cycle; reporting updated and verified
+Status: Repaired skipped overnight artifact reporting
 
 ## Inspection
 - Latest overnight run inspected: `artifacts/runs/overnight/20260527-175700-ilo-cisco`.
 - Read required artifacts: `live-job.log`, `trace.yml`, `summary.yml`, `MORNING_READY.md`, `job-state.yml`, `ilo/*`, and `cisco/*`.
-- `STOP_HARDWARE_WORK` is present; hardware evidence artifacts remain pending placeholders from the earlier discovery-only run.
+- `STOP_HARDWARE_WORK` is present; no hardware, iLO, Cisco console, power, storage wipe, factory reset, or ESXi action was attempted.
 - The run finalized before the `2026-05-28 06:00 local` deadline with tests, compile, and secret scan clean.
-- `MORNING_READY.md`, `summary.yml`, and `job-state.yml` agree that the only Needs Attention reason is 11 pending hardware evidence artifacts.
-- `/overnight-hardware` Operator Mode is compact and shows one next action; Debug Mode keeps raw artifact health and paths.
-- Safe defaults remain intact: `discovery_only`, destructive flags false, confirmation required for guided/full modes, and stop marker blocking.
+- Real issue found: hardware evidence files remained as `pending` placeholders even though the run logs showed hardware work had been stopped before collectors ran.
 
 ## Repair
-- No product-code repair was needed this cycle.
-- Updated `continuous-improvement-findings.md` because it still described the previous Operator Mode issue as planned work.
+- Added first-class `skipped` artifact health handling for overnight artifacts.
+- MORNING_READY/finalization now report skipped evidence as Needs Attention instead of treating it as complete or leaving placeholders.
+- Operator Mode now summarizes skipped evidence compactly and gives one next action; Debug Mode keeps raw artifact health.
+- Repaired the newest ignored run bundle in place so the 11 hardware evidence files are durable skipped diagnostics.
 
 ## Verification
-- Focused Operator Mode regression tests passed: 2 tests.
-- `~/lab-builder/.venv/bin/python -m pytest -q tests/test_overnight_run.py` passed: 27 tests.
-- `~/lab-builder/.venv/bin/python -m pytest -q` passed: 434 tests.
+- Focused changed-behavior coverage passed via `~/lab-builder/.venv/bin/python -m pytest -q tests/test_overnight_run.py`: 30 tests.
+- `~/lab-builder/.venv/bin/python -m pytest -q` passed: 437 tests.
 - `~/lab-builder/.venv/bin/python -m compileall app` passed.
 - `git diff --check` passed.
-- Staged secret scan passed with 0 findings.
+- `/api/ui/overnight-hardware` and `/overnight-hardware` returned 200; API reports `discovery_only`, destructive defaults false, 11 skipped artifacts, 0 pending artifacts, compact Operator Mode, and raw Debug Mode detail.
 
 ## Commit Gate
-- Commit/push: allowed for report-only tracked changes; final staged scan was clean.
+- Staged secret scan passed with 0 findings over the 5 staged files.
+- Commit/push: allowed if final staged diff remains scoped to the repaired behavior.
