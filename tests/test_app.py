@@ -1520,6 +1520,55 @@ def test_react_ui_global_settings_api_saves_editable_shared_defaults(client):
     assert autofill.json()["plan"]["ilo"] == "10.77.0.11"
 
 
+def test_react_ui_global_settings_updates_netapp_cluster_management_override(client):
+    cfg = main.default_config()
+    cfg["site"]["name"] = "React NetApp Override"
+    cfg["shared_network"]["subnet"] = "10.80.1.0/24"
+    cfg["ip_plan"].update(main.build_default_ip_plan("10.80.1.0/24"))
+    cfg["ip_plan"]["netapp"] = "10.80.1.45"
+    cfg["netapp"]["host"] = "10.80.1.45"
+    cfg["netapp"]["bootstrap_overrides"] = {"netapp_cluster_mgmt": "10.80.1.60"}
+    main.save_kit_config(main.apply_ip_plan(cfg))
+    main.set_current_kit_name("React-NetApp-Override")
+
+    response = client.post(
+        "/api/ui/global-settings",
+        json={
+            "values": {
+                "site_name": "React NetApp Override",
+                "shared_subnet": "10.80.1.0/24",
+                "gateway_ip": "10.80.1.1",
+                "switch_ip": "10.80.1.2",
+                "esxi_ip": "10.80.1.10",
+                "ilo_target_ip": "10.80.1.11",
+                "windows_ip": "10.80.1.20",
+                "qnap_ip": "10.80.1.30",
+                "iosafe_ip": "10.80.1.31",
+                "netapp_ip": "10.80.1.45",
+                "dns1": "10.80.1.1",
+                "dns2": "",
+                "dns3": "",
+                "dns4": "",
+                "snmp_v3_username": "",
+                "snmp_v3_auth_protocol": "SHA",
+                "snmp_v3_auth_password": "",
+                "snmp_v3_priv_protocol": "AES",
+                "snmp_v3_priv_password": "",
+            }
+        },
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["ok"] is True
+    assert payload["app_state"]["setup_ip"]["netapp"]["host"] == "10.80.1.45"
+    assert payload["app_state"]["setup_ip"]["netapp"]["cluster_mgmt_ip"] == "10.80.1.45"
+    saved = main.load_kit_config("React-NetApp-Override")
+    assert saved["ip_plan"]["netapp_cluster_mgmt"] == "10.80.1.45"
+    assert saved["netapp"]["management"]["cluster_mgmt_ip"] == "10.80.1.45"
+    assert saved["netapp"]["bootstrap_overrides"]["netapp_cluster_mgmt"] == "10.80.1.45"
+
+
 def test_react_ui_kits_api_restores_legacy_kit_management(client):
     primary = main.default_config()
     primary["site"]["name"] = "React Primary Kit"

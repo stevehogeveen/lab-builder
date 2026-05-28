@@ -15743,6 +15743,7 @@ async def api_ui_global_settings_save(request: Request):
     if "netapp_ip" in values:
         cfg.setdefault("netapp", {})["host"] = cfg["ip_plan"].get("netapp", "")
         cfg.setdefault("netapp", {}).setdefault("management", {})["cluster_mgmt_ip"] = cfg["ip_plan"].get("netapp", "")
+        cfg.setdefault("netapp", {}).setdefault("bootstrap_overrides", {})["netapp_cluster_mgmt"] = cfg["ip_plan"].get("netapp", "")
 
     if included_values is not None:
         cfg.setdefault("included", {}).update(

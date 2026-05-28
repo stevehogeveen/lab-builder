@@ -32,6 +32,7 @@ Latest follow-up:
 - Exact visible-label comparison is down to two known raw Jinja conditional rows; their resolved labels are now all represented in React.
 - Removed tracked stale Codex prompt files that still described re-adding the removed Overnight Hardware Run feature.
 - React visible action inventory artifact was resynced from `react_ui_action_inventory`; it now records all 175 live React actions.
+- React Global Settings now updates the NetApp cluster-management bootstrap override when the global NetApp IP changes, so Setup IP, app-state, saved config, and NetApp management values stay aligned.
 
 Remaining gaps:
 - No unmatched original visible actions are currently listed in artifacts/codex-runs/full-visible-workflow-missing-controls.md.
@@ -48,6 +49,8 @@ Validation:
 - Latest current-head compile/JS/diff checks: compileall app passed; node --check static/js/react-desktop-ui.js passed; git diff --check passed
 - Latest Overnight removal/app-state validation: /home/administrator/lab-builder/.venv/bin/python -m pytest -q tests/test_full_ui_parity_contract.py::test_overnight_hardware_feature_is_removed_from_routes_and_nav tests/test_full_visible_workflow_parity.py::test_overnight_hardware_surface_remains_removed tests/test_app.py::test_react_ui_app_state_api_exposes_desktop_shell_state: 3 passed
 - Latest visible/UI parity validation after inventory resync: /home/administrator/lab-builder/.venv/bin/python -m pytest -q tests/test_full_visible_workflow_parity.py tests/test_full_ui_parity_contract.py: 33 passed
+- Latest NetApp/global-settings propagation validation: /home/administrator/lab-builder/.venv/bin/python -m pytest -q tests/test_full_visible_workflow_parity.py tests/test_full_ui_parity_contract.py tests/test_app.py::test_react_ui_global_settings_api_saves_editable_shared_defaults tests/test_app.py::test_react_ui_global_settings_updates_netapp_cluster_management_override: 35 passed
+- Latest compile/diff checks after NetApp propagation fix: /home/administrator/lab-builder/.venv/bin/python -m compileall app passed; git diff --check passed
 
 Hardware safety:
 - No hardware actions were executed by tests or validation.
