@@ -14566,15 +14566,15 @@ def react_ui_action_inventory() -> dict[str, list[dict[str, str]]]:
         ],
         "upgrade_helper": [
             {"label": "Open upgrade helper", "method": "GET", "route": "/upgrade-helper", "mode": "legacy-html"},
-            {"label": "Save upgrade policies", "method": "POST", "route": "/save-upgrade-policies", "mode": "legacy-html"},
+            {"label": "Save policies", "method": "POST", "route": "/save-upgrade-policies", "mode": "legacy-html"},
             {"label": "Upload firmware media", "method": "POST", "route": "/upload-upgrade-media", "mode": "legacy-html"},
             {"label": "Review Cisco upgrade plan", "method": "POST", "route": "/modules/cisco/plan-upgrade", "mode": "legacy-html"},
             {"label": "Run Cisco upgrade", "method": "POST", "route": "/modules/cisco/run-upgrade", "mode": "legacy-html"},
             {"label": "Read Cisco version", "method": "POST", "route": "/modules/cisco/discover-version", "mode": "legacy-html"},
             {"label": "Review ONTAP upgrade plan", "method": "POST", "route": "/modules/netapp/plan-upgrade", "mode": "legacy-html"},
             {"label": "Run ONTAP upgrade", "method": "POST", "route": "/modules/netapp/run-upgrade", "mode": "legacy-html"},
-            {"label": "Plan iLO firmware upgrade", "method": "POST", "route": "/plan-ilo-upgrade", "mode": "legacy-html"},
-            {"label": "Run iLO firmware upgrade", "method": "POST", "route": "/run-ilo-upgrade", "mode": "legacy-html"},
+            {"label": "Plan iLO upgrade", "method": "POST", "route": "/plan-ilo-upgrade", "mode": "legacy-html"},
+            {"label": "Run iLO upgrade", "method": "POST", "route": "/run-ilo-upgrade", "mode": "legacy-html"},
             {"label": "Open iLO", "method": "GET", "route": "/ilo", "mode": "legacy-html"},
         ],
         "ilo": [

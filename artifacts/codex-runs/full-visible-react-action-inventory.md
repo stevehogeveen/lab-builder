@@ -24,15 +24,15 @@ Total rows: 155
 | global_settings | Save upgrade policies | POST | /save-upgrade-policies | legacy-html | static/js/react-desktop-ui.js + app/main.py:react_ui_action_inventory |
 | global_settings | Upload firmware media | POST | /upload-upgrade-media | legacy-html | static/js/react-desktop-ui.js + app/main.py:react_ui_action_inventory |
 | upgrade_helper | Open upgrade helper | GET | /upgrade-helper | legacy-html | static/js/react-desktop-ui.js + app/main.py:react_ui_action_inventory |
-| upgrade_helper | Save upgrade policies | POST | /save-upgrade-policies | legacy-html | static/js/react-desktop-ui.js + app/main.py:react_ui_action_inventory |
+| upgrade_helper | Save policies | POST | /save-upgrade-policies | legacy-html | static/js/react-desktop-ui.js + app/main.py:react_ui_action_inventory |
 | upgrade_helper | Upload firmware media | POST | /upload-upgrade-media | legacy-html | static/js/react-desktop-ui.js + app/main.py:react_ui_action_inventory |
 | upgrade_helper | Review Cisco upgrade plan | POST | /modules/cisco/plan-upgrade | legacy-html | static/js/react-desktop-ui.js + app/main.py:react_ui_action_inventory |
 | upgrade_helper | Run Cisco upgrade | POST | /modules/cisco/run-upgrade | legacy-html | static/js/react-desktop-ui.js + app/main.py:react_ui_action_inventory |
 | upgrade_helper | Read Cisco version | POST | /modules/cisco/discover-version | legacy-html | static/js/react-desktop-ui.js + app/main.py:react_ui_action_inventory |
 | upgrade_helper | Review ONTAP upgrade plan | POST | /modules/netapp/plan-upgrade | legacy-html | static/js/react-desktop-ui.js + app/main.py:react_ui_action_inventory |
 | upgrade_helper | Run ONTAP upgrade | POST | /modules/netapp/run-upgrade | legacy-html | static/js/react-desktop-ui.js + app/main.py:react_ui_action_inventory |
-| upgrade_helper | Plan iLO firmware upgrade | POST | /plan-ilo-upgrade | legacy-html | static/js/react-desktop-ui.js + app/main.py:react_ui_action_inventory |
-| upgrade_helper | Run iLO firmware upgrade | POST | /run-ilo-upgrade | legacy-html | static/js/react-desktop-ui.js + app/main.py:react_ui_action_inventory |
+| upgrade_helper | Plan iLO upgrade | POST | /plan-ilo-upgrade | legacy-html | static/js/react-desktop-ui.js + app/main.py:react_ui_action_inventory |
+| upgrade_helper | Run iLO upgrade | POST | /run-ilo-upgrade | legacy-html | static/js/react-desktop-ui.js + app/main.py:react_ui_action_inventory |
 | upgrade_helper | Open iLO | GET | /ilo | legacy-html | static/js/react-desktop-ui.js + app/main.py:react_ui_action_inventory |
 | ilo | Load iLO state | GET | /api/ui/ilo | json | static/js/react-desktop-ui.js + app/main.py:react_ui_action_inventory |
 | ilo | Save iLO setup | POST | /api/ui/ilo/settings | json | static/js/react-desktop-ui.js + app/main.py:react_ui_action_inventory |
