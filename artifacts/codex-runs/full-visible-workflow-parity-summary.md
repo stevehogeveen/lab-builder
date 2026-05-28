@@ -19,6 +19,7 @@ Latest follow-up:
 - NetApp now exposes the explicit guarded "Factory reset NetApp" label in addition to reset readiness, matching the original visible control while still opening the original confirmation form.
 - React execution-review fallback now scopes missing ESXi ISO/media blockers to the ESXi stage instead of making every included stage look blocked by the same ESXi issue.
 - A follow-up NetApp template scan restored additional original console and cluster management IP action labels in React: save selected console, read current NetApp config, preview/apply console cluster IP, and preview/apply cluster management IP.
+- Storage action labels were aligned back to the original operator wording for current-state display, plan build, approval, invalid-selection repair, and approval removal.
 
 Remaining gaps:
 - No unmatched original visible actions are currently listed in artifacts/codex-runs/full-visible-workflow-missing-controls.md.
