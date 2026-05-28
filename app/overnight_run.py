@@ -369,6 +369,54 @@ def read_morning_report_status(path: Path) -> dict[str, str]:
     return {"status": status, "reason": reasons[0] if reasons else ""}
 
 
+def _parse_artifact_datetime(value: Any) -> datetime | None:
+    text = str(value or "").strip()
+    if not text:
+        return None
+    try:
+        return datetime.fromisoformat(text.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+
+
+def _is_deadline_missed_reason(reason: str) -> bool:
+    lowered = str(reason or "").lower()
+    return "6:00 am finalization deadline was missed" in lowered
+
+
+def _finalization_deadline_label(deadline_at: datetime | None) -> str:
+    if deadline_at is None:
+        return ""
+    return deadline_at.strftime("%Y-%m-%d %H:%M local")
+
+
+def reconcile_overnight_needs_attention_reasons(
+    reasons: list[Any],
+    *,
+    run_dir: Path,
+    generated_at: Any = "",
+) -> tuple[list[str], dict[str, Any]]:
+    normalized = [str(item) for item in reasons if str(item).strip()]
+    started_at = overnight_run_started_at(run_dir)
+    completed_at = _parse_artifact_datetime(generated_at)
+    if started_at is None or completed_at is None:
+        return normalized, {}
+
+    local_completed_at = _local_wall_datetime(completed_at)
+    deadline_at = _overnight_cutoff_at(FINALIZATION_DEADLINE, local_completed_at, started_at)
+    before_deadline = finalization_deadline_ok(completed_at, run_started_at=started_at)
+    if before_deadline:
+        filtered = [reason for reason in normalized if not _is_deadline_missed_reason(reason)]
+    else:
+        filtered = normalized
+    return filtered, {
+        "completed_at": local_completed_at.strftime("%Y-%m-%d %H:%M local"),
+        "deadline": _finalization_deadline_label(deadline_at),
+        "status": "before_deadline" if before_deadline else "missed_deadline",
+        "removed_stale_deadline_reason": before_deadline and len(filtered) != len(normalized),
+    }
+
+
 def create_overnight_run_dir(artifacts_root: Path, now: datetime | None = None) -> Path:
     root = Path(artifacts_root) / "runs" / "overnight"
     root.mkdir(parents=True, exist_ok=True)
@@ -853,6 +901,12 @@ def _write_morning_report(writer: OvernightArtifactWriter, payload: dict[str, An
         f"- Secret scan: {payload.get('secret_scan_result') or 'not run'}",
         f"- Hardware stop marker: {payload.get('hardware_stop_marker') or 'not written'}",
     ]
+    if payload.get("finalization_completed_at"):
+        lines.append(f"- Finalization completed: {payload.get('finalization_completed_at')}")
+    if payload.get("finalization_deadline"):
+        lines.append(f"- Finalization deadline: {payload.get('finalization_deadline')}")
+    if payload.get("finalization_timing"):
+        lines.append(f"- Finalization timing: {payload.get('finalization_timing')}")
     if reasons:
         lines.extend(["", "## Needs Attention Reasons"])
         lines.extend(f"- {reason}" for reason in reasons)
@@ -962,6 +1016,8 @@ def finalize_overnight_run(
     secret_findings = scan_paths_for_secrets([writer.run_dir])
     secret_scan_result = "clean" if not secret_findings else f"blocked ({len(secret_findings)} finding(s))"
     decision_time = now or datetime.now().astimezone()
+    local_decision_time = _local_wall_datetime(decision_time)
+    deadline_at = _overnight_cutoff_at(FINALIZATION_DEADLINE, local_decision_time, run_started_at)
     deadline_ok = finalization_deadline_ok(decision_time, run_started_at=run_started_at)
     if should_stop_hardware_actions(started_at, run_started_at=run_started_at):
         notes.append("Hardware stop marker was written at or after 5:30 AM local time; verify no hardware action overran the stop window.")
@@ -1060,6 +1116,9 @@ def finalize_overnight_run(
         "secret_findings": secret_findings,
         "artifact_folder": str(writer.run_dir),
         "hardware_stop_marker": str(stop_marker),
+        "finalization_completed_at": local_decision_time.strftime("%Y-%m-%d %H:%M local"),
+        "finalization_deadline": _finalization_deadline_label(deadline_at),
+        "finalization_timing": "before deadline" if deadline_ok else "missed deadline",
         "git_status_before": status_before.stdout,
         "git_status_after": status_after.stdout,
         "commands": commands,
@@ -1174,6 +1233,12 @@ def list_overnight_run_artifacts(artifacts_root: Path) -> list[dict[str, Any]]:
         needs_attention_reasons = list(finalization.get("needs_attention_reasons") or [])
         if not needs_attention_reasons and morning.get("reason"):
             needs_attention_reasons = [str(morning.get("reason") or "")]
+        generated_at = str(summary.get("generated_at") or "")
+        needs_attention_reasons, deadline_reconciliation = reconcile_overnight_needs_attention_reasons(
+            needs_attention_reasons,
+            run_dir=run_dir,
+            generated_at=generated_at,
+        )
         if str(morning.get("status") or "").lower() == "pending" and not needs_attention_reasons:
             needs_attention_reasons = ["MORNING_READY.md is still pending; finalization did not record a completed result."]
         runs.append(
@@ -1186,8 +1251,9 @@ def list_overnight_run_artifacts(artifacts_root: Path) -> list[dict[str, Any]]:
                 "morning_status": str(morning.get("status") or ""),
                 "display_status": str(morning.get("status") or summary.get("status") or "pending"),
                 "needs_attention_reasons": needs_attention_reasons,
+                "deadline_reconciliation": deadline_reconciliation,
                 "artifact_health": artifact_health,
-                "generated_at": str(summary.get("generated_at") or ""),
+                "generated_at": generated_at,
                 "artifact_count": len([item for item in run_dir.rglob("*") if item.is_file()]),
             }
         )

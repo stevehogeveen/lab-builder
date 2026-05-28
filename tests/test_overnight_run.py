@@ -21,6 +21,7 @@ from app.overnight_run import (
     hardware_stop_requested,
     inspect_overnight_artifacts,
     normalize_overnight_mode,
+    reconcile_overnight_needs_attention_reasons,
     request_hardware_stop,
     run_overnight_hardware,
     scan_text_for_secrets,
@@ -277,9 +278,14 @@ def test_evening_finalize_uses_next_morning_deadline(tmp_path):
 
     assert result["status_label"] == "Ready for review"
     assert result["push_result"] == "pushed"
+    assert result["finalization_deadline"] == "2026-05-28 06:00 local"
+    assert result["finalization_timing"] == "before deadline"
     assert not any("deadline was missed" in reason for reason in result["needs_attention_reasons"])
     assert not any("at or after 5:30 AM" in note for note in result["notes"])
     assert any(command[:2] == ["git", "commit"] for command in calls)
+    report = writer.morning_report_path.read_text(encoding="utf-8")
+    assert "- Finalization deadline: 2026-05-28 06:00 local" in report
+    assert "- Finalization timing: before deadline" in report
 
 
 def test_finalize_morning_report_records_needs_attention_reason_and_compile(tmp_path):
@@ -316,6 +322,22 @@ def test_finalize_morning_report_records_needs_attention_reason_and_compile(tmp_
     assert "## Needs Attention Reasons" in report
     assert "Pytest did not pass" in report
     assert "- Compile: passed" in report
+
+
+def test_deadline_reconciliation_keeps_real_missed_deadline(tmp_path):
+    run_dir = tmp_path / "20260527-052500-ilo-cisco"
+    run_dir.mkdir()
+    reasons = ["The 6:00 AM finalization deadline was missed."]
+
+    filtered, info = reconcile_overnight_needs_attention_reasons(
+        reasons,
+        run_dir=run_dir,
+        generated_at="2026-05-27T06:10:00-04:00",
+    )
+
+    assert filtered == reasons
+    assert info["deadline"] == "2026-05-27 06:00 local"
+    assert info["status"] == "missed_deadline"
 
 
 def test_hardware_stop_marker_prevents_hardware_collectors(tmp_path):
@@ -562,12 +584,18 @@ def test_overnight_operator_mode_reconciles_stale_running_job(client):
     run_dir = main.ARTIFACTS_DIR / "runs" / "overnight" / "20260527-175700-ilo-cisco"
     writer = OvernightArtifactWriter(run_dir)
     writer.initialize_placeholders()
-    writer.write_summary(
+    writer.write_yaml(
+        "summary.yml",
         {
+            "run_folder": str(run_dir),
+            "generated_at": "2026-05-27T20:35:11-04:00",
             "status": "Needs attention",
             "finalization": {
                 "status_label": "Needs attention",
-                "needs_attention_reasons": ["Expected artifacts still contain placeholders: ilo/discovery.json"],
+                "needs_attention_reasons": [
+                    "The 6:00 AM finalization deadline was missed.",
+                    "Expected artifacts still contain placeholders: ilo/discovery.json",
+                ],
             },
         }
     )
@@ -598,3 +626,6 @@ def test_overnight_operator_mode_reconciles_stale_running_job(client):
     assert payload["operator"]["status"] == "Needs attention"
     assert payload["operator"]["current_stage"] == "Finalization complete"
     assert payload["operator"]["next"] == "Start a new discovery_only run before the hardware stop window to collect the pending artifacts."
+    assert payload["operator"]["needs_attention"] == "Expected artifacts still contain placeholders: ilo/discovery.json"
+    assert "The 6:00 AM finalization deadline was missed." not in payload["operator"]["needs_attention_reasons"]
+    assert payload["debug"]["latest_run"]["deadline_reconciliation"]["removed_stale_deadline_reason"] is True

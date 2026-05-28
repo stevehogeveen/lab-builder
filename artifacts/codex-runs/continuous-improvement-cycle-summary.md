@@ -2,24 +2,25 @@
 
 Status: repaired
 
-## Finding
+## Inspection
 - Latest overnight run inspected: `artifacts/runs/overnight/20260527-175700-ilo-cisco`.
-- The prior cutoff repair is present, safe defaults remain in place, and the stop marker exists.
-- The finalized run artifacts report `Needs attention`, but persisted app job state still reports the same run as `Running`.
-- `/api/ui/overnight-hardware` therefore showed Operator Mode as still waiting for finalization instead of pointing at the real issue: pending iLO/Cisco evidence artifacts.
+- Required run artifacts were read with redaction for secret-bearing fields. `job-state.yml` is not present in the run folder.
+- `STOP_HARDWARE_WORK` exists. iLO and Cisco required evidence artifacts are still pending placeholders.
+- The latest artifact reports were generated at `2026-05-27T20:35:11-04:00` for run folder timestamp `20260527-175700`; current cutoff logic makes the correct deadline `2026-05-28 06:00 local`.
+- Problem found: Operator Mode was still using the stale legacy `MORNING_READY.md`/`summary.yml` deadline-missed reason as the first Needs Attention item.
 
 ## Repair
-- Operator Mode now reconciles stale in-progress job state when the latest matching run has a finalized morning status.
-- Pending required artifacts now get a direct next action: start a new `discovery_only` run before the hardware stop window to collect the pending evidence.
-- Added regression coverage for a stale `Running` job paired with a finalized `Needs attention` overnight run.
+- Added deadline reconciliation for overnight run summaries so legacy false deadline-missed reasons are removed from the UI/API summary when the artifact generation time is before the computed run deadline.
+- Added explicit finalization completed/deadline/timing lines to newly generated `MORNING_READY.md` reports.
+- Added regression coverage for future overnight deadlines, true missed deadlines, and stale Operator Mode job reconciliation.
 
 ## Verification
-- Focused behavior check: `tests/test_overnight_run.py::test_overnight_operator_mode_reconciles_stale_running_job` -> passed
-- `~/lab-builder/.venv/bin/python -m pytest -q tests/test_overnight_run.py` -> passed, 21 tests
-- `~/lab-builder/.venv/bin/python -m pytest -q` -> passed, 428 tests
-- `~/lab-builder/.venv/bin/python -m compileall app` -> passed
-- `git diff --check` -> passed
+- Read-only `/api/ui/overnight-hardware` check: `default_mode=discovery_only`, destructive flags false, Operator Mode status `Needs attention`, stage `Finalization complete`, next action points to a new `discovery_only` artifact collection pass, and the stale deadline reason is removed from Operator Mode.
+- `~/lab-builder/.venv/bin/python -m pytest -q tests/test_overnight_run.py` -> passed, 22 tests.
+- `~/lab-builder/.venv/bin/python -m pytest -q` -> passed, 429 tests.
+- `~/lab-builder/.venv/bin/python -m compileall app` -> passed.
+- `git diff --check` -> passed.
+- Staged secret scan over exact intended commit contents -> clean.
 
 ## Commit Gate
-- Staged secret scan: clean
-- Commit/push: eligible after clean gate
+- Commit/push: safe to run.
