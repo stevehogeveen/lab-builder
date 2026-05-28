@@ -23,6 +23,7 @@ Latest follow-up:
 - Cisco action labels were aligned back to the original operator wording for console access, current-config check, version check, save-to-config, and config approval while preserving the explicit Setup Cisco IP action.
 - NetApp connection/save labels were aligned back to the original operator wording for "Test ONTAP API" and "Save NetApp setup."
 - iLO inventory readback was relabeled to the original operator wording, "Read current iLO."
+- Dashboard and command header text sizing was tightened by removing viewport-scaled heading sizes and negative letter spacing from the app shell.
 
 Remaining gaps:
 - No unmatched original visible actions are currently listed in artifacts/codex-runs/full-visible-workflow-missing-controls.md.
