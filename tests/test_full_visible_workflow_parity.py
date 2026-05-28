@@ -159,6 +159,35 @@ GUARDED_LABELS = {
     "Reboot storage now",
 }
 
+CONTEXT_REQUIRED_LABELS = {
+    "Save global settings HTML action",
+    "Save iLO setup HTML action",
+    "Export iLO config",
+    "Export iLO inventory",
+    "View iLO config snapshot",
+    "Save storage target",
+    "Read current storage",
+    "Plan RAID layout",
+    "Approve storage plan",
+    "View storage artifact",
+    "Download storage artifact",
+    "Save ESXi setup",
+    "Save Windows setup",
+    "Register OVF directory",
+    "Register OVF path",
+    "Save QNAP setup",
+    "Discover Cisco version",
+    "Discover Cisco console",
+    "Setup Cisco IP",
+    "Save NetApp settings",
+    "Read current ONTAP",
+    "Setup NetApp IP",
+    "View run summary",
+    "Download run summary",
+    "View report",
+    "Download report",
+}
+
 
 def route_paths() -> set[str]:
     return {route.path for route in main.app.routes}
@@ -219,6 +248,24 @@ def test_guarded_hardware_actions_do_not_auto_submit_from_action_inventory():
     assert "Open confirmation" in guarded_branch
     for route in guarded_routes:
         assert route in {action["route"] for actions in inventory.values() for action in actions}
+
+
+def test_context_required_legacy_actions_open_original_forms_instead_of_empty_posts():
+    inventory = all_actions()
+    available = {
+        action["label"]
+        for actions in inventory.values()
+        for action in actions
+    }
+    missing_labels = CONTEXT_REQUIRED_LABELS - available
+    assert not missing_labels
+
+    js = Path("static/js/react-desktop-ui.js").read_text(encoding="utf-8")
+    action_control = js.split("function actionControl(action)", 1)[1].split("return h(Panel", 1)[0]
+    assert "needsOriginalFormContext(action)" in action_control
+    assert "Open form" in action_control
+    assert 'route === "/prepare-execute"' in js
+    assert 'route === "/execute-preview"' in js
 
 
 def test_reports_page_exposes_action_inventory_and_debug_downloads():

@@ -1485,11 +1485,21 @@
         }
         function isGuarded(action) {
             const text = String((action.label || "") + " " + (action.route || "")).toLowerCase();
-            return text.includes("factory reset") || text.includes("start real") || text.includes("run for real") || text.includes("run-upgrade") || text.includes("reboot") || text.includes("apply config") || text.includes("apply netapp page");
+            return text.includes("factory reset") || text.includes("start real") || text.includes("run for real") || text.includes("run-upgrade") || text.includes("reboot") || text.includes("apply config") || text.includes("apply netapp page") || text.includes("apply storage") || text.includes("safe apply");
+        }
+        function needsOriginalFormContext(action) {
+            const route = String((action || {}).route || "");
+            const label = String((action || {}).label || "").toLowerCase();
+            if (route.indexOf("/api/ui/") === 0) return false;
+            if (route === "/prepare-execute" || route === "/execute-preview") return false;
+            if (route === "/view-current-kit-config" || route === "/download-current-kit-config") return false;
+            if (route === "/view-latest-live-summary" || route === "/download-latest-live-summary" || route === "/download-latest-live-raw") return false;
+            if (label.indexOf("view ") === 0 || label.indexOf("download ") === 0) return true;
+            return action.method === "POST";
         }
         function actionControl(action) {
-            if (isGuarded(action)) {
-                return h(ReactAwareButton, { href: pageHref || action.route, appState: props.appState, onNavigate: props.onNavigate }, "Open confirmation");
+            if (isGuarded(action) || needsOriginalFormContext(action)) {
+                return h(ReactAwareButton, { href: pageHref || action.route, appState: props.appState, onNavigate: props.onNavigate }, isGuarded(action) ? "Open confirmation" : "Open form");
             }
             if (action.method === "GET") {
                 if (action.mode === "download") return h(DownloadButton, { href: action.route }, "Download");
