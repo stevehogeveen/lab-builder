@@ -16,6 +16,7 @@ from app.overnight_run import (
     OvernightArtifactWriter,
     create_overnight_run_dir,
     finalize_overnight_run,
+    reconcile_overnight_needs_attention_reasons,
 )
 
 
@@ -98,6 +99,24 @@ def _finalization_snapshot(result: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _reconcile_finalization_result(run_dir: Path, result: dict[str, Any]) -> dict[str, Any]:
+    reconciled = dict(result)
+    summary = _read_yaml_dict(run_dir / "summary.yml")
+    generated_at = str(reconciled.get("generated_at") or summary.get("generated_at") or "")
+    reasons, timing = reconcile_overnight_needs_attention_reasons(
+        list(reconciled.get("needs_attention_reasons") or []),
+        run_dir=run_dir,
+        generated_at=generated_at,
+    )
+    reconciled["needs_attention_reasons"] = reasons
+    if timing:
+        reconciled["finalization_completed_at"] = str(reconciled.get("finalization_completed_at") or timing.get("completed_at") or "")
+        reconciled["finalization_deadline"] = str(reconciled.get("finalization_deadline") or timing.get("deadline") or "")
+        if not reconciled.get("finalization_timing"):
+            reconciled["finalization_timing"] = "before deadline" if timing.get("status") == "before_deadline" else "missed deadline"
+    return reconciled
+
+
 def _write_job_state_snapshot(
     *,
     run_dir: Path,
@@ -140,6 +159,7 @@ def sync_finalized_job_state(
     if not job or not _job_matches_run(job, run_dir):
         return None
 
+    result = _reconcile_finalization_result(run_dir, result)
     status_label = str(result.get("status_label") or "").strip() or "Needs attention"
     job_status = _finalized_job_status(status_label)
     event_status = "completed" if job_status == "Completed" else "needs_attention"

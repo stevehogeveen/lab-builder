@@ -699,6 +699,76 @@ def test_cli_finalizer_syncs_matching_overnight_job_state(tmp_path):
     assert "do not persist this" not in job_state_text
 
 
+def test_cli_finalizer_sync_reconciles_stale_deadline_snapshot(tmp_path):
+    repo = tmp_path
+    artifacts_root = repo / "artifacts"
+    run_dir = artifacts_root / "runs" / "overnight" / "20260527-175700-ilo-cisco"
+    run_dir.mkdir(parents=True)
+    (run_dir / "config-snapshot.yml").write_text(
+        yaml.safe_dump({"kit_config": {"site": {"name": "Kit-01"}}}, sort_keys=False),
+        encoding="utf-8",
+    )
+    (run_dir / "summary.yml").write_text(
+        yaml.safe_dump(
+            {
+                "generated_at": "2026-05-27T20:35:11-04:00",
+                "finalization": {
+                    "needs_attention_reasons": ["The 6:00 AM finalization deadline was missed."],
+                },
+            },
+            sort_keys=False,
+        ),
+        encoding="utf-8",
+    )
+    jobs_dir = artifacts_root / "jobs"
+    jobs_dir.mkdir(parents=True)
+    job_path = jobs_dir / "Kit-01_job.yml"
+    job_path.write_text(
+        yaml.safe_dump(
+            {
+                "status": "Running",
+                "scope": "overnight_hardware",
+                "root_scope": "overnight_hardware",
+                "current_stage": "Finalization",
+                "progress_percent": 72,
+                "logs": [],
+                "trace_events": [],
+                "run_id": run_dir.name,
+                "run_bundle_dir": str(run_dir),
+            },
+            sort_keys=False,
+        ),
+        encoding="utf-8",
+    )
+
+    overnight_finalize.sync_finalized_job_state(
+        repo_root=repo,
+        artifacts_root=artifacts_root,
+        run_dir=run_dir,
+        result={
+            "status_label": "Needs attention",
+            "test_result": "passed",
+            "compile_result": "passed",
+            "push_result": "not run",
+            "secret_scan_result": "clean",
+            "needs_attention_reasons": [
+                "The 6:00 AM finalization deadline was missed.",
+                "Expected artifacts still contain placeholders: ilo/discovery.json",
+            ],
+        },
+    )
+
+    updated = yaml.safe_load(job_path.read_text(encoding="utf-8"))
+    job_state = yaml.safe_load((run_dir / "job-state.yml").read_text(encoding="utf-8"))
+
+    assert "The 6:00 AM finalization deadline was missed." not in updated["overnight_finalization"]["needs_attention_reasons"]
+    assert updated["overnight_finalization"]["needs_attention_reasons"] == ["Expected artifacts still contain placeholders: ilo/discovery.json"]
+    assert updated["overnight_finalization"]["finalization_completed_at"] == "2026-05-27 20:35 local"
+    assert updated["overnight_finalization"]["finalization_deadline"] == "2026-05-28 06:00 local"
+    assert updated["overnight_finalization"]["finalization_timing"] == "before deadline"
+    assert job_state["finalization"] == updated["overnight_finalization"]
+
+
 def test_overnight_start_blocks_when_existing_run_is_active(client, monkeypatch):
     cfg = main.load_kit_config()
     main.save_job(
