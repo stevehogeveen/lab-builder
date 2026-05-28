@@ -245,6 +245,14 @@ def test_hard_coded_react_internal_urls_map_to_registered_routes():
     assert not missing, f"React bundle references unregistered route(s): {missing}"
 
 
+def test_react_action_catalog_categories_match_operator_navigation():
+    assert main.react_ui_route_category("/dashboard") == "Overview"
+    assert main.react_ui_route_category("/global-settings") == "Overview"
+    assert main.react_ui_route_category("/configs") == "Reports"
+    assert main.react_ui_route_category("/history") == "Reports"
+    assert main.react_ui_route_category("/execution") == "Run Center"
+
+
 def test_legacy_post_actions_render_as_visible_operator_forms():
     js = Path("static/js/react-desktop-ui.js").read_text(encoding="utf-8")
     assert "inline-action-form" in js
