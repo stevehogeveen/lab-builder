@@ -263,7 +263,7 @@ def test_context_required_legacy_actions_open_original_forms_instead_of_empty_po
     js = Path("static/js/react-desktop-ui.js").read_text(encoding="utf-8")
     action_control = js.split("function actionControl(action)", 1)[1].split("return h(Panel", 1)[0]
     assert "needsOriginalFormContext(action)" in action_control
-    assert "Open form" in action_control
+    assert "Open full form" in action_control
     assert 'route === "/prepare-execute"' in js
     assert 'route === "/execute-preview"' in js
 
@@ -290,6 +290,9 @@ def test_generic_migration_pages_show_saved_setup_value_panel():
     migration_body = js.split("function MigrationPage", 1)[1].split("function ModuleDetailPanel", 1)[0]
     assert "state.setup_values" in migration_body
     assert "ModuleDetailPanel" in migration_body
+    detail_body = js.split("function ModuleDetailPanel", 1)[1].split("function NetAppStatusPanel", 1)[0]
+    assert "Open full form" in detail_body
+    assert "ReactAwareButton" not in detail_body
 
 
 def test_operator_mode_keeps_raw_logs_in_debug_surfaces():

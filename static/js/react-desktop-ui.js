@@ -571,7 +571,7 @@
             h("p", { className: "panel-subtitle" }, module.planned_summary || "Review setup."),
             h("div", { className: "job-actions" },
                 h(Button, { onClick: function () { props.onNavigate(module.key); } }, "Open"),
-                h(Pill, { tone: "blue" }, "Route mapped")
+                h(Pill, { tone: "blue" }, "Actions available")
             )
         );
     }
@@ -748,7 +748,7 @@
                         })
                     )
                 ),
-                h(Panel, { label: "Modules", title: "Setup workspaces", subtitle: "Real backend state is shown where APIs are wired; full setup pages remain one click away." },
+                h(Panel, { label: "Modules", title: "Setup workspaces", subtitle: "Each workspace shows saved values, readiness, and mapped operator actions from the backend." },
                     h("div", { className: "module-grid" }, modules.map(function (module) {
                         return h(ModuleCard, { key: module.key, module: module, onNavigate: props.onNavigate });
                     }))
@@ -1185,7 +1185,7 @@
         const module = (state.modules || []).find(function (item) { return item.key === props.page; }) || {};
         const actions = ((state.actions || {})[props.page] || []);
         const setupValues = ((state.setup_values || {})[props.page] || {});
-        const last = module.last_summary || "No migrated React action has run yet.";
+        const last = module.last_summary || "No recent activity has been recorded for this workspace yet.";
         return h("div", { className: "page-layout" },
             h("div", { className: "page-main" },
                 h(SetupStrip, {
@@ -1234,7 +1234,7 @@
             label: "Saved setup values",
             title: (pageCopy[props.page] || {}).title || "Setup values",
             subtitle: "Current kit values are shown here so the React page exposes the same operator context as the original form.",
-            action: primary.href ? h(ReactAwareButton, { href: primary.href, appState: props.appState, onNavigate: props.onNavigate }, primary.label || "Open form") : null
+            action: primary.href ? h(Button, { href: primary.href }, primary.label || "Open full form") : null
         },
             h("div", { className: "section-grid" }, (detail.summary || []).map(function (item) {
                 return h("div", { className: "setup-card", key: item.label },
@@ -1530,7 +1530,7 @@
         }
         function actionControl(action) {
             if (isGuarded(action) || needsOriginalFormContext(action)) {
-                return h(ReactAwareButton, { href: pageHref || action.route, appState: props.appState, onNavigate: props.onNavigate }, isGuarded(action) ? "Open confirmation" : "Open form");
+                return h(Button, { href: pageHref || action.route }, isGuarded(action) ? "Open confirmation" : "Open full form");
             }
             if (action.method === "GET") {
                 if (action.mode === "download") return h(DownloadButton, { href: action.route }, "Download");
@@ -1544,7 +1544,7 @@
             }
             return h(Pill, { tone: "ready" }, "API");
         }
-        return h(Panel, { label: "Backend action inventory", title: "Mapped routes", subtitle: "Every preserved workflow is visible here. Simple HTML actions submit to the original route; guarded hardware actions open the full confirmation page." },
+        return h(Panel, { label: "Backend action inventory", title: "Mapped routes", subtitle: "Every preserved workflow is visible here. Context-heavy actions open the full form; simple no-context actions submit to their original route." },
             actions.length ? h("div", { className: "action-list" }, actions.map(function (action) {
                 return h("div", { className: "action-row", key: action.method + action.route + action.label },
                     h("div", null,
