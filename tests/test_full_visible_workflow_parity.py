@@ -1,3 +1,4 @@
+import re
 from pathlib import Path
 
 from fastapi.testclient import TestClient
@@ -223,6 +224,25 @@ def test_every_react_visible_action_maps_to_registered_backend_route():
             if action["method"] == "WS" or "{" in route:
                 continue
             assert route in paths, f"page={page} visible action={action['label']!r} maps missing route {route}"
+
+
+def test_hard_coded_react_internal_urls_map_to_registered_routes():
+    paths = route_paths()
+    js = Path("static/js/react-desktop-ui.js").read_text(encoding="utf-8")
+    patterns = [
+        r'href:\s*"(/[^"]+)"',
+        r'apiGet\("(/[^"]+)"',
+        r'htmlActionPost\("(/[^"]+)"',
+        r'runForm\("(/[^"]+)"',
+        r'reportPostForm\("(/[^"]+)"',
+    ]
+    urls = set()
+    for pattern in patterns:
+        urls.update(re.findall(pattern, js))
+
+    assert urls
+    missing = sorted(url for url in urls if "{" not in url and url not in paths)
+    assert not missing, f"React bundle references unregistered route(s): {missing}"
 
 
 def test_legacy_post_actions_render_as_visible_operator_forms():
