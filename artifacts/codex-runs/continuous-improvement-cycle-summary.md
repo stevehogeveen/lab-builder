@@ -4,18 +4,18 @@ Status: repaired and verified
 
 ## Inspection
 - Latest overnight run inspected: `artifacts/runs/overnight/20260527-175700-ilo-cisco`.
-- Read required run artifacts: `live-job.log`, `trace.yml`, `summary.yml`, `MORNING_READY.md`, `job-state.yml`, `ilo/*`, and `cisco/*`.
-- `STOP_HARDWARE_WORK` is present. iLO and Cisco evidence artifacts are pending placeholders from the discovery-only run.
-- `/api/ui/overnight-hardware` keeps safe defaults: `discovery_only`, destructive flags false, compact Operator Mode, and raw Debug Mode details.
+- Read required artifacts: `live-job.log`, `trace.yml`, `summary.yml`, `MORNING_READY.md`, `job-state.yml`, `ilo/*`, and `cisco/*`.
+- `STOP_HARDWARE_WORK` is present; hardware evidence artifacts remain pending placeholders from the discovery-only run.
+- Safe defaults remain intact: `discovery_only`, destructive flags false, confirmation required for guided/full modes, compact Operator Mode, raw Debug Mode detail.
 
 ## Repair
-- Preserved safe `secret_scan_result` and `secret_findings_count` metadata during overnight report redaction.
-- Kept `secret_findings` useful but redacted to path, line, reason, and a redacted excerpt.
-- Repaired the ignored current run/job artifacts so the latest `MORNING_READY.md`, `summary.yml`, `job-state.yml`, and job snapshot show `Secret scan: clean` instead of `[REDACTED]`.
-- Added regression coverage for clean scan status and blocked secret-scan diagnostics without raw suspicious excerpts.
+- Removed the misleading generic git blocker when commit/push was skipped by a reconciled stale deadline or another explicit safety gate rather than a real git failure.
+- Kept the generic git blocker for actual add/commit/push failure paths.
+- Re-synced the latest durable run report so Operator Mode and `MORNING_READY.md` now show only the pending artifact reason.
+- Added regression coverage for secret-scan gate reporting and stale-deadline finalizer sync.
 
 ## Verification
-- Focused changed-behavior tests passed: 3 tests.
+- Focused changed-behavior tests passed: 2 tests.
 - `~/lab-builder/.venv/bin/python -m pytest -q tests/test_overnight_run.py` passed: 26 tests.
 - `~/lab-builder/.venv/bin/python -m pytest -q` passed: 433 tests.
 - `~/lab-builder/.venv/bin/python -m compileall app` passed.
@@ -23,4 +23,4 @@ Status: repaired and verified
 - Staged secret scan passed with 0 findings.
 
 ## Commit Gate
-- Commit/push: allowed; final exact staged scan was clean.
+- Commit/push: allowed; final staged scan was clean.

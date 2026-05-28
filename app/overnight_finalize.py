@@ -62,6 +62,24 @@ def _hardware_stop_window_note(value: Any) -> bool:
     return "hardware stop marker was written at or after 5:30 am" in str(value or "").lower()
 
 
+def _git_incomplete_text(value: Any) -> bool:
+    return "git commit or push did not complete" in str(value or "").lower()
+
+
+def _actionable_git_failure_note(value: Any) -> bool:
+    lowered = str(value or "").lower()
+    return any(
+        fragment in lowered
+        for fragment in (
+            "git add failed",
+            "git commit failed",
+            "git push failed",
+            "could not determine the current branch",
+            "no configured commit paths exist",
+        )
+    )
+
+
 def _secret_findings_list(value: Any) -> list[Any]:
     return value if isinstance(value, list) else []
 
@@ -170,14 +188,22 @@ def _reconcile_finalization_result(run_dir: Path, result: dict[str, Any]) -> dic
         run_dir=run_dir,
         generated_at=generated_at,
     )
-    reconciled["needs_attention_reasons"] = reasons
     if timing:
         reconciled["finalization_completed_at"] = str(reconciled.get("finalization_completed_at") or timing.get("completed_at") or "")
         reconciled["finalization_deadline"] = str(reconciled.get("finalization_deadline") or timing.get("deadline") or "")
         if not reconciled.get("finalization_timing"):
             reconciled["finalization_timing"] = "before deadline" if timing.get("status") == "before_deadline" else "missed deadline"
         notes = list(reconciled.get("notes") or summary_finalization.get("notes") or [])
-        reconciled["notes"] = _reconcile_finalization_notes(run_dir, notes, timing)
+        reconciled_notes = _reconcile_finalization_notes(run_dir, notes, timing)
+        reconciled["notes"] = reconciled_notes
+        push_result = str(reconciled.get("push_result") or summary_finalization.get("push_result") or "").strip().lower()
+        if (
+            timing.get("status") == "before_deadline"
+            and push_result in {"", "not run"}
+            and not any(_actionable_git_failure_note(note) for note in reconciled_notes)
+        ):
+            reasons = [reason for reason in reasons if not _git_incomplete_text(reason)]
+    reconciled["needs_attention_reasons"] = reasons
     return reconciled
 
 

@@ -118,9 +118,11 @@ def test_secret_scan_blocks_auto_commit(tmp_path):
 
     assert result["status_label"] == "Needs attention"
     assert result["secret_findings"]
+    assert "Git commit or push did not complete." not in result["needs_attention_reasons"]
     assert not any(command[:2] == ["git", "commit"] for command in calls)
     report = writer.morning_report_path.read_text(encoding="utf-8")
     assert "Possible secrets were found" in report
+    assert "Git commit or push did not complete." not in report
     assert "verysecretvalue" not in report
     summary_text = writer.summary_path.read_text(encoding="utf-8")
     summary = yaml.safe_load(summary_text)
@@ -814,6 +816,7 @@ def test_cli_finalizer_sync_reconciles_stale_deadline_snapshot(tmp_path):
             "needs_attention_reasons": [
                 "The 6:00 AM finalization deadline was missed.",
                 "Expected artifacts still contain placeholders: ilo/discovery.json",
+                "Git commit or push did not complete.",
             ],
         },
     )
@@ -833,6 +836,7 @@ def test_cli_finalizer_sync_reconciles_stale_deadline_snapshot(tmp_path):
     assert summary["finalization"]["notes"] == []
     assert "do not persist this" not in (run_dir / "summary.yml").read_text(encoding="utf-8")
     assert "The 6:00 AM finalization deadline was missed." not in morning_ready
+    assert "Git commit or push did not complete." not in morning_ready
     assert "Hardware stop marker was written at or after 5:30 AM" not in morning_ready
     assert "Finalization timing: before deadline" in morning_ready
     assert "do not persist this" not in morning_ready

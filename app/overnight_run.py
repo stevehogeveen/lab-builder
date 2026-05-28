@@ -1127,7 +1127,7 @@ def finalize_overnight_run(
         needs_attention_reasons.append("Expected artifacts still contain placeholders: " + ", ".join(artifact_health["pending"]))
     if artifact_health.get("unreadable"):
         needs_attention_reasons.append("Expected artifacts could not be read: " + ", ".join(artifact_health["unreadable"]))
-    if allow_git and not git_ok:
+    if decision.should_commit_push and not git_ok and not secret_findings:
         needs_attention_reasons.append("Git commit or push did not complete.")
 
     status_label = "Ready for review" if tests_ok and compile_ok and not secret_findings and git_ok and deadline_ok and not artifact_issues else "Needs attention"
