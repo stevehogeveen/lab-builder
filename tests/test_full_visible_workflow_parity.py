@@ -409,6 +409,22 @@ def test_react_app_state_exposes_execution_review_fix_links():
             assert stage.get("fix_label"), stage
 
 
+def test_react_execution_review_does_not_probe_live_esxi_runtime(monkeypatch, tmp_path):
+    cfg = main.load_kit_config()
+    iso = tmp_path / "base-esxi.iso"
+    iso.write_bytes(b"iso")
+    cfg.setdefault("included", {})["esxi"] = True
+    cfg.setdefault("esxi", {})["base_iso_path"] = str(iso)
+
+    def fail_runtime_probe(*args, **kwargs):
+        raise AssertionError("React app-state should not run ESXi runtime probes")
+
+    monkeypatch.setattr(main, "build_esxi_runtime_status", fail_runtime_probe)
+    review = main.build_react_execution_review_state(cfg)
+    assert review.get("stages")
+    assert "fallback_error" not in review
+
+
 def test_dashboard_module_cards_preserve_original_dynamic_links():
     state = main.build_react_ui_state()
     assert {module["legacy_href"] for module in state.get("modules", [])}

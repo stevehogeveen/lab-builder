@@ -9428,12 +9428,12 @@ def build_action_feedback(
     }
 
 
-def build_execution_review(cfg: dict, scope: str):
+def build_execution_review(cfg: dict, scope: str, *, include_runtime: bool = True):
     lines = [f"Execution scope: {scope}", ""]
     execution_mode = execution_mode_for_scope(scope)
     storage_review = build_storage_review_context(cfg)
     selected_scope_keys = run_center_scope_keys(scope, cfg)
-    esxi_install_review = build_esxi_install_review(cfg, include_runtime=True) if scope in {"esxi", "included"} or "esxi" in selected_scope_keys else {}
+    esxi_install_review = build_esxi_install_review(cfg, include_runtime=include_runtime) if scope in {"esxi", "included"} or "esxi" in selected_scope_keys else {}
     storage_validation_error = None
     try:
         storage_execution = validate_storage_ready_for_ilo_run(cfg)
@@ -15164,7 +15164,7 @@ def react_ui_module_summaries(cfg: dict[str, Any], workflow_contexts: dict[str, 
 
 def build_react_execution_review_state(cfg: dict[str, Any]) -> dict[str, Any]:
     try:
-        return build_execution_review(cfg, "included")
+        return build_execution_review(cfg, "included", include_runtime=False)
     except Exception as exc:
         included = cfg.get("included", {}) or {}
         stages = []
