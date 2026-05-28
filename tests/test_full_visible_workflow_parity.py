@@ -196,6 +196,17 @@ def route_paths() -> set[str]:
     return {route.path for route in main.app.routes}
 
 
+def route_methods() -> dict[str, set[str]]:
+    methods_by_path: dict[str, set[str]] = {}
+    for route in main.app.routes:
+        path = getattr(route, "path", "")
+        methods = {str(method) for method in (getattr(route, "methods", None) or []) if str(method) not in {"HEAD", "OPTIONS"}}
+        if not methods and str(path).startswith("/ws/"):
+            methods = {"WS"}
+        methods_by_path.setdefault(path, set()).update(methods)
+    return methods_by_path
+
+
 def all_actions() -> dict[str, list[dict[str, str]]]:
     return main.react_ui_action_inventory()
 
@@ -220,12 +231,17 @@ def test_every_expected_visible_workflow_is_in_react_inventory():
 
 def test_every_react_visible_action_maps_to_registered_backend_route():
     paths = route_paths()
+    methods_by_path = route_methods()
     for page, actions in all_actions().items():
         for action in actions:
             route = action["route"]
             if action["method"] == "WS" or "{" in route:
                 continue
             assert route in paths, f"page={page} visible action={action['label']!r} maps missing route {route}"
+            assert action["method"] in methods_by_path.get(route, set()), (
+                f"page={page} visible action={action['label']!r} expects {action['method']} "
+                f"but route {route} allows {sorted(methods_by_path.get(route, set()))}"
+            )
 
 
 def test_hard_coded_react_internal_urls_map_to_registered_routes():
