@@ -18,7 +18,8 @@ def resolve_storage_target_host(
         ("explicit storage target override", str(storage_cfg.get("target_host_override") or "").strip()),
         ("current kit iLO IP", str(ilo_cfg.get("current_ip") or "").strip()),
         ("current kit iLO host", str(ilo_cfg.get("host") or "").strip()),
-        ("planned iLO target IP", str(ilo_cfg.get("target_ip") or cfg.get("ip_plan", {}).get("ilo") or "").strip()),
+        ("planned iLO target IP", str(ilo_cfg.get("target_ip") or "").strip()),
+        ("planned iLO address", str(cfg.get("ip_plan", {}).get("ilo") or "").strip()),
         ("latest discovery artifact", str(storage_cfg.get("latest_host") or "").strip()),
         ("approved storage artifact", str(approval.get("host") or "").strip()),
     ]
@@ -49,10 +50,10 @@ def resolve_storage_target_host(
 def resolve_ilo_control_host(cfg: dict[str, Any]) -> str:
     ilo_cfg = cfg.get("ilo", {}) or {}
     return str(
-        ilo_cfg.get("target_ip")
-        or cfg.get("ip_plan", {}).get("ilo")
-        or ilo_cfg.get("current_ip")
+        ilo_cfg.get("current_ip")
         or ilo_cfg.get("host")
+        or ilo_cfg.get("target_ip")
+        or cfg.get("ip_plan", {}).get("ilo")
         or ""
     ).strip()
 

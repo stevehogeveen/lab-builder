@@ -1,21 +1,20 @@
-# React Preview Experiment
+# React UI Merge Note
 
-The desktop UI experiment is isolated behind `GET /react-preview`.
+The React desktop UI is now the primary app at `GET /`.
 
 The current expanded wiring is documented in [react-desktop-ui.md](react-desktop-ui.md). This note remains as the first-pass preview record.
 
 ## Wiring
 
-- Route: `app/main.py::react_preview_page`
+- Route: `app/main.py::home`
 - Template: `templates/react_preview.html`
-- Current production Run Center route remains `GET /execution`.
-- Existing Jinja and HTMX templates are not removed or replaced.
+- Older HTML setup routes remain available as compatibility endpoints for actions that still post to server-rendered handlers.
 
 ## Frontend Shape
 
-This first pass uses CDN-loaded React and ReactDOM from the standalone Jinja template. There is no npm package, bundler, or frontend build step yet.
+The current UI uses CDN-loaded React and ReactDOM from the standalone Jinja template. There is no npm package, bundler, or frontend build step yet.
 
-The preview uses mock Run Center data in the template script. It demonstrates:
+The removed first-pass prototype used mock Run Center data in the template script. The live UI now loads state from `/api/ui/*` and the existing hardware services.
 
 - left sidebar navigation
 - top status bar
@@ -32,14 +31,16 @@ The preview uses mock Run Center data in the template script. It demonstrates:
 Use the normal FastAPI app command:
 
 ```bash
-PORT=8001 ./scripts/start-app-dev
+./runreact
 ```
 
 Then open:
 
 ```text
-http://localhost:8001/react-preview
+http://localhost:8001/
 ```
+
+`/react-preview` is retained as a redirect to `/` for bookmarks.
 
 ## Tests
 

@@ -1339,18 +1339,22 @@ def test_navigation_pages_render(client):
         assert response.status_code == 200
 
 
-def test_react_preview_route_renders_isolated_desktop_experiment(client):
-    response = client.get("/react-preview")
+def test_react_root_route_renders_desktop_ui(client):
+    response = client.get("/")
 
     assert response.status_code == 200
-    assert 'id="react-preview-root"' in response.text
-    assert "LAB_BUILDER_USE_EXTERNAL_REACT_APP" in response.text
-    assert 'src="/static/js/react-desktop-ui.js"' in response.text
-    assert "Run Center workspace" in response.text
-    assert "Large live job panel" in response.text
-    assert "Technical details" in response.text
-    assert 'href: "/execution"' in response.text
+    assert 'id="lab-builder-react-root"' in response.text
+    assert "LAB_BUILDER_REACT" in response.text
+    assert 'src="/static/js/react-desktop-ui.js?v=' in response.text
+    assert "Loading Lab Builder" in response.text
     assert "react.development.js" in response.text
+
+
+def test_react_preview_route_redirects_to_root(client):
+    response = client.get("/react-preview", follow_redirects=False)
+
+    assert response.status_code == 308
+    assert response.headers["location"] == "/"
 
 
 def test_react_ui_app_state_api_exposes_desktop_shell_state(client):
@@ -1360,12 +1364,44 @@ def test_react_ui_app_state_api_exposes_desktop_shell_state(client):
     payload = response.json()
     assert payload["app"]["name"] == "Lab Builder"
     assert payload["kit"]["name"] == "Kit-01"
+    page_keys = {page["key"] for page in payload["pages"]}
+    assert {
+        "dashboard",
+        "global_settings",
+        "upgrade_helper",
+        "ilo",
+        "storage",
+        "esxi",
+        "windows",
+        "ovf_templates",
+        "qnap",
+        "netapp",
+        "cisco",
+        "execution",
+        "reports",
+        "configuration",
+        "action-map",
+        "technical",
+    }.issubset(page_keys)
+    assert "overnight_hardware" not in page_keys
     assert any(page["key"] == "dashboard" and page["legacy_href"] == "/dashboard" for page in payload["pages"])
     assert any(page["key"] == "ilo" and page["legacy_href"] == "/ilo" for page in payload["pages"])
-    assert any(page["key"] == "action-map" for page in payload["pages"])
-    assert any(module["key"] == "ilo" for module in payload["modules"])
+    module_keys = {module["key"] for module in payload["modules"]}
+    assert {"ilo", "storage", "windows", "ovf_templates", "qnap", "upgrade_helper"}.issubset(module_keys)
     assert payload["actions"]["ilo"][0]["route"] == "/api/ui/ilo"
+    assert any(action["label"] == "Setup iLO IP" and action["route"] == "/api/ui/ilo/setup-ip" for action in payload["actions"]["ilo"])
+    assert payload["actions"]["dashboard"][1]["route"] == "/api/ui/kits/load"
+    assert payload["actions"]["global_settings"][0]["route"] == "/api/ui/global-settings"
+    assert any(action["label"] == "Setup NetApp IP" and action["route"] == "/modules/netapp/apply-ip-setup" for action in payload["actions"]["netapp"])
+    assert any(action["label"] == "Setup Cisco IP" and action["route"] == "/modules/cisco/bootstrap-management" for action in payload["actions"]["cisco"])
+    assert payload["actions"]["execution"][1]["route"] == "/api/ui/job-status"
     assert payload["action_catalog"]["coverage"]["total_routes"] > 20
+    assert "target_ip" in payload["setup_ip"]["ilo"]
+    assert "management_ip" in payload["setup_ip"]["cisco"]
+    assert "cluster_mgmt_ip" in payload["setup_ip"]["netapp"]
+    assert payload["storage"]["target"]["default_host"]
+    assert payload["storage"]["plan"]["create_only_confirmation"] == "CREATE STORAGE"
+    assert payload["actions"]["storage"][0]["route"] == "/api/ui/storage"
     assert "status" in payload["job"]
 
 
@@ -1386,6 +1422,138 @@ def test_react_ui_action_catalog_exposes_legacy_and_react_routes(client):
     assert payload["coverage"]["legacy_routes"] > 20
     assert any(route["path"] == "/save-ilo-settings" and route["mode"] == "legacy-html" for route in routes)
     assert any(route["path"] == "/api/ui/action-catalog" and route["mode"] == "json" for route in routes)
+
+
+def test_react_ui_mapped_pages_and_actions_match_registered_routes():
+    registered_routes = {route.path for route in main.app.routes}
+
+    for page in main.react_ui_page_specs():
+        assert page["legacy_href"] in registered_routes
+
+    for page_key, actions in main.react_ui_action_inventory().items():
+        for action in actions:
+            if action["method"] == "WS" or "{" in action["route"]:
+                continue
+            assert action["route"] in registered_routes, f"{page_key} maps missing route {action['route']}"
+
+
+def test_react_ui_global_settings_api_saves_editable_shared_defaults(client):
+    response = client.post(
+        "/api/ui/global-settings",
+        json={
+            "values": {
+                "site_name": "React Global Kit",
+                "shared_subnet": "10.55.1.0/24",
+                "gateway_ip": "10.55.1.1",
+                "switch_ip": "10.55.1.2",
+                "esxi_ip": "10.55.1.10",
+                "ilo_target_ip": "10.55.1.11",
+                "windows_ip": "10.55.1.20",
+                "qnap_ip": "10.55.1.30",
+                "iosafe_ip": "10.55.1.31",
+                "netapp_ip": "10.55.1.45",
+                "dns1": "1.1.1.1",
+                "dns2": "8.8.8.8",
+                "dns3": "",
+                "dns4": "",
+                "snmp_v3_username": "reactsnmp",
+                "snmp_v3_auth_protocol": "SHA",
+                "snmp_v3_auth_password": "reactauth",
+                "snmp_v3_priv_protocol": "AES",
+                "snmp_v3_priv_password": "reactpriv",
+            },
+            "included": {
+                "ilo": True,
+                "storage": True,
+                "esxi": True,
+                "windows": True,
+                "qnap": False,
+                "netapp": True,
+                "cisco_switch": False,
+                "iosafe": False,
+            },
+            "snmp_users": [
+                {
+                    "username": "reactbackup",
+                    "auth_protocol": "MD5",
+                    "auth_password": "backupauth",
+                    "priv_protocol": "DES",
+                    "priv_password": "backuppriv",
+                }
+            ],
+        },
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["ok"] is True
+    assert payload["message"] == "Global settings saved."
+    assert payload["ilo"]["values"]["target_ip"] == "10.55.1.11"
+    assert any(module["key"] == "ilo" and module["target"] == "10.55.1.11" for module in payload["app_state"]["modules"])
+
+    saved = main.load_kit_config("React-Global-Kit")
+    assert saved["shared_network"]["subnet"] == "10.55.1.0/24"
+    assert saved["shared_network"]["dns_servers"][:2] == ["1.1.1.1", "8.8.8.8"]
+    assert saved["ip_plan"]["gateway"] == "10.55.1.1"
+    assert saved["ip_plan"]["netapp"] == "10.55.1.45"
+    assert saved["ilo"]["target_ip"] == "10.55.1.11"
+    assert saved["cisco_switch"]["management_ip"] == "10.55.1.2"
+    assert saved["netapp"]["host"] == "10.55.1.45"
+    assert saved["included"]["storage"] is True
+    assert saved["included"]["windows"] is True
+    assert saved["included"]["netapp"] is True
+    assert saved["storage"]["include_in_ilo_run"] is True
+    assert saved["shared_snmp"]["v3_username"] == "reactsnmp"
+    assert saved["shared_snmp"]["users"][0]["username"] == "reactsnmp"
+    assert saved["shared_snmp"]["users"][1]["username"] == "reactbackup"
+    assert any(module["key"] == "netapp" and module["target"] == "10.55.1.45" for module in payload["app_state"]["modules"])
+
+    autofill = client.post("/api/ui/global-settings/autofill", json={"shared_subnet": "10.77.0.0/24"})
+    assert autofill.status_code == 200
+    assert autofill.json()["ok"] is True
+    assert autofill.json()["plan"]["ilo"] == "10.77.0.11"
+
+
+def test_react_ui_kits_api_restores_legacy_kit_management(client):
+    primary = main.default_config()
+    primary["site"]["name"] = "React Primary Kit"
+    main.save_kit_config(primary)
+    older = main.default_config()
+    older["site"]["name"] = "React Older Kit"
+    older["shared_network"]["subnet"] = "10.66.1.0/24"
+    main.save_kit_config(older)
+    main.set_current_kit_name("React-Primary-Kit")
+
+    kits = client.get("/api/ui/kits")
+    assert kits.status_code == 200
+    assert kits.json()["active"] == "React-Primary-Kit"
+    assert "React-Older-Kit" in kits.json()["other_kits"]
+
+    load_response = client.post("/api/ui/kits/load", json={"selected_kit": "React-Older-Kit"})
+    assert load_response.status_code == 200
+    assert load_response.json()["ok"] is True
+    assert load_response.json()["app_state"]["kit"]["name"] == "React-Older-Kit"
+    assert main.get_current_kit_name() == "React-Older-Kit"
+
+    create_response = client.post("/api/ui/kits/create", json={"new_kit_name": "React Fresh Kit"})
+    assert create_response.status_code == 200
+    assert create_response.json()["ok"] is True
+    assert create_response.json()["app_state"]["kit"]["name"] == "React-Fresh-Kit"
+    assert main.kit_path("React-Fresh-Kit").exists()
+
+    config_response = client.get("/api/ui/current-kit-config")
+    assert config_response.status_code == 200
+    assert config_response.json()["ok"] is True
+    assert "React-Fresh-Kit" in config_response.json()["content"]
+
+    payload = yaml.safe_dump({"site": {"name": "React Imported Kit"}, "ip_plan": {"gateway": "10.44.55.1", "ilo": "10.44.55.11"}}, sort_keys=False).encode("utf-8")
+    import_response = client.post(
+        "/api/ui/kits/import",
+        files={"import_file": ("react-imported.yml", payload, "application/x-yaml")},
+    )
+    assert import_response.status_code == 200
+    assert import_response.json()["ok"] is True
+    assert import_response.json()["app_state"]["kit"]["name"] == "React-Imported-Kit"
 
 
 def test_react_ui_ilo_settings_api_reuses_backend_save_logic(client):
@@ -1414,6 +1582,147 @@ def test_react_ui_ilo_settings_api_reuses_backend_save_logic(client):
     assert saved["ilo"]["username"] == "Administrator"
     assert saved["ilo"]["password"] == "Valid1Pass!"
     assert saved["included"]["ilo"] is True
+    assert payload["app_state"]["modules"][1]["target"] == "10.10.8.90"
+
+
+def test_verify_ilo_endpoint_reachable_retries_until_redfish_summary_responds():
+    attempts = []
+
+    class FlakyClient:
+        def __init__(self, cfg):
+            attempts.append(cfg.host)
+
+        def get_summary(self):
+            if len(attempts) == 1:
+                raise main.ILOError("connection refused")
+            return {"model": "DL360"}
+
+    result = main.verify_ilo_endpoint_reachable(
+        "10.10.8.91",
+        "Administrator",
+        "Valid1Pass!",
+        attempts=2,
+        delay_seconds=0,
+        client_factory=FlakyClient,
+    )
+
+    assert result["ok"] is True
+    assert result["host"] == "10.10.8.91"
+    assert result["attempt"] == 2
+    assert attempts == ["10.10.8.91", "10.10.8.91"]
+
+
+def test_verify_ilo_endpoint_reachable_fails_when_final_ip_never_responds():
+    class DownClient:
+        def __init__(self, cfg):
+            self.cfg = cfg
+
+        def get_summary(self):
+            raise main.ILOError("timed out")
+
+    result = main.verify_ilo_endpoint_reachable(
+        "10.10.8.91",
+        "Administrator",
+        "Valid1Pass!",
+        attempts=2,
+        delay_seconds=0,
+        client_factory=DownClient,
+    )
+
+    assert result["ok"] is False
+    assert result["host"] == "10.10.8.91"
+    assert result["attempts"] == 2
+    assert result["error"] == "timed out"
+
+
+def test_run_ilo_ip_setup_does_not_promote_target_until_reachable(client, monkeypatch):
+    cfg = main.load_kit_config("Kit-01")
+    cfg["ilo"].update(
+        {
+            "current_ip": "10.10.8.50",
+            "host": "10.10.8.50",
+            "target_ip": "10.10.8.91",
+            "gateway": "10.10.8.1",
+            "subnet_mask": "255.255.255.0",
+            "username": "Administrator",
+            "password": "Valid1Pass!",
+        }
+    )
+    cfg.setdefault("storage", {})["target_host_override"] = "10.10.8.50"
+    main.save_kit_config(cfg)
+
+    reset_calls = []
+
+    class FakeSetupClient:
+        def __init__(self, cfg_obj):
+            self.cfg_obj = cfg_obj
+
+        def set_static_ipv4_best_effort(self, **kwargs):
+            return {"applied_keys": ["address", "gateway"]}
+
+        def reset_ilo(self, reset_type="GracefulRestart"):
+            reset_calls.append(reset_type)
+            return {"path": "/redfish/v1/Managers/1/Actions/Manager.Reset", "reset_type": reset_type}
+
+    monkeypatch.setattr(main, "ILOClient", FakeSetupClient)
+    monkeypatch.setattr(main, "wait_for_ilo_endpoint_after_reset", lambda *args, **kwargs: {"ok": True, "interrupt_observed": True, "return_observed": True})
+    monkeypatch.setattr(main, "verify_ilo_endpoint_reachable", lambda *args, **kwargs: {"ok": False, "error": "timed out"})
+
+    main.run_ilo_ip_setup_in_background(copy.deepcopy(cfg))
+
+    saved = main.load_kit_config("Kit-01")
+    job = main.load_job("Kit-01")
+    assert saved["ilo"]["current_ip"] == "10.10.8.50"
+    assert saved["ilo"]["host"] == "10.10.8.50"
+    assert saved["storage"]["target_host_override"] == "10.10.8.50"
+    assert job["status"] == "Failed"
+    assert "did not verify reachability" in job["logs"][-1]
+    assert reset_calls == ["GracefulRestart"]
+
+
+def test_run_ilo_ip_setup_promotes_target_after_reachability_verification(client, monkeypatch):
+    cfg = main.load_kit_config("Kit-01")
+    cfg["ilo"].update(
+        {
+            "current_ip": "10.10.8.50",
+            "host": "10.10.8.50",
+            "target_ip": "10.10.8.91",
+            "gateway": "10.10.8.1",
+            "subnet_mask": "255.255.255.0",
+            "username": "Administrator",
+            "password": "Valid1Pass!",
+        }
+    )
+    cfg.setdefault("storage", {})["target_host_override"] = "10.10.8.50"
+    main.save_kit_config(cfg)
+
+    reset_calls = []
+
+    class FakeSetupClient:
+        def __init__(self, cfg_obj):
+            self.cfg_obj = cfg_obj
+
+        def set_static_ipv4_best_effort(self, **kwargs):
+            return {"applied_keys": ["address", "gateway"]}
+
+        def reset_ilo(self, reset_type="GracefulRestart"):
+            reset_calls.append(reset_type)
+            return {"path": "/redfish/v1/Managers/1/Actions/Manager.Reset", "reset_type": reset_type}
+
+    monkeypatch.setattr(main, "ILOClient", FakeSetupClient)
+    monkeypatch.setattr(main, "wait_for_ilo_endpoint_after_reset", lambda *args, **kwargs: {"ok": True, "interrupt_observed": True, "return_observed": True})
+    monkeypatch.setattr(main, "verify_ilo_endpoint_reachable", lambda *args, **kwargs: {"ok": True, "host": "10.10.8.91", "attempt": 1})
+
+    main.run_ilo_ip_setup_in_background(copy.deepcopy(cfg))
+
+    saved = main.load_kit_config("Kit-01")
+    job = main.load_job("Kit-01")
+    assert saved["ilo"]["current_ip"] == "10.10.8.91"
+    assert saved["ilo"]["host"] == "10.10.8.91"
+    assert saved["storage"]["target_host_override"] == ""
+    assert job["status"] == "Complete"
+    assert "[VERIFIED] iLO endpoint is reachable at 10.10.8.91." in job["logs"][-1]
+    assert reset_calls == ["GracefulRestart"]
 
 
 def test_save_config_persists_manual_completion_and_ilo_ips(client):
@@ -2852,7 +3161,7 @@ def test_read_current_storage_warns_when_smart_storage_controller_has_no_childre
     assert "Open reports" in response.text
 
 
-def test_storage_target_host_prefers_planned_ilo_ip_over_current_and_artifact_host():
+def test_storage_target_host_prefers_active_ilo_ip_over_planned_and_artifact_hosts():
     cfg = main.default_config()
     cfg["ilo"]["target_ip"] = "10.10.8.89"
     cfg["ilo"]["current_ip"] = "10.10.8.90"
@@ -2865,6 +3174,30 @@ def test_storage_target_host_prefers_planned_ilo_ip_over_current_and_artifact_ho
     assert resolved["resolved"] == "10.10.8.90"
     assert resolved["source"] == "current kit iLO IP"
     assert resolved["artifact_fallback"] is False
+
+
+def test_ilo_control_host_prefers_active_ilo_endpoint_over_planned_target():
+    cfg = main.default_config()
+    cfg["ilo"]["current_ip"] = "10.10.8.90"
+    cfg["ilo"]["host"] = "10.10.8.90"
+    cfg["ilo"]["target_ip"] = "10.10.8.91"
+    cfg["ip_plan"]["ilo"] = "10.10.8.91"
+
+    assert main.resolve_ilo_control_host(cfg) == "10.10.8.90"
+
+
+def test_propagate_active_ilo_endpoint_clears_stale_storage_override():
+    cfg = main.default_config()
+    cfg["ilo"]["current_ip"] = "10.10.8.90"
+    cfg["ilo"]["host"] = "10.10.8.90"
+    cfg["storage"]["target_host_override"] = "10.10.8.55"
+
+    main.propagate_active_ilo_endpoint(cfg, "10.10.8.91")
+
+    assert cfg["ilo"]["current_ip"] == "10.10.8.91"
+    assert cfg["ilo"]["host"] == "10.10.8.91"
+    assert cfg["storage"]["target_host_override"] == ""
+    assert "10.10.8.55" in cfg["storage"]["previous_target_host_overrides"]
 
 
 def test_storage_target_host_can_fallback_to_latest_artifact_when_kit_host_is_missing():

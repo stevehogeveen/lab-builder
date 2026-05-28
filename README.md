@@ -38,6 +38,14 @@ or:
 
 Default URL: `http://localhost:8000`
 
+To start the React desktop UI:
+
+```bash
+./runreact
+```
+
+React URL: `http://localhost:8001/`
+
 ## Dependency Notes
 
 - Python packages are pinned in `requirements.txt`.

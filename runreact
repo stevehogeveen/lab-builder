@@ -1,0 +1,43 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+APP_DIR="$(cd "$(dirname "$0")" && pwd)"
+HOST="${HOST:-0.0.0.0}"
+PORT="${PORT:-8001}"
+URL_HOST="${URL_HOST:-localhost}"
+
+cd "$APP_DIR"
+
+if ! command -v lsof >/dev/null 2>&1; then
+  echo "[ERROR] lsof is not installed. Install it with:"
+  echo "sudo apt install lsof"
+  exit 1
+fi
+
+if [ ! -x ".venv/bin/python" ]; then
+  echo "[ERROR] .venv not found or missing Python. Create it first with:"
+  echo "python3 -m venv .venv"
+  echo ".venv/bin/pip install -r requirements.txt"
+  exit 1
+fi
+
+echo "[INFO] Checking port $PORT..."
+PIDS="$(lsof -ti tcp:"$PORT" 2>/dev/null || true)"
+
+if [ -n "$PIDS" ]; then
+  echo "[WARN] Port $PORT is already in use by PID(s): $PIDS"
+  echo "[INFO] Stopping process(es) on port $PORT..."
+  kill $PIDS 2>/dev/null || true
+  sleep 2
+
+  STILL_RUNNING="$(lsof -ti tcp:"$PORT" 2>/dev/null || true)"
+  if [ -n "$STILL_RUNNING" ]; then
+    echo "[WARN] Process still using port $PORT. Forcing stop..."
+    kill -9 $STILL_RUNNING 2>/dev/null || true
+    sleep 1
+  fi
+fi
+
+echo "[OK] Starting Lab Builder React UI"
+echo "[OK] Open http://$URL_HOST:$PORT/"
+exec .venv/bin/python -m uvicorn app.main:app --reload --host "$HOST" --port "$PORT"

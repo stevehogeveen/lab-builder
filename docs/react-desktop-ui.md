@@ -1,14 +1,14 @@
 # React Desktop UI
 
-The experimental desktop interface is served from `GET /react-preview`. It keeps FastAPI, Python services, and all existing Jinja/HTMX pages in place.
+The desktop interface is served from `GET /`. FastAPI and the Python device services remain in place; older HTML routes are now compatibility endpoints for actions that have not been given dedicated JSON APIs yet.
 
 ## How It Is Wired
 
-- Shell route: `app/main.py::react_preview_page`
+- Shell route: `app/main.py::home`
 - HTML host template: `templates/react_preview.html`
 - React bundle: `static/js/react-desktop-ui.js`
 - React data APIs: `app/main.py` under `/api/ui/*`
-- Legacy fallback pages remain available from every React page.
+- Compatibility HTML action routes remain available while hardware workflows are moved behind JSON APIs.
 
 The frontend uses CDN React and ReactDOM. There is no npm package, bundler, or frontend build step in this pass.
 
@@ -34,16 +34,16 @@ Reference URLs:
 
 ## Run
 
-Port 8001 is the experimental UI port:
+Port 8001 is the React UI port:
 
 ```bash
-PORT=8001 ./scripts/start-app-dev
+./runreact
 ```
 
 Open:
 
 ```text
-http://localhost:8001/react-preview
+http://localhost:8001/
 ```
 
 ## Backend Endpoints Used
@@ -60,7 +60,7 @@ http://localhost:8001/react-preview
 - `POST /api/ui/ilo/settings` - saves iLO settings through the existing iLO module service.
 - `GET /modules/netapp/status` - existing NetApp JSON status endpoint reused by the React NetApp page.
 
-The dashboard also has buttons that call existing legacy HTML routes:
+The dashboard also has buttons that call existing HTML action routes:
 
 - `POST /prepare-execute`
 - `POST /execute-preview`
@@ -72,9 +72,9 @@ Those routes still return HTML; React only treats them as backend actions and th
 - Dashboard / Run Center: real `/api/ui/app-state`, job polling, recent activity, module readiness, and existing run action routes.
 - iLO setup: real `/api/ui/ilo` state and real `/api/ui/ilo/settings` save path using server-side iLO logic.
 - NetApp setup: shell page with real `/modules/netapp/status`.
-- ESXi setup: shell page with readiness summary and mapped legacy actions.
-- Cisco setup: shell page with readiness summary and mapped legacy actions.
-- Configuration / Kit management: real current-kit and kit-list state from `/api/ui/app-state`; form writes still use the legacy page.
+- ESXi setup: shell page with readiness summary and mapped compatibility actions.
+- Cisco setup: shell page with readiness summary and mapped compatibility actions.
+- Configuration / Kit management: real current-kit and kit-list state from `/api/ui/app-state`; some writes still use compatibility action routes.
 - Reports / run history: real state from `/api/ui/app-state` and `/api/ui/run-history`.
 - Action catalog: real generated route inventory from `/api/ui/action-catalog`.
 - Technical details/logs: real `/api/ui/technical-events` plus the global technical drawer.
@@ -83,17 +83,17 @@ Those routes still return HTML; React only treats them as backend actions and th
 
 - Dashboard / Run Center: first-pass migrated.
 - iLO: partially migrated with real JSON save.
-- ESXi: inventory and shell only; forms/actions still use legacy page.
+- ESXi: inventory and shell only; some forms/actions still use compatibility routes.
 - NetApp: status is real; save/plan/apply actions are listed but not fully integrated in React controls.
-- Cisco: inventory and shell only; actions still use legacy page.
-- Configuration / Kit management: read-only kit state migrated; save/load/import actions still use legacy page.
-- Reports / history: read-only state is migrated; detailed report viewers still use legacy routes.
+- Cisco: inventory and shell only; actions still use compatibility routes.
+- Configuration / Kit management: kit state, load, create, import, and downloads use React APIs; older save routes remain available.
+- Reports / history: read-only state is migrated; detailed report viewers still use compatibility routes.
 - Action catalog: migrated as a read-only control surface for route coverage and migration planning.
 - Technical details/logs: read-only diagnostics migrated.
 
 ## Safety Notes
 
-- Existing Jinja/HTMX templates are not deleted or replaced.
-- Existing production routes remain available.
+- Existing Jinja/HTMX templates are retained only as compatibility views until their actions are fully represented by React controls.
+- Existing backend routes remain available.
 - Hardware/config/job business logic stays server-side.
-- React pages link back to the legacy page for full coverage while migration continues.
+- React pages expose the mapped action inventory so missing JSON endpoints are visible instead of hidden.

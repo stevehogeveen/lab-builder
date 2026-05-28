@@ -76,45 +76,171 @@
         .app-sidebar {
             display: flex;
             flex-direction: column;
-            gap: 18px;
+            gap: 14px;
             min-height: 100vh;
-            padding: 18px 14px;
+            padding: 18px 14px 14px;
             background: var(--nav);
             color: #f8fafc;
             border-right: 1px solid rgba(255, 255, 255, 0.08);
+            overflow-y: auto;
         }
 
-        .brand-row {
-            display: flex;
-            align-items: center;
-            gap: 10px;
-            min-height: 42px;
-            padding: 4px 6px;
+        .brand-block {
+            padding: 4px 6px 2px;
         }
 
-        .brand-mark {
-            display: grid;
-            width: 34px;
-            height: 34px;
-            place-items: center;
-            border-radius: 8px;
-            background: #f8fafc;
-            color: var(--nav);
-            font-weight: 850;
+        .eyebrow {
+            color: #9fb0c7;
+            font-size: 0.68rem;
+            font-weight: 800;
+            text-transform: uppercase;
+            letter-spacing: 0;
         }
 
-        .brand-name {
-            font-size: 0.98rem;
+        .brand {
+            margin-top: 2px;
+            font-size: 1.04rem;
             font-weight: 800;
         }
 
-        .brand-subtitle {
+        .muted {
+            margin-top: 3px;
             color: #b8c0cc;
             font-size: 0.78rem;
+            line-height: 1.35;
         }
 
-        .sidebar-section-title {
-            margin: 14px 8px 8px;
+        .sidebar-kit-card {
+            padding: 12px;
+            border: 1px solid rgba(255, 255, 255, 0.12);
+            border-radius: 8px;
+            background: rgba(255, 255, 255, 0.06);
+        }
+
+        .sidebar-kit-top,
+        .sidebar-kit-meta {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 8px;
+        }
+
+        .sidebar-kit-label {
+            color: #aab3c1;
+            font-size: 0.7rem;
+            font-weight: 800;
+            text-transform: uppercase;
+            letter-spacing: 0;
+        }
+
+        .status {
+            display: inline-flex;
+            align-items: center;
+            min-height: 20px;
+            padding: 2px 7px;
+            border-radius: 999px;
+            background: rgba(255, 255, 255, 0.1);
+            color: #e5edf8;
+            font-size: 0.7rem;
+            font-weight: 800;
+            white-space: nowrap;
+        }
+
+        .status.ready {
+            background: rgba(22, 163, 74, 0.18);
+            color: #bbf7d0;
+        }
+
+        .status.blocked,
+        .status.failed {
+            background: rgba(245, 158, 11, 0.2);
+            color: #fde68a;
+        }
+
+        .status.pending,
+        .status.muted {
+            background: rgba(148, 163, 184, 0.16);
+            color: #cbd5e1;
+        }
+
+        .sidebar-kit-name {
+            margin-top: 8px;
+            overflow: hidden;
+            font-size: 0.92rem;
+            font-weight: 800;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+
+        .sidebar-kit-meter {
+            height: 6px;
+            margin-top: 10px;
+            overflow: hidden;
+            border-radius: 999px;
+            background: rgba(255, 255, 255, 0.12);
+        }
+
+        .sidebar-kit-meter span {
+            display: block;
+            width: var(--meter, 0%);
+            height: 100%;
+            border-radius: inherit;
+            background: #38bdf8;
+        }
+
+        .sidebar-kit-meta {
+            margin-top: 8px;
+            color: #b8c0cc;
+            font-size: 0.74rem;
+            font-weight: 700;
+        }
+
+        .sidebar-utility-grid {
+            display: grid;
+            grid-template-columns: 1fr;
+            gap: 6px;
+        }
+
+        .sidebar-tool-button {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 8px;
+            min-height: 34px;
+            padding: 7px 9px;
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            border-radius: 8px;
+            background: rgba(255, 255, 255, 0.05);
+            color: #dce3ee;
+            font: inherit;
+            font-size: 0.78rem;
+            font-weight: 750;
+            cursor: pointer;
+        }
+
+        .sidebar-tool-button:hover,
+        .sidebar-tool-button:focus-visible {
+            background: var(--nav-2);
+            outline: none;
+        }
+
+        .kbd {
+            min-width: 34px;
+            padding: 2px 6px;
+            border: 1px solid rgba(255, 255, 255, 0.16);
+            border-radius: 6px;
+            color: #cbd5e1;
+            font-size: 0.68rem;
+            text-align: center;
+        }
+
+        .nav-group {
+            display: grid;
+            gap: 4px;
+        }
+
+        .nav-label {
+            margin: 8px 8px 4px;
             color: #aab3c1;
             font-size: 0.72rem;
             font-weight: 800;
@@ -122,70 +248,129 @@
             letter-spacing: 0;
         }
 
-        .nav-list {
-            display: grid;
-            gap: 4px;
-        }
-
-        .nav-item {
-            display: grid;
-            grid-template-columns: 22px 1fr auto;
-            align-items: center;
-            gap: 10px;
-            min-height: 42px;
-            padding: 8px 10px;
+        .nav-link {
+            display: block;
             border: 1px solid transparent;
             border-radius: 8px;
             color: #dce3ee;
         }
 
-        .nav-item:hover,
-        .nav-item:focus-visible {
+        .nav-link:hover,
+        .nav-link:focus-visible {
             border-color: rgba(255, 255, 255, 0.12);
             background: var(--nav-2);
             outline: none;
         }
 
-        .nav-item-active {
+        .nav-link-active {
             background: #f8fafc;
             color: var(--ink);
             border-color: #f8fafc;
         }
 
-        .nav-icon {
+        .nav-link-shell {
             display: grid;
-            width: 22px;
-            height: 22px;
-            place-items: center;
-            border-radius: 6px;
-            background: rgba(255, 255, 255, 0.1);
-            font-size: 0.72rem;
-            font-weight: 800;
+            grid-template-columns: 8px 24px minmax(0, 1fr);
+            align-items: center;
+            gap: 9px;
+            min-height: 42px;
+            padding: 7px 9px;
         }
 
-        .nav-item-active .nav-icon {
+        .nav-dot {
+            width: 7px;
+            height: 7px;
+            border-radius: 50%;
+            background: #94a3b8;
+        }
+
+        .nav-dot-ready {
+            background: var(--green);
+        }
+
+        .nav-dot-progress {
+            background: var(--blue);
+        }
+
+        .nav-dot-pending {
+            background: var(--amber);
+        }
+
+        .nav-dot-blocked,
+        .nav-dot-failed {
+            background: #f97316;
+        }
+
+        .nav-dot-muted {
+            background: #64748b;
+        }
+
+        .nav-icon {
+            display: grid;
+            width: 24px;
+            height: 24px;
+            place-items: center;
+            border-radius: 7px;
+            background: rgba(255, 255, 255, 0.1);
+            color: #e2e8f0;
+            font-size: 0.68rem;
+            font-weight: 850;
+        }
+
+        .nav-link-active .nav-icon {
             background: var(--blue-soft);
             color: var(--blue);
         }
 
-        .nav-text {
+        .icon-tone-ready {
+            background: rgba(22, 163, 74, 0.18);
+        }
+
+        .icon-tone-pending {
+            background: rgba(245, 158, 11, 0.18);
+        }
+
+        .icon-tone-blocked,
+        .icon-tone-failed {
+            background: rgba(249, 115, 22, 0.2);
+        }
+
+        .icon-tone-muted {
+            background: rgba(100, 116, 139, 0.24);
+            color: #cbd5e1;
+        }
+
+        .nav-link-copy {
             min-width: 0;
         }
 
-        .nav-label {
+        .nav-link-title {
             display: block;
             overflow: hidden;
-            font-size: 0.9rem;
-            font-weight: 750;
+            font-size: 0.86rem;
+            font-weight: 780;
             text-overflow: ellipsis;
             white-space: nowrap;
         }
 
-        .nav-meta {
+        .nav-link-subtitle {
             display: block;
+            overflow: hidden;
             color: currentColor;
-            font-size: 0.72rem;
-            opacity: 0.68;
+            font-size: 0.7rem;
+            opacity: 0.65;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+
+        .compact-view .workspace {
+            padding: 18px;
+        }
+
+        .compact-view .panel,
+        .compact-view .setup-card,
+        .compact-view .metric-card {
+            padding: 14px;
         }
 
         .sidebar-footer {
@@ -922,6 +1107,76 @@
             gap: 12px;
         }
 
+        .global-settings-form {
+            display: grid;
+            gap: 16px;
+            min-width: 0;
+        }
+
+        .toggle-grid {
+            display: grid;
+            grid-template-columns: repeat(4, minmax(0, 1fr));
+            gap: 10px;
+        }
+
+        .toggle-field {
+            display: grid;
+            grid-template-columns: auto minmax(0, 1fr);
+            gap: 10px;
+            align-items: flex-start;
+            min-width: 0;
+            min-height: 58px;
+            padding: 12px;
+            border: 1px solid var(--line);
+            border-radius: 8px;
+            background: var(--surface-2);
+            cursor: pointer;
+        }
+
+        .toggle-field input {
+            width: 16px;
+            height: 16px;
+            margin-top: 2px;
+            accent-color: var(--blue);
+        }
+
+        .toggle-field strong {
+            display: block;
+            font-size: 0.86rem;
+            font-weight: 820;
+        }
+
+        .toggle-field small {
+            display: block;
+            margin-top: 2px;
+            color: var(--muted);
+            font-size: 0.76rem;
+        }
+
+        .snmp-user-list {
+            display: grid;
+            gap: 12px;
+        }
+
+        .snmp-user-card {
+            overflow: hidden;
+            border: 1px solid var(--line);
+            border-radius: 8px;
+            background: var(--surface-2);
+        }
+
+        .compact-header {
+            padding: 12px 14px;
+            background: var(--surface);
+        }
+
+        .snmp-user-grid {
+            display: grid;
+            grid-template-columns: repeat(2, minmax(0, 1fr));
+            gap: 12px;
+            padding: 14px;
+        }
+
         .field {
             display: grid;
             gap: 6px;
@@ -954,6 +1209,14 @@
             box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.12);
         }
 
+        .text-input:-webkit-autofill,
+        .text-input:-webkit-autofill:hover,
+        .text-input:-webkit-autofill:focus {
+            -webkit-text-fill-color: var(--ink);
+            box-shadow: 0 0 0 1000px var(--surface) inset, 0 0 0 3px rgba(37, 99, 235, 0.12);
+            transition: background-color 9999s ease-out;
+        }
+
         .field-help {
             color: var(--muted);
             font-size: 0.78rem;
@@ -975,10 +1238,84 @@
             color: var(--green);
         }
 
+        .message-info {
+            border-color: #b9d4f6;
+            background: var(--blue-soft);
+            color: var(--blue);
+        }
+
         .message-warn {
             border-color: #f5d088;
             background: var(--amber-soft);
             color: var(--amber);
+        }
+
+        .message-error {
+            border-color: #ffc5bd;
+            background: var(--red-soft);
+            color: var(--red);
+        }
+
+        .status-step-list {
+            display: grid;
+            gap: 8px;
+            margin-top: 14px;
+        }
+
+        .status-step {
+            display: grid;
+            grid-template-columns: 24px minmax(0, 1fr);
+            gap: 10px;
+            align-items: start;
+            padding: 10px 0;
+            border-top: 1px solid var(--line);
+        }
+
+        .status-step:first-child {
+            border-top: 0;
+        }
+
+        .status-icon {
+            display: grid;
+            width: 22px;
+            height: 22px;
+            place-items: center;
+            border-radius: 50%;
+            border: 1px solid var(--line-strong);
+            color: var(--muted);
+            font-size: 0.75rem;
+            font-weight: 900;
+        }
+
+        .status-step-good .status-icon {
+            border-color: #b8dccb;
+            color: var(--green);
+            background: var(--green-soft);
+        }
+
+        .status-step-warn .status-icon {
+            border-color: #f5d088;
+            color: var(--amber);
+            background: var(--amber-soft);
+        }
+
+        .status-step-error .status-icon {
+            border-color: #ffc5bd;
+            color: var(--red);
+            background: var(--red-soft);
+        }
+
+        .status-step-title {
+            color: var(--ink);
+            font-size: 0.9rem;
+            font-weight: 830;
+        }
+
+        .status-step-detail {
+            margin-top: 3px;
+            color: var(--muted);
+            font-size: 0.82rem;
+            line-height: 1.42;
         }
 
         .action-list {
@@ -998,6 +1335,18 @@
         .action-row:first-child {
             border-top: 0;
             padding-top: 0;
+        }
+
+        .action-row-controls {
+            display: flex;
+            align-items: center;
+            justify-content: flex-end;
+            gap: 8px;
+            min-width: 0;
+        }
+
+        .action-row-controls form {
+            margin: 0;
         }
 
         .coverage-strip {
@@ -1080,6 +1429,22 @@
             gap: 0;
         }
 
+        .kit-management-grid {
+            display: grid;
+            grid-template-columns: repeat(2, minmax(0, 1fr));
+            gap: 12px;
+        }
+
+        .kit-tool-card {
+            display: grid;
+            align-content: start;
+            gap: 10px;
+        }
+
+        .dashboard-kit-management-grid {
+            margin-top: 14px;
+        }
+
         .kit-row {
             display: grid;
             grid-template-columns: minmax(0, 1fr) auto;
@@ -1106,6 +1471,20 @@
             font-size: 0.78rem;
             line-height: 1.55;
             white-space: pre-wrap;
+        }
+
+        .config-preview {
+            max-height: 520px;
+        }
+
+        .file-input {
+            width: 100%;
+            min-height: 40px;
+            padding: 8px 10px;
+            border: 1px solid var(--line-strong);
+            border-radius: 6px;
+            background: var(--surface);
+            color: var(--ink);
         }
 
         .technical-drawer {
@@ -1205,6 +1584,9 @@
             .section-grid,
             .module-grid,
             .form-grid,
+            .kit-management-grid,
+            .toggle-grid,
+            .snmp-user-grid,
             .coverage-strip,
             .technical-drawer-body,
             .technical-body {
@@ -1225,546 +1607,21 @@
 <body>
     <noscript>
         <div class="noscript-panel">
-            JavaScript is required for the React preview route. The existing Jinja and HTMX pages remain available from the normal navigation.
+            JavaScript is required for the Lab Builder desktop UI.
         </div>
     </noscript>
-    <div id="react-preview-root">
-        <div class="preview-loading">Loading Run Center preview...</div>
+    <div id="lab-builder-react-root">
+        <div class="preview-loading">Loading Lab Builder...</div>
     </div>
 
     <script>
-        window.LAB_BUILDER_REACT_PREVIEW = {
+        window.LAB_BUILDER_REACT = {
             currentKit: {{ current_kit|tojson }},
             version: {{ app_version|tojson }}
         };
-        window.LAB_BUILDER_USE_EXTERNAL_REACT_APP = true;
     </script>
     <script crossorigin src="https://unpkg.com/react@18/umd/react.development.js"></script>
     <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
-    <script>
-        (function () {
-            if (window.LAB_BUILDER_USE_EXTERNAL_REACT_APP) {
-                return;
-            }
-            const h = React.createElement;
-            const serverState = window.LAB_BUILDER_REACT_PREVIEW || {};
-
-            const mockData = {
-                kit: {
-                    name: serverState.currentKit || "Kit-01",
-                    site: "Lab rack A",
-                    targetHost: "dl380-g11-01",
-                    mode: "Preview / safety mode",
-                    build: serverState.version || "unknown",
-                    subnet: "10.10.8.0/24",
-                    includedStages: ["iLO", "Storage", "ESXi", "Windows", "NetApp"],
-                    readiness: "8 of 10 checks ready"
-                },
-                job: {
-                    title: "Included kit preview",
-                    status: "Running",
-                    progress: 68,
-                    currentStage: "ESXi installer media",
-                    started: "05:18",
-                    elapsed: "14m 32s",
-                    eta: "7m",
-                    operator: "Local console"
-                },
-                purpose: [
-                    {
-                        label: "What this page is for",
-                        value: "Monitor the active run, surface blockers, and keep setup flow separate from technical logs."
-                    },
-                    {
-                        label: "What to do next",
-                        value: "Confirm generated ESXi media readback, then continue the real execution gate."
-                    },
-                    {
-                        label: "What happened last",
-                        value: "Storage plan preview finished and the approved RAID artifact was attached to the run."
-                    }
-                ],
-                timeline: [
-                    {
-                        id: "ilo",
-                        title: "iLO connection",
-                        detail: "Credentials verified, Redfish service root reachable.",
-                        status: "done",
-                        label: "Done",
-                        tone: "good",
-                        time: "05:19"
-                    },
-                    {
-                        id: "storage",
-                        title: "Storage plan",
-                        detail: "Approved exact artifact loaded for controller slot 0.",
-                        status: "done",
-                        label: "Done",
-                        tone: "good",
-                        time: "05:23"
-                    },
-                    {
-                        id: "esxi",
-                        title: "ESXi installer media",
-                        detail: "Generated ISO URL validated. Virtual media readback is pending.",
-                        status: "running",
-                        label: "Running",
-                        tone: "blue",
-                        time: "Now"
-                    },
-                    {
-                        id: "windows",
-                        title: "Windows safe stage",
-                        detail: "OVF template is registered. Deployment remains dry-run only.",
-                        status: "waiting",
-                        label: "Waiting",
-                        tone: "neutral",
-                        time: "Next"
-                    },
-                    {
-                        id: "netapp",
-                        title: "NetApp apply",
-                        detail: "ONTAP policy allows safe apply after upgrade gate review.",
-                        status: "warn",
-                        label: "Review",
-                        tone: "warn",
-                        time: "Queued"
-                    }
-                ],
-                warnings: [
-                    {
-                        title: "Virtual media readback pending",
-                        detail: "The generated ISO URL is reachable, but iLO has not confirmed the mounted image yet.",
-                        severity: "warn"
-                    },
-                    {
-                        title: "Windows deploy remains dry-run",
-                        detail: "The registered OVF template has not been promoted to a real deployment action.",
-                        severity: "neutral"
-                    },
-                    {
-                        title: "Upgrade gate review",
-                        detail: "NetApp version policy is warn-only for this mock preview run.",
-                        severity: "warn"
-                    }
-                ],
-                activity: [
-                    {
-                        title: "Storage approval restored",
-                        detail: "Exact artifact matched current kit host.",
-                        time: "05:24"
-                    },
-                    {
-                        title: "Execution preview started",
-                        detail: "Included stages selected from Run Center.",
-                        time: "05:18"
-                    },
-                    {
-                        title: "iLO inventory snapshot loaded",
-                        detail: "Firmware and power state were attached to the run context.",
-                        time: "05:17"
-                    },
-                    {
-                        title: "Kit settings saved",
-                        detail: "Global subnet and ESXi host values refreshed.",
-                        time: "05:12"
-                    }
-                ],
-                logs: [
-                    "[05:18:02] preview initialized scope=included kit=Kit-01",
-                    "[05:19:11] iLO service root reachable model=iLO 6 firmware=3.00",
-                    "[05:21:48] storage artifact restored path=artifacts/exports/storage-raid/Kit-01/approved.yml",
-                    "[05:24:06] generated ESXi ISO URL http://lab-builder:8001/esxi-built-iso/Kit-01/Kit-01.iso",
-                    "[05:26:15] waiting for virtual media image readback",
-                    "[05:27:03] next gate requires operator confirmation before real execution"
-                ]
-            };
-
-            function Pill(props) {
-                return h("span", { className: "pill pill-" + (props.tone || "neutral") }, props.children);
-            }
-
-            function Sidebar() {
-                const nav = [
-                    ["RC", "Run Center", "Live execution", "/react-preview", true],
-                    ["DB", "Dashboard", "Kit overview", "/dashboard", false],
-                    ["HW", "Hardware", "iLO and storage", "/ilo", false],
-                    ["EX", "ESXi", "Installer setup", "/esxi", false],
-                    ["VM", "Windows", "Safe VM stage", "/windows", false],
-                    ["LG", "History", "Run records", "/history", false]
-                ];
-                return h("aside", { className: "app-sidebar", "aria-label": "Preview navigation" },
-                    h("div", { className: "brand-row" },
-                        h("div", { className: "brand-mark" }, "LB"),
-                        h("div", null,
-                            h("div", { className: "brand-name" }, "Lab Builder"),
-                            h("div", { className: "brand-subtitle" }, "Desktop preview")
-                        )
-                    ),
-                    h("div", null,
-                        h("div", { className: "sidebar-section-title" }, "Workspace"),
-                        h("nav", { className: "nav-list" },
-                            nav.map(function (item) {
-                                return h("a", {
-                                    key: item[1],
-                                    className: "nav-item" + (item[4] ? " nav-item-active" : ""),
-                                    href: item[3]
-                                },
-                                    h("span", { className: "nav-icon", "aria-hidden": "true" }, item[0]),
-                                    h("span", { className: "nav-text" },
-                                        h("span", { className: "nav-label" }, item[1]),
-                                        h("span", { className: "nav-meta" }, item[2])
-                                    ),
-                                    item[4] ? h(Pill, { tone: "blue" }, "Open") : null
-                                );
-                            })
-                        )
-                    ),
-                    h("div", null,
-                        h("div", { className: "sidebar-section-title" }, "Quick Links"),
-                        h("nav", { className: "nav-list" },
-                            h("a", { className: "nav-item", href: "/execution" },
-                                h("span", { className: "nav-icon", "aria-hidden": "true" }, "HT"),
-                                h("span", { className: "nav-text" },
-                                    h("span", { className: "nav-label" }, "Current Run Center"),
-                                    h("span", { className: "nav-meta" }, "Jinja / HTMX route")
-                                )
-                            ),
-                            h("a", { className: "nav-item", href: "/configs" },
-                                h("span", { className: "nav-icon", "aria-hidden": "true" }, "RP"),
-                                h("span", { className: "nav-text" },
-                                    h("span", { className: "nav-label" }, "Reports"),
-                                    h("span", { className: "nav-meta" }, "Logs and exports")
-                                )
-                            )
-                        )
-                    ),
-                    h("div", { className: "sidebar-footer" },
-                        h("strong", null, mockData.kit.name),
-                        h("span", null, mockData.kit.readiness),
-                        h("span", null, mockData.kit.subnet)
-                    )
-                );
-            }
-
-            function TopStatus() {
-                return h("header", { className: "top-status" },
-                    h("div", { className: "top-status-left" },
-                        h("div", { className: "status-cluster" },
-                            h("span", { className: "status-dot dot-good", "aria-hidden": "true" }),
-                            "Connected"
-                        ),
-                        h("div", { className: "status-cluster" },
-                            h("span", { className: "status-dot dot-blue", "aria-hidden": "true" }),
-                            mockData.kit.name
-                        ),
-                        h("div", { className: "status-cluster" }, mockData.job.operator)
-                    ),
-                    h("div", { className: "top-status-right" },
-                        h("div", { className: "status-cluster" }, "Mode: " + mockData.kit.mode),
-                        h("div", { className: "status-cluster" },
-                            h("span", { className: "status-dot dot-warn", "aria-hidden": "true" }),
-                            "3 warnings"
-                        )
-                    )
-                );
-            }
-
-            function WorkspaceHeading(props) {
-                return h("div", { className: "workspace-heading" },
-                    h("div", null,
-                        h("div", { className: "eyebrow" }, "React preview"),
-                        h("h1", null, "Run Center workspace"),
-                        h("p", { className: "heading-summary" }, "A desktop-style control center for the active Lab Builder run, with operator decisions separated from low-level diagnostics.")
-                    ),
-                    h("div", { className: "toolbar" },
-                        h("button", { className: "button", type: "button", onClick: props.onToggleDetails }, props.detailsOpen ? "Hide details" : "Show details"),
-                        h("a", { className: "button", href: "/execution" }, "Open current UI"),
-                        h("button", { className: "button button-primary", type: "button" }, "Start preview")
-                    )
-                );
-            }
-
-            function PurposeStrip() {
-                return h("section", { className: "summary-strip", "aria-label": "Run Center setup flow summary" },
-                    mockData.purpose.map(function (item) {
-                        return h("div", { className: "strip-item", key: item.label },
-                            h("div", { className: "strip-label" }, item.label),
-                            h("div", { className: "strip-value" }, item.value)
-                        );
-                    })
-                );
-            }
-
-            function LiveJobPanel() {
-                const metrics = [
-                    ["Current step", mockData.job.currentStage],
-                    ["Started", mockData.job.started],
-                    ["Elapsed", mockData.job.elapsed],
-                    ["ETA", mockData.job.eta]
-                ];
-                return h("section", { className: "panel live-panel", "aria-label": "Large live job panel" },
-                    h("div", { className: "panel-header" },
-                        h("div", null,
-                            h("div", { className: "panel-label" }, "Live job"),
-                            h("h2", { className: "panel-title" }, "Execution monitor")
-                        ),
-                        h(Pill, { tone: "blue" }, mockData.job.status)
-                    ),
-                    h("div", { className: "panel-body" },
-                        h("div", { className: "job-hero" },
-                            h("div", null,
-                                h("div", { className: "job-title" }, mockData.job.title),
-                                h("p", { className: "job-summary" }, "Preview mode is validating run inputs and collecting device state. Real execution remains gated behind the existing Run Center confirmation flow.")
-                            ),
-                            h("div", { className: "progress-ring", role: "img", "aria-label": mockData.job.progress + " percent complete" },
-                                h("div", { className: "progress-ring-inner" },
-                                    h("div", { className: "progress-ring-value" }, mockData.job.progress + "%"),
-                                    h("div", { className: "progress-ring-label" }, "complete")
-                                )
-                            )
-                        ),
-                        h("div", { className: "metric-row" },
-                            metrics.map(function (metric) {
-                                return h("div", { className: "metric", key: metric[0] },
-                                    h("div", { className: "metric-label" }, metric[0]),
-                                    h("div", { className: "metric-value", title: metric[1] }, metric[1])
-                                );
-                            })
-                        ),
-                        h("div", { className: "wide-progress", "aria-hidden": "true" },
-                            h("div", { className: "wide-progress-bar" })
-                        ),
-                        h("div", { className: "job-actions" },
-                            h("button", { className: "button button-primary", type: "button" }, "Continue gate"),
-                            h("button", { className: "button", type: "button" }, "Hold run"),
-                            h("button", { className: "button", type: "button" }, "Export summary")
-                        )
-                    )
-                );
-            }
-
-            function TimelinePanel(props) {
-                return h("section", { className: "panel", "aria-label": "Progress timeline" },
-                    h("div", { className: "panel-header" },
-                        h("div", null,
-                            h("div", { className: "panel-label" }, "Progress"),
-                            h("h2", { className: "panel-title" }, "Timeline")
-                        ),
-                        h(Pill, { tone: "blue" }, "5 stages")
-                    ),
-                    h("div", { className: "timeline" },
-                        mockData.timeline.map(function (item, index) {
-                            const selected = props.selectedStage.id === item.id;
-                            return h("button", {
-                                key: item.id,
-                                type: "button",
-                                className: "timeline-item timeline-" + item.status + (selected ? " timeline-item-selected" : ""),
-                                onClick: function () { props.onSelect(item); }
-                            },
-                                h("span", { className: "timeline-marker" }, index + 1),
-                                h("span", null,
-                                    h("span", { className: "timeline-title" }, item.title),
-                                    h("span", { className: "timeline-detail" }, item.detail)
-                                ),
-                                h("span", { className: "timeline-time" }, item.time)
-                            );
-                        })
-                    )
-                );
-            }
-
-            function KitSummaryPanel() {
-                const rows = [
-                    ["Kit", mockData.kit.name],
-                    ["Site", mockData.kit.site],
-                    ["Target", mockData.kit.targetHost],
-                    ["Subnet", mockData.kit.subnet],
-                    ["Mode", mockData.kit.mode],
-                    ["Build", mockData.kit.build]
-                ];
-                return h("section", { className: "panel", "aria-label": "Kit summary panel" },
-                    h("div", { className: "panel-header" },
-                        h("div", null,
-                            h("div", { className: "panel-label" }, "Kit summary"),
-                            h("h2", { className: "panel-title" }, mockData.kit.name)
-                        ),
-                        h(Pill, { tone: "good" }, "Ready")
-                    ),
-                    h("div", { className: "panel-body" },
-                        h("div", { className: "data-list" },
-                            rows.map(function (row) {
-                                return h("div", { className: "data-row", key: row[0] },
-                                    h("div", null,
-                                        h("div", { className: "data-name" }, row[0]),
-                                        h("div", { className: "data-value" }, row[1])
-                                    )
-                                );
-                            })
-                        ),
-                        h("div", { className: "data-row" },
-                            h("div", null,
-                                h("div", { className: "data-name" }, "Included stages"),
-                                h("div", { className: "data-value" }, mockData.kit.includedStages.join(", "))
-                            )
-                        )
-                    )
-                );
-            }
-
-            function WarningsPanel() {
-                return h("section", { className: "panel", "aria-label": "Warnings panel" },
-                    h("div", { className: "panel-header" },
-                        h("div", null,
-                            h("div", { className: "panel-label" }, "Warnings"),
-                            h("h2", { className: "panel-title" }, "Needs attention")
-                        ),
-                        h(Pill, { tone: "warn" }, mockData.warnings.length + " open")
-                    ),
-                    h("div", { className: "panel-body" },
-                        h("div", { className: "warning-list" },
-                            mockData.warnings.map(function (item) {
-                                return h("div", { className: "warning-row", key: item.title },
-                                    h("div", null,
-                                        h("div", { className: "warning-title" }, item.title),
-                                        h("div", { className: "warning-detail" }, item.detail)
-                                    ),
-                                    h(Pill, { tone: item.severity === "warn" ? "warn" : "neutral" }, item.severity === "warn" ? "Review" : "Info")
-                                );
-                            })
-                        )
-                    )
-                );
-            }
-
-            function NextStepPanel() {
-                return h("section", { className: "panel next-step", "aria-label": "Next recommended step card" },
-                    h("div", { className: "panel-header" },
-                        h("div", null,
-                            h("div", { className: "panel-label" }, "Next recommended step"),
-                            h("h2", { className: "panel-title" }, "Confirm ESXi media readback")
-                        ),
-                        h(Pill, { tone: "blue" }, "Next")
-                    ),
-                    h("div", { className: "panel-body" },
-                        h("div", { className: "next-step-title" }, "Wait for iLO to report the mounted image, then continue the real execution gate."),
-                        h("p", { className: "next-step-copy" }, "The main setup flow stays focused on operator decisions. Technical evidence and raw logs remain in the details panel below."),
-                        h("div", { className: "job-actions" },
-                            h("button", { className: "button button-primary", type: "button" }, "Mark reviewed"),
-                            h("button", { className: "button", type: "button" }, "Open log")
-                        )
-                    )
-                );
-            }
-
-            function RecentActivityPanel() {
-                return h("section", { className: "panel", "aria-label": "Recent activity list" },
-                    h("div", { className: "panel-header" },
-                        h("div", null,
-                            h("div", { className: "panel-label" }, "Recent activity"),
-                            h("h2", { className: "panel-title" }, "Latest run events")
-                        )
-                    ),
-                    h("div", { className: "panel-body" },
-                        h("div", { className: "activity-list" },
-                            mockData.activity.map(function (item) {
-                                return h("div", { className: "activity-row", key: item.title },
-                                    h("div", null,
-                                        h("div", { className: "activity-title" }, item.title),
-                                        h("div", { className: "activity-detail" }, item.detail)
-                                    ),
-                                    h("div", { className: "timeline-time" }, item.time)
-                                );
-                            })
-                        )
-                    )
-                );
-            }
-
-            function TechnicalDetailsPanel(props) {
-                const rows = [
-                    ["Selected stage", props.selectedStage.title],
-                    ["Stage state", props.selectedStage.label],
-                    ["Artifact", "artifacts/runs/Kit-01/preview-summary.yml"],
-                    ["Transport", "Redfish + local app server"],
-                    ["Public base URL", "http://lab-builder:8001"],
-                    ["Run scope", "included"]
-                ];
-                return h("section", {
-                    className: "panel technical-panel" + (props.open ? " technical-panel-open" : ""),
-                    "aria-label": "Technical details panel"
-                },
-                    h("div", { className: "panel-header" },
-                        h("div", null,
-                            h("div", { className: "panel-label" }, "Technical details"),
-                            h("h2", { className: "panel-title" }, "Diagnostics and raw evidence")
-                        ),
-                        h("button", { className: "button", type: "button", onClick: props.onToggle }, props.open ? "Collapse" : "Expand")
-                    ),
-                    h("div", { className: "technical-body" },
-                        h("div", { className: "selected-stage" },
-                            h("div", { className: "panel-label" }, "Selected timeline item"),
-                            h("h3", { className: "panel-title" }, props.selectedStage.title),
-                            h("p", { className: "panel-subtitle" }, props.selectedStage.detail),
-                            h("div", { className: "detail-grid" },
-                                rows.map(function (row) {
-                                    return h("div", { className: "detail-item", key: row[0] },
-                                        h("div", { className: "metric-label" }, row[0]),
-                                        h("div", { className: "detail-value" }, row[1])
-                                    );
-                                })
-                            )
-                        ),
-                        h("div", null,
-                            h("div", { className: "panel-label" }, "Technical log"),
-                            h("pre", { className: "log-box" }, mockData.logs.join("\n"))
-                        )
-                    )
-                );
-            }
-
-            function App() {
-                const initialStage = mockData.timeline.find(function (item) { return item.status === "running"; }) || mockData.timeline[0];
-                const state = React.useState(initialStage);
-                const selectedStage = state[0];
-                const setSelectedStage = state[1];
-                const detailsState = React.useState(true);
-                const detailsOpen = detailsState[0];
-                const setDetailsOpen = detailsState[1];
-                const toggleDetails = function () { setDetailsOpen(function (open) { return !open; }); };
-
-                return h("div", { className: "desktop-preview" },
-                    h(Sidebar),
-                    h("div", { className: "workspace-shell" },
-                        h(TopStatus),
-                        h("main", { className: "workspace" },
-                            h(WorkspaceHeading, { detailsOpen: detailsOpen, onToggleDetails: toggleDetails }),
-                            h(PurposeStrip),
-                            h("div", { className: "content-grid" },
-                                h("div", { className: "primary-stack" },
-                                    h(LiveJobPanel),
-                                    h(TimelinePanel, { selectedStage: selectedStage, onSelect: setSelectedStage }),
-                                    h(RecentActivityPanel)
-                                ),
-                                h("div", { className: "side-stack" },
-                                    h(KitSummaryPanel),
-                                    h(WarningsPanel),
-                                    h(NextStepPanel)
-                                )
-                            ),
-                            h(TechnicalDetailsPanel, {
-                                open: detailsOpen,
-                                selectedStage: selectedStage,
-                                onToggle: toggleDetails
-                            })
-                        )
-                    )
-                );
-            }
-
-            ReactDOM.createRoot(document.getElementById("react-preview-root")).render(h(App));
-        }());
-    </script>
-    <script src="/static/js/react-desktop-ui.js"></script>
+    <script src="/static/js/react-desktop-ui.js?v={{ react_asset_version }}"></script>
 </body>
 </html>

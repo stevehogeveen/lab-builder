@@ -1,8 +1,12 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+import ipaddress
+import os
 from pathlib import Path
+import re
 import threading
+import time
 from typing import Any
 
 from fastapi import APIRouter, FastAPI, Form, Request
@@ -11,7 +15,7 @@ from jinja2 import Environment, FileSystemLoader, select_autoescape
 
 from app.modules.netapp.schemas import NetAppModuleContext
 from app.modules.netapp.service import NetAppModuleService
-from app.netapp import NetAppClient, NetAppConfig
+from app.netapp import NetAppClient, NetAppConfig, NetAppError
 from app.netapp_upgrade import build_netapp_upgrade_plan, execute_netapp_upgrade
 from app.plan_renderer import build_token_map, render_command_preview, write_plan_artifacts
 from app.storage_profiles import build_protocol_profile
@@ -32,9 +36,9 @@ service = NetAppModuleService()
 BOOTSTRAP_CHECK_TARGETS = (
     "sp_a",
     "sp_b",
+    "cluster_mgmt",
     "node_01_mgmt",
     "node_02_mgmt",
-    "cluster_mgmt",
     "svm_mgmt",
 )
 BOOTSTRAP_CHECK_LABELS = {
@@ -46,6 +50,7 @@ BOOTSTRAP_CHECK_LABELS = {
     "svm_mgmt": "SVM management",
 }
 CONSOLE_PORT_PATTERNS = ("/dev/ttyUSB*", "/dev/ttyACM*", "/dev/serial/by-id/*")
+NETAPP_FACTORY_RESET_ENV = "LAB_BUILDER_ENABLE_NETAPP_FACTORY_RESET"
 
 
 def _lines(value: str) -> list[str]:
@@ -175,6 +180,11 @@ def _store_live_read(cfg: dict[str, Any], read: dict[str, Any]) -> dict[str, str
     return live_read
 
 
+def _store_current_config_read(cfg: dict[str, Any], discovery: dict[str, Any]) -> None:
+    cfg.setdefault("netapp", {})
+    cfg["netapp"]["last_current_config"] = {key: value for key, value in dict(discovery).items() if key != "raw"}
+
+
 def _scan_console_ports() -> dict[str, Any]:
     candidates: list[dict[str, str]] = []
     seen: set[str] = set()
@@ -207,6 +217,237 @@ def _scan_console_ports() -> dict[str, Any]:
     }
 
 
+def _truthy_env(name: str) -> bool:
+    return str(os.environ.get(name) or "").strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _netapp_factory_reset_steps(targets: list[str]) -> list[str]:
+    target_text = ", ".join(targets) if targets else "each controller that must be reset"
+    return [
+        f"Use the selected serial console to access {target_text}.",
+        "Interrupt boot to reach the ONTAP boot menu.",
+        "At the boot menu, run wipeconfig.",
+        "Answer yes only after confirming this is the intended lab NetApp.",
+        "Let the controller reboot back to factory setup state.",
+        "Repeat on the partner controller when rebuilding a pair from scratch.",
+    ]
+
+
+def _probe_netapp_reset_console(port: str, baud: str) -> dict[str, Any]:
+    result: dict[str, Any] = {
+        "ok": False,
+        "port": str(port or "").strip(),
+        "baud": str(baud or "115200").strip() or "115200",
+        "sent": ["newline only"],
+        "output_excerpt": "",
+        "error": "",
+        "checked_at": datetime.now(timezone.utc).isoformat(),
+    }
+    if not result["port"]:
+        result["error"] = "Console port is not selected."
+        return result
+    try:
+        baud_int = int(result["baud"])
+    except ValueError:
+        result["error"] = f"Invalid baud rate: {result['baud']}"
+        return result
+    try:
+        import serial  # type: ignore
+    except ImportError:
+        result["error"] = "pyserial is not installed, so Lab Builder cannot probe the NetApp console."
+        return result
+    chunks: list[bytes] = []
+    try:
+        with serial.Serial(port=result["port"], baudrate=baud_int, timeout=0.5, write_timeout=0.5) as conn:
+            conn.write(b"\r\n")
+            conn.flush()
+            deadline = time.monotonic() + 2.0
+            while time.monotonic() < deadline:
+                waiting = int(getattr(conn, "in_waiting", 0) or 0)
+                chunk = conn.read(waiting or 256)
+                if chunk:
+                    chunks.append(chunk)
+                else:
+                    time.sleep(0.05)
+        output = b"".join(chunks).decode("utf-8", errors="replace")
+        result["output_excerpt"] = "\n".join(output.splitlines()[-40:]).strip()
+        result["ok"] = True
+        if not result["output_excerpt"]:
+            result["error"] = "Console opened, but no output was received after sending Enter."
+    except Exception as exc:
+        result["error"] = str(exc).splitlines()[0]
+    return result
+
+
+def _valid_ipv4(value: str) -> bool:
+    try:
+        ipaddress.ip_address(str(value or "").strip())
+        return True
+    except ValueError:
+        return False
+
+
+def _redact_console_output(output: str, secrets: list[str]) -> str:
+    redacted = str(output or "")
+    for secret in secrets:
+        if secret:
+            redacted = redacted.replace(secret, "<redacted>")
+    return redacted
+
+
+def _read_serial_quiet(conn: Any, *, max_seconds: float = 3.0, quiet_seconds: float = 0.8) -> str:
+    chunks: list[bytes] = []
+    deadline = time.monotonic() + max_seconds
+    quiet_deadline = time.monotonic() + quiet_seconds
+    while time.monotonic() < deadline and time.monotonic() < quiet_deadline:
+        waiting = int(getattr(conn, "in_waiting", 0) or 0)
+        chunk = conn.read(waiting or 512)
+        if chunk:
+            chunks.append(chunk)
+            quiet_deadline = time.monotonic() + quiet_seconds
+        else:
+            time.sleep(0.05)
+    return b"".join(chunks).decode("utf-8", errors="replace")
+
+
+def _run_netapp_console_commands(
+    *,
+    port: str,
+    baud: str,
+    username: str,
+    password: str,
+    commands: list[str],
+    command_seconds: float = 5.0,
+) -> dict[str, Any]:
+    result: dict[str, Any] = {
+        "ok": False,
+        "port": str(port or "").strip(),
+        "baud": str(baud or "115200").strip() or "115200",
+        "username": str(username or "").strip(),
+        "commands": list(commands),
+        "output": "",
+        "error": "",
+        "checked_at": datetime.now(timezone.utc).isoformat(),
+    }
+    if not result["port"]:
+        result["error"] = "Console port is not selected."
+        return result
+    if not result["username"]:
+        result["error"] = "Console username is not set."
+        return result
+    if not password:
+        result["error"] = "Console password is not set."
+        return result
+    try:
+        baud_int = int(result["baud"])
+    except ValueError:
+        result["error"] = f"Invalid baud rate: {result['baud']}"
+        return result
+    try:
+        import serial  # type: ignore
+    except ImportError:
+        result["error"] = "pyserial is not installed, so Lab Builder cannot use the NetApp console."
+        return result
+    transcript = ""
+    try:
+        with serial.Serial(port=result["port"], baudrate=baud_int, timeout=0.35, write_timeout=0.5) as conn:
+            conn.write(b"\r\n")
+            conn.flush()
+            transcript += _read_serial_quiet(conn, max_seconds=1.5)
+            if "login" in transcript.lower():
+                conn.write((result["username"] + "\r").encode())
+                conn.flush()
+                transcript += _read_serial_quiet(conn, max_seconds=2.0)
+            if "password" in transcript.lower():
+                conn.write((password + "\r").encode())
+                conn.flush()
+                transcript += _read_serial_quiet(conn, max_seconds=3.0)
+            if "::>" not in transcript and "*>" not in transcript:
+                conn.write(b"\r\n")
+                conn.flush()
+                transcript += _read_serial_quiet(conn, max_seconds=2.0)
+            if "::>" not in transcript and "*>" not in transcript:
+                result["error"] = "Console login did not reach an ONTAP cluster-shell prompt."
+                result["output"] = _redact_console_output(transcript[-6000:], [password])
+                return result
+            for command in commands:
+                conn.write((command + "\r").encode())
+                conn.flush()
+                transcript += _read_serial_quiet(conn, max_seconds=command_seconds)
+        result["ok"] = True
+        result["output"] = _redact_console_output(transcript[-12000:], [password])
+    except Exception as exc:
+        result["error"] = str(exc).splitlines()[0]
+        result["output"] = _redact_console_output(transcript[-6000:], [password])
+    return result
+
+
+def _parse_cluster_name_from_console(output: str) -> str:
+    match = re.search(r"Cluster Name:\s*([^\s\r\n]+)", str(output or ""))
+    if match:
+        return match.group(1).strip()
+    prompt = re.search(r"\n([A-Za-z0-9_.-]+)::>", str(output or ""))
+    return prompt.group(1).strip() if prompt else ""
+
+
+def _safe_ontap_name(value: str) -> str:
+    text = str(value or "").strip()
+    return text if re.fullmatch(r"[A-Za-z0-9_.-]+", text) else ""
+
+
+def _clean_string_list(values: Any) -> list[str]:
+    if isinstance(values, str):
+        return _lines(values)
+    if not isinstance(values, list | tuple):
+        return []
+    cleaned: list[str] = []
+    for item in values:
+        if isinstance(item, dict):
+            text = str(item.get("name") or "").strip()
+        else:
+            text = str(item or "").strip()
+        if text and text not in cleaned:
+            cleaned.append(text)
+    return cleaned
+
+
+def _live_node_names_from_discovery(discovery: dict[str, Any]) -> list[str]:
+    node_names = _clean_string_list(discovery.get("node_names") or discovery.get("nodes") or [])
+    if node_names:
+        return sorted(node_names)
+    return sorted(_clean_string_list(discovery.get("node_details") or []))
+
+
+def _is_placeholder_node_targets(targets: list[str]) -> bool:
+    normalized = [str(item or "").strip().lower().replace("_", "-") for item in targets if str(item or "").strip()]
+    return normalized in (["node-a", "node-b"], ["node-1", "node-2"], ["node01", "node02"])
+
+
+def _cluster_mgmt_patch_plan(discovery: dict[str, Any], desired_ip: str, netmask: str) -> dict[str, Any]:
+    lif = dict(discovery.get("discovered_cluster_mgmt_lif") or {})
+    if not lif:
+        for item in list(discovery.get("lif_details") or []):
+            name = str((item or {}).get("name") or "").strip().lower()
+            service = str((item or {}).get("service_policy") or "").strip().lower()
+            if name == "cluster_mgmt" or ("cluster" in name and ("management" in service or "mgmt" in service)):
+                lif = dict(item)
+                break
+    uuid = str(lif.get("uuid") or "").strip()
+    current_ip = str(lif.get("address") or "").strip()
+    current_netmask = str(lif.get("netmask") or "").strip()
+    return {
+        "lif": lif,
+        "lif_name": str(lif.get("name") or "cluster_mgmt").strip(),
+        "lif_uuid": uuid,
+        "current_ip": current_ip,
+        "current_netmask": current_netmask,
+        "desired_ip": desired_ip,
+        "desired_netmask": netmask,
+        "endpoint": f"/api/network/ip/interfaces/{uuid}" if uuid else "",
+        "body": {"ip": {"address": desired_ip, "netmask": netmask}},
+    }
+
+
 def _sync_discovered_values(cfg: dict[str, Any], discovery: dict[str, Any]) -> list[str]:
     cfg.setdefault("netapp", {})
     netapp_cfg = cfg["netapp"]
@@ -223,8 +464,19 @@ def _sync_discovered_values(cfg: dict[str, Any], discovery: dict[str, Any]) -> l
         notes.append(f"ONTAP API target set to {cluster_mgmt_ip}.")
 
     node_mgmt_ips = dict(discovery.get("discovered_node_mgmt_ips") or {})
-    node_names = list(discovery.get("node_names") or discovery.get("nodes") or [])
+    node_names = _live_node_names_from_discovery(discovery)
     if node_names:
+        current_required = _clean_string_list(desired.get("required_nodes") or [])
+        if current_required != node_names:
+            desired["required_nodes"] = node_names
+            notes.append(f"Required nodes set to live ONTAP nodes: {', '.join(node_names)}.")
+        netapp_cfg["nodes"] = node_names
+        netapp_cfg["last_discovered_node_names"] = node_names
+        current_reset_targets = _clean_string_list(netapp_cfg.get("factory_reset_targets") or [])
+        if current_reset_targets != node_names:
+            netapp_cfg["factory_reset_targets"] = node_names
+            if current_required == node_names:
+                notes.append(f"Factory reset targets set to live ONTAP nodes: {', '.join(node_names)}.")
         if len(node_names) >= 1:
             node_01_ip = str(node_mgmt_ips.get(str(node_names[0])) or "").strip()
             if node_01_ip:
@@ -443,6 +695,12 @@ def _apply_live_netapp_form_state(cfg: dict[str, Any], form: dict[str, Any]) -> 
     console_baud = str(form.get("netapp_console_baud_quick") or form.get("netapp_console_baud") or "").strip()
     if console_baud:
         cfg["netapp"]["console_baud"] = console_baud
+    console_username = str(form.get("netapp_console_username_quick") or form.get("netapp_console_username") or "").strip()
+    if console_username:
+        cfg["netapp"]["console_username"] = console_username
+    console_password = str(form.get("netapp_console_password_quick") or form.get("netapp_console_password") or "")
+    if console_password:
+        cfg["netapp"]["console_password"] = console_password
     protocol = str(form.get("netapp_storage_protocol") or cfg["netapp"].get("storage_protocol") or "nfs").strip().lower()
     cfg["netapp"]["storage_protocol"] = protocol if protocol in {"iscsi", "nfs"} else "nfs"
     cfg["netapp"]["bootstrap_overrides"] = {
@@ -681,7 +939,10 @@ def _render_template(template_name: str, context: dict[str, Any]) -> str:
 @router.get("/modules/netapp", response_class=HTMLResponse)
 async def netapp_module_page(request: Request):
     context = _module_context(request)
-    payload = service.plan(context)
+    payload = service._response(context, "setup")
+    cached = ((context.get("cfg") or {}).get("netapp") or {}).get("last_current_config") or {}
+    if cached:
+        payload["discovery"] = cached
     return _render_netapp_page(request, context, payload)
 
 
@@ -806,7 +1067,10 @@ async def netapp_save_settings(
     _apply_live_netapp_form_state(cfg, form)
     main.save_kit_config(cfg)
     context = _module_context(request)
-    payload = service.plan(context)
+    payload = service._response(context, "save_settings")
+    cached = ((context.get("cfg") or {}).get("netapp") or {}).get("last_current_config") or {}
+    if cached:
+        payload["discovery"] = cached
     return _render_netapp_page(request, context, payload, saved=True)
 
 
@@ -946,6 +1210,73 @@ async def netapp_test_connection(
     return _render_netapp_page(request, context, payload, action_feedback=feedback)
 
 
+@router.post("/modules/netapp/read-current-config", response_class=HTMLResponse)
+async def netapp_read_current_config(request: Request):
+    from app import main
+
+    context = _module_context(request)
+    cfg = context["cfg"]
+    form = {key: value for key, value in dict(await request.form()).items()}
+    _apply_live_netapp_form_state(cfg, form)
+    main.save_kit_config(cfg)
+    context = _module_context(request)
+    try:
+        client = service._build_client(context)
+        discovery = client.build_discovery_summary()
+    except NetAppError as exc:
+        payload = service._response(context, "read_current_config")
+        payload["ok"] = False
+        payload["error"] = str(exc)
+        payload["warnings"] = ["Current NetApp config read failed. Review cluster management IP, credentials, and ONTAP API reachability."]
+        result = {
+            "status": "failed",
+            "message": str(exc),
+            "read_at": datetime.now(timezone.utc).isoformat(),
+            "source": "Live read",
+            "target_host": str((cfg.get("netapp") or {}).get("host") or ""),
+        }
+        cfg.setdefault("netapp", {})["last_current_config_result"] = result
+        main.save_kit_config(cfg)
+        feedback = main.build_action_feedback(
+            "Current NetApp config read failed",
+            result["message"],
+            tone="danger",
+            outcomes=["No configuration changes were sent."],
+        )
+        return _render_netapp_page(request, context, payload, action_feedback=feedback)
+
+    _cache_discovery_summary(cfg, discovery)
+    _store_live_read(cfg, discovery)
+    _store_current_config_read(cfg, discovery)
+    sync_notes = _sync_discovered_values(cfg, discovery)
+    cfg.setdefault("netapp", {})["last_current_config_result"] = {
+        "status": "read",
+        "message": "Current NetApp config was read from ONTAP.",
+        "read_at": str(discovery.get("read_at") or datetime.now(timezone.utc).isoformat()),
+        "source": "Live read",
+        "target_host": str(discovery.get("source_host") or (cfg.get("netapp") or {}).get("host") or ""),
+    }
+    main.save_kit_config(cfg)
+    context = _module_context(request)
+    payload = service._response(context, "read_current_config")
+    payload["discovery"] = discovery
+    payload["warnings"] = list(discovery.get("warnings") or [])
+    payload.setdefault("suggestions", [])
+    payload["suggestions"] = list(sync_notes) + list(payload.get("suggestions") or [])
+    feedback = main.build_action_feedback(
+        "Current NetApp config read complete",
+        f"Cluster: {discovery.get('cluster_name') or 'unknown'}",
+        tone="ready",
+        outcomes=[
+            f"Protocols: {', '.join(list(discovery.get('enabled_protocols') or [])) or 'unknown'}",
+            f"Cluster mgmt: {discovery.get('discovered_cluster_mgmt_ip') or 'unknown'}",
+            f"Volumes: {len(list(discovery.get('volume_details') or []))}",
+        ]
+        + sync_notes[:3],
+    )
+    return _render_netapp_page(request, context, payload, action_feedback=feedback)
+
+
 @router.post("/modules/netapp/discover-page", response_class=HTMLResponse)
 async def netapp_discover_page(
     request: Request,
@@ -971,8 +1302,13 @@ async def netapp_discover_page(
     if payload.get("ok") and payload.get("discovery"):
         _cache_discovery_summary(cfg, payload["discovery"])
         _store_live_read(cfg, payload["discovery"])
+        sync_notes = _sync_discovered_values(cfg, payload["discovery"])
         main.save_kit_config(cfg)
         context = _module_context(request)
+        payload.setdefault("suggestions", [])
+        payload["suggestions"] = list(sync_notes) + list(payload.get("suggestions") or [])
+    else:
+        sync_notes = []
     discovery_result = payload.get("discovery") or {}
     feedback = main.build_action_feedback(
         "Current ONTAP read complete" if payload.get("ok") and discovery_result else "Current ONTAP read failed",
@@ -981,7 +1317,8 @@ async def netapp_discover_page(
         outcomes=[
             f"Cluster: {discovery_result.get('cluster_name') or 'unknown'}",
             f"ONTAP: {discovery_result.get('ontap_version') or 'unknown'}",
-        ],
+        ]
+        + sync_notes[:3],
         details=([str(payload.get("error"))] if payload.get("error") else []),
     )
     return _render_netapp_page(request, context, payload, action_feedback=feedback)
@@ -999,7 +1336,10 @@ async def netapp_bootstrap_complete(request: Request, bootstrap_complete: str = 
     cfg["netapp"]["bootstrap_complete"] = str(bootstrap_complete or "").strip().lower() in {"1", "true", "yes", "on"}
     main.save_kit_config(cfg)
     context = _module_context(request)
-    payload = service.plan(context) if cfg["netapp"]["bootstrap_complete"] else service._response(context, "bootstrap")
+    payload = service._response(context, "bootstrap")
+    cached = ((context.get("cfg") or {}).get("netapp") or {}).get("last_current_config") or {}
+    if cached:
+        payload["discovery"] = cached
     return _render_netapp_page(request, context, payload, saved=True)
 
 
@@ -1051,6 +1391,224 @@ async def netapp_save_console(request: Request):
         tone="ready" if selected else "pending",
         outcomes=[f"Baud: {str((cfg.get('netapp') or {}).get('console_baud') or '9600')}"],
     )
+    return _render_netapp_page(request, context, payload, action_feedback=feedback)
+
+
+@router.post("/modules/netapp/console-read-state", response_class=HTMLResponse)
+async def netapp_console_read_state(request: Request):
+    from app import main
+
+    context = _module_context(request)
+    cfg = context["cfg"]
+    form = {key: value for key, value in dict(await request.form()).items()}
+    _apply_live_netapp_form_state(cfg, form)
+    netapp_cfg = cfg.setdefault("netapp", {})
+    port = str(netapp_cfg.get("console_port") or "").strip()
+    baud = str(netapp_cfg.get("console_baud") or "115200").strip() or "115200"
+    username = str(netapp_cfg.get("console_username") or netapp_cfg.get("username") or "admin").strip()
+    password = str(form.get("netapp_console_password_quick") or form.get("netapp_console_password") or netapp_cfg.get("console_password") or netapp_cfg.get("password") or "")
+    api_user = str(netapp_cfg.get("username") or "admin").strip()
+    commands = [
+        "set -rows 0",
+        "cluster identity show",
+        "network interface show -fields address,netmask,home-node,home-port,role,service-policy,status-admin,status-oper",
+        f"security login show -user-or-group-name {api_user}",
+    ]
+    result = _run_netapp_console_commands(port=port, baud=baud, username=username, password=password, commands=commands)
+    cluster_name = _parse_cluster_name_from_console(str(result.get("output") or ""))
+    if cluster_name:
+        result["cluster_name"] = cluster_name
+        netapp_cfg["last_console_cluster_name"] = cluster_name
+    netapp_cfg["last_console_state"] = result
+    main.save_kit_config(cfg)
+    context = _module_context(request)
+    payload = service._response(context, "console_read_state")
+    cached = ((context.get("cfg") or {}).get("netapp") or {}).get("last_current_config") or {}
+    if cached:
+        payload["discovery"] = cached
+    payload["console_state"] = result
+    feedback = main.build_action_feedback(
+        "Console state read" if result.get("ok") else "Console state read failed",
+        f"Cluster: {cluster_name or 'unknown'}",
+        tone="ready" if result.get("ok") else "danger",
+        outcomes=[
+            "Read cluster identity, LIFs, and API user presence.",
+            "No configuration commands were sent.",
+        ],
+        details=([str(result.get("error"))] if result.get("error") else []),
+    )
+    return _render_netapp_page(request, context, payload, action_feedback=feedback)
+
+
+@router.post("/modules/netapp/console-cluster-mgmt-ip", response_class=HTMLResponse)
+async def netapp_console_cluster_mgmt_ip(request: Request):
+    from app import main
+
+    context = _module_context(request)
+    cfg = context["cfg"]
+    form = {key: value for key, value in dict(await request.form()).items()}
+    _apply_live_netapp_form_state(cfg, form)
+    netapp_cfg = cfg.setdefault("netapp", {})
+    mode = str(form.get("netapp_console_ip_mode") or "preview").strip().lower()
+    if mode not in {"preview", "apply"}:
+        mode = "preview"
+    desired_ip = str(form.get("netapp_cluster_mgmt_ip") or (netapp_cfg.get("bootstrap_overrides") or {}).get("netapp_cluster_mgmt") or netapp_cfg.get("host") or "").strip()
+    netmask = str(form.get("management_netmask") or ((netapp_cfg.get("desired") or {}).get("management_netmask")) or "255.255.255.0").strip()
+    gateway = str(form.get("management_gateway") or ((netapp_cfg.get("desired") or {}).get("management_gateway")) or "").strip()
+    confirmation = str(form.get("netapp_console_ip_confirmation") or "").strip()
+    port = str(netapp_cfg.get("console_port") or "").strip()
+    baud = str(netapp_cfg.get("console_baud") or "115200").strip() or "115200"
+    username = str(netapp_cfg.get("console_username") or netapp_cfg.get("username") or "admin").strip()
+    password = str(form.get("netapp_console_password_quick") or form.get("netapp_console_password") or netapp_cfg.get("console_password") or netapp_cfg.get("password") or "")
+    cluster_hint = _safe_ontap_name(
+        str(
+            form.get("netapp_console_cluster_name")
+            or netapp_cfg.get("last_console_cluster_name")
+            or (netapp_cfg.get("last_live_read") or {}).get("cluster_name")
+            or ((netapp_cfg.get("desired") or {}).get("cluster_name"))
+            or ""
+        )
+    )
+    attempted_at = datetime.now(timezone.utc).isoformat()
+    preview_commands = [
+        f"network interface modify -vserver {cluster_hint or '<cluster-name>'} -lif cluster_mgmt -address {desired_ip or '<cluster-mgmt-ip>'} -netmask {netmask or '<netmask>'}",
+    ]
+    if gateway:
+        preview_commands.append(f"network route create -vserver {cluster_hint or '<cluster-name>'} -destination 0.0.0.0/0 -gateway {gateway}")
+    result: dict[str, Any] = {
+        "status": "preview",
+        "mode": mode,
+        "attempted_at": attempted_at,
+        "attempted_action": "console_cluster_mgmt_ip",
+        "desired_ip": desired_ip,
+        "desired_netmask": netmask,
+        "gateway": gateway,
+        "cluster_hint": cluster_hint,
+        "commands": preview_commands,
+        "message": "",
+        "attempted": [],
+    }
+    tone = "pending"
+    title = "Console cluster IP preview"
+    outcomes: list[str] = []
+    if not desired_ip or not _valid_ipv4(desired_ip):
+        result.update(
+            {
+                "status": "refused",
+                "message": "Console cluster IP command was not sent because the requested cluster management IP is invalid.",
+                "attempted": ["Validated requested cluster management IP.", "No console configuration commands were sent."],
+            }
+        )
+        tone = "danger"
+        title = "Console cluster IP not sent"
+        outcomes = ["Requested IP is invalid.", "No console commands were sent."]
+    elif not netmask:
+        result.update(
+            {
+                "status": "refused",
+                "message": "Console cluster IP command was not sent because netmask/subnet mask is missing.",
+                "attempted": ["Validated requested netmask.", "No console configuration commands were sent."],
+            }
+        )
+        tone = "danger"
+        title = "Console cluster IP not sent"
+        outcomes = ["Netmask is missing.", "No console commands were sent."]
+    elif mode == "preview":
+        result.update(
+            {
+                "status": "preview",
+                "message": "Preview only. Type SET CLUSTER IP before applying these console commands.",
+                "attempted": ["Built console command preview.", "No console configuration commands were sent."],
+            }
+        )
+        outcomes = [f"Target IP: {desired_ip}", "No console commands were sent."]
+    elif confirmation != "SET CLUSTER IP":
+        result.update(
+            {
+                "status": "refused",
+                "message": "Console cluster IP command was not sent because confirmation did not match SET CLUSTER IP.",
+                "attempted": ["Checked typed confirmation.", "No console configuration commands were sent."],
+            }
+        )
+        tone = "danger"
+        title = "Console cluster IP not sent"
+        outcomes = ["Typed confirmation did not match.", "No console commands were sent."]
+    else:
+        identity = _run_netapp_console_commands(
+            port=port,
+            baud=baud,
+            username=username,
+            password=password,
+            commands=["set -rows 0", "cluster identity show"],
+        )
+        cluster_name = _safe_ontap_name(_parse_cluster_name_from_console(str(identity.get("output") or "")) or cluster_hint)
+        if not identity.get("ok") or not cluster_name:
+            result.update(
+                {
+                    "status": "blocked",
+                    "message": "Console cluster IP command was not sent because Lab Builder could not confirm the ONTAP cluster name from the console.",
+                    "console_result": identity,
+                    "attempted": ["Logged in to console for cluster identity read.", "No cluster IP modify command was sent."],
+                }
+            )
+            tone = "danger"
+            title = "Console cluster IP blocked"
+            outcomes = [str(identity.get("error") or "Cluster name was not confirmed.")]
+        else:
+            commands = [
+                f"network interface modify -vserver {cluster_name} -lif cluster_mgmt -address {desired_ip} -netmask {netmask}",
+            ]
+            if gateway:
+                commands.append(f"network route create -vserver {cluster_name} -destination 0.0.0.0/0 -gateway {gateway}")
+            commands.extend(
+                [
+                    f"network interface show -vserver {cluster_name} -lif cluster_mgmt -fields address,netmask,home-node,home-port,role,service-policy,status-admin,status-oper",
+                    f"network route show -vserver {cluster_name}",
+                ]
+            )
+            console_result = _run_netapp_console_commands(port=port, baud=baud, username=username, password=password, commands=commands)
+            output = str(console_result.get("output") or "")
+            failed = (not console_result.get("ok")) or bool(re.search(r"\nError:", output))
+            result_message = str(
+                console_result.get("error")
+                or ("Console cluster IP command returned an ONTAP error." if failed else "Console cluster IP commands completed.")
+            )
+            result.update(
+                {
+                    "status": "failed" if failed else "applied",
+                    "message": result_message,
+                    "cluster_name": cluster_name,
+                    "commands": commands,
+                    "console_result": console_result,
+                    "attempted": [
+                        "Confirmed ONTAP cluster name from console.",
+                        f"Sent network interface modify for cluster_mgmt to {desired_ip}/{netmask}.",
+                    ]
+                    + ([f"Sent network route create for gateway {gateway}."] if gateway else [])
+                    + ["Read back cluster_mgmt LIF and route table."],
+                }
+            )
+            if not failed:
+                netapp_cfg["host"] = desired_ip
+                netapp_cfg["last_console_cluster_name"] = cluster_name
+                netapp_cfg.setdefault("management", {})["cluster_mgmt_ip"] = desired_ip
+                netapp_cfg.setdefault("bootstrap_overrides", {})["netapp_cluster_mgmt"] = desired_ip
+                tone = "ready"
+                title = "Console cluster IP applied"
+                outcomes = [f"cluster_mgmt: {desired_ip}", "Retest ONTAP API from the Current NetApp access card."]
+            else:
+                tone = "danger"
+                title = "Console cluster IP failed"
+                outcomes = [str(console_result.get("error") or "ONTAP returned an error.")[:180]]
+    netapp_cfg["last_console_ip_setup"] = result
+    main.save_kit_config(cfg)
+    context = _module_context(request)
+    payload = service._response(context, "console_cluster_mgmt_ip")
+    cached = ((context.get("cfg") or {}).get("netapp") or {}).get("last_current_config") or {}
+    if cached:
+        payload["discovery"] = cached
+    payload["console_ip_setup"] = result
+    feedback = main.build_action_feedback(title, result["message"], tone=tone, outcomes=outcomes)
     return _render_netapp_page(request, context, payload, action_feedback=feedback)
 
 
@@ -1140,6 +1698,153 @@ async def netapp_apply_ip_setup(request: Request):
     return _render_netapp_page(request, context, payload, action_feedback=feedback)
 
 
+@router.post("/modules/netapp/cluster-mgmt-ip", response_class=HTMLResponse)
+async def netapp_cluster_mgmt_ip(request: Request):
+    from app import main
+
+    context = _module_context(request)
+    cfg = context["cfg"]
+    form = {key: value for key, value in dict(await request.form()).items()}
+    _apply_live_netapp_form_state(cfg, form)
+    main.save_kit_config(cfg)
+    context = _module_context(request)
+    netapp_cfg = cfg.setdefault("netapp", {})
+    mode = str(form.get("netapp_cluster_mgmt_ip_mode") or "preview").strip().lower()
+    if mode not in {"preview", "apply"}:
+        mode = "preview"
+    confirmation = str(form.get("netapp_cluster_mgmt_ip_confirmation") or "").strip()
+    desired_ip = str(form.get("netapp_cluster_mgmt_ip") or (netapp_cfg.get("bootstrap_overrides") or {}).get("netapp_cluster_mgmt") or netapp_cfg.get("host") or "").strip()
+    netmask = str(form.get("management_netmask") or ((netapp_cfg.get("desired") or {}).get("management_netmask")) or "255.255.255.0").strip()
+    attempted_at = datetime.now(timezone.utc).isoformat()
+    result: dict[str, Any] = {
+        "status": "preview",
+        "mode": mode,
+        "attempted_at": attempted_at,
+        "attempted_action": "cluster_mgmt_ip_change",
+        "desired_ip": desired_ip,
+        "desired_netmask": netmask,
+        "confirmation": confirmation,
+        "message": "",
+        "attempted": [],
+    }
+    discovery: dict[str, Any] = {}
+    tone = "pending"
+    title = "Cluster management IP preview"
+    outcomes: list[str] = []
+
+    if not desired_ip or not _valid_ipv4(desired_ip):
+        result.update(
+            {
+                "status": "refused",
+                "message": "Cluster management IP was not changed because the requested IP is not valid.",
+                "attempted": ["Validated requested cluster management IP.", "No ONTAP commands were sent."],
+            }
+        )
+        tone = "danger"
+        title = "Cluster management IP not changed"
+        outcomes = ["Requested IP is invalid.", "No ONTAP commands were sent."]
+    elif not netmask:
+        result.update(
+            {
+                "status": "refused",
+                "message": "Cluster management IP was not changed because netmask/subnet mask is not set.",
+                "attempted": ["Validated requested netmask.", "No ONTAP commands were sent."],
+            }
+        )
+        tone = "danger"
+        title = "Cluster management IP not changed"
+        outcomes = ["Netmask is missing.", "No ONTAP commands were sent."]
+    else:
+        try:
+            client = service._build_client(context)
+            discovery = client.build_discovery_summary()
+            plan = _cluster_mgmt_patch_plan(discovery, desired_ip, netmask)
+            result["plan"] = plan
+            if not plan.get("lif_uuid"):
+                result.update(
+                    {
+                        "status": "blocked",
+                        "message": "Cluster management IP was not changed because the current cluster management LIF UUID could not be discovered.",
+                        "attempted": ["Read current ONTAP network interfaces.", "No ONTAP PATCH command was sent."],
+                    }
+                )
+                tone = "danger"
+                title = "Cluster management IP blocked"
+                outcomes = ["Current cluster_mgmt LIF UUID was not found.", "No ONTAP commands were sent."]
+            elif str(plan.get("current_ip") or "").strip() == desired_ip and str(plan.get("current_netmask") or "").strip() in {"", netmask}:
+                result.update(
+                    {
+                        "status": "already_current",
+                        "message": "Cluster management IP already matches the requested value.",
+                        "attempted": ["Read current ONTAP network interfaces.", "No ONTAP PATCH command was needed."],
+                    }
+                )
+                tone = "ready"
+                title = "Cluster management IP already current"
+                outcomes = [f"Current IP: {desired_ip}", "No ONTAP commands were sent."]
+            elif mode == "preview":
+                result.update(
+                    {
+                        "status": "preview",
+                        "message": "Preview only. Review the PATCH command and type CHANGE CLUSTER IP before applying.",
+                        "attempted": ["Read current ONTAP network interfaces.", "Built PATCH preview.", "No ONTAP PATCH command was sent."],
+                    }
+                )
+                outcomes = [f"{plan.get('current_ip') or 'unknown'} -> {desired_ip}", f"Endpoint: {plan.get('endpoint')}"]
+            elif confirmation != "CHANGE CLUSTER IP":
+                result.update(
+                    {
+                        "status": "refused",
+                        "message": "Cluster management IP was not changed because confirmation did not match CHANGE CLUSTER IP.",
+                        "attempted": ["Read current ONTAP network interfaces.", "Checked typed confirmation.", "No ONTAP PATCH command was sent."],
+                    }
+                )
+                tone = "danger"
+                title = "Cluster management IP not changed"
+                outcomes = ["Typed confirmation did not match.", "No ONTAP commands were sent."]
+            else:
+                response = client.patch(str(plan["endpoint"]), dict(plan["body"]))
+                result.update(
+                    {
+                        "status": "applied",
+                        "message": "Cluster management IP PATCH was accepted by ONTAP. The current browser/API connection may need to reconnect to the new address.",
+                        "response": response,
+                        "attempted": [
+                            "Read current ONTAP network interfaces.",
+                            f"Sent PATCH {plan['endpoint']} with ip.address={desired_ip} and ip.netmask={netmask}.",
+                            "Updated Lab Builder NetApp host to the requested cluster management IP.",
+                        ],
+                    }
+                )
+                netapp_cfg["host"] = desired_ip
+                netapp_cfg.setdefault("management", {})["cluster_mgmt_ip"] = desired_ip
+                netapp_cfg.setdefault("bootstrap_overrides", {})["netapp_cluster_mgmt"] = desired_ip
+                tone = "ready"
+                title = "Cluster management IP PATCH sent"
+                outcomes = [f"Requested IP: {desired_ip}", "Retest ONTAP API after the LIF settles."]
+        except NetAppError as exc:
+            result.update(
+                {
+                    "status": "failed",
+                    "message": str(exc),
+                    "attempted": ["Tried to read or patch ONTAP cluster management LIF.", "Review credentials, current cluster IP, and ONTAP network state."],
+                }
+            )
+            tone = "danger"
+            title = "Cluster management IP action failed"
+            outcomes = [str(exc)[:180]]
+
+    netapp_cfg["last_cluster_mgmt_ip_change"] = result
+    main.save_kit_config(cfg)
+    context = _module_context(request)
+    payload = service._response(context, "cluster_mgmt_ip")
+    if discovery:
+        payload["discovery"] = discovery
+    payload["cluster_mgmt_ip_change"] = result
+    feedback = main.build_action_feedback(title, result["message"], tone=tone, outcomes=outcomes)
+    return _render_netapp_page(request, context, payload, action_feedback=feedback)
+
+
 @router.post("/modules/netapp/factory-reset", response_class=HTMLResponse)
 async def netapp_factory_reset(request: Request, netapp_factory_reset_confirmation: str = Form("")):
     from app import main
@@ -1148,35 +1853,115 @@ async def netapp_factory_reset(request: Request, netapp_factory_reset_confirmati
     cfg = context["cfg"]
     form = {key: value for key, value in dict(await request.form()).items()}
     _apply_live_netapp_form_state(cfg, form)
+    netapp_cfg = cfg.setdefault("netapp", {})
     confirmation = str(netapp_factory_reset_confirmation or "").strip()
+    mode = str(form.get("netapp_factory_reset_mode") or form.get("netapp_factory_reset_mode_select") or "preflight").strip()
+    if mode not in {"preflight", "live_console"}:
+        mode = "preflight"
+    saved_targets = _clean_string_list(netapp_cfg.get("factory_reset_targets") or [])
+    desired_targets = _clean_string_list((netapp_cfg.get("desired") or {}).get("required_nodes") or [])
+    cached_targets = _live_node_names_from_discovery(netapp_cfg.get("last_current_config") or {})
+    discovered_targets = desired_targets or cached_targets
+    live_targets = saved_targets if saved_targets and not _is_placeholder_node_targets(saved_targets) else (discovered_targets or saved_targets)
+    posted_targets = _lines(str(form.get("netapp_factory_reset_targets") or ""))
+    targets = posted_targets or live_targets
+    if live_targets and _is_placeholder_node_targets(targets):
+        targets = live_targets
+    if targets:
+        netapp_cfg["factory_reset_targets"] = targets
+    planned_steps = _netapp_factory_reset_steps(targets)
+    console_port = str(netapp_cfg.get("console_port") or "").strip()
+    console_baud = str(netapp_cfg.get("console_baud") or "115200").strip() or "115200"
+    live_enabled = _truthy_env(NETAPP_FACTORY_RESET_ENV)
     attempted_at = datetime.now(timezone.utc).isoformat()
+
+    base_result: dict[str, Any] = {
+        "attempted_at": attempted_at,
+        "attempted_action": "factory_reset",
+        "confirmation": confirmation,
+        "mode": mode,
+        "env_gate": NETAPP_FACTORY_RESET_ENV,
+        "live_enabled": live_enabled,
+        "target": str(netapp_cfg.get("host") or ""),
+        "targets": targets,
+        "console_port": console_port,
+        "console_baud": console_baud,
+        "planned_steps": planned_steps,
+        "documentation_basis": "ONTAP boot-menu wipeconfig reset path",
+    }
+
     if confirmation != "FACTORY RESET":
         result = {
+            **base_result,
             "status": "refused",
-            "attempted_at": attempted_at,
-            "attempted_action": "factory_reset",
-            "confirmation": confirmation,
             "message": "Factory reset was not attempted because confirmation did not match FACTORY RESET.",
-            "target": str((cfg.get("netapp") or {}).get("host") or ""),
             "attempted": ["Checked typed confirmation.", "No NetApp commands were sent."],
         }
         tone = "danger"
         title = "Factory reset not attempted"
         outcomes = ["Typed confirmation did not match.", "No NetApp commands were sent."]
     else:
-        result = {
-            "status": "not_implemented",
-            "attempted_at": attempted_at,
-            "attempted_action": "factory_reset",
-            "confirmation": "FACTORY RESET",
-            "message": "Factory reset backend is not implemented yet for NetApp.",
-            "target": str((cfg.get("netapp") or {}).get("host") or ""),
-            "attempted": ["Accepted exact typed confirmation.", "Stopped because no guarded NetApp factory-reset backend exists."],
-        }
-        tone = "pending"
-        title = "Factory reset backend unavailable"
-        outcomes = ["Confirmation accepted.", "No NetApp commands were sent."]
-    cfg.setdefault("netapp", {})["last_factory_reset"] = result
+        console_probe = _probe_netapp_reset_console(console_port, console_baud)
+        console_ok = bool(console_probe.get("ok"))
+        if mode == "preflight":
+            result = {
+                **base_result,
+                "status": "preflight_ready" if console_ok else "preflight_blocked",
+                "message": "Factory reset readiness check completed. No destructive commands were sent."
+                if console_ok
+                else "Factory reset readiness check could not confirm console access. No destructive commands were sent.",
+                "console_probe": console_probe,
+                "attempted": [
+                    "Accepted exact typed confirmation.",
+                    "Opened the selected console and sent Enter only." if console_ok else "Tried to open the selected console for a newline-only probe.",
+                    "No wipeconfig, reset, reboot, or ONTAP configuration commands were sent.",
+                ],
+            }
+            tone = "ready" if console_ok else "pending"
+            title = "Factory reset readiness checked"
+            outcomes = [
+                f"Console: {'ready' if console_ok else 'not ready'}",
+                "No destructive commands were sent.",
+            ]
+            if console_probe.get("error"):
+                outcomes.append(str(console_probe.get("error")))
+        elif not live_enabled:
+            result = {
+                **base_result,
+                "status": "blocked",
+                "message": f"Live NetApp factory reset is disabled. Set {NETAPP_FACTORY_RESET_ENV}=1 and restart Lab Builder before live testing destructive reset automation.",
+                "console_probe": console_probe,
+                "attempted": [
+                    "Accepted exact typed confirmation.",
+                    "Probed the selected console with Enter only." if console_ok else "Tried to probe the selected console with Enter only.",
+                    f"Stopped because {NETAPP_FACTORY_RESET_ENV} is not enabled.",
+                    "No wipeconfig, reset, reboot, or ONTAP configuration commands were sent.",
+                ],
+            }
+            tone = "danger"
+            title = "Factory reset blocked"
+            outcomes = [f"{NETAPP_FACTORY_RESET_ENV} is not enabled.", "No destructive commands were sent."]
+            if console_probe.get("error"):
+                outcomes.append(str(console_probe.get("error")))
+        else:
+            result = {
+                **base_result,
+                "status": "not_implemented",
+                "message": "Factory reset backend is not implemented yet for NetApp.",
+                "console_probe": console_probe,
+                "attempted": [
+                    "Accepted exact typed confirmation.",
+                    f"Verified {NETAPP_FACTORY_RESET_ENV} is enabled.",
+                    "Stopped because no guarded NetApp factory-reset executor exists.",
+                    "No wipeconfig, reset, reboot, or ONTAP configuration commands were sent.",
+                ],
+            }
+            tone = "pending"
+            title = "Factory reset backend unavailable"
+            outcomes = ["Confirmation accepted.", "Executor is not implemented.", "No destructive commands were sent."]
+            if console_probe.get("error"):
+                outcomes.append(str(console_probe.get("error")))
+    netapp_cfg["last_factory_reset"] = result
     main.save_kit_config(cfg)
     context = _module_context(request)
     payload = service._response(context, "factory_reset")

@@ -17,7 +17,7 @@ from urllib.parse import quote, urlparse
 
 from fastapi import FastAPI, Request, Form, WebSocket, WebSocketDisconnect, UploadFile, File
 from fastapi.encoders import jsonable_encoder
-from fastapi.responses import FileResponse, HTMLResponse
+from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
@@ -72,15 +72,6 @@ from app.core.jobs import JobStepRunner
 from app.core.database import DatabaseStore, SQLiteRuntime
 from app.core.registry import load_modules
 from app.core.stage_registry import StageRegistry
-from app.overnight_run import (
-    DESTRUCTIVE_FLAG_DEFAULTS,
-    OVERNIGHT_MODES,
-    OvernightArtifactWriter,
-    OvernightHardwareConfig,
-    initialize_overnight_artifacts,
-    list_overnight_run_artifacts,
-    run_overnight_hardware,
-)
 from app.stages.ilo.adapter import HpeIloRedfishAdapter
 from app.modules.ilo.routes import (
     ilo_page_handler,
@@ -547,10 +538,6 @@ PAGE_META = {
         "title": "Execution",
         "subtitle": "Run staged actions and monitor live job progress.",
     },
-    "overnight_hardware": {
-        "title": "Overnight Hardware Run",
-        "subtitle": "Controlled iLO and Cisco console discovery with morning finalization.",
-    },
     "esxi": {
         "title": "ESXi",
         "subtitle": "Review inherited network settings and local ESXi overrides.",
@@ -801,41 +788,6 @@ def write_run_bundle_files(kit_name: str, job: dict[str, Any]) -> None:
     live_log_path = Path(str(job.get("run_live_log_path") or bundle_dir / "live-job.log"))
     trace_path = Path(str(job.get("run_trace_path") or bundle_dir / "trace.yml"))
     summary_path = Path(str(job.get("run_summary_path") or bundle_dir / "summary.yml"))
-
-    if str(job.get("scope") or "") == "overnight_hardware":
-        job_state_path = bundle_dir / "job-state.yml"
-        job_state_path.write_text(
-            yaml.safe_dump(
-                {
-                    "kit_name": sanitize_kit_name(kit_name),
-                    "run_id": str(job.get("run_id") or ""),
-                    "status": str(job.get("status") or ""),
-                    "current_stage": str(job.get("current_stage") or ""),
-                    "progress_percent": int(job.get("progress_percent") or 0),
-                    "updated_at": str(job.get("updated_at") or ""),
-                    "job_fields": {
-                        key: value
-                        for key, value in job.items()
-                        if key
-                        not in {
-                            "logs",
-                            "trace_events",
-                        }
-                    },
-                    "logs": [str(line) for line in list(job.get("logs") or [])],
-                    "events": list(job.get("trace_events") or []),
-                    "paths": {
-                        "job_yaml": str(job_path(kit_name)),
-                        "live_log": str(live_log_path),
-                        "trace": str(trace_path),
-                        "summary": str(summary_path),
-                    },
-                },
-                sort_keys=False,
-            ),
-            encoding="utf-8",
-        )
-        return
 
     logs = list(job.get("logs") or [])
     live_log_text = "\n".join(str(line) for line in logs)
@@ -1809,6 +1761,32 @@ def promote_final_ilo_endpoint(cfg: dict[str, Any], final_ip: str | None = None)
         resolve_ilo_control_host_fn=resolve_ilo_control_host,
         final_ip=final_ip,
     )
+
+
+def propagate_active_ilo_endpoint(cfg: dict[str, Any], active_ip: str | None = None) -> dict[str, Any]:
+    cfg.setdefault("ilo", {})
+    endpoint = str(
+        active_ip
+        or cfg["ilo"].get("current_ip")
+        or cfg["ilo"].get("host")
+        or cfg["ilo"].get("target_ip")
+        or cfg.get("ip_plan", {}).get("ilo")
+        or ""
+    ).strip()
+    if not endpoint:
+        return cfg
+    cfg["ilo"]["current_ip"] = endpoint
+    cfg["ilo"]["host"] = endpoint
+    cfg.setdefault("storage", {})
+    storage_override = str(cfg["storage"].get("target_host_override") or "").strip()
+    if storage_override and storage_override != endpoint:
+        cfg["storage"].setdefault("previous_target_host_overrides", [])
+        previous = list(cfg["storage"].get("previous_target_host_overrides") or [])
+        if storage_override not in previous:
+            previous.append(storage_override)
+        cfg["storage"]["previous_target_host_overrides"] = previous[-5:]
+        cfg["storage"]["target_host_override"] = ""
+    return cfg
 
 
 def resolve_storage_target_credentials(cfg: dict[str, Any]) -> dict[str, Any]:
@@ -3749,7 +3727,7 @@ def build_workflow_contexts(cfg: dict[str, Any], job: dict[str, Any], history: l
     }
 
     for key, name, target, config_summary in [
-        ("ilo", "iLO", (cfg.get("ilo", {}).get("current_ip") or cfg.get("ilo", {}).get("host") or "").strip(), (cfg.get("ilo", {}).get("hostname") or "").strip()),
+        ("ilo", "iLO", (cfg.get("ilo", {}).get("target_ip") or cfg.get("ip_plan", {}).get("ilo") or cfg.get("ilo", {}).get("current_ip") or cfg.get("ilo", {}).get("host") or "").strip(), (cfg.get("ilo", {}).get("hostname") or "").strip()),
         ("esxi", "ESXi", (cfg.get("esxi", {}).get("management_ip") or cfg.get("ip_plan", {}).get("esxi") or "").strip(), (cfg.get("esxi", {}).get("hostname") or "").strip()),
         ("windows", "Windows", (cfg.get("windows", {}).get("ip_address") or cfg.get("ip_plan", {}).get("windows") or "").strip(), (cfg.get("windows", {}).get("vm_name") or "").strip()),
         ("qnap", "QNAP", (cfg.get("qnap", {}).get("ip") or cfg.get("ip_plan", {}).get("qnap") or "").strip(), (cfg.get("qnap", {}).get("hostname") or "").strip()),
@@ -11251,7 +11229,12 @@ def run_esxi_real(cfg: dict, run_stamp: str | None = None):
     inherited_root_scope = str(existing_job.get("root_scope") or "esxi")
     ilo_cfg = cfg.get("ilo", {}) or {}
     esxi_cfg = cfg.get("esxi", {}) or {}
-    login_ip = resolve_ilo_control_host(cfg)
+    login_ip = str(
+        ilo_cfg.get("target_ip")
+        or (cfg.get("ip_plan") or {}).get("ilo")
+        or resolve_ilo_control_host(cfg)
+        or ""
+    ).strip()
     username = str(ilo_cfg.get("username") or "").strip()
     password = ilo_cfg.get("password", "")
     total = 13
@@ -14237,228 +14220,6 @@ def execute_preview_job_in_background(cfg: dict, scope: str):
         append_job_history_snapshot(cfg, scope)
 
 
-def _read_text_excerpt(path: str | Path, *, max_chars: int = 6000) -> str:
-    target = Path(path)
-    if not target.exists() or not target.is_file():
-        return ""
-    try:
-        text = target.read_text(encoding="utf-8", errors="replace")
-    except OSError:
-        return ""
-    if len(text) <= max_chars:
-        return text
-    return text[-max_chars:]
-
-
-def _artifact_count_text(count: int) -> str:
-    return f"{count} artifact" if count == 1 else f"{count} artifacts"
-
-
-def _count_artifacts_from_reason(reason: str) -> int:
-    _, _, tail = str(reason or "").partition(":")
-    if not tail.strip():
-        return 0
-    return len([item for item in tail.split(",") if item.strip()])
-
-
-def _compact_overnight_operator_reasons(reasons: list[str], artifact_health: dict[str, Any]) -> list[str]:
-    compacted: list[str] = []
-    pending_count = len(list(artifact_health.get("pending") or []))
-    skipped_count = len(list(artifact_health.get("skipped") or []))
-    missing_count = len(list(artifact_health.get("missing") or []))
-    unreadable_count = len(list(artifact_health.get("unreadable") or []))
-    for reason in reasons:
-        text = str(reason or "").strip()
-        lowered = text.lower()
-        if lowered.startswith("expected artifacts still contain placeholders:"):
-            count = _count_artifacts_from_reason(text) or pending_count
-            text = f"Hardware evidence is still pending ({_artifact_count_text(count)})." if count else "Hardware evidence is still pending."
-        elif lowered.startswith("expected artifacts were skipped:"):
-            count = _count_artifacts_from_reason(text) or skipped_count
-            text = f"Hardware evidence was skipped ({_artifact_count_text(count)})." if count else "Hardware evidence was skipped."
-        elif lowered.startswith("expected artifacts are missing:"):
-            count = _count_artifacts_from_reason(text) or missing_count
-            text = f"Required overnight artifacts are missing ({_artifact_count_text(count)})." if count else "Required overnight artifacts are missing."
-        elif lowered.startswith("expected artifacts could not be read:"):
-            count = _count_artifacts_from_reason(text) or unreadable_count
-            text = f"Required overnight artifacts could not be read ({_artifact_count_text(count)})." if count else "Required overnight artifacts could not be read."
-        if text and text not in compacted:
-            compacted.append(text)
-    return compacted
-
-
-def build_overnight_hardware_state(cfg: dict[str, Any], job: dict[str, Any] | None = None) -> dict[str, Any]:
-    default_run_config = OvernightHardwareConfig.from_mapping({}, cfg)
-    cisco_cfg = dict(cfg.get("cisco_switch") or {})
-    runs = list_overnight_run_artifacts(ARTIFACTS_DIR)
-    latest = runs[0] if runs else {}
-    latest_path = Path(str(latest.get("path") or "")) if latest else Path()
-    artifact_links: list[dict[str, str]] = []
-    if latest_path and latest_path.exists():
-        for relative in [
-            "config-snapshot.yml",
-            "live-job.log",
-            "trace.yml",
-            "summary.yml",
-            "MORNING_READY.md",
-            "job-state.yml",
-            "ilo/discovery.json",
-            "ilo/power-state-before.json",
-            "ilo/boot-options.json",
-            "ilo/virtual-media.json",
-            "ilo/final-state.json",
-            "cisco/console-detect.txt",
-            "cisco/initial-session.txt",
-            "cisco/show-version.txt",
-            "cisco/running-config-before.txt",
-            "cisco/setup-transcript.txt",
-            "cisco/running-config-after.txt",
-        ]:
-            path = latest_path / relative
-            artifact_links.append({"label": relative, "path": str(path), "exists": "yes" if path.exists() else "no"})
-
-    active_job = job or {}
-    mode = str(active_job.get("overnight_mode") or default_run_config.mode)
-    finalization_excerpt = _read_text_excerpt(latest_path / "MORNING_READY.md", max_chars=2400) if latest else ""
-    latest_status = str(latest.get("display_status") or latest.get("status") or "No run")
-    latest_folder = str(latest.get("path") or "")
-    morning_status = str(latest.get("morning_status") or ("Ready for review" if "Status: Ready for review" in finalization_excerpt else ("Needs attention" if "Status: Needs attention" in finalization_excerpt else "Pending")))
-    needs_attention_reasons = [str(item) for item in list(latest.get("needs_attention_reasons") or []) if str(item).strip()]
-    artifact_health = dict(latest.get("artifact_health") or {})
-    if not needs_attention_reasons and artifact_health:
-        if artifact_health.get("missing"):
-            needs_attention_reasons.append("Expected artifacts are missing: " + ", ".join(artifact_health.get("missing") or []))
-        if artifact_health.get("pending"):
-            needs_attention_reasons.append("Expected artifacts still contain placeholders: " + ", ".join(artifact_health.get("pending") or []))
-        if artifact_health.get("skipped"):
-            needs_attention_reasons.append("Expected artifacts were skipped: " + ", ".join(artifact_health.get("skipped") or []))
-    operator_attention_reasons = _compact_overnight_operator_reasons(needs_attention_reasons, artifact_health)
-    raw_active_status = str(active_job.get("status") or "")
-    active_run_id = str(active_job.get("run_id") or "")
-    active_run_dir = str(active_job.get("run_bundle_dir") or "")
-    latest_name = str(latest.get("name") or "")
-    finalized_statuses = {"ready for review", "needs attention"}
-    latest_is_finalized = morning_status.lower() in finalized_statuses or latest_status.lower() in finalized_statuses
-    finalized_display_status = morning_status if morning_status.lower() in finalized_statuses else latest_status
-    active_job_matches_latest = bool(latest) and (
-        (active_run_id and active_run_id == latest_name)
-        or (active_run_dir and active_run_dir == latest_folder)
-    )
-    stale_in_progress_job = raw_active_status in {"Running", "Overnight queued"} and active_job_matches_latest and latest_is_finalized
-    active_status = finalized_display_status if stale_in_progress_job else raw_active_status
-    current_stage = str(active_job.get("current_stage") or "Not running")
-    operator_completion = int(active_job.get("progress_percent") or 0)
-    operator_last = str(
-        active_job.get("logs", ["No overnight run has been started."])[-1]
-        if active_job.get("logs")
-        else "No overnight run has been started."
-    )
-    if stale_in_progress_job:
-        current_stage = "Finalization complete"
-        operator_completion = 100
-        operator_last = f"Latest run finalized as {finalized_display_status}."
-    pending_artifacts = bool(artifact_health.get("pending"))
-    skipped_artifacts = bool(artifact_health.get("skipped"))
-    incomplete_artifacts = bool(artifact_health.get("missing") or artifact_health.get("unreadable"))
-    if not latest:
-        next_action = "Start discovery_only for the safe default pass."
-    elif active_status in {"Running", "Overnight queued"}:
-        next_action = "Let the current finalization finish, then review MORNING_READY.md."
-    elif pending_artifacts:
-        next_action = "Start a new discovery_only run before the hardware stop window to collect the pending artifacts."
-    elif skipped_artifacts:
-        next_action = "Start a new discovery_only run before the hardware stop window to collect the skipped hardware evidence."
-    elif incomplete_artifacts:
-        next_action = "Review Debug Mode, preserve diagnostics, then rerun the finalizer for the last folder."
-    elif needs_attention_reasons or morning_status.lower() in {"needs attention", "pending", "missing", "unreadable"}:
-        next_action = "Review Debug Mode and address the latest Needs Attention reason."
-    elif morning_status == "Ready for review":
-        next_action = "Review MORNING_READY.md."
-    else:
-        next_action = "Start discovery_only for the safe default pass."
-    return {
-        "modes": list(OVERNIGHT_MODES),
-        "default_mode": default_run_config.mode,
-        "defaults": default_run_config.to_dict(),
-        "destructive_flags": dict(DESTRUCTIVE_FLAG_DEFAULTS),
-        "targets": {
-            "ilo": default_run_config.ilo_host,
-            "cisco_console_port": default_run_config.cisco_console_port or str(cisco_cfg.get("console_port") or "Auto-detect"),
-            "cisco_console_baud": default_run_config.cisco_console_baud,
-        },
-        "operator": {
-            "purpose": "Collect current iLO Redfish state and Cisco console evidence overnight without wiping storage, factory resetting devices, or installing ESXi by default.",
-            "current_mode": mode,
-            "next": next_action,
-            "last": operator_last,
-            "completion": operator_completion,
-            "status": active_status or "Idle",
-            "current_stage": current_stage,
-            "finalization_status": morning_status,
-            "latest_run_status": latest_status,
-            "latest_run_folder": latest_folder,
-            "needs_attention": operator_attention_reasons[0] if operator_attention_reasons else "",
-            "needs_attention_reasons": operator_attention_reasons,
-        },
-        "debug": {
-            "latest_run": latest,
-            "artifact_links": artifact_links,
-            "artifact_health": artifact_health,
-            "live_log": _read_text_excerpt(latest_path / "live-job.log") if latest else "",
-            "trace": _read_text_excerpt(latest_path / "trace.yml") if latest else "",
-            "api_output": yaml.safe_dump({"route": "/api/ui/overnight-hardware", "job": active_job, "defaults": default_run_config.to_dict(), "latest_run": latest}, sort_keys=False),
-            "console_transcripts": {
-                "detect": _read_text_excerpt(latest_path / "cisco" / "console-detect.txt") if latest else "",
-                "initial": _read_text_excerpt(latest_path / "cisco" / "initial-session.txt") if latest else "",
-                "show_version": _read_text_excerpt(latest_path / "cisco" / "show-version.txt") if latest else "",
-                "setup": _read_text_excerpt(latest_path / "cisco" / "setup-transcript.txt") if latest else "",
-            },
-            "finalization": finalization_excerpt,
-        },
-        "runs": runs,
-    }
-
-
-def _record_overnight_job_event(kit_name: str, event: dict[str, Any]) -> None:
-    job = load_job(kit_name)
-    progress = int(event.get("progress") or job.get("progress_percent") or 0)
-    status = str(event.get("status") or "")
-    stage = str(event.get("stage") or "overnight_hardware")
-    if stage == "finalization" and status == "completed":
-        job_status = "Completed"
-    elif status in {"failed", "needs_attention", "blocked"}:
-        job_status = "Needs attention"
-    else:
-        job_status = "Running"
-    job["status"] = job_status
-    job["scope"] = "overnight_hardware"
-    job["root_scope"] = "overnight_hardware"
-    job["current_stage"] = stage.replace("_", " ").title()
-    job["progress_percent"] = progress
-    job["completed_steps"] = progress
-    job["total_steps"] = 100
-    job.setdefault("logs", []).append(f"[OVERNIGHT] {stage}: {status} - {event.get('message') or ''}")
-    job.setdefault("trace_events", []).append(dict(event))
-    save_job(kit_name, job)
-
-
-def _execute_overnight_hardware_background(cfg: dict[str, Any], run_config: OvernightHardwareConfig, run_dir: str) -> None:
-    kit_name = cfg["site"]["name"]
-    writer = OvernightArtifactWriter(Path(run_dir))
-    try:
-        run_overnight_hardware(
-            cfg,
-            run_config,
-            writer,
-            repo_root=BASE_DIR,
-            on_event=lambda event: _record_overnight_job_event(kit_name, event),
-        )
-    except Exception as exc:
-        event = writer.trace(stage="overnight_error", status="failed", progress=100, message=str(exc).splitlines()[0])
-        _record_overnight_job_event(kit_name, event)
-        writer.write_summary({"status": "Needs attention", "error": str(exc).splitlines()[0]})
-
-
 def render_page(
     request: Request,
     cfg: dict,
@@ -14562,7 +14323,6 @@ def render_page(
     live_job_story = build_live_job_story(job)
     live_stage_cards = build_live_stage_cards(job)
     run_checklist = build_run_checklist(job, cfg)
-    overnight_run = build_overnight_hardware_state(cfg, job)
     report_center = build_report_center(
         cfg,
         query=str(request.query_params.get("report_query", "") or ""),
@@ -14651,7 +14411,6 @@ def render_page(
         "live_job_story": live_job_story,
         "live_stage_cards": live_stage_cards,
         "run_checklist": run_checklist,
-        "overnight_run": overnight_run,
         "report_center": report_center,
         "ilo_inclusion": ilo_inclusion,
         "esxi_inclusion": esxi_inclusion,
@@ -14698,7 +14457,6 @@ def page_name_from_request_path(path: str) -> str:
         "save_qnap_settings": "qnap",
         "prepare_execute": "execution",
         "execute": "execution",
-        "overnight_hardware": "overnight_hardware",
         "configs": "configs",
         "reports": "configs",
         "history": "history",
@@ -14762,42 +14520,72 @@ class ReactFormAdapter(dict):
 
 def react_ui_page_specs() -> list[dict[str, str]]:
     return [
-        {"key": "dashboard", "label": "Dashboard / Run Center", "group": "Operate", "legacy_href": "/dashboard"},
-        {"key": "overnight_hardware", "label": "Overnight Hardware Run", "group": "Operate", "legacy_href": "/overnight-hardware"},
-        {"key": "ilo", "label": "iLO setup", "group": "Setup", "legacy_href": "/ilo"},
-        {"key": "esxi", "label": "ESXi setup", "group": "Setup", "legacy_href": "/esxi"},
-        {"key": "netapp", "label": "NetApp setup", "group": "Setup", "legacy_href": "/modules/netapp"},
-        {"key": "cisco", "label": "Cisco setup", "group": "Setup", "legacy_href": "/cisco"},
+        {"key": "dashboard", "label": "Dashboard", "group": "Overview", "legacy_href": "/dashboard"},
+        {"key": "global_settings", "label": "Global Settings", "group": "Overview", "legacy_href": "/global-settings"},
+        {"key": "upgrade_helper", "label": "Upgrade Helper", "group": "Overview", "legacy_href": "/upgrade-helper"},
+        {"key": "ilo", "label": "iLO setup", "group": "Setup Modules", "legacy_href": "/ilo"},
+        {"key": "storage", "label": "Storage setup", "group": "Setup Modules", "legacy_href": "/storage"},
+        {"key": "esxi", "label": "ESXi setup", "group": "Setup Modules", "legacy_href": "/esxi"},
+        {"key": "windows", "label": "Windows setup", "group": "Setup Modules", "legacy_href": "/windows"},
+        {"key": "ovf_templates", "label": "OVF Templates", "group": "Setup Modules", "legacy_href": "/modules/ovf-templates"},
+        {"key": "qnap", "label": "QNAP setup", "group": "Setup Modules", "legacy_href": "/qnap"},
+        {"key": "netapp", "label": "NetApp setup", "group": "Setup Modules", "legacy_href": "/modules/netapp"},
+        {"key": "cisco", "label": "Cisco setup", "group": "Setup Modules", "legacy_href": "/cisco"},
+        {"key": "execution", "label": "Run Center", "group": "Run", "legacy_href": "/execution"},
         {"key": "configuration", "label": "Configuration / Kits", "group": "Manage", "legacy_href": "/configuration"},
         {"key": "reports", "label": "Reports / History", "group": "Manage", "legacy_href": "/configs"},
         {"key": "action-map", "label": "Action catalog", "group": "Manage", "legacy_href": "/configuration"},
-        {"key": "technical", "label": "Technical details", "group": "Operate", "legacy_href": "/configs"},
+        {"key": "technical", "label": "Technical details", "group": "Manage", "legacy_href": "/configs"},
     ]
 
 
 def react_ui_action_inventory() -> dict[str, list[dict[str, str]]]:
     return {
         "dashboard": [
+            {"label": "Load kit library", "method": "GET", "route": "/api/ui/kits", "mode": "json"},
+            {"label": "Load existing kit", "method": "POST", "route": "/api/ui/kits/load", "mode": "json"},
+            {"label": "Create kit", "method": "POST", "route": "/api/ui/kits/create", "mode": "json"},
+            {"label": "Open current config", "method": "POST", "route": "/view-current-kit-config", "mode": "legacy-html"},
+            {"label": "Download current config", "method": "POST", "route": "/download-current-kit-config", "mode": "download"},
             {"label": "Open Run Center", "method": "GET", "route": "/execution", "mode": "legacy-html"},
-            {"label": "Open Overnight Hardware Run", "method": "GET", "route": "/overnight-hardware", "mode": "legacy-html"},
             {"label": "Prepare run review", "method": "POST", "route": "/prepare-execute", "mode": "legacy-html"},
             {"label": "Start preview run", "method": "POST", "route": "/execute-preview", "mode": "legacy-html"},
             {"label": "Start real run", "method": "POST", "route": "/execute", "mode": "legacy-html"},
             {"label": "Retry storage stage", "method": "POST", "route": "/retry-storage-stage", "mode": "legacy-html"},
         ],
-        "overnight_hardware": [
-            {"label": "Load overnight run state", "method": "GET", "route": "/api/ui/overnight-hardware", "mode": "json"},
-            {"label": "Start overnight hardware run", "method": "POST", "route": "/overnight-hardware/start", "mode": "legacy-html"},
+        "global_settings": [
+            {"label": "Load global settings", "method": "GET", "route": "/api/ui/global-settings", "mode": "json"},
+            {"label": "Save global settings", "method": "POST", "route": "/api/ui/global-settings", "mode": "json"},
+            {"label": "Autofill IP plan", "method": "POST", "route": "/api/ui/global-settings/autofill", "mode": "json"},
+            {"label": "Open global settings", "method": "GET", "route": "/global-settings", "mode": "legacy-html"},
+            {"label": "Save global settings HTML action", "method": "POST", "route": "/save-global-settings", "mode": "legacy-html"},
+            {"label": "Autofill IP plan HTML action", "method": "POST", "route": "/autofill-ip-plan", "mode": "legacy-html"},
+            {"label": "Save upgrade policies", "method": "POST", "route": "/save-upgrade-policies", "mode": "legacy-html"},
+            {"label": "Upload firmware media", "method": "POST", "route": "/upload-upgrade-media", "mode": "legacy-html"},
+        ],
+        "upgrade_helper": [
+            {"label": "Open upgrade helper", "method": "GET", "route": "/upgrade-helper", "mode": "legacy-html"},
+            {"label": "Save upgrade policies", "method": "POST", "route": "/save-upgrade-policies", "mode": "legacy-html"},
+            {"label": "Upload firmware media", "method": "POST", "route": "/upload-upgrade-media", "mode": "legacy-html"},
+            {"label": "Review Cisco upgrade plan", "method": "POST", "route": "/modules/cisco/plan-upgrade", "mode": "legacy-html"},
+            {"label": "Run Cisco upgrade", "method": "POST", "route": "/modules/cisco/run-upgrade", "mode": "legacy-html"},
+            {"label": "Read Cisco version", "method": "POST", "route": "/modules/cisco/discover-version", "mode": "legacy-html"},
+            {"label": "Review ONTAP upgrade plan", "method": "POST", "route": "/modules/netapp/plan-upgrade", "mode": "legacy-html"},
+            {"label": "Run ONTAP upgrade", "method": "POST", "route": "/modules/netapp/run-upgrade", "mode": "legacy-html"},
+            {"label": "Plan iLO firmware upgrade", "method": "POST", "route": "/plan-ilo-upgrade", "mode": "legacy-html"},
+            {"label": "Run iLO firmware upgrade", "method": "POST", "route": "/run-ilo-upgrade", "mode": "legacy-html"},
         ],
         "ilo": [
             {"label": "Load iLO state", "method": "GET", "route": "/api/ui/ilo", "mode": "json"},
             {"label": "Save iLO setup", "method": "POST", "route": "/api/ui/ilo/settings", "mode": "json"},
-            {"label": "Legacy save iLO setup", "method": "POST", "route": "/save-ilo-settings", "mode": "legacy-html"},
+            {"label": "Setup iLO IP", "method": "POST", "route": "/api/ui/ilo/setup-ip", "mode": "json"},
+            {"label": "Save iLO setup HTML action", "method": "POST", "route": "/save-ilo-settings", "mode": "legacy-html"},
             {"label": "Export iLO config", "method": "POST", "route": "/export-ilo-config", "mode": "legacy-html"},
             {"label": "Export iLO inventory", "method": "POST", "route": "/export-ilo-inventory", "mode": "legacy-html"},
             {"label": "View iLO config snapshot", "method": "POST", "route": "/view-ilo-config-snapshot", "mode": "legacy-html"},
             {"label": "Plan iLO firmware upgrade", "method": "POST", "route": "/plan-ilo-upgrade", "mode": "legacy-html"},
             {"label": "Run iLO firmware upgrade", "method": "POST", "route": "/run-ilo-upgrade", "mode": "legacy-html"},
+            {"label": "iLO upgrade activity", "method": "GET", "route": "/ilo-upgrade-activity", "mode": "legacy-html"},
         ],
         "esxi": [
             {"label": "Save ESXi setup", "method": "POST", "route": "/save-esxi-settings", "mode": "legacy-html"},
@@ -14806,35 +14594,63 @@ def react_ui_action_inventory() -> dict[str, list[dict[str, str]]]:
             {"label": "Start ESXi run", "method": "POST", "route": "/execute", "mode": "legacy-html"},
         ],
         "netapp": [
+            {"label": "Open NetApp setup", "method": "GET", "route": "/modules/netapp", "mode": "legacy-html"},
             {"label": "Module status", "method": "GET", "route": "/modules/netapp/status", "mode": "json"},
             {"label": "Save NetApp settings", "method": "POST", "route": "/modules/netapp/save-settings", "mode": "legacy-html"},
             {"label": "Test NetApp connection", "method": "POST", "route": "/modules/netapp/test-connection", "mode": "legacy-html"},
-            {"label": "Discover NetApp", "method": "POST", "route": "/modules/netapp/discover", "mode": "json"},
+            {"label": "Read current ONTAP", "method": "POST", "route": "/modules/netapp/read-current-config", "mode": "legacy-html"},
             {"label": "Discover NetApp page", "method": "POST", "route": "/modules/netapp/discover-page", "mode": "legacy-html"},
+            {"label": "Check console ports", "method": "POST", "route": "/modules/netapp/check-console-ports", "mode": "legacy-html"},
+            {"label": "Save selected console", "method": "POST", "route": "/modules/netapp/save-console", "mode": "legacy-html"},
+            {"label": "Read console state", "method": "POST", "route": "/modules/netapp/console-read-state", "mode": "legacy-html"},
+            {"label": "Preview console IP commands", "method": "POST", "route": "/modules/netapp/console-cluster-mgmt-ip", "mode": "legacy-html"},
+            {"label": "Update NetApp convention", "method": "POST", "route": "/modules/netapp/update-convention", "mode": "legacy-html"},
+            {"label": "Setup NetApp IP", "method": "POST", "route": "/modules/netapp/apply-ip-setup", "mode": "legacy-html"},
+            {"label": "Preview cluster IP command", "method": "POST", "route": "/modules/netapp/cluster-mgmt-ip", "mode": "legacy-html"},
+            {"label": "Ping all NetApp IPs", "method": "POST", "route": "/modules/netapp/bootstrap-test-all", "mode": "legacy-html"},
+            {"label": "Use discovered values", "method": "POST", "route": "/modules/netapp/use-discovered-values", "mode": "legacy-html"},
+            {"label": "Probe ESXi and NFS", "method": "POST", "route": "/modules/netapp/probe-vmware-nfs", "mode": "legacy-html"},
+            {"label": "Discover NetApp", "method": "POST", "route": "/modules/netapp/discover", "mode": "json"},
             {"label": "Mark bootstrap complete", "method": "POST", "route": "/modules/netapp/bootstrap-complete", "mode": "legacy-html"},
+            {"label": "API readiness", "method": "POST", "route": "/modules/netapp/api-readiness", "mode": "legacy-html"},
             {"label": "Plan NetApp", "method": "POST", "route": "/modules/netapp/plan", "mode": "json"},
             {"label": "Validate NetApp", "method": "POST", "route": "/modules/netapp/validate", "mode": "json"},
+            {"label": "Validate NetApp page", "method": "POST", "route": "/modules/netapp/validate-page", "mode": "legacy-html"},
+            {"label": "Export NetApp plan", "method": "POST", "route": "/modules/netapp/export-plan", "mode": "legacy-html"},
             {"label": "Safe apply NetApp", "method": "POST", "route": "/modules/netapp/apply", "mode": "json"},
             {"label": "Apply NetApp page", "method": "POST", "route": "/modules/netapp/apply-page", "mode": "legacy-html"},
+            {"label": "Check reset readiness", "method": "POST", "route": "/modules/netapp/factory-reset", "mode": "legacy-html"},
             {"label": "Plan ONTAP upgrade", "method": "POST", "route": "/modules/netapp/plan-upgrade", "mode": "legacy-html"},
             {"label": "Run ONTAP upgrade", "method": "POST", "route": "/modules/netapp/run-upgrade", "mode": "legacy-html"},
+            {"label": "ONTAP upgrade activity", "method": "GET", "route": "/modules/netapp/upgrade-activity", "mode": "legacy-html"},
         ],
         "cisco": [
+            {"label": "Open Cisco setup", "method": "GET", "route": "/cisco", "mode": "legacy-html"},
             {"label": "Discover Cisco version", "method": "POST", "route": "/modules/cisco/discover-version", "mode": "legacy-html"},
             {"label": "Discover Cisco console", "method": "POST", "route": "/modules/cisco/discover-console", "mode": "legacy-html"},
-            {"label": "Bootstrap management", "method": "POST", "route": "/modules/cisco/bootstrap-management", "mode": "legacy-html"},
+            {"label": "Fix serial access", "method": "POST", "route": "/modules/cisco/fix-serial-permissions", "mode": "legacy-html"},
+            {"label": "Setup Cisco IP", "method": "POST", "route": "/modules/cisco/bootstrap-management", "mode": "legacy-html"},
             {"label": "Verify console bootstrap", "method": "POST", "route": "/modules/cisco/verify-console-bootstrap", "mode": "legacy-html"},
             {"label": "Test SSH", "method": "POST", "route": "/modules/cisco/test-ssh", "mode": "legacy-html"},
             {"label": "Save port map", "method": "POST", "route": "/modules/cisco/save-port-map", "mode": "legacy-html"},
             {"label": "Discover ports", "method": "POST", "route": "/modules/cisco/discover-ports", "mode": "legacy-html"},
+            {"label": "Discover current state", "method": "POST", "route": "/modules/cisco/discover-state", "mode": "legacy-html"},
             {"label": "Preview config", "method": "POST", "route": "/modules/cisco/preview-config", "mode": "legacy-html"},
             {"label": "Apply config", "method": "POST", "route": "/modules/cisco/apply-config", "mode": "legacy-html"},
             {"label": "Approve config plan", "method": "POST", "route": "/modules/cisco/approve-config-plan", "mode": "legacy-html"},
             {"label": "Backup config", "method": "POST", "route": "/modules/cisco/backup-config", "mode": "legacy-html"},
+            {"label": "Factory reset switch", "method": "POST", "route": "/modules/cisco/factory-reset", "mode": "legacy-html"},
             {"label": "Plan Cisco upgrade", "method": "POST", "route": "/modules/cisco/plan-upgrade", "mode": "legacy-html"},
             {"label": "Run Cisco upgrade", "method": "POST", "route": "/modules/cisco/run-upgrade", "mode": "legacy-html"},
+            {"label": "Cisco upgrade activity", "method": "GET", "route": "/modules/cisco/upgrade-activity", "mode": "legacy-html"},
         ],
         "configuration": [
+            {"label": "Load kit library", "method": "GET", "route": "/api/ui/kits", "mode": "json"},
+            {"label": "Load existing kit", "method": "POST", "route": "/api/ui/kits/load", "mode": "json"},
+            {"label": "Create kit", "method": "POST", "route": "/api/ui/kits/create", "mode": "json"},
+            {"label": "Import kit config", "method": "POST", "route": "/api/ui/kits/import", "mode": "json"},
+            {"label": "Open current kit config", "method": "GET", "route": "/api/ui/current-kit-config", "mode": "json"},
+            {"label": "Download current kit config", "method": "GET", "route": "/api/ui/current-kit-config/download", "mode": "download"},
             {"label": "Save global settings", "method": "POST", "route": "/save-global-settings", "mode": "legacy-html"},
             {"label": "Load kit", "method": "POST", "route": "/load-kit", "mode": "legacy-html"},
             {"label": "Create kit", "method": "POST", "route": "/new-kit", "mode": "legacy-html"},
@@ -14845,12 +14661,18 @@ def react_ui_action_inventory() -> dict[str, list[dict[str, str]]]:
             {"label": "Import kit config", "method": "POST", "route": "/import-kit-config", "mode": "legacy-html"},
         ],
         "storage": [
+            {"label": "Load storage state", "method": "GET", "route": "/api/ui/storage", "mode": "json"},
             {"label": "Save storage target", "method": "POST", "route": "/save-storage-target", "mode": "legacy-html"},
             {"label": "Read current storage", "method": "POST", "route": "/read-current-storage", "mode": "legacy-html"},
             {"label": "Plan RAID layout", "method": "POST", "route": "/plan-raid-layout", "mode": "legacy-html"},
             {"label": "Approve storage plan", "method": "POST", "route": "/approve-storage-plan", "mode": "legacy-html"},
             {"label": "Apply storage layout", "method": "POST", "route": "/apply-storage-layout", "mode": "legacy-html"},
+            {"label": "Repair storage selections", "method": "POST", "route": "/repair-storage-selection", "mode": "legacy-html"},
+            {"label": "Probe storage capabilities", "method": "POST", "route": "/probe-storage-capabilities", "mode": "legacy-html"},
+            {"label": "Clear storage approval", "method": "POST", "route": "/clear-storage-approval", "mode": "legacy-html"},
             {"label": "Reboot storage now", "method": "POST", "route": "/reboot-storage-now", "mode": "legacy-html"},
+            {"label": "View storage artifact", "method": "POST", "route": "/view-storage-artifact", "mode": "legacy-html"},
+            {"label": "Download storage artifact", "method": "POST", "route": "/download-storage-artifact", "mode": "download"},
         ],
         "windows": [
             {"label": "Save Windows setup", "method": "POST", "route": "/save-windows-settings", "mode": "legacy-html"},
@@ -14859,6 +14681,25 @@ def react_ui_action_inventory() -> dict[str, list[dict[str, str]]]:
             {"label": "Probe vSphere", "method": "POST", "route": "/probe-windows-vsphere", "mode": "legacy-html"},
             {"label": "Probe WinRM", "method": "POST", "route": "/probe-windows-winrm", "mode": "legacy-html"},
             {"label": "Register OVF path", "method": "POST", "route": "/register-windows-ovf-path", "mode": "legacy-html"},
+            {"label": "Select Windows OVF template", "method": "POST", "route": "/select-windows-ovf-template", "mode": "legacy-html"},
+        ],
+        "ovf_templates": [
+            {"label": "Open OVF Templates", "method": "GET", "route": "/modules/ovf-templates", "mode": "legacy-html"},
+            {"label": "Open Windows template settings", "method": "GET", "route": "/windows", "mode": "legacy-html"},
+            {"label": "Register OVF directory", "method": "POST", "route": "/modules/ovf-templates/register-directory", "mode": "legacy-html"},
+            {"label": "Register OVF path", "method": "POST", "route": "/register-windows-ovf-path", "mode": "legacy-html"},
+        ],
+        "qnap": [
+            {"label": "Open QNAP setup", "method": "GET", "route": "/qnap", "mode": "legacy-html"},
+            {"label": "Save QNAP setup", "method": "POST", "route": "/save-qnap-settings", "mode": "legacy-html"},
+        ],
+        "execution": [
+            {"label": "Open Run Center", "method": "GET", "route": "/execution", "mode": "legacy-html"},
+            {"label": "Live job status", "method": "GET", "route": "/api/ui/job-status", "mode": "json"},
+            {"label": "Prepare run review", "method": "POST", "route": "/prepare-execute", "mode": "legacy-html"},
+            {"label": "Start preview run", "method": "POST", "route": "/execute-preview", "mode": "legacy-html"},
+            {"label": "Start real run", "method": "POST", "route": "/execute", "mode": "legacy-html"},
+            {"label": "Retry storage stage", "method": "POST", "route": "/retry-storage-stage", "mode": "legacy-html"},
         ],
         "reports": [
             {"label": "Run history API", "method": "GET", "route": "/api/ui/run-history", "mode": "json"},
@@ -14941,13 +14782,17 @@ def react_ui_route_category(path: str) -> str:
         if path == prefix or path.startswith(prefix):
             return category
     if path == "/":
-        return "Run Center"
+        return "React shell"
     return "Other"
 
 
 def react_ui_route_mode(path: str, methods: list[str], response_class: Any) -> str:
     if methods == ["WS"]:
         return "websocket"
+    if path in {"/", "/react-preview"}:
+        return "react-shell"
+    if "download" in path or path.startswith("/debug-bundles"):
+        return "download"
     if path.startswith("/api/ui"):
         return "json"
     if path in {
@@ -14959,8 +14804,6 @@ def react_ui_route_mode(path: str, methods: list[str], response_class: Any) -> s
         "/modules/netapp/repair/{issue_id}",
     }:
         return "json"
-    if "download" in path or path.startswith("/debug-bundles"):
-        return "download"
     response_name = getattr(response_class, "__name__", "")
     if response_name == "HTMLResponse":
         return "legacy-html"
@@ -14968,16 +14811,16 @@ def react_ui_route_mode(path: str, methods: list[str], response_class: Any) -> s
 
 
 def react_ui_route_migration_status(path: str, mode: str) -> str:
-    if path.startswith("/api/ui"):
-        return "React JSON API"
-    if path == "/react-preview":
-        return "React shell"
     if mode == "legacy-html":
-        return "Legacy fallback"
+        return "HTML compatibility"
     if mode == "download":
         return "Shared download"
     if mode == "websocket":
         return "Shared live stream"
+    if path.startswith("/api/ui"):
+        return "React JSON API"
+    if mode == "react-shell":
+        return "React shell"
     return "Shared backend"
 
 
@@ -15066,10 +14909,142 @@ def react_ui_job_payload(job: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _react_path_text(paths: dict[str, Any] | None, key: str) -> str:
+    if not paths:
+        return ""
+    value = paths.get(key)
+    return str(value or "")
+
+
+def _react_storage_artifact_paths(paths: dict[str, Path] | None) -> dict[str, str]:
+    if not paths:
+        return {}
+    return {str(key): str(value) for key, value in paths.items()}
+
+
+def build_react_storage_state(cfg: dict[str, Any] | None = None, job: dict[str, Any] | None = None) -> dict[str, Any]:
+    cfg = cfg or load_kit_config()
+    job = job if job is not None else load_job(cfg.get("site", {}).get("name", ""))
+    storage_cfg = ensure_storage_config(cfg)
+    target = resolve_storage_target_host(cfg)
+    credentials = resolve_storage_target_credentials(cfg)
+    review = build_storage_review_context(cfg)
+    execution_status = build_storage_execution_status(cfg)
+    discovery = None
+    discovery_paths = None
+    plan = None
+    plan_paths = None
+    restore_error = ""
+    latest_raw_path = str(storage_cfg.get("latest_discovery_raw_path") or "").strip()
+    latest_plan_path = str(storage_cfg.get("latest_plan_path") or "").strip()
+    if latest_raw_path or latest_plan_path:
+        try:
+            discovery, discovery_paths, plan, plan_paths = restore_storage_page_state(
+                discovery_raw_path=latest_raw_path,
+                raid_plan_path=latest_plan_path,
+                expected_host=str(target.get("resolved") or ""),
+            )
+        except Exception as exc:
+            restore_error = str(exc).splitlines()[0]
+    discovery_summary = (discovery or {}).get("summary", discovery) if discovery else {}
+    hpe = (discovery_summary or {}).get("hpe_smart_storage", {}) or {}
+    standard = (discovery_summary or {}).get("standard_redfish_storage", {}) or {}
+    controllers = list(hpe.get("controllers") or []) + list(standard.get("controllers") or [])
+    drives = build_storage_display_drives(discovery_summary) if discovery_summary else []
+    volumes = list(hpe.get("volumes") or []) + list(standard.get("volumes") or [])
+    plan_summary = storage_plan_summary(plan) if plan else (storage_cfg.get("latest_plan_summary") or {})
+    approval = storage_cfg.get("approval", {}) or {}
+    apply_dir = str(job.get("storage_run_directory") or "").strip()
+    apply_paths = None
+    workflow_state = None
+    if apply_dir:
+        try:
+            apply_paths = storage_apply_paths_from_directory(apply_dir)
+            workflow_state = load_storage_workflow_state(apply_paths)
+        except Exception:
+            apply_paths = None
+            workflow_state = None
+    readiness = build_storage_page_readiness(review, target, credentials, execution_status, discovery_paths)
+    blockers = [item for item in readiness if item.get("tone") != "ready"]
+    return {
+        "target": {
+            "resolved": str(target.get("resolved") or ""),
+            "source": str(target.get("source") or ""),
+            "valid": bool(target.get("valid")),
+            "error": str(target.get("error") or ""),
+            "default_host": str((cfg.get("ilo", {}) or {}).get("current_ip") or (cfg.get("ilo", {}) or {}).get("host") or (cfg.get("ilo", {}) or {}).get("target_ip") or (cfg.get("ip_plan", {}) or {}).get("ilo") or ""),
+        },
+        "credentials": {
+            "valid": bool(credentials.get("valid")),
+            "username": str(credentials.get("username") or ""),
+            "username_source": str(credentials.get("username_source") or ""),
+            "password_saved": bool(credentials.get("password")),
+            "error": str(credentials.get("error") or ""),
+        },
+        "values": {
+            "target_host": str(storage_cfg.get("target_host_override") or ""),
+            "username": str(storage_cfg.get("username") or (cfg.get("ilo", {}) or {}).get("username") or ""),
+            "password": "",
+            "password_saved": bool(storage_cfg.get("password") or (cfg.get("ilo", {}) or {}).get("password")),
+            "target_mode": "override" if str(storage_cfg.get("target_host_override") or "").strip() else "defaults",
+            "include_in_ilo_run": bool(storage_cfg.get("include_in_ilo_run")),
+        },
+        "review": {
+            "state": str(review.get("state") or ""),
+            "state_label": str(review.get("state_label") or ""),
+            "state_tone": str(review.get("state_tone") or ""),
+            "approved": bool(review.get("approved")),
+            "stale": bool(review.get("stale")),
+            "status_reason": str(review.get("status_reason") or ""),
+        },
+        "execution_status": execution_status,
+        "readiness": readiness,
+        "blockers": blockers,
+        "discovery": {
+            "available": bool(discovery_paths),
+            "raw_path": _react_path_text(discovery_paths, "raw") or latest_raw_path,
+            "directory": _react_path_text(discovery_paths, "directory"),
+            "controllers": len(controllers),
+            "drives": len(drives),
+            "volumes": len(volumes),
+            "server": (discovery_summary or {}).get("server", {}) or {},
+            "restore_error": restore_error,
+        },
+        "plan": {
+            "available": bool(plan_paths),
+            "valid": bool((plan or {}).get("valid")) if plan else bool(plan_summary),
+            "path": _react_path_text(plan_paths, "plan") or latest_plan_path,
+            "directory": _react_path_text(plan_paths, "directory"),
+            "summary": plan_summary,
+            "arrays": list((plan_summary or {}).get("arrays") or []),
+            "mode": str((plan_summary or {}).get("mode") or ""),
+            "create_only_confirmation": STORAGE_APPLY_CONFIRM_CREATE,
+            "wipe_rebuild_confirmation": STORAGE_APPLY_CONFIRM_WIPE,
+        },
+        "approval": {
+            "approved": bool(approval.get("plan_path") and approval.get("discovery_raw_path") and review.get("state") == "approved"),
+            "state": str(approval.get("state") or ""),
+            "host": str(approval.get("host") or ""),
+            "plan_path": str(approval.get("plan_path") or ""),
+            "discovery_raw_path": str(approval.get("discovery_raw_path") or ""),
+            "include_in_ilo_run": bool(storage_cfg.get("include_in_ilo_run")),
+        },
+        "apply": {
+            "directory": str(apply_dir or ""),
+            "paths": _react_storage_artifact_paths(apply_paths),
+            "workflow": workflow_state or {},
+        },
+        "actions": react_ui_action_inventory().get("storage", []),
+    }
+
+
 def react_ui_module_summaries(cfg: dict[str, Any], workflow_contexts: dict[str, dict[str, Any]]) -> list[dict[str, Any]]:
     module_keys = [
         ("ilo", "iLO", "/ilo"),
+        ("storage", "Storage setup", "/storage"),
         ("esxi", "ESXi", "/esxi"),
+        ("windows", "Windows", "/windows"),
+        ("qnap", "QNAP", "/qnap"),
         ("netapp", "NetApp", "/modules/netapp"),
         ("cisco_switch", "Cisco", "/cisco"),
     ]
@@ -15095,6 +15070,64 @@ def react_ui_module_summaries(cfg: dict[str, Any], workflow_contexts: dict[str, 
                 "blockers": [dict(item) for item in checks if not item.get("ok")],
             }
         )
+    ip_plan = cfg.get("ip_plan", {}) or {}
+    shared_ready = bool(str((cfg.get("shared_network") or {}).get("subnet") or "").strip() and str(ip_plan.get("gateway") or "").strip())
+    modules.append(
+        {
+            "key": "global_settings",
+            "workflow_key": "global_settings",
+            "label": "Global Settings",
+            "legacy_href": "/global-settings",
+            "target": str((cfg.get("shared_network") or {}).get("subnet") or "Not set"),
+            "state": "ready" if shared_ready else "not_started",
+            "state_label": "Available" if shared_ready else "Needs defaults",
+            "tone": "ready" if shared_ready else "pending",
+            "planned_summary": "Shared subnet, gateway, DNS, address plan, and SNMP defaults.",
+            "last_summary": f"Gateway: {ip_plan.get('gateway') or 'Not set'}",
+            "included": True,
+            "checks_ready": 1 if shared_ready else 0,
+            "total_checks": 1,
+            "blockers": [] if shared_ready else [{"label": "Shared defaults", "fix": "Set the subnet and gateway before running setup."}],
+        }
+    )
+    registered_ovfs = len((((cfg.get("ovf_templates") or {}).get("templates") or {})))
+    modules.append(
+        {
+            "key": "ovf_templates",
+            "workflow_key": "ovf_templates",
+            "label": "OVF Templates",
+            "legacy_href": "/windows",
+            "target": f"{registered_ovfs} registered" if registered_ovfs else "None registered",
+            "state": "ready" if registered_ovfs else "not_started",
+            "state_label": "Available" if registered_ovfs else "Review",
+            "tone": "ready" if registered_ovfs else "progress",
+            "planned_summary": "Reusable OVF/OVA template registration for VM workflows.",
+            "last_summary": f"{registered_ovfs} template(s) registered.",
+            "included": True,
+            "checks_ready": 1 if registered_ovfs else 0,
+            "total_checks": 1,
+            "blockers": [],
+        }
+    )
+    upgrade_card = build_upgrade_helper_card(cfg)
+    modules.append(
+        {
+            "key": "upgrade_helper",
+            "workflow_key": "upgrade_helper",
+            "label": "Upgrade Helper",
+            "legacy_href": "/upgrade-helper",
+            "target": str(upgrade_card.get("label") or "Upgrade gates"),
+            "state": "ready" if not int(upgrade_card.get("blockers") or 0) else "pending",
+            "state_label": "Available" if not int(upgrade_card.get("blockers") or 0) else "Needs review",
+            "tone": str(upgrade_card.get("tone") or "progress"),
+            "planned_summary": "Firmware/media gates before execution.",
+            "last_summary": str(upgrade_card.get("summary") or ""),
+            "included": True,
+            "checks_ready": int(upgrade_card.get("ready_checks") or 0),
+            "total_checks": int(upgrade_card.get("total_checks") or 0),
+            "blockers": [],
+        }
+    )
     modules.append(
         {
             "key": "configuration",
@@ -15141,13 +15174,67 @@ def build_react_ui_state() -> dict[str, Any]:
         "job": react_ui_job_payload(job),
         "dashboard": dashboard_overview,
         "modules": react_ui_module_summaries(cfg, workflow_contexts),
-        "overnight_hardware": build_overnight_hardware_state(cfg, job),
+        "setup_ip": build_react_setup_ip_state(cfg),
+        "storage": build_react_storage_state(cfg, job),
         "recent_activity": build_activity_feed(history, limit=10),
         "run_history": build_history_display_entries(history)[:30],
         "technical": {
             "logs": react_ui_job_payload(job)["logs"],
             "artifacts": react_ui_artifact_links(job),
             "trace_events": list(job.get("trace_events") or [])[-50:],
+        },
+    }
+
+
+def build_react_setup_ip_state(cfg: dict[str, Any] | None = None) -> dict[str, Any]:
+    cfg = cfg or load_kit_config()
+    ip_plan = cfg.get("ip_plan", {}) or {}
+    ilo_cfg = cfg.get("ilo", {}) or {}
+    cisco_cfg = cfg.get("cisco_switch", {}) or {}
+    netapp_cfg = cfg.get("netapp", {}) or {}
+    netapp_bootstrap = netapp_cfg.get("bootstrap_overrides", {}) or {}
+    netapp_desired = netapp_cfg.get("desired", {}) or {}
+    return {
+        "ilo": {
+            "current_ip": ilo_cfg.get("current_ip") or ilo_cfg.get("host") or "",
+            "target_ip": ilo_cfg.get("target_ip") or ip_plan.get("ilo") or "",
+            "gateway": ilo_cfg.get("gateway") or ip_plan.get("gateway") or "",
+            "hostname": ilo_cfg.get("hostname") or "",
+            "username": ilo_cfg.get("username") or "",
+            "password_saved": bool(ilo_cfg.get("password")),
+        },
+        "cisco": {
+            "hostname": cisco_cfg.get("hostname") or "sw01",
+            "management_ip": cisco_cfg.get("management_ip") or cisco_cfg.get("ip") or ip_plan.get("switch") or "",
+            "username": cisco_cfg.get("username") or "admin",
+            "password": "",
+            "password_saved": bool(cisco_cfg.get("password")),
+            "enable_password": "",
+            "enable_password_saved": bool(cisco_cfg.get("enable_password")),
+            "management_vlan": cisco_cfg.get("management_vlan") or 10,
+            "subnet_mask": cisco_cfg.get("subnet_mask") or ip_plan.get("netmask") or "255.255.255.0",
+            "gateway": cisco_cfg.get("gateway") or ip_plan.get("gateway") or "",
+            "console_port": cisco_cfg.get("console_port") or "",
+            "console_baud": cisco_cfg.get("console_baud") or 9600,
+            "domain_name": cisco_cfg.get("domain_name") or "lab.local",
+            "bootstrap_network_port": cisco_cfg.get("bootstrap_network_port") or "",
+            "bootstrap_network_mode": cisco_cfg.get("bootstrap_network_mode") or "trunk",
+        },
+        "netapp": {
+            "host": netapp_cfg.get("host") or ip_plan.get("netapp") or "",
+            "username": netapp_cfg.get("username") or "admin",
+            "password": "",
+            "password_saved": bool(netapp_cfg.get("password")),
+            "console_port": netapp_cfg.get("console_port") or "",
+            "console_baud": netapp_cfg.get("console_baud") or "9600",
+            "gateway": netapp_desired.get("management_gateway") or ip_plan.get("gateway") or "",
+            "netmask": netapp_desired.get("management_netmask") or ip_plan.get("netmask") or "255.255.255.0",
+            "sp_a_ip": netapp_bootstrap.get("netapp_sp_a") or "",
+            "sp_b_ip": netapp_bootstrap.get("netapp_sp_b") or "",
+            "cluster_mgmt_ip": netapp_bootstrap.get("netapp_cluster_mgmt") or netapp_cfg.get("host") or ip_plan.get("netapp") or "",
+            "node_01_mgmt_ip": netapp_bootstrap.get("netapp_node_01_mgmt") or "",
+            "node_02_mgmt_ip": netapp_bootstrap.get("netapp_node_02_mgmt") or "",
+            "svm_mgmt_ip": netapp_bootstrap.get("netapp_svm_mgmt") or netapp_desired.get("svm_mgmt_ip") or "",
         },
     }
 
@@ -15175,12 +15262,40 @@ def build_react_ilo_state(cfg: dict[str, Any] | None = None) -> dict[str, Any]:
     job = load_job(cfg.get("site", {}).get("name", ""))
     workflow_contexts = build_workflow_contexts(cfg, job, history)
     context = dict(workflow_contexts.get("ilo") or {})
-    review = build_ilo_input_review(cfg, include_policy_validation=True)
+    review = build_ilo_input_review(cfg, include_policy_validation=False)
     field_errors = build_ilo_field_errors(cfg)
     ilo_cfg = cfg.get("ilo", {}) or {}
     latest = latest_history_entry_for_scope(history, ["ilo"]) or {}
     checks = list(context.get("checks") or [])
     blocker = next((dict(item) for item in checks if not item.get("ok")), None)
+    setup_ready = all(
+        str(value or "").strip()
+        for value in (
+            ilo_cfg.get("current_ip") or ilo_cfg.get("host"),
+            ilo_cfg.get("target_ip") or cfg.get("ip_plan", {}).get("ilo"),
+            ilo_cfg.get("gateway") or cfg.get("ip_plan", {}).get("gateway"),
+            ilo_cfg.get("username"),
+            ilo_cfg.get("password"),
+        )
+    )
+    status_state = "ready" if setup_ready else "not_started"
+    status_label = "Ready for IP setup" if setup_ready else "Needs iLO values"
+    status_tone = "ready" if setup_ready else "pending"
+    if str(job.get("scope") or "") == "ilo-ip-setup":
+        current_stage = str(job.get("current_stage") or "").strip()
+        job_status = str(job.get("status") or "").strip()
+        if job_status == "Failed":
+            status_state = "failed"
+            status_label = current_stage or "iLO IP setup failed"
+            status_tone = "failed"
+        elif "Running" in job_status or "queued" in job_status.lower():
+            status_state = "running"
+            status_label = current_stage or job_status or "iLO IP setup running"
+            status_tone = "progress"
+        elif job_status == "Complete":
+            status_state = "ready"
+            status_label = current_stage or "iLO IP setup complete"
+            status_tone = "ready"
     return {
         "page": {
             "key": "ilo",
@@ -15200,9 +15315,9 @@ def build_react_ilo_state(cfg: dict[str, Any] | None = None) -> dict[str, Any]:
             "included": bool(cfg.get("included", {}).get("ilo")),
         },
         "status": {
-            "state": context.get("state") or "not_started",
-            "label": context.get("state_label") or "Review",
-            "tone": context.get("tone") or "progress",
+            "state": status_state,
+            "label": status_label,
+            "tone": status_tone,
             "target": context.get("target") or "Not set",
         },
         "review": {
@@ -15215,9 +15330,327 @@ def build_react_ilo_state(cfg: dict[str, Any] | None = None) -> dict[str, Any]:
     }
 
 
+def build_react_global_settings_state(cfg: dict[str, Any] | None = None) -> dict[str, Any]:
+    cfg = cfg or load_kit_config()
+    site = cfg.get("site", {}) or {}
+    shared_network = cfg.get("shared_network", {}) or {}
+    ip_plan = cfg.get("ip_plan", {}) or {}
+    included = cfg.get("included", {}) or {}
+    snmp_cfg = cfg.get("shared_snmp", {}) or {}
+    dns_servers = [str(item or "") for item in list(shared_network.get("dns_servers") or [])[:4]]
+    while len(dns_servers) < 4:
+        dns_servers.append("")
+    snmp_users = normalize_snmp_users(snmp_cfg.get("users", []))
+    first_user = snmp_users[0] if snmp_users else {}
+    primary_auth_password = str(snmp_cfg.get("v3_auth_password") or first_user.get("auth_password") or "")
+    primary_priv_password = str(snmp_cfg.get("v3_priv_password") or first_user.get("priv_password") or "")
+    review = build_snmp_input_review(cfg)
+    return {
+        "page": {
+            "key": "global_settings",
+            "title": "Global Settings",
+            "legacy_href": "/global-settings",
+            "what": "Shared kit defaults for subnet, gateway, DNS, address assignments, and SNMPv3 users.",
+            "next": "Save shared defaults, then continue through the setup modules that are included for this kit.",
+            "last": f"Current kit: {site.get('name') or 'Kit-01'}",
+        },
+        "values": {
+            "site_name": site.get("name") or "",
+            "shared_subnet": shared_network.get("subnet") or ip_plan.get("subnet") or "",
+            "gateway_ip": ip_plan.get("gateway") or "",
+            "ilo_target_ip": ip_plan.get("ilo") or (cfg.get("ilo", {}) or {}).get("target_ip") or "",
+            "esxi_ip": ip_plan.get("esxi") or "",
+            "windows_ip": ip_plan.get("windows") or "",
+            "switch_ip": ip_plan.get("switch") or "",
+            "netapp_ip": ip_plan.get("netapp") or "",
+            "qnap_ip": ip_plan.get("qnap") or "",
+            "iosafe_ip": ip_plan.get("iosafe") or "",
+            "dns1": dns_servers[0],
+            "dns2": dns_servers[1],
+            "dns3": dns_servers[2],
+            "dns4": dns_servers[3],
+            "snmp_v3_username": snmp_cfg.get("v3_username") or first_user.get("username") or "",
+            "snmp_v3_auth_protocol": snmp_cfg.get("v3_auth_protocol") or first_user.get("auth_protocol") or "SHA",
+            "snmp_v3_auth_password": "",
+            "snmp_v3_auth_password_saved": bool(primary_auth_password),
+            "snmp_v3_priv_protocol": snmp_cfg.get("v3_priv_protocol") or first_user.get("priv_protocol") or "AES",
+            "snmp_v3_priv_password": "",
+            "snmp_v3_priv_password_saved": bool(primary_priv_password),
+        },
+        "included": {
+            "ilo": bool(included.get("ilo")),
+            "storage": bool(included.get("storage")),
+            "esxi": bool(included.get("esxi")),
+            "windows": bool(included.get("windows")),
+            "qnap": bool(included.get("qnap")),
+            "netapp": bool(included.get("netapp")),
+            "cisco_switch": bool(included.get("cisco_switch")),
+            "iosafe": bool(included.get("iosafe")),
+        },
+        "snmp_users": [
+            {
+                "username": item.get("username") or "",
+                "auth_protocol": item.get("auth_protocol") or "SHA",
+                "auth_password": "",
+                "auth_password_saved": bool(item.get("auth_password")),
+                "priv_protocol": item.get("priv_protocol") or "AES",
+                "priv_password": "",
+                "priv_password_saved": bool(item.get("priv_password")),
+            }
+            for item in snmp_users[1:]
+        ],
+        "review": {
+            "errors": list(review.get("errors") or []),
+            "notes": list(review.get("notes") or []),
+        },
+        "actions": react_ui_action_inventory().get("global_settings", []),
+    }
+
+
+def build_react_kit_library_state(cfg: dict[str, Any] | None = None) -> dict[str, Any]:
+    cfg = cfg or load_kit_config()
+    current_name = sanitize_kit_name((cfg.get("site") or {}).get("name") or get_current_kit_name())
+    available = list_kits()
+    return {
+        "active": current_name,
+        "available": available,
+        "other_kits": [name for name in available if name != current_name],
+        "site": cfg.get("site", {}),
+        "ip_plan": cfg.get("ip_plan", {}),
+        "included": cfg.get("included", {}),
+        "actions": react_ui_action_inventory().get("configuration", []),
+    }
+
+
+def _react_bool(value: Any) -> bool:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        return value.strip().lower() in {"1", "true", "yes", "on"}
+    return bool(value)
+
+
+def _react_preserve_secret(submitted: Any, existing: Any) -> str:
+    submitted_value = str(submitted or "")
+    return submitted_value if submitted_value else str(existing or "")
+
+
+async def _react_json_body(request: Request) -> dict[str, Any]:
+    try:
+        body = await request.json()
+    except Exception:
+        return {}
+    return body if isinstance(body, dict) else {}
+
+
 @app.get("/api/ui/app-state")
 async def api_ui_app_state():
     return jsonable_encoder(build_react_ui_state())
+
+
+@app.get("/api/ui/global-settings")
+async def api_ui_global_settings():
+    return jsonable_encoder(build_react_global_settings_state())
+
+
+@app.get("/api/ui/storage")
+async def api_ui_storage():
+    return jsonable_encoder(build_react_storage_state())
+
+
+@app.post("/api/ui/global-settings/autofill")
+async def api_ui_global_settings_autofill(request: Request):
+    cfg = load_kit_config()
+    body = await _react_json_body(request)
+    subnet = str(
+        body.get("shared_subnet")
+        or body.get("subnet")
+        or (cfg.get("shared_network") or {}).get("subnet")
+        or "10.10.8.0/24"
+    ).strip()
+    try:
+        plan = build_default_ip_plan(subnet)
+        return jsonable_encoder(
+            {
+                "ok": True,
+                "message": "Default IP plan generated.",
+                "shared_subnet": subnet,
+                "plan": plan,
+            }
+        )
+    except Exception as e:
+        return jsonable_encoder(
+            {
+                "ok": False,
+                "message": f"IP plan generation failed: {str(e).splitlines()[0]}",
+                "shared_subnet": subnet,
+                "global": build_react_global_settings_state(cfg),
+            }
+        )
+
+
+@app.post("/api/ui/global-settings")
+async def api_ui_global_settings_save(request: Request):
+    cfg = merge_defaults(load_kit_config())
+    body = await _react_json_body(request)
+    values = body.get("values") if isinstance(body.get("values"), dict) else body
+    values = dict(values or {})
+    included_values = body.get("included") if isinstance(body.get("included"), dict) else None
+    submitted_snmp_users = body.get("snmp_users") if isinstance(body.get("snmp_users"), list) else []
+
+    existing_snmp = cfg.get("shared_snmp", {}) or {}
+    existing_users = normalize_snmp_users(existing_snmp.get("users", []))
+    existing_extra_users = existing_users[1:] if existing_users else []
+
+    def value_or_existing(key: str, existing: Any = "") -> str:
+        if key in values:
+            return str(values.get(key) or "").strip()
+        return str(existing or "").strip()
+
+    previous_subnet = str((cfg.get("shared_network") or {}).get("subnet") or "")
+    shared_subnet = value_or_existing("shared_subnet", previous_subnet or "10.10.8.0/24")
+    cfg.setdefault("site", {})["name"] = sanitize_kit_name(value_or_existing("site_name", (cfg.get("site") or {}).get("name") or "Kit-01"))
+    cfg.setdefault("shared_network", {})["subnet"] = shared_subnet
+    current_dns = [str(item or "") for item in list((cfg.get("shared_network") or {}).get("dns_servers") or [])[:4]]
+    while len(current_dns) < 4:
+        current_dns.append("")
+    cfg["shared_network"]["dns_servers"] = [
+        value_or_existing("dns1", current_dns[0]),
+        value_or_existing("dns2", current_dns[1]),
+        value_or_existing("dns3", current_dns[2]),
+        value_or_existing("dns4", current_dns[3]),
+    ]
+
+    cfg.setdefault("ip_plan", {})
+    module_ip_fields = {
+        "gateway_ip": "gateway",
+        "switch_ip": "switch",
+        "esxi_ip": "esxi",
+        "ilo_target_ip": "ilo",
+        "windows_ip": "windows",
+        "qnap_ip": "qnap",
+        "iosafe_ip": "iosafe",
+        "netapp_ip": "netapp",
+    }
+    reset_default_ip_plan = previous_subnet != shared_subnet and not any(field in values for field in module_ip_fields)
+    if reset_default_ip_plan:
+        try:
+            cfg["ip_plan"].update(build_default_ip_plan(shared_subnet))
+        except Exception as e:
+            return jsonable_encoder(
+                {
+                    "ok": False,
+                    "message": f"Could not save global settings: {str(e).splitlines()[0]}",
+                    "global": build_react_global_settings_state(cfg),
+                }
+            )
+    for field, plan_key in module_ip_fields.items():
+        if field in values:
+            cfg["ip_plan"][plan_key] = value_or_existing(field, cfg["ip_plan"].get(plan_key, ""))
+    if "ilo_target_ip" in values:
+        cfg.setdefault("ilo", {})["target_ip"] = cfg["ip_plan"].get("ilo", "")
+    if "switch_ip" in values:
+        cfg.setdefault("cisco_switch", {})["ip"] = cfg["ip_plan"].get("switch", "")
+        cfg.setdefault("cisco_switch", {})["management_ip"] = cfg["ip_plan"].get("switch", "")
+    if "netapp_ip" in values:
+        cfg.setdefault("netapp", {})["host"] = cfg["ip_plan"].get("netapp", "")
+        cfg.setdefault("netapp", {}).setdefault("management", {})["cluster_mgmt_ip"] = cfg["ip_plan"].get("netapp", "")
+
+    if included_values is not None:
+        cfg.setdefault("included", {}).update(
+            {
+                key: _react_bool(included_values.get(key))
+                for key in ("ilo", "storage", "esxi", "windows", "qnap", "netapp", "cisco_switch", "iosafe")
+                if key in included_values
+            }
+        )
+    cfg.setdefault("storage", {})["include_in_ilo_run"] = bool((cfg.get("included") or {}).get("storage"))
+
+    primary_username = value_or_existing("snmp_v3_username", existing_snmp.get("v3_username") or (existing_users[0].get("username") if existing_users else ""))
+    primary_auth_protocol = value_or_existing("snmp_v3_auth_protocol", existing_snmp.get("v3_auth_protocol") or (existing_users[0].get("auth_protocol") if existing_users else "SHA")) or "SHA"
+    primary_auth_password = _react_preserve_secret(values.get("snmp_v3_auth_password"), existing_snmp.get("v3_auth_password") or (existing_users[0].get("auth_password") if existing_users else ""))
+    primary_priv_protocol = value_or_existing("snmp_v3_priv_protocol", existing_snmp.get("v3_priv_protocol") or (existing_users[0].get("priv_protocol") if existing_users else "AES")) or "AES"
+    primary_priv_password = _react_preserve_secret(values.get("snmp_v3_priv_password"), existing_snmp.get("v3_priv_password") or (existing_users[0].get("priv_password") if existing_users else ""))
+
+    normalized_snmp_payload: list[dict[str, str]] = []
+    if primary_username:
+        normalized_snmp_payload.append(
+            {
+                "username": primary_username,
+                "auth_protocol": primary_auth_protocol,
+                "auth_password": primary_auth_password,
+                "priv_protocol": primary_priv_protocol,
+                "priv_password": primary_priv_password,
+            }
+        )
+    for index, item in enumerate(submitted_snmp_users):
+        if not isinstance(item, dict):
+            continue
+        username = str(item.get("username") or "").strip()
+        if not username:
+            continue
+        existing_extra = existing_extra_users[index] if index < len(existing_extra_users) else {}
+        normalized_snmp_payload.append(
+            {
+                "username": username,
+                "auth_protocol": str(item.get("auth_protocol") or existing_extra.get("auth_protocol") or "SHA").strip() or "SHA",
+                "auth_password": _react_preserve_secret(item.get("auth_password"), existing_extra.get("auth_password")),
+                "priv_protocol": str(item.get("priv_protocol") or existing_extra.get("priv_protocol") or "AES").strip() or "AES",
+                "priv_password": _react_preserve_secret(item.get("priv_password"), existing_extra.get("priv_password")),
+            }
+        )
+    cfg["shared_snmp"] = {
+        "v3_username": primary_username,
+        "v3_auth_protocol": primary_auth_protocol,
+        "v3_auth_password": primary_auth_password,
+        "v3_priv_protocol": primary_priv_protocol,
+        "v3_priv_password": primary_priv_password,
+        "read_community": str(existing_snmp.get("read_community") or ""),
+        "users": normalize_snmp_users(normalized_snmp_payload),
+    }
+
+    snmp_input_review = build_snmp_input_review(cfg)
+    if snmp_input_review["errors"]:
+        return jsonable_encoder(
+            {
+                "ok": False,
+                "message": "Shared defaults need attention before they can be saved.",
+                "errors": list(snmp_input_review["errors"]),
+                "notes": list(snmp_input_review["notes"]),
+                "global": build_react_global_settings_state(cfg),
+            }
+        )
+    try:
+        cfg = apply_ip_plan(cfg)
+        save_kit_config(cfg)
+        append_activity_event(
+            cfg["site"]["name"],
+            "global_settings_saved",
+            workflow="global_settings",
+            summary="Saved shared defaults from the React desktop UI.",
+            target=cfg["site"]["name"],
+            details=[
+                f"Shared subnet: {cfg['shared_network'].get('subnet', '') or 'Not set'}",
+                f"Gateway: {cfg['ip_plan'].get('gateway', '') or 'Not set'}",
+            ],
+        )
+        return jsonable_encoder(
+            {
+                "ok": True,
+                "message": "Global settings saved.",
+                "global": build_react_global_settings_state(load_kit_config()),
+                "ilo": build_react_ilo_state(load_kit_config()),
+                "app_state": build_react_ui_state(),
+            }
+        )
+    except Exception as e:
+        return jsonable_encoder(
+            {
+                "ok": False,
+                "message": f"Could not save global settings: {str(e).splitlines()[0]}",
+                "global": build_react_global_settings_state(cfg),
+            }
+        )
 
 
 @app.get("/api/ui/current-kit")
@@ -15232,6 +15665,134 @@ async def api_ui_current_kit():
             "included": cfg.get("included", {}),
         }
     )
+
+
+@app.get("/api/ui/kits")
+async def api_ui_kits():
+    return jsonable_encoder(build_react_kit_library_state())
+
+
+@app.post("/api/ui/kits/load")
+async def api_ui_kits_load(request: Request):
+    body = await _react_json_body(request)
+    selected_kit = sanitize_kit_name(str(body.get("selected_kit") or body.get("kit") or ""))
+    if not selected_kit or not kit_path(selected_kit).exists():
+        return jsonable_encoder(
+            {
+                "ok": False,
+                "message": f"Saved kit not found: {selected_kit or '(blank)'}",
+                "kits": build_react_kit_library_state(),
+            }
+        )
+    set_current_kit_name(selected_kit)
+    cfg = load_kit_config(selected_kit)
+    return jsonable_encoder(
+        {
+            "ok": True,
+            "message": f"Loaded kit: {selected_kit}",
+            "kits": build_react_kit_library_state(cfg),
+            "global": build_react_global_settings_state(cfg),
+            "ilo": build_react_ilo_state(cfg),
+            "app_state": build_react_ui_state(),
+        }
+    )
+
+
+@app.post("/api/ui/kits/create")
+async def api_ui_kits_create(request: Request):
+    body = await _react_json_body(request)
+    new_kit_name = sanitize_kit_name(str(body.get("new_kit_name") or body.get("name") or ""))
+    if not new_kit_name:
+        return jsonable_encoder({"ok": False, "message": "Enter a kit name.", "kits": build_react_kit_library_state()})
+    cfg = default_config()
+    cfg.setdefault("site", {})["name"] = new_kit_name
+    save_kit_config(cfg)
+    save_job(
+        new_kit_name,
+        {
+            "status": "Idle",
+            "scope": "",
+            "current_stage": "",
+            "progress_percent": 0,
+            "completed_steps": 0,
+            "total_steps": 0,
+            "logs": [],
+        },
+    )
+    save_history(new_kit_name, [])
+    cfg = load_kit_config(new_kit_name)
+    return jsonable_encoder(
+        {
+            "ok": True,
+            "message": f"Created new kit: {new_kit_name}",
+            "kits": build_react_kit_library_state(cfg),
+            "global": build_react_global_settings_state(cfg),
+            "ilo": build_react_ilo_state(cfg),
+            "app_state": build_react_ui_state(),
+        }
+    )
+
+
+@app.get("/api/ui/current-kit-config")
+async def api_ui_current_kit_config():
+    cfg = load_kit_config()
+    snapshot_path = export_current_kit_config_snapshot(cfg)
+    return jsonable_encoder(
+        {
+            "ok": True,
+            "kit": cfg.get("site", {}).get("name", ""),
+            "path": str(snapshot_path),
+            "filename": snapshot_path.name,
+            "content": snapshot_path.read_text(encoding="utf-8"),
+        }
+    )
+
+
+@app.get("/api/ui/current-kit-config/download")
+async def api_ui_current_kit_config_download():
+    cfg = load_kit_config()
+    snapshot_path = export_current_kit_config_snapshot(cfg)
+    return FileResponse(path=snapshot_path, filename=snapshot_path.name, media_type="application/x-yaml")
+
+
+@app.post("/api/ui/kits/import")
+async def api_ui_kits_import(import_file: UploadFile = File(...)):
+    current_cfg = load_kit_config()
+    try:
+        raw = await import_file.read()
+        if not raw:
+            raise ValueError("The uploaded file was empty.")
+        imported = yaml.safe_load(raw.decode("utf-8")) or {}
+        if not isinstance(imported, dict):
+            raise ValueError("The uploaded file must contain a YAML or JSON object.")
+        imported = merge_defaults(imported)
+        imported_name = sanitize_kit_name(
+            imported.get("site", {}).get("name", "") or current_cfg.get("site", {}).get("name", "Kit-01")
+        )
+        imported.setdefault("site", {})["name"] = imported_name
+        save_kit_config(imported)
+        imported_snapshot = current_build_output_dir(imported) / f"imported-config-{time.strftime('%Y%m%d-%H%M%S')}.yml"
+        imported_snapshot.write_text(yaml.safe_dump(imported, sort_keys=False), encoding="utf-8")
+        cfg = load_kit_config(imported_name)
+        return jsonable_encoder(
+            {
+                "ok": True,
+                "message": f"Config imported. Current kit: {imported_name}",
+                "kits": build_react_kit_library_state(cfg),
+                "global": build_react_global_settings_state(cfg),
+                "ilo": build_react_ilo_state(cfg),
+                "app_state": build_react_ui_state(),
+                "snapshot_path": str(imported_snapshot),
+            }
+        )
+    except Exception as e:
+        return jsonable_encoder(
+            {
+                "ok": False,
+                "message": f"Config import failed: {str(e).splitlines()[0]}",
+                "kits": build_react_kit_library_state(current_cfg),
+            }
+        )
 
 
 @app.get("/api/ui/job-status")
@@ -15285,13 +15846,6 @@ async def api_ui_technical_events():
     )
 
 
-@app.get("/api/ui/overnight-hardware")
-async def api_ui_overnight_hardware():
-    cfg = load_kit_config()
-    job = load_job(cfg.get("site", {}).get("name", ""))
-    return jsonable_encoder(build_overnight_hardware_state(cfg, job))
-
-
 @app.get("/api/ui/ilo")
 async def api_ui_ilo():
     return jsonable_encoder(build_react_ilo_state())
@@ -15342,6 +15896,7 @@ async def api_ui_ilo_settings(request: Request):
         cfg = apply_ip_plan(cfg)
     except Exception as e:
         return jsonable_encoder({"ok": False, "message": f"Could not save iLO setup: {str(e).splitlines()[0]}", "ilo": build_react_ilo_state(cfg)})
+    cfg = propagate_active_ilo_endpoint(cfg, cfg.get("ilo", {}).get("current_ip") or cfg.get("ilo", {}).get("host"))
     save_kit_config(cfg)
     append_activity_event(
         cfg["site"]["name"],
@@ -15366,10 +15921,519 @@ async def api_ui_ilo_settings(request: Request):
     )
 
 
+def verify_ilo_endpoint_reachable(
+    host: str,
+    username: str,
+    password: str,
+    *,
+    attempts: int = 12,
+    delay_seconds: float = 5.0,
+    timeout_seconds: int = 15,
+    client_factory: Callable[[ILOConfig], Any] | None = None,
+) -> dict[str, Any]:
+    normalized_host = str(host or "").strip()
+    if not normalized_host:
+        return {"ok": False, "host": "", "error": "No iLO endpoint was provided."}
+    factory = client_factory or ILOClient
+    last_error = ""
+    for attempt in range(1, max(1, attempts) + 1):
+        try:
+            client = factory(ILOConfig(host=normalized_host, username=username, password=password, verify_tls=False, timeout=timeout_seconds))
+            summary = client.get_summary()
+            return {"ok": True, "host": normalized_host, "attempt": attempt, "summary": summary}
+        except Exception as e:
+            last_error = str(e).splitlines()[0] or e.__class__.__name__
+            if attempt < attempts and delay_seconds > 0:
+                time.sleep(delay_seconds)
+    return {"ok": False, "host": normalized_host, "attempts": max(1, attempts), "error": last_error or "iLO endpoint did not respond."}
+
+
+def request_ilo_reset_best_effort(client: Any, *, reset_type: str = "GracefulRestart") -> dict[str, Any]:
+    if not hasattr(client, "reset_ilo"):
+        return {"ok": False, "status": "not_available", "error": "iLO reset action is not available on this client."}
+    try:
+        if all(hasattr(client, name) for name in ("get_manager", "base", "auth", "cfg")):
+            manager = client.get_manager()
+            target = str((((manager.get("Actions") or {}).get("#Manager.Reset") or {}).get("target")) or "").strip()
+            if not target:
+                return {"ok": False, "status": "not_available", "error": "Manager reset action is not available on this iLO."}
+            url = target if target.startswith("http") else f"{client.base}{target}"
+            response = requests.post(
+                url,
+                auth=client.auth,
+                verify=client.cfg.verify_tls,
+                timeout=(2, 5),
+                headers={"Accept": "application/json", "Content-Type": "application/json"},
+                json={"ResetType": reset_type},
+            )
+            if response.status_code >= 400:
+                return {"ok": False, "status": "failed", "error": f"POST {url} failed with HTTP {response.status_code}: {response.text[:300]}", "reset_type": reset_type}
+            body = {}
+            try:
+                body = response.json() if response.text.strip() else {}
+            except Exception:
+                body = {}
+            message_ids = [
+                str(item.get("MessageId") or "")
+                for item in (((body.get("error") or {}).get("@Message.ExtendedInfo") or []) if isinstance(body, dict) else [])
+                if isinstance(item, dict)
+            ]
+            status = "reset_in_progress" if any("ResetInProgress" in item for item in message_ids) else "requested"
+            return {"ok": True, "status": status, "path": target, "reset_type": reset_type, "http_status": response.status_code, "message_ids": message_ids}
+        result = client.reset_ilo(reset_type=reset_type)
+        return {"ok": True, "status": "requested", **(result or {})}
+    except Exception as exc:
+        message = str(exc).splitlines()[0] or exc.__class__.__name__
+        lowered = message.lower()
+        if any(text in lowered for text in ["connection aborted", "connection reset", "remote end closed", "remotedisconnected", "read timed out", "temporarily unreachable"]):
+            return {"ok": True, "status": "disconnect_after_request", "message": message, "reset_type": reset_type}
+        return {"ok": False, "status": "failed", "error": message, "reset_type": reset_type}
+
+
+def request_ilo_reset_with_deadline(client: Any, *, reset_type: str = "GracefulRestart", deadline_seconds: float = 8.0) -> dict[str, Any]:
+    result: dict[str, Any] = {}
+
+    def submit_reset() -> None:
+        nonlocal result
+        result = request_ilo_reset_best_effort(client, reset_type=reset_type)
+
+    worker = threading.Thread(target=submit_reset, daemon=True)
+    worker.start()
+    worker.join(max(1.0, deadline_seconds))
+    if worker.is_alive():
+        return {
+            "ok": True,
+            "status": "request_timeout_after_submit",
+            "message": f"Reset request did not return within {deadline_seconds:g} seconds; polling will verify whether iLO reset.",
+            "reset_type": reset_type,
+        }
+    return result
+
+
+def wait_for_ilo_endpoint_after_reset(
+    host: str,
+    username: str,
+    password: str,
+    *,
+    start_timeout: float = 90.0,
+    return_timeout: float = 300.0,
+    poll_interval: float = 5.0,
+    client_factory: Callable[[ILOConfig], Any] | None = None,
+) -> dict[str, Any]:
+    normalized_host = str(host or "").strip()
+    if not normalized_host:
+        return {"ok": False, "host": "", "interrupt_observed": False, "return_observed": False, "error": "No iLO endpoint was provided."}
+
+    interrupt_observed = False
+    interrupt_detail = "No interruption was observed before timeout."
+    start_deadline = time.time() + max(start_timeout, 1.0)
+    while time.time() < start_deadline:
+        probe = verify_ilo_endpoint_reachable(
+            normalized_host,
+            username,
+            password,
+            attempts=1,
+            delay_seconds=0,
+            client_factory=client_factory,
+        )
+        if not probe.get("ok"):
+            interrupt_observed = True
+            interrupt_detail = str(probe.get("error") or "temporarily unreachable")
+            break
+        time.sleep(max(poll_interval, 1.0))
+
+    if not interrupt_observed:
+        return {
+            "ok": False,
+            "host": normalized_host,
+            "interrupt_observed": False,
+            "return_observed": False,
+            "interrupt_detail": interrupt_detail,
+            "return_detail": "",
+            "error": interrupt_detail,
+        }
+
+    return_deadline = time.time() + max(return_timeout, 1.0)
+    return_detail = "iLO did not come back before timeout."
+    while time.time() < return_deadline:
+        probe = verify_ilo_endpoint_reachable(
+            normalized_host,
+            username,
+            password,
+            attempts=1,
+            delay_seconds=0,
+            client_factory=client_factory,
+        )
+        if probe.get("ok"):
+            return {
+                "ok": True,
+                "host": normalized_host,
+                "interrupt_observed": True,
+                "return_observed": True,
+                "interrupt_detail": interrupt_detail,
+                "return_detail": f"Reconnected to iLO on {normalized_host}.",
+                "summary": probe.get("summary") or {},
+            }
+        return_detail = str(probe.get("error") or return_detail)
+        time.sleep(max(poll_interval, 1.0))
+
+    return {
+        "ok": False,
+        "host": normalized_host,
+        "interrupt_observed": True,
+        "return_observed": False,
+        "interrupt_detail": interrupt_detail,
+        "return_detail": return_detail,
+        "error": return_detail,
+    }
+
+
+def read_ilo_network_activation_state(host: str, username: str, password: str) -> dict[str, Any]:
+    normalized_host = str(host or "").strip()
+    if not normalized_host:
+        return {"ok": False, "host": "", "error": "No iLO endpoint was provided."}
+    try:
+        client = ILOClient(ILOConfig(host=normalized_host, username=username, password=password, verify_tls=False, timeout=15))
+        iface = client.get_active_manager_interface()
+        ipv4_values = [
+            str(item.get("Address") or "").strip()
+            for item in list(iface.get("IPv4Addresses") or []) + list(iface.get("IPv4StaticAddresses") or [])
+            if isinstance(item, dict) and str(item.get("Address") or "").strip()
+        ]
+        oem_hpe = ((iface.get("Oem") or {}).get("Hpe") or {}) if isinstance(iface, dict) else {}
+        return {
+            "ok": True,
+            "host": normalized_host,
+            "path": str(iface.get("@odata.id") or ""),
+            "ipv4_values": ipv4_values,
+            "configuration_settings": str(oem_hpe.get("ConfigurationSettings") or ""),
+            "interface_type": str(oem_hpe.get("InterfaceType") or ""),
+            "link_status": str(iface.get("LinkStatus") or ""),
+        }
+    except Exception as exc:
+        return {"ok": False, "host": normalized_host, "error": str(exc).splitlines()[0] or exc.__class__.__name__}
+
+
+def run_ilo_ip_setup_in_background(cfg: dict[str, Any]) -> None:
+    kit_name = str((cfg.get("site") or {}).get("name") or "")
+    ilo_cfg = cfg.get("ilo", {}) or {}
+    login_ip = str(ilo_cfg.get("current_ip") or ilo_cfg.get("host") or "").strip()
+    target_ip = str(ilo_cfg.get("target_ip") or (cfg.get("ip_plan") or {}).get("ilo") or "").strip()
+    gateway = str(ilo_cfg.get("gateway") or (cfg.get("ip_plan") or {}).get("gateway") or "").strip()
+    subnet_mask = str(ilo_cfg.get("subnet_mask") or (cfg.get("ip_plan") or {}).get("netmask") or "255.255.255.0").strip()
+    username = str(ilo_cfg.get("username") or "").strip()
+    password = str(ilo_cfg.get("password") or "")
+    job = load_job(kit_name)
+    try:
+        update_job(kit_name, job, "Running", "Setup iLO IP", 1, 5, f"[RUNNING] Connecting to iLO at {login_ip}.", progress_percent=10)
+        client = ILOClient(ILOConfig(host=login_ip, username=username, password=password, verify_tls=False, timeout=15))
+        update_job(
+            kit_name,
+            job,
+            "Running",
+            "Apply static IPv4",
+            2,
+            5,
+            f"[RUNNING] Applying static IPv4 address={target_ip} subnet_mask={subnet_mask} gateway={gateway}.",
+            progress_percent=45,
+        )
+        verification_host = target_ip or login_ip
+        ip_changed = bool(target_ip and target_ip != login_ip)
+        target_reached_during_apply = False
+        try:
+            result = client.set_static_ipv4_best_effort(address=target_ip, subnet_mask=subnet_mask, gateway=gateway)
+        except Exception as apply_error:
+            if not ip_changed:
+                raise
+            update_job(
+                kit_name,
+                load_job(kit_name),
+                "Running",
+                "Reconnect to iLO",
+                2,
+                5,
+                (
+                    "[WARN] Lost the old iLO endpoint during static IPv4 apply. "
+                    f"Checking whether the final endpoint {verification_host} is now reachable. detail={str(apply_error).splitlines()[0]}"
+                ),
+                progress_percent=60,
+            )
+            transition_check = verify_ilo_endpoint_reachable(verification_host, username, password, attempts=8, delay_seconds=5, timeout_seconds=2)
+            if not transition_check.get("ok"):
+                raise
+            result = {
+                "applied_keys": ["old endpoint dropped during static IPv4 apply", "target endpoint verified"],
+                "transition_check": transition_check,
+            }
+            target_reached_during_apply = True
+            update_job(
+                kit_name,
+                load_job(kit_name),
+                "Running",
+                "Reconnect to iLO",
+                3,
+                5,
+                f"[RUNNING] Final iLO endpoint {verification_host} is reachable after the old endpoint dropped.",
+                progress_percent=78,
+            )
+        if ip_changed and not target_reached_during_apply:
+            update_job(
+                kit_name,
+                load_job(kit_name),
+                "Running",
+                "Reset iLO",
+                3,
+                5,
+                "[RUNNING] iLO IP changed; requesting GracefulRestart before final reachability verification.",
+                progress_percent=62,
+            )
+            reset_result = request_ilo_reset_with_deadline(client, reset_type="GracefulRestart")
+            if not reset_result.get("ok"):
+                update_job(
+                    kit_name,
+                    load_job(kit_name),
+                    "Failed",
+                    "Reset iLO",
+                    5,
+                    5,
+                    f"[FAILED] iLO IP changed, but iLO reset could not be requested: {reset_result.get('error') or reset_result.get('status') or 'unknown error'}",
+                    progress_percent=100,
+                )
+                return
+            update_job(
+                kit_name,
+                load_job(kit_name),
+                "Running",
+                "Wait for iLO reset",
+                3,
+                5,
+                f"[RUNNING] iLO reset request status={reset_result.get('status')}; waiting for old endpoint {login_ip} to reset before checking {verification_host}.",
+                progress_percent=70,
+            )
+            reset_wait = wait_for_ilo_endpoint_after_reset(login_ip, username, password, start_timeout=30, return_timeout=30)
+            if not reset_wait.get("ok"):
+                update_job(
+                    kit_name,
+                    load_job(kit_name),
+                    "Running",
+                    "Wait for iLO reset",
+                    3,
+                    5,
+                    (
+                        "[WARN] The old iLO endpoint reset window was not fully observed; "
+                        f"continuing to final endpoint verification. detail={reset_wait.get('return_detail') or reset_wait.get('error') or 'No response'}"
+                    ),
+                    progress_percent=74,
+                )
+        else:
+            update_job(
+                kit_name,
+                load_job(kit_name),
+                "Running",
+                "Reset iLO",
+                3,
+                5,
+                (
+                    f"[SKIP] Final iLO endpoint {verification_host} is already reachable after static IPv4 apply; reset wait is not required."
+                    if target_reached_during_apply
+                    else "[SKIP] Current and final iLO IP match; reset is not required for this IP setup action."
+                ),
+                progress_percent=70,
+            )
+        update_job(
+            kit_name,
+            load_job(kit_name),
+            "Running",
+            "Verify iLO reachability",
+            4,
+            5,
+            f"[RUNNING] Verifying iLO endpoint is reachable at {verification_host}.",
+            progress_percent=82,
+        )
+        verification = verify_ilo_endpoint_reachable(verification_host, username, password, attempts=2, delay_seconds=3, timeout_seconds=3)
+        if ip_changed and not verification.get("ok"):
+            old_state = read_ilo_network_activation_state(login_ip, username, password)
+            if old_state.get("ok") and verification_host in list(old_state.get("ipv4_values") or []) and "pendingreset" in str(old_state.get("configuration_settings") or "").replace(" ", "").lower():
+                update_job(
+                    kit_name,
+                    load_job(kit_name),
+                    "Running",
+                    "Force iLO network activation",
+                    4,
+                    5,
+                    (
+                        f"[RUNNING] Final IP {verification_host} is configured in Redfish but still pending reset on old endpoint {login_ip}; "
+                        "requesting Manager.Reset ForceRestart once."
+                    ),
+                    progress_percent=88,
+                )
+                force_client = ILOClient(ILOConfig(host=login_ip, username=username, password=password, verify_tls=False, timeout=15))
+                force_result = request_ilo_reset_with_deadline(force_client, reset_type="ForceRestart")
+                if force_result.get("ok"):
+                    update_job(
+                        kit_name,
+                        load_job(kit_name),
+                        "Running",
+                        "Force iLO network activation",
+                        4,
+                        5,
+                        f"[RUNNING] ForceRestart request status={force_result.get('status')}; polling final endpoint {verification_host}.",
+                        progress_percent=90,
+                    )
+                    verification = verify_ilo_endpoint_reachable(verification_host, username, password, attempts=8, delay_seconds=5, timeout_seconds=2)
+                else:
+                    update_job(
+                        kit_name,
+                        load_job(kit_name),
+                        "Running",
+                        "Force iLO network activation",
+                        4,
+                        5,
+                        f"[WARN] ForceRestart could not be requested: {force_result.get('error') or force_result.get('status') or 'unknown error'}",
+                        progress_percent=90,
+                    )
+        if not verification.get("ok"):
+            old_state = read_ilo_network_activation_state(login_ip, username, password) if ip_changed else {}
+            append_activity_event(
+                kit_name,
+                "ilo_ip_setup_unverified",
+                workflow="ilo",
+                summary="iLO IP setup did not verify reachability.",
+                target=verification_host,
+                details=[
+                    f"Login IP: {login_ip}",
+                    f"Target IP: {target_ip}",
+                    f"Gateway: {gateway}",
+                    f"Verification error: {verification.get('error') or 'No response'}",
+                    (
+                        "Old endpoint state: "
+                        f"reachable={old_state.get('ok')} ips={old_state.get('ipv4_values') or []} "
+                        f"configuration_settings={old_state.get('configuration_settings') or ''}"
+                    )
+                    if old_state
+                    else "Old endpoint state: not checked",
+                    f"Applied keys: {', '.join(result.get('applied_keys') or []) or 'not reported'}",
+                ],
+            )
+            update_job(
+                kit_name,
+                load_job(kit_name),
+                "Failed",
+                "iLO reachability verification failed",
+                5,
+                5,
+                (
+                    f"[FAILED] iLO IP setup did not verify reachability at {verification_host}: {verification.get('error') or 'No response'}"
+                    + (
+                        f" | old_endpoint={login_ip} reachable={old_state.get('ok')} redfish_ips={old_state.get('ipv4_values') or []} "
+                        f"configuration_settings={old_state.get('configuration_settings') or ''}"
+                        if old_state
+                        else ""
+                    )
+                ),
+                progress_percent=100,
+            )
+            return
+        latest_cfg = load_kit_config(kit_name)
+        latest_cfg = propagate_active_ilo_endpoint(latest_cfg, verification_host)
+        latest_cfg["ilo"]["target_ip"] = target_ip
+        latest_cfg["ilo"]["gateway"] = gateway
+        latest_cfg["ilo"]["subnet_mask"] = subnet_mask
+        save_kit_config(latest_cfg)
+        append_activity_event(
+            kit_name,
+            "ilo_ip_setup_verified",
+            workflow="ilo",
+            summary="Verified iLO endpoint reachable after static IP setup.",
+            target=verification_host,
+            details=[
+                f"Login IP: {login_ip}",
+                f"Target IP: {target_ip}",
+                f"Gateway: {gateway}",
+                f"Verification attempt: {verification.get('attempt') or 'unknown'}",
+                f"Applied keys: {', '.join(result.get('applied_keys') or []) or 'not reported'}",
+            ],
+        )
+        update_job(
+            kit_name,
+            load_job(kit_name),
+            "Complete",
+            "iLO IP setup verified",
+            5,
+            5,
+            f"[VERIFIED] iLO endpoint is reachable at {verification_host}.",
+            progress_percent=100,
+        )
+    except Exception as e:
+        update_job(
+            kit_name,
+            load_job(kit_name),
+            "Failed",
+            "iLO IP setup failed",
+            5,
+            5,
+            f"[FAILED] iLO IP setup failed: {str(e).splitlines()[0]}",
+            progress_percent=100,
+        )
+
+
+@app.post("/api/ui/ilo/setup-ip")
+async def api_ui_ilo_setup_ip():
+    cfg = apply_ip_plan(load_kit_config())
+    cfg = propagate_active_ilo_endpoint(cfg, cfg.get("ilo", {}).get("current_ip") or cfg.get("ilo", {}).get("host"))
+    ilo_cfg = cfg.get("ilo", {}) or {}
+    missing = []
+    if not str(ilo_cfg.get("current_ip") or ilo_cfg.get("host") or "").strip():
+        missing.append("current iLO IP")
+    if not str(ilo_cfg.get("target_ip") or (cfg.get("ip_plan") or {}).get("ilo") or "").strip():
+        missing.append("target iLO IP")
+    if not str(ilo_cfg.get("gateway") or (cfg.get("ip_plan") or {}).get("gateway") or "").strip():
+        missing.append("gateway")
+    if not str(ilo_cfg.get("username") or "").strip():
+        missing.append("username")
+    if not str(ilo_cfg.get("password") or ""):
+        missing.append("password")
+    if missing:
+        return jsonable_encoder(
+            {
+                "ok": False,
+                "message": f"iLO IP setup needs {', '.join(missing)}.",
+                "ilo": build_react_ilo_state(cfg),
+                "app_state": build_react_ui_state(),
+            }
+        )
+    kit_name = str((cfg.get("site") or {}).get("name") or "")
+    save_kit_config(cfg)
+    save_job(
+        kit_name,
+        {
+            "status": "Real run queued",
+            "execution_mode": "real",
+            "execution_mode_label": "Setup iLO IP",
+            "scope": "ilo-ip-setup",
+            "current_stage": "Queued",
+            "progress_percent": 0,
+            "completed_steps": 0,
+            "total_steps": 5,
+            "logs": ["[QUEUED] iLO IP setup requested from the React desktop UI."],
+            "root_scope": "ilo-ip-setup",
+            "stage_statuses": {"ilo": "queued"},
+        },
+    )
+    threading.Thread(target=run_ilo_ip_setup_in_background, args=(copy.deepcopy(cfg),), daemon=True).start()
+    return jsonable_encoder(
+        {
+            "ok": True,
+            "message": "iLO IP setup started; final completion waits for reachability verification.",
+            "ilo": build_react_ilo_state(load_kit_config()),
+            "app_state": build_react_ui_state(),
+        }
+    )
+
+
 @app.get("/", response_class=HTMLResponse)
 async def home(request: Request):
-    cfg = load_kit_config()
-    return render_page(request, cfg, active_page="dashboard")
+    return react_app_response(request, title="Lab Builder")
 
 
 @app.get("/dashboard", response_class=HTMLResponse)
@@ -15384,104 +16448,27 @@ async def execution_page(request: Request):
     return render_page(request, cfg, active_page="execution")
 
 
-@app.get("/overnight-hardware", response_class=HTMLResponse)
-async def overnight_hardware_page(request: Request):
+def react_app_response(request: Request, title: str = "Lab Builder") -> HTMLResponse:
     cfg = load_kit_config()
-    return render_page(request, cfg, active_page="overnight_hardware")
-
-
-@app.post("/overnight-hardware/start", response_class=HTMLResponse)
-async def start_overnight_hardware_run(request: Request):
-    cfg = load_kit_config()
-    form = dict(await request.form())
-    run_config = OvernightHardwareConfig.from_mapping(form, cfg)
-    kit_name = cfg["site"]["name"]
-    existing_job = load_job(kit_name)
-    existing_scopes = {
-        str(existing_job.get("scope") or ""),
-        str(existing_job.get("root_scope") or ""),
-        str(existing_job.get("execution_mode") or ""),
-    }
-    if "overnight_hardware" in existing_scopes:
-        existing_state = build_overnight_hardware_state(cfg, existing_job)
-        existing_status = str(existing_state.get("operator", {}).get("status") or "")
-        if existing_status in {"Running", "Overnight queued"}:
-            return render_page(
-                request,
-                cfg,
-                active_page="overnight_hardware",
-                error_message="Overnight hardware run blocked: another overnight hardware run is still active. Let finalization finish or review MORNING_READY.md before starting a new run.",
-            )
-    if run_config.requires_safety_confirmation:
-        confirmed = str(form.get("overnight_safety_phrase") or "").strip().upper() == "OVERNIGHT"
-        sheet_ack = str(form.get("overnight_safety_ack") or "").strip().lower() == "on"
-        if not confirmed or not sheet_ack:
-            return render_page(
-                request,
-                cfg,
-                active_page="overnight_hardware",
-                error_message="Overnight hardware run blocked: guided_setup and full_overnight require the safety confirmation sheet and phrase OVERNIGHT.",
-            )
-
-    writer = initialize_overnight_artifacts(cfg, run_config, ARTIFACTS_DIR)
-    save_job(
-        kit_name,
-        {
-            "status": "Overnight queued",
-            "execution_mode": "overnight_hardware",
-            "execution_mode_label": "Overnight hardware run",
-            "overnight_mode": run_config.mode,
-            "scope": "overnight_hardware",
-            "root_scope": "overnight_hardware",
-            "current_stage": "Queued",
-            "progress_percent": 3,
-            "completed_steps": 3,
-            "total_steps": 100,
-            "logs": [f"[OVERNIGHT] Queued {run_config.mode} iLO/Cisco hardware run."],
-            "trace_events": list(writer.events),
-            "run_id": writer.run_dir.name,
-            "run_bundle_dir": str(writer.run_dir),
-            "run_live_log_path": str(writer.live_log_path),
-            "run_trace_path": str(writer.trace_path),
-            "run_summary_path": str(writer.summary_path),
-            "run_config_snapshot_path": str(writer.run_dir / "config-snapshot.yml"),
+    try:
+        react_asset_version = str(int((STATIC_DIR / "js" / "react-desktop-ui.js").stat().st_mtime))
+    except Exception:
+        react_asset_version = app_version()
+    return templates.TemplateResponse(
+        request=request,
+        name="react_preview.html",
+        context={
+            "title": title,
+            "current_kit": cfg.get("site", {}).get("name", ""),
+            "app_version": app_version(),
+            "react_asset_version": react_asset_version,
         },
-    )
-    threading.Thread(
-        target=_execute_overnight_hardware_background,
-        args=(cfg, run_config, str(writer.run_dir)),
-        daemon=True,
-        name="overnight-hardware-run",
-    ).start()
-    return render_page(
-        request,
-        cfg,
-        active_page="overnight_hardware",
-        action_feedback=build_action_feedback(
-            "Overnight hardware run queued",
-            "The run is collecting iLO and Cisco console evidence and will stop hardware actions before the finalization window.",
-            tone="progress",
-            outcomes=[
-                f"Mode: {run_config.mode}",
-                f"iLO: {run_config.ilo_host}",
-                f"Run folder: {writer.run_dir}",
-            ],
-        ),
     )
 
 
 @app.get("/react-preview", response_class=HTMLResponse)
 async def react_preview_page(request: Request):
-    cfg = load_kit_config()
-    return templates.TemplateResponse(
-        request=request,
-        name="react_preview.html",
-        context={
-            "title": "Lab Builder React Preview",
-            "current_kit": cfg.get("site", {}).get("name", ""),
-            "app_version": app_version(),
-        },
-    )
+    return RedirectResponse(url="/", status_code=308)
 
 
 @app.get("/global-settings", response_class=HTMLResponse)
