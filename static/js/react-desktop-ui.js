@@ -1567,6 +1567,19 @@
                         h(Button, { href: "/debug-bundles/latest" }, "Download latest debug bundle")
                     )
                 ),
+                h(Panel, { label: "Run summary", title: "Latest execution summary", subtitle: "Open or download the same run summary actions exposed by the original Run Center." },
+                    h("div", { className: "job-actions" },
+                        h("form", { className: "inline-action-form", action: "/view-run-summary", method: "post" },
+                            h("input", { type: "hidden", name: "scope", value: "included" }),
+                            h("input", { type: "hidden", name: "return_page", value: "execution" }),
+                            h("button", { className: "button", type: "submit" }, "Open summary")
+                        ),
+                        h("form", { className: "inline-action-form", action: "/download-run-summary", method: "post" },
+                            h("input", { type: "hidden", name: "scope", value: "included" }),
+                            h("button", { className: "button", type: "submit" }, "Download summary")
+                        )
+                    )
+                ),
                 h(ActionInventoryPanel, { activePage: "execution", appState: state, actions: actions, onNavigate: props.onNavigate })
             ),
             h(ContextPanel, { activePage: "execution", appState: state, actions: actions, onNavigate: props.onNavigate })

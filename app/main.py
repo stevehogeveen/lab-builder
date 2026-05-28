@@ -14705,6 +14705,8 @@ def react_ui_action_inventory() -> dict[str, list[dict[str, str]]]:
             {"label": "Start preview run", "method": "POST", "route": "/execute-preview", "mode": "legacy-html"},
             {"label": "Start real run", "method": "POST", "route": "/execute", "mode": "legacy-html"},
             {"label": "Retry storage stage", "method": "POST", "route": "/retry-storage-stage", "mode": "legacy-html"},
+            {"label": "View run summary", "method": "POST", "route": "/view-run-summary", "mode": "legacy-html"},
+            {"label": "Download run summary", "method": "POST", "route": "/download-run-summary", "mode": "download"},
             {"label": "Open setup page", "method": "GET", "route": "/configuration", "mode": "legacy-html"},
             {"label": "Open Reports", "method": "GET", "route": "/configs", "mode": "legacy-html"},
         ],

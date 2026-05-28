@@ -130,6 +130,8 @@ EXPECTED_VISIBLE_WORKFLOWS = {
         "Start preview run",
         "Start real run",
         "Retry storage stage",
+        "View run summary",
+        "Download run summary",
         "Open Reports",
     ],
     "reports": [
@@ -366,8 +368,13 @@ def test_execution_page_has_dedicated_scope_review_and_preview_forms():
     execution_body = js.split("function ExecutionPage", 1)[1].split("function ReportCenterPanel", 1)[0]
     assert '"/prepare-execute"' in execution_body
     assert '"/execute-preview"' in execution_body
+    assert '"/view-run-summary"' in execution_body
+    assert '"/download-run-summary"' in execution_body
     assert 'name: "selected_scopes"' in execution_body
+    assert 'name: "scope"' in execution_body
     assert "Open full confirmation" in execution_body
+    assert "Open summary" in execution_body
+    assert "Download summary" in execution_body
     app_switch = js.split('} else if (activePage === "storage")', 1)[1].split('} else if (activePage === "reports")', 1)[0]
     assert "ExecutionPage" in app_switch
 
