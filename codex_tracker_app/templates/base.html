@@ -35,6 +35,25 @@
         padding: 24px 16px 48px;
       }
 
+      .app-shell {
+        display: grid;
+        gap: 14px;
+        grid-template-columns: minmax(290px, 340px) minmax(0, 1fr);
+        align-items: start;
+      }
+
+      .sidebar {
+        position: sticky;
+        top: 16px;
+        max-height: calc(100vh - 36px);
+        overflow-y: auto;
+        padding-right: 4px;
+      }
+
+      .workspace {
+        min-width: 0;
+      }
+
       h1,
       h2,
       h3 {
@@ -94,6 +113,15 @@
       .small {
         color: var(--muted);
         font-size: 0.9rem;
+      }
+
+      .toolbar .btn {
+        border-radius: 10px;
+      }
+
+      .session-page {
+        display: grid;
+        gap: 12px;
       }
 
       label {
@@ -241,7 +269,20 @@
       .mono {
         font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, Liberation Mono, Courier New, monospace;
       }
+
+      @media (max-width: 980px) {
+        .app-shell {
+          grid-template-columns: 1fr;
+        }
+
+        .sidebar {
+          position: relative;
+          top: auto;
+          max-height: none;
+        }
+      }
     </style>
+    <script src="https://unpkg.com/htmx.org@2.0.4"></script>
   </head>
   <body>
     <main class="wrap">

@@ -73,6 +73,10 @@ def _project_key(value: Any) -> str:
     return _normalize_text(value).lower()
 
 
+def _is_hx_request(request: Request) -> bool:
+    return request.headers.get("HX-Request") == "true"
+
+
 def _session_label(session: dict[str, Any]) -> str:
     return _normalize_text(session.get("title") or "(untitled session)")
 
@@ -415,6 +419,44 @@ def _build_chat_reply(session: dict[str, Any], message: str, sessions: list[dict
     )
 
 
+def _load_dashboard_context(
+    project_filter: str | None = None,
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]], list[str], int, int, dict[str, Any]]:
+    all_sessions = sorted(load_sessions(), key=lambda item: item.get("updated_at") or "", reverse=True)
+    sessions, projects = _enrich_sessions_for_listing(
+        all_sessions,
+        project_filter=project_filter,
+    )
+    workspace = summarize_git_changes()
+    return (
+        all_sessions,
+        sessions,
+        projects,
+        _total_usage(all_sessions),
+        _usage_left(all_sessions),
+        workspace,
+    )
+
+
+def _render_session_panel(session: dict[str, Any], sessions: list[dict[str, Any]]) -> dict[str, Any]:
+    return {
+        "session": session,
+        "current_summary": summarize_git_changes(),
+        "related_project_sessions": [
+            item
+            for item in _project_sessions_for_session(session, sessions)
+            if item.get("session_id") != session.get("session_id")
+        ][:6],
+        "project_name": _normalize_project(session.get("project_name")),
+        "codex_usage_left": _usage_left(sessions),
+        "codex_total_budget": CODEX_USAGE_QUOTA,
+        "applies_to_title": _find_applied_session_title(sessions, _normalize_text(session.get("applies_to_session_id"))),
+        "suggestions": _build_codex_prompt(session, sessions)["suggestions"],
+        "title": session.get("title", "Session"),
+        "codex_run": codex_run_signature(session),
+    }
+
+
 def _create_session(
     title: str,
     feature_goal: str,
@@ -626,14 +668,14 @@ def _project_sessions_for_session(session: dict[str, Any], sessions: list[dict[s
 
 @app.get("/", response_class=HTMLResponse)
 async def dashboard(request: Request, project: str | None = None):
-    all_sessions = sorted(load_sessions(), key=lambda item: item.get("updated_at") or "", reverse=True)
-    sessions, projects = _enrich_sessions_for_listing(
-        all_sessions,
-        project_filter=project,
+    all_sessions, sessions, projects, usage_used, usage_left, workspace_summary = _load_dashboard_context(
+        project_filter=project
     )
     total = len(all_sessions)
-    usage_used = _total_usage(all_sessions)
-    usage_left = _usage_left(all_sessions)
+    selected_session = sessions[0] if sessions else None
+    selected_context = {}
+    if selected_session:
+        selected_context = _render_session_panel(selected_session, all_sessions)
     return templates.TemplateResponse(
         request=request,
         name="index.html",
@@ -644,13 +686,38 @@ async def dashboard(request: Request, project: str | None = None):
             "projects": projects,
             "project_filter": _normalize_project(project),
             "total_sessions": total,
+            "selected_session": selected_session,
+            "selected_session_id": selected_session.get("session_id") if selected_session else "",
+            "usage_used": usage_used,
+            "usage_left": usage_left,
             "codex_usage": {
                 "quota": CODEX_USAGE_QUOTA,
                 "used": usage_used,
                 "left": usage_left,
             },
-            "workspace_summary": summarize_git_changes(),
+            "workspace_summary": workspace_summary,
+            **selected_context,
             "title": "Codex App Planner",
+        },
+    )
+
+
+@app.get("/session-list", response_class=HTMLResponse)
+async def session_list_fragment(request: Request, project: str | None = None):
+    all_sessions, sessions, projects, usage_used, usage_left, workspace_summary = _load_dashboard_context(
+        project_filter=project
+    )
+    return templates.TemplateResponse(
+        request=request,
+        name="partials/session_list.html",
+        context={
+            "sessions": sessions,
+            "projects": projects,
+            "project_filter": _normalize_project(project),
+            "usage_used": usage_used,
+            "usage_left": usage_left,
+            "workspace_summary": workspace_summary,
+            "title": "Session list",
         },
     )
 
@@ -662,29 +729,31 @@ async def view_session(request: Request, session_id: str):
     if not session:
         raise HTTPException(status_code=404, detail="Session not found")
 
-    workspace = summarize_git_changes()
-    project_sessions = _project_sessions_for_session(session, sessions)
+    context = _render_session_panel(session, sessions)
     return templates.TemplateResponse(
         request=request,
         name="session.html",
-        context={
-            "request": request,
-            "session": session,
-            "current_summary": workspace,
-            "title": session.get("title", "Session"),
-            "codex_run": codex_run_signature(session),
-            "related_project_sessions": [item for item in project_sessions if item.get("session_id") != session_id],
-            "project_name": _normalize_project(session.get("project_name")),
-            "codex_usage_left": _usage_left(sessions),
-            "codex_total_budget": CODEX_USAGE_QUOTA,
-            "applies_to_title": _find_applied_session_title(sessions, _normalize_text(session.get("applies_to_session_id"))),
-            "suggestions": _build_codex_prompt(session, sessions)["suggestions"],
-        },
+        context={"request": request, **context},
+    )
+
+
+@app.get("/session/{session_id}/panel", response_class=HTMLResponse)
+async def session_panel(request: Request, session_id: str):
+    sessions = load_sessions()
+    session = find_session(sessions, session_id)
+    if not session:
+        raise HTTPException(status_code=404, detail="Session not found")
+
+    return templates.TemplateResponse(
+        request=request,
+        name="partials/session_panel.html",
+        context={"request": request, **_render_session_panel(session, sessions)},
     )
 
 
 @app.post("/sessions", response_class=HTMLResponse)
 async def create_session(
+    request: Request,
     title: str = Form(""),
     feature_goal: str = Form(""),
     feature_area: str = Form(""),
@@ -708,11 +777,70 @@ async def create_session(
     )
     sessions.append(session)
     save_sessions(sessions)
+    if _is_hx_request(request):
+        all_sessions, enriched, projects, _, _, workspace_summary = _load_dashboard_context()
+        return templates.TemplateResponse(
+            request=request,
+            name="partials/session_list.html",
+            context={
+                "request": request,
+                "sessions": enriched,
+                "projects": projects,
+                "project_filter": _normalize_project(""),
+                "usage_used": _total_usage(all_sessions),
+                "usage_left": _usage_left(all_sessions),
+                "workspace_summary": workspace_summary,
+            },
+        )
     return RedirectResponse(url=f"/session/{session['session_id']}", status_code=303)
+
+
+@app.post("/sessions/hx", response_class=HTMLResponse)
+async def create_session_fragment(
+    request: Request,
+    title: str = Form(""),
+    feature_goal: str = Form(""),
+    feature_area: str = Form(""),
+    project_name: str = Form(""),
+    session_purpose: str = Form(""),
+    audience: str = Form(""),
+    applies_to_session_id: str = Form(""),
+    notes: str = Form(""),
+):
+    sessions = load_sessions()
+    session = _create_session(
+        title=title,
+        feature_goal=feature_goal,
+        feature_area=feature_area,
+        project_name=project_name,
+        session_purpose=session_purpose,
+        audience=audience,
+        applies_to_session_id=applies_to_session_id,
+        notes=notes,
+        existing_sessions=sessions,
+    )
+    sessions.append(session)
+    save_sessions(sessions)
+
+    all_sessions, enriched, projects, _, _, workspace_summary = _load_dashboard_context()
+    return templates.TemplateResponse(
+        request=request,
+        name="partials/session_list.html",
+        context={
+            "request": request,
+            "sessions": enriched,
+            "projects": projects,
+            "project_filter": "",
+            "usage_used": _total_usage(all_sessions),
+            "usage_left": _usage_left(all_sessions),
+            "workspace_summary": workspace_summary,
+        },
+    )
 
 
 @app.post("/session/{session_id}/status", response_class=HTMLResponse)
 async def set_status(
+    request: Request,
     session_id: str,
     status: str = Form("planning"),
 ):
@@ -724,11 +852,17 @@ async def set_status(
     session["status"] = normalize_status(status)
     session["updated_at"] = _utc_like_now()
     save_sessions(sessions)
+    if _is_hx_request(request):
+        return templates.TemplateResponse(
+            request=request,
+            name="partials/session_panel.html",
+            context={"request": request, **_render_session_panel(session, sessions)},
+        )
     return RedirectResponse(url=f"/session/{session_id}", status_code=303)
 
 
 @app.post("/session/{session_id}/snapshot", response_class=HTMLResponse)
-async def capture_snapshot(session_id: str):
+async def capture_snapshot(request: Request, session_id: str):
     sessions = load_sessions()
     session = find_session(sessions, session_id)
     if not session:
@@ -746,11 +880,21 @@ async def capture_snapshot(session_id: str):
     )
 
     save_sessions(sessions)
+    if _is_hx_request(request):
+        return templates.TemplateResponse(
+            request=request,
+            name="partials/session_panel.html",
+            context={"request": request, **_render_session_panel(session, sessions)},
+        )
     return RedirectResponse(url=f"/session/{session_id}", status_code=303)
 
 
 @app.post("/session/{session_id}/note", response_class=HTMLResponse)
-async def add_note(session_id: str, note: str = Form("")):
+async def add_note(
+    request: Request,
+    session_id: str,
+    note: str = Form(""),
+):
     sessions = load_sessions()
     session = find_session(sessions, session_id)
     if not session:
@@ -764,11 +908,18 @@ async def add_note(session_id: str, note: str = Form("")):
         session["updated_at"] = _utc_like_now()
         save_sessions(sessions)
 
+    if _is_hx_request(request):
+        return templates.TemplateResponse(
+            request=request,
+            name="partials/session_panel.html",
+            context={"request": request, **_render_session_panel(session, sessions)},
+        )
     return RedirectResponse(url=f"/session/{session_id}", status_code=303)
 
 
 @app.post("/session/{session_id}/chat", response_class=HTMLResponse)
 async def chat_with_codex(
+    request: Request,
     session_id: str,
     message: str = Form(""),
     suggestion: str = Form(""),
@@ -801,13 +952,32 @@ async def chat_with_codex(
     session["updated_at"] = _utc_like_now()
     save_sessions(sessions)
 
+    if _is_hx_request(request):
+        return templates.TemplateResponse(
+            request=request,
+            name="partials/session_panel.html",
+            context={"request": request, **_render_session_panel(session, sessions)},
+        )
     return RedirectResponse(url=f"/session/{session_id}", status_code=303)
 
 
 @app.post("/session/{session_id}/delete", response_class=HTMLResponse)
-async def delete_session(session_id: str):
+async def delete_session(request: Request, session_id: str):
     sessions = [session for session in load_sessions() if session.get("session_id") != session_id]
     save_sessions(sessions)
+    if _is_hx_request(request):
+        all_sessions, _, projects, usage_used, usage_left, workspace_summary = _load_dashboard_context()
+        if all_sessions:
+            first = all_sessions[0]
+            return templates.TemplateResponse(
+                request=request,
+                name="partials/session_panel.html",
+                context={
+                    "request": request,
+                    **_render_session_panel(first, all_sessions),
+                },
+            )
+        return HTMLResponse("<div class='card'><p class='muted'>Session removed. Pick another session from the sidebar.</p></div>")
     return RedirectResponse(url="/", status_code=303)
 
 

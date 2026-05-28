@@ -1,0 +1,128 @@
+<section class="card">
+  <h2 class="headline">Workspace snapshot</h2>
+  <p class="subtitle">Current working tree: {{ workspace_summary.headline }}</p>
+  <div class="meta-grid">
+    <div class="meta-card">
+      <h4>Codex usage</h4>
+      <div class="small">Used: {{ usage_used }} / {{ (usage_left + usage_used) }}</div>
+      <div class="small">Left: {{ usage_left }}</div>
+    </div>
+    <div class="meta-card">
+      <h4>Session count</h4>
+      <div class="small">All sessions: {{ sessions|length }}</div>
+      <div class="small">Projects: {{ projects|length }}</div>
+    </div>
+  </div>
+  <div class="toolbar">
+    <a class="btn" href="/api/sessions">Open JSON API</a>
+  </div>
+  {% if workspace_summary.areas %}
+  <ul>
+    {% for area, count in workspace_summary.areas.items() %}
+    <li>{{ area | replace('_', ' ') | title }}: {{ count }}</li>
+    {% endfor %}
+  </ul>
+  {% endif %}
+</section>
+
+<section class="card">
+  <h2 class="headline">Create a new planning session</h2>
+  <p class="subtitle">Use plain language and keep each session focused to one feature milestone. Add project context so Codex can reuse prior work.</p>
+  <form method="post" action="/sessions/hx" hx-post="/sessions/hx" hx-target="#session-list" hx-swap="innerHTML">
+    <label for="project_name">Project</label>
+    <input
+      id="project_name"
+      name="project_name"
+      list="project_list"
+      placeholder="Example: Portal rewrite"
+      required
+    />
+    <datalist id="project_list">
+      {% for project in projects %}
+      <option value="{{ project }}"></option>
+      {% endfor %}
+    </datalist>
+
+    <label for="title">Session title</label>
+    <input id="title" name="title" placeholder="Example: Codex run simplification" required />
+
+    <label for="session_purpose">What is this session for?</label>
+    <input
+      id="session_purpose"
+      name="session_purpose"
+      placeholder="Example: Improve onboarding by simplifying the run checklist copy"
+      required
+    />
+
+    <label for="audience">Who is the audience?</label>
+    <input
+      id="audience"
+      name="audience"
+      placeholder='Example: Operators in the lab, not code reviewers'
+      required
+    />
+
+    <label for="feature_area">What part of the app is changing?</label>
+    <select id="feature_area" name="feature_area">
+      <option value="backend">Backend behavior</option>
+      <option value="frontend">Screen and forms</option>
+      <option value="tests">Tests</option>
+      <option value="other">Other</option>
+    </select>
+
+    <label for="applies_to_session_id">What session should this apply to?</label>
+    <select id="applies_to_session_id" name="applies_to_session_id">
+      <option value="">No specific session</option>
+      {% for session_item in sessions %}
+      <option value="{{ session_item.session_id }}">{{ session_item.title }} ({{ session_item.project_name | default('General project') }})</option>
+      {% endfor %}
+    </select>
+
+    <label for="feature_goal">Feature goal</label>
+    <input id="feature_goal" name="feature_goal" placeholder="Example: Build a session list page and save plan details" required />
+
+    <label for="notes">Quick notes</label>
+    <textarea id="notes" name="notes" placeholder="What should users understand first?"></textarea>
+
+    <div class="toolbar">
+      <button class="btn primary" type="submit">Create session</button>
+    </div>
+  </form>
+</section>
+
+<section class="card">
+  <h2 class="headline">Planning sessions</h2>
+  <div class="toolbar">
+    <a class="btn" href="/session-list" hx-get="/session-list" hx-target="#session-list" hx-swap="innerHTML">All projects</a>
+    {% for project in projects %}
+    <a class="btn" href="/session-list?project={{ project | replace(' ', '%20') }}" hx-get="/session-list?project={{ project | replace(' ', '%20') }}" hx-target="#session-list" hx-swap="innerHTML">{{ project }}</a>
+    {% endfor %}
+  </div>
+  {% if sessions %}
+  <ul class="session-list">
+    {% for session in sessions %}
+    <li class="session-item card">
+      <div class="copy">
+        <div>
+          <span class="status {{ session.status }}">{{ session.status | replace('_', ' ') }}</span>
+          <span class="small"> &nbsp;{{ session.updated_at }}</span>
+        </div>
+        <a class="session-title" style="color: #e7ecff" href="/session/{{ session.session_id }}/panel" hx-get="/session/{{ session.session_id }}/panel" hx-target="#session-panel" hx-swap="innerHTML">{{ session.title }}</a>
+        <div class="small">Project: {{ session.project_name | default('General project') }}</div>
+        <div class="small">{{ session.feature_area | default('General') }} · {{ session.feature_goal }}</div>
+        <div class="session-areas">Workspace captured: {{ session.git_summary.headline }}</div>
+        <div class="small">Purpose: {{ session.session_purpose | default('Not set') }}</div>
+        <div class="small">Audience: {{ session.audience | default('General') }}</div>
+        <div class="small">Applies to: {{ session.applies_to_title | default('None') }}</div>
+        <div class="small">Codex calls: {{ session.codex_usage_count or 0 }}</div>
+      </div>
+      <div class="actions">
+        <a class="btn" href="/session/{{ session.session_id }}">Open</a>
+      </div>
+    </li>
+    {% endfor %}
+  </ul>
+  {% else %}
+  <div class="small">No sessions yet. Create one above to start tracking.</div>
+  {% endif %}
+</section>

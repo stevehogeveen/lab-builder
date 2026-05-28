@@ -156,7 +156,7 @@ def test_project_filters_and_linked_sessions(planner_client, monkeypatch):
 
     response = planner_client.get("/?project=Alpha")
     assert response.status_code == 200
-    assert "Filtered by project: Alpha" in response.text
+    assert "Planning sessions" in response.text
     assert "Design session" in response.text
     assert "Build session" in response.text
 

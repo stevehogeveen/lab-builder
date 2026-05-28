@@ -11,6 +11,7 @@ It gives you:
 - Codex prompt builder (purpose, audience, and related-session context)
 - In-session chat draft loop and usage tracking
 - Manual session snapshots, status updates, and delete flow
+- Sidebar-first, interactive workflow with HTMX partial updates (no full reload on common actions)
 
 ## Run
 

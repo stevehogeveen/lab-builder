@@ -1,0 +1,179 @@
+<section class="card">
+  <div class="toolbar">
+    <a class="btn" href="/">← All sessions</a>
+    <a class="btn" href="/?project={{ project_name | replace(' ', '%20') }}">All for project</a>
+    <a class="btn" href="#">Session {{ session.session_id[:8] }}</a>
+    <span class="status {{ session.status }}">{{ session.status | replace('_', ' ') }}</span>
+  </div>
+
+  <h2 class="headline">{{ session.title }}</h2>
+  <p class="subtitle">{{ session.feature_goal }}</p>
+  <div class="meta-grid" style="margin-top: 8px">
+    <div class="meta-card">
+      <h4>Project</h4>
+      <div class="small">{{ project_name }}</div>
+    </div>
+    <div class="meta-card">
+      <h4>Purpose</h4>
+      <div class="small">{{ session.session_purpose or 'Not set' }}</div>
+    </div>
+    <div class="meta-card">
+      <h4>Audience</h4>
+      <div class="small">{{ session.audience or 'General' }}</div>
+    </div>
+    <div class="meta-card">
+      <h4>Applies To</h4>
+      <div class="small">{{ applies_to_title or session.applies_to_session_id or 'None' }}</div>
+    </div>
+    <div class="meta-card">
+      <h4>Codex usage</h4>
+      <div class="small">session: {{ session.codex_usage_count or 0 }}</div>
+      <div class="small">remaining total budget: {{ codex_usage_left }} / {{ codex_total_budget }}</div>
+    </div>
+  </div>
+
+  <div class="toolbar">
+    <form method="post" action="/session/{{ session.session_id }}/status" class="toolbar" hx-post="/session/{{ session.session_id }}/status" hx-target="#session-panel" hx-swap="innerHTML">
+      <input type="hidden" name="status" value="in_progress" />
+      <button class="btn" type="submit">Mark in progress</button>
+    </form>
+    <form method="post" action="/session/{{ session.session_id }}/status" class="toolbar" hx-post="/session/{{ session.session_id }}/status" hx-target="#session-panel" hx-swap="innerHTML">
+      <input type="hidden" name="status" value="done" />
+      <button class="btn" type="submit">Mark done</button>
+    </form>
+    <form method="post" action="/session/{{ session.session_id }}/status" class="toolbar" hx-post="/session/{{ session.session_id }}/status" hx-target="#session-panel" hx-swap="innerHTML">
+      <input type="hidden" name="status" value="blocked" />
+      <button class="btn" type="submit">Mark blocked</button>
+    </form>
+  </div>
+</section>
+
+<section class="card">
+  <h3>Change summary (latest session capture)</h3>
+  <p class="subtitle">{{ session.git_summary.headline }}</p>
+  {% if session.git_summary.items() %}
+  <ul>
+    {% for item in session.git_summary.items() %}
+    <li><strong>{{ item.plain }}</strong> — {{ item.area_label }}</li>
+    {% endfor %}
+  </ul>
+  {% else %}
+  <p class="muted">No changed files were captured at session creation.</p>
+  {% endif %}
+  <div class="toolbar">
+    <form method="post" action="/session/{{ session.session_id }}/snapshot" hx-post="/session/{{ session.session_id }}/snapshot" hx-target="#session-panel" hx-swap="innerHTML">
+      <button class="btn" type="submit">Capture latest workspace now</button>
+    </form>
+    {% if current_summary.status == 'dirty' %}
+    <span class="small">Current workspace differs by {{ current_summary.count }} files.</span>
+    {% else %}
+    <span class="small">Workspace is clean right now.</span>
+    {% endif %}
+  </div>
+</section>
+
+<section class="card">
+  <h3>Simple plan</h3>
+  <ol>
+    {% for step in session.plan_steps %}
+    <li>{{ step }}</li>
+    {% endfor %}
+  </ol>
+</section>
+
+<section class="card">
+  <h3>Codex-friendly run checklist</h3>
+  <p class="subtitle">Use this as a simple handoff when you want to start the session in Codex terms.</p>
+  <code>{{ codex_run.command }}</code>
+  <p class="small">Copiable starter prompt</p>
+  <textarea class="mono" readonly rows="10">{{ codex_run.prompt }}</textarea>
+  <ul>
+    {% for item in codex_run.checks %}
+    <li>{{ item }}</li>
+    {% endfor %}
+  </ul>
+</section>
+
+<section class="card">
+  <h3>Suggestions</h3>
+  <p class="subtitle">Quick prompts to send to Codex.</p>
+  <div class="toolbar">
+    {% for suggestion in suggestions %}
+    <form method="post" action="/session/{{ session.session_id }}/chat" hx-post="/session/{{ session.session_id }}/chat" hx-target="#session-panel" hx-swap="innerHTML">
+      <input type="hidden" name="suggestion" value="{{ suggestion }}">
+      <button class="btn" type="submit">{{ suggestion }}</button>
+    </form>
+    {% endfor %}
+  </div>
+</section>
+
+<section class="card">
+  <h3>Chat with Codex</h3>
+  <p class="subtitle">Type what you want and the app will keep a running session log and draft the next prompt.</p>
+  <form method="post" action="/session/{{ session.session_id }}/chat" hx-post="/session/{{ session.session_id }}/chat" hx-target="#session-panel" hx-swap="innerHTML">
+    <label for="message">Message</label>
+    <textarea id="message" name="message" placeholder="Example: I want to simplify the plan text for ops users."></textarea>
+    <div class="toolbar">
+      <button class="btn primary" type="submit">Send to Codex</button>
+    </div>
+  </form>
+
+  <div class="chat" aria-label="Codex conversation">
+    {% if session.messages %}
+      {% for message in session.messages %}
+      <div class="msg {{ message.role }}">{{ message.role }} · {{ message.created_at }}</div>
+      <div class="msg {{ message.role }}">{{ message.text }}</div>
+      {% endfor %}
+    {% else %}
+      <div class="msg">No messages yet.</div>
+    {% endif %}
+  </div>
+</section>
+
+{% if related_project_sessions %}
+<section class="card">
+  <h3>Related sessions in this project</h3>
+  <ul>
+    {% for item in related_project_sessions[:5] %}
+    <li><a href="#" hx-get="/session/{{ item.session_id }}/panel" hx-target="#session-panel" hx-swap="innerHTML">{{ item.title }}</a> · {{ item.goal }}</li>
+    {% endfor %}
+  </ul>
+</section>
+{% endif %}
+
+<section class="card">
+  <h3>Test plan</h3>
+  <ul>
+    {% for step in session.test_plan %}
+    <li>{{ step }}</li>
+    {% endfor %}
+  </ul>
+</section>
+
+<section class="card">
+  <h3>Snapshot history</h3>
+  <ul>
+    {% for snapshot in session.snapshots[-5:] %}
+    <li>{{ snapshot.captured_at }} — {{ snapshot.headline }}</li>
+    {% endfor %}
+  </ul>
+</section>
+
+<section class="card">
+  <h3>Session notes</h3>
+  <p class="subtitle">{{ session.notes or 'No notes yet.' }}</p>
+  <form method="post" action="/session/{{ session.session_id }}/note" hx-post="/session/{{ session.session_id }}/note" hx-target="#session-panel" hx-swap="innerHTML">
+    <label for="note">Add note</label>
+    <textarea id="note" name="note" placeholder="Keep this short: what changed, what failed, what to do next."></textarea>
+    <div class="toolbar">
+      <button class="btn primary" type="submit">Add note</button>
+    </div>
+  </form>
+</section>
+
+<section class="card">
+  <h3>Delete session</h3>
+  <form method="post" action="/session/{{ session.session_id }}/delete" hx-post="/session/{{ session.session_id }}/delete" hx-target="#session-panel" hx-swap="innerHTML">
+    <button class="btn" type="submit">Delete this session</button>
+  </form>
+</section>
