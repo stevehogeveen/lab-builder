@@ -1,6 +1,6 @@
 # Full Visible React Action Inventory
 
-Total rows: 168
+Total rows: 175
 
 | page_key | label | method | route | mode | location |
 | --- | --- | --- | --- | --- | --- |
@@ -55,14 +55,18 @@ Total rows: 168
 | netapp | Save NetApp setup | POST | /modules/netapp/save-settings | legacy-html | static/js/react-desktop-ui.js + app/main.py:react_ui_action_inventory |
 | netapp | Test ONTAP API | POST | /modules/netapp/test-connection | legacy-html | static/js/react-desktop-ui.js + app/main.py:react_ui_action_inventory |
 | netapp | Read current ONTAP | POST | /modules/netapp/read-current-config | legacy-html | static/js/react-desktop-ui.js + app/main.py:react_ui_action_inventory |
+| netapp | Read current NetApp config | POST | /modules/netapp/read-current-config | legacy-html | static/js/react-desktop-ui.js + app/main.py:react_ui_action_inventory |
 | netapp | Discover NetApp page | POST | /modules/netapp/discover-page | legacy-html | static/js/react-desktop-ui.js + app/main.py:react_ui_action_inventory |
+| netapp | Discover NetApp console | POST | /modules/netapp/discover-console | legacy-html | static/js/react-desktop-ui.js + app/main.py:react_ui_action_inventory |
 | netapp | Check console ports | POST | /modules/netapp/check-console-ports | legacy-html | static/js/react-desktop-ui.js + app/main.py:react_ui_action_inventory |
 | netapp | Save selected console | POST | /modules/netapp/save-console | legacy-html | static/js/react-desktop-ui.js + app/main.py:react_ui_action_inventory |
 | netapp | Read console state | POST | /modules/netapp/console-read-state | legacy-html | static/js/react-desktop-ui.js + app/main.py:react_ui_action_inventory |
 | netapp | Preview console IP commands | POST | /modules/netapp/console-cluster-mgmt-ip | legacy-html | static/js/react-desktop-ui.js + app/main.py:react_ui_action_inventory |
+| netapp | Apply cluster IP by console | POST | /modules/netapp/console-cluster-mgmt-ip | legacy-html | static/js/react-desktop-ui.js + app/main.py:react_ui_action_inventory |
 | netapp | Update NetApp convention | POST | /modules/netapp/update-convention | legacy-html | static/js/react-desktop-ui.js + app/main.py:react_ui_action_inventory |
 | netapp | Setup NetApp IP | POST | /modules/netapp/apply-ip-setup | legacy-html | static/js/react-desktop-ui.js + app/main.py:react_ui_action_inventory |
 | netapp | Preview cluster IP command | POST | /modules/netapp/cluster-mgmt-ip | legacy-html | static/js/react-desktop-ui.js + app/main.py:react_ui_action_inventory |
+| netapp | Apply cluster management IP | POST | /modules/netapp/cluster-mgmt-ip | legacy-html | static/js/react-desktop-ui.js + app/main.py:react_ui_action_inventory |
 | netapp | Ping all NetApp IPs | POST | /modules/netapp/bootstrap-test-all | legacy-html | static/js/react-desktop-ui.js + app/main.py:react_ui_action_inventory |
 | netapp | Use discovered values | POST | /modules/netapp/use-discovered-values | legacy-html | static/js/react-desktop-ui.js + app/main.py:react_ui_action_inventory |
 | netapp | Probe ESXi and NFS | POST | /modules/netapp/probe-vmware-nfs | legacy-html | static/js/react-desktop-ui.js + app/main.py:react_ui_action_inventory |
@@ -76,6 +80,7 @@ Total rows: 168
 | netapp | Safe apply NetApp | POST | /modules/netapp/apply | json | static/js/react-desktop-ui.js + app/main.py:react_ui_action_inventory |
 | netapp | Apply NetApp page | POST | /modules/netapp/apply-page | legacy-html | static/js/react-desktop-ui.js + app/main.py:react_ui_action_inventory |
 | netapp | Check reset readiness | POST | /modules/netapp/factory-reset | legacy-html | static/js/react-desktop-ui.js + app/main.py:react_ui_action_inventory |
+| netapp | Factory reset NetApp | POST | /modules/netapp/factory-reset | legacy-html | static/js/react-desktop-ui.js + app/main.py:react_ui_action_inventory |
 | netapp | Plan ONTAP upgrade | POST | /modules/netapp/plan-upgrade | legacy-html | static/js/react-desktop-ui.js + app/main.py:react_ui_action_inventory |
 | netapp | Run ONTAP upgrade | POST | /modules/netapp/run-upgrade | legacy-html | static/js/react-desktop-ui.js + app/main.py:react_ui_action_inventory |
 | netapp | ONTAP upgrade activity | GET | /modules/netapp/upgrade-activity | legacy-html | static/js/react-desktop-ui.js + app/main.py:react_ui_action_inventory |
@@ -154,6 +159,8 @@ Total rows: 168
 | execution | Start preview run | POST | /execute-preview | legacy-html | static/js/react-desktop-ui.js + app/main.py:react_ui_action_inventory |
 | execution | Start real run | POST | /execute | legacy-html | static/js/react-desktop-ui.js + app/main.py:react_ui_action_inventory |
 | execution | Retry storage stage | POST | /retry-storage-stage | legacy-html | static/js/react-desktop-ui.js + app/main.py:react_ui_action_inventory |
+| execution | View run summary | POST | /view-run-summary | legacy-html | static/js/react-desktop-ui.js + app/main.py:react_ui_action_inventory |
+| execution | Download run summary | POST | /download-run-summary | download | static/js/react-desktop-ui.js + app/main.py:react_ui_action_inventory |
 | execution | Open setup page | GET | /configuration | legacy-html | static/js/react-desktop-ui.js + app/main.py:react_ui_action_inventory |
 | execution | Open Reports | GET | /configs | legacy-html | static/js/react-desktop-ui.js + app/main.py:react_ui_action_inventory |
 | reports | Run history API | GET | /api/ui/run-history | json | static/js/react-desktop-ui.js + app/main.py:react_ui_action_inventory |

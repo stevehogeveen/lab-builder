@@ -31,6 +31,7 @@ Latest follow-up:
 - Upgrade Helper, OVF directory registration, storage repair/reboot/artifact, and history artifact labels were aligned with the original visible controls.
 - Exact visible-label comparison is down to two known raw Jinja conditional rows; their resolved labels are now all represented in React.
 - Removed tracked stale Codex prompt files that still described re-adding the removed Overnight Hardware Run feature.
+- React visible action inventory artifact was resynced from `react_ui_action_inventory`; it now records all 175 live React actions.
 
 Remaining gaps:
 - No unmatched original visible actions are currently listed in artifacts/codex-runs/full-visible-workflow-missing-controls.md.
@@ -46,6 +47,7 @@ Validation:
 - Latest current-head full validation: /home/administrator/lab-builder/.venv/bin/python -m pytest -q: 457 passed in 242.63s
 - Latest current-head compile/JS/diff checks: compileall app passed; node --check static/js/react-desktop-ui.js passed; git diff --check passed
 - Latest Overnight removal/app-state validation: /home/administrator/lab-builder/.venv/bin/python -m pytest -q tests/test_full_ui_parity_contract.py::test_overnight_hardware_feature_is_removed_from_routes_and_nav tests/test_full_visible_workflow_parity.py::test_overnight_hardware_surface_remains_removed tests/test_app.py::test_react_ui_app_state_api_exposes_desktop_shell_state: 3 passed
+- Latest visible/UI parity validation after inventory resync: /home/administrator/lab-builder/.venv/bin/python -m pytest -q tests/test_full_visible_workflow_parity.py tests/test_full_ui_parity_contract.py: 33 passed
 
 Hardware safety:
 - No hardware actions were executed by tests or validation.
