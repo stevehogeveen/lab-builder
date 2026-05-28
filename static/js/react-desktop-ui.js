@@ -1566,11 +1566,26 @@
                 h("button", { className: "button", type: "submit", disabled: !path }, label)
             );
         }
+        function relatedReportsHref(bundle) {
+            const query = String((bundle || {}).related_reports_query || (bundle || {}).scope || "").trim();
+            return "/configs" + (query ? "?report_query=" + encodeURIComponent(query) : "");
+        }
         return h(Panel, {
             label: "Report center",
             title: "Run bundles and saved files",
             subtitle: String(center.entries_total || 0) + " matching file(s). Latest bundles and newest files are shown first.",
         },
+            h("form", { className: "report-search-form", action: "/configs", method: "get" },
+                h("input", { className: "input", type: "text", name: "report_query", defaultValue: center.query || "", placeholder: "serial, storage, summary, plan" }),
+                h("select", { className: "input", name: "report_type", defaultValue: center.report_type || "all" },
+                    h("option", { value: "all" }, "All reports"),
+                    h("option", { value: "summary" }, "Summaries"),
+                    h("option", { value: "log" }, "Logs"),
+                    h("option", { value: "config" }, "Config snapshots"),
+                    h("option", { value: "other" }, "Other files")
+                ),
+                h("button", { className: "button", type: "submit" }, "Search reports")
+            ),
             bundles.length ? h("div", { className: "data-list report-bundle-list" }, bundles.slice(0, 6).map(function (bundle, index) {
                 return h("div", { className: "data-row report-row", key: "bundle-" + index },
                     h("div", null,
@@ -1580,7 +1595,8 @@
                     ),
                     h("div", { className: "action-row-controls" },
                         h(Pill, { tone: bundle.tone || "blue" }, bundle.result || "Recorded"),
-                        reportPostForm("/view-report", "Open bundle", bundle.run_summary_path)
+                        reportPostForm("/view-report", "Open bundle", bundle.run_summary_path),
+                        h(Button, { href: relatedReportsHref(bundle) }, "Related reports")
                     )
                 );
             })) : h("div", { className: "empty-state" }, "No run bundles have been recorded for this kit yet."),

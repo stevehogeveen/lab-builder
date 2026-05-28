@@ -1349,6 +1349,14 @@
             margin: 0;
         }
 
+        .report-search-form {
+            display: grid;
+            grid-template-columns: minmax(0, 1fr) minmax(150px, 190px) auto;
+            gap: 8px;
+            align-items: center;
+            margin-bottom: 12px;
+        }
+
         .coverage-strip {
             display: grid;
             grid-template-columns: repeat(6, minmax(0, 1fr));
@@ -1584,6 +1592,7 @@
             .section-grid,
             .module-grid,
             .form-grid,
+            .report-search-form,
             .kit-management-grid,
             .toggle-grid,
             .snmp-user-grid,

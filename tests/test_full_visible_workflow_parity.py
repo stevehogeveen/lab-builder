@@ -327,6 +327,11 @@ def test_report_center_panel_has_view_and_download_forms():
     assert '"/view-report"' in report_body
     assert '"/download-report"' in report_body
     assert 'name: "report_path"' in report_body
+    assert 'action: "/configs"' in report_body
+    assert 'name: "report_query"' in report_body
+    assert "Search reports" in report_body
+    assert "relatedReportsHref" in report_body
+    assert "Related reports" in report_body
 
 
 def test_execution_page_has_dedicated_scope_review_and_preview_forms():
