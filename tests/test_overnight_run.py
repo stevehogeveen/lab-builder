@@ -122,12 +122,48 @@ def test_secret_scan_blocks_auto_commit(tmp_path):
     report = writer.morning_report_path.read_text(encoding="utf-8")
     assert "Possible secrets were found" in report
     assert "verysecretvalue" not in report
+    summary_text = writer.summary_path.read_text(encoding="utf-8")
+    summary = yaml.safe_load(summary_text)
+    finalization = summary["finalization"]
+    assert finalization["secret_scan_result"].startswith("blocked")
+    assert isinstance(finalization["secret_findings"], list)
+    assert finalization["secret_findings"][0]["excerpt"] == "[redacted possible secret]"
+    assert "verysecretvalue" not in summary_text
 
 
 def test_secret_scan_ignores_code_variable_plumbing():
     assert scan_text_for_secrets("password = str(cfg.get('password') or '')\n") == []
     secretish_line = "api_key = '" + ("abcd1234" * 2) + "'\n"
     assert scan_text_for_secrets(secretish_line)
+
+
+def test_clean_secret_scan_status_is_not_redacted_in_reports(tmp_path):
+    repo = tmp_path
+    writer = OvernightArtifactWriter(repo / "artifacts" / "runs" / "overnight" / "20260527-052000-ilo-cisco")
+    writer.initialize_placeholders()
+    write_complete_nonsecret_artifacts(writer)
+
+    def runner(command: list[str], cwd: Path) -> CommandCapture:
+        if command == ["git", "status", "--short", "--branch"]:
+            return CommandCapture(command, 0, "## feature/finalizer...origin/feature/finalizer\n", "")
+        return CommandCapture(command, 0, "", "")
+
+    result = finalize_overnight_run(
+        writer,
+        repo_root=repo,
+        run_tests=False,
+        allow_git=False,
+        command_runner=runner,
+        now=datetime(2026, 5, 27, 5, 20),
+    )
+
+    report = writer.morning_report_path.read_text(encoding="utf-8")
+    summary = yaml.safe_load(writer.summary_path.read_text(encoding="utf-8"))
+
+    assert result["secret_scan_result"] == "clean"
+    assert "- Secret scan: clean" in report
+    assert summary["finalization"]["secret_scan_result"] == "clean"
+    assert summary["finalization"]["secret_findings"] == []
 
 
 def test_missing_and_pending_artifacts_are_reported_clearly(tmp_path):

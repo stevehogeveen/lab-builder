@@ -68,6 +68,7 @@ REQUIRED_ARTIFACTS = [
 ]
 
 PENDING_ARTIFACT_VALUES = {"", "pending", "status: pending"}
+SAFE_SECRET_METADATA_KEYS = {"secret_scan_result", "secret_findings_count"}
 
 
 def _local_wall_datetime(value: datetime | None = None) -> datetime:
@@ -181,8 +182,32 @@ class OvernightHardwareConfig:
         }
 
 
+def _redacted_secret_findings_for_report(value: Any) -> Any:
+    if not value:
+        return [] if isinstance(value, list) else value
+    if not isinstance(value, list):
+        return "[REDACTED]"
+    redacted: list[dict[str, Any]] = []
+    for finding in value:
+        item = finding if isinstance(finding, dict) else {}
+        redacted.append(
+            {
+                "path": str(item.get("path") or ""),
+                "line": item.get("line") or "",
+                "reason": str(item.get("reason") or ""),
+                "excerpt": "[redacted possible secret]",
+            }
+        )
+    return redacted
+
+
 def redact_nested(value: Any, key_name: str = "") -> Any:
     lowered = str(key_name or "").lower()
+    normalized_key = lowered.replace("-", "_")
+    if normalized_key in SAFE_SECRET_METADATA_KEYS:
+        return value
+    if normalized_key == "secret_findings":
+        return _redacted_secret_findings_for_report(value)
     secret_key = any(token in lowered for token in ("password", "secret", "token", "authorization", "api_key", "apikey", "community", "passphrase"))
     if secret_key and value not in (None, "", [], {}):
         return "[REDACTED]"
