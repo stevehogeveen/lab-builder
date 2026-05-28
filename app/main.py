@@ -14307,8 +14307,16 @@ def build_overnight_hardware_state(cfg: dict[str, Any], job: dict[str, Any] | No
     stale_in_progress_job = raw_active_status in {"Running", "Overnight queued"} and active_job_matches_latest and latest_is_finalized
     active_status = finalized_display_status if stale_in_progress_job else raw_active_status
     current_stage = str(active_job.get("current_stage") or "Not running")
+    operator_completion = int(active_job.get("progress_percent") or 0)
+    operator_last = str(
+        active_job.get("logs", ["No overnight run has been started."])[-1]
+        if active_job.get("logs")
+        else "No overnight run has been started."
+    )
     if stale_in_progress_job:
         current_stage = "Finalization complete"
+        operator_completion = 100
+        operator_last = f"Latest run finalized as {finalized_display_status}."
     pending_artifacts = bool(artifact_health.get("pending"))
     incomplete_artifacts = bool(artifact_health.get("missing") or artifact_health.get("unreadable"))
     if not latest:
@@ -14339,8 +14347,8 @@ def build_overnight_hardware_state(cfg: dict[str, Any], job: dict[str, Any] | No
             "purpose": "Collect current iLO Redfish state and Cisco console evidence overnight without wiping storage, factory resetting devices, or installing ESXi by default.",
             "current_mode": mode,
             "next": next_action,
-            "last": str(active_job.get("logs", ["No overnight run has been started."])[-1] if active_job.get("logs") else "No overnight run has been started."),
-            "completion": int(active_job.get("progress_percent") or 0),
+            "last": operator_last,
+            "completion": operator_completion,
             "status": active_status or "Idle",
             "current_stage": current_stage,
             "finalization_status": morning_status,

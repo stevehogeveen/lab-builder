@@ -625,6 +625,8 @@ def test_overnight_operator_mode_reconciles_stale_running_job(client):
     assert response.status_code == 200
     assert payload["operator"]["status"] == "Needs attention"
     assert payload["operator"]["current_stage"] == "Finalization complete"
+    assert payload["operator"]["completion"] == 100
+    assert payload["operator"]["last"] == "Latest run finalized as Needs attention."
     assert payload["operator"]["next"] == "Start a new discovery_only run before the hardware stop window to collect the pending artifacts."
     assert payload["operator"]["needs_attention"] == "Expected artifacts still contain placeholders: ilo/discovery.json"
     assert "The 6:00 AM finalization deadline was missed." not in payload["operator"]["needs_attention_reasons"]
