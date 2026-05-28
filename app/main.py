@@ -14623,6 +14623,7 @@ def react_ui_action_inventory() -> dict[str, list[dict[str, str]]]:
             {"label": "Safe apply NetApp", "method": "POST", "route": "/modules/netapp/apply", "mode": "json"},
             {"label": "Apply NetApp page", "method": "POST", "route": "/modules/netapp/apply-page", "mode": "legacy-html"},
             {"label": "Check reset readiness", "method": "POST", "route": "/modules/netapp/factory-reset", "mode": "legacy-html"},
+            {"label": "Factory reset NetApp", "method": "POST", "route": "/modules/netapp/factory-reset", "mode": "legacy-html"},
             {"label": "Plan ONTAP upgrade", "method": "POST", "route": "/modules/netapp/plan-upgrade", "mode": "legacy-html"},
             {"label": "Run ONTAP upgrade", "method": "POST", "route": "/modules/netapp/run-upgrade", "mode": "legacy-html"},
             {"label": "ONTAP upgrade activity", "method": "GET", "route": "/modules/netapp/upgrade-activity", "mode": "legacy-html"},

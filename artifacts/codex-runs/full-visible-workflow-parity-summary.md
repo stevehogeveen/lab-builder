@@ -15,6 +15,8 @@ Latest follow-up:
 - Dashboard module cards now render backend-provided `legacy_href` destinations through the React-aware route mapper.
 - Run Center now includes a stage readiness panel sourced from `execution_review.stages`, including original review and blocked-stage fix links.
 - React app-state now degrades missing execution-review prerequisites, such as absent ESXi ISO media, into visible Needs attention stage rows instead of breaking Operator Mode.
+- React app-state execution review is passive and does not run ESXi runtime reachability probes during normal Operator Mode polling.
+- NetApp now exposes the explicit guarded "Factory reset NetApp" label in addition to reset readiness, matching the original visible control while still opening the original confirmation form.
 
 Remaining gaps:
 - No unmatched original visible actions are currently listed in artifacts/codex-runs/full-visible-workflow-missing-controls.md.

@@ -112,6 +112,7 @@ EXPECTED_VISIBLE_WORKFLOWS = {
         "Export NetApp plan",
         "Apply NetApp page",
         "Check reset readiness",
+        "Factory reset NetApp",
     ],
     "ovf_templates": [
         "Register OVF directory",
@@ -158,6 +159,7 @@ GUARDED_LABELS = {
     "Start real run",
     "Apply NetApp page",
     "Safe apply NetApp",
+    "Factory reset NetApp",
     "Apply storage layout",
     "Reboot storage now",
 }
