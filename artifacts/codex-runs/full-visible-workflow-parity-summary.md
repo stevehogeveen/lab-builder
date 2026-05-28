@@ -29,7 +29,7 @@ Latest follow-up:
 - NetApp setup-IP React feedback now reports the saved-values-only backend placeholder as a warning instead of a successful/sent action.
 - Dashboard kit switching now uses the original "Switch active kit" wording while preserving the legacy load-kit route in the action inventory.
 - Upgrade Helper, OVF directory registration, storage repair/reboot/artifact, and history artifact labels were aligned with the original visible controls.
-- Exact visible-label comparison is down to three known differences: the intentional Cisco "Setup Cisco IP" alias and two raw Jinja conditional button expressions that resolve to existing React labels.
+- Exact visible-label comparison is down to two known raw Jinja conditional rows; their resolved labels are now all represented in React.
 - Removed tracked stale Codex prompt files that still described re-adding the removed Overnight Hardware Run feature.
 
 Remaining gaps:
