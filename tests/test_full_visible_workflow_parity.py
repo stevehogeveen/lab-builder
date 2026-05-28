@@ -334,7 +334,7 @@ def test_netapp_setup_ip_copy_matches_placeholder_backend_behavior():
     panel_body = js.split("function NetAppSetupIpPanel", 1)[1].split("function ActionLogPanel", 1)[0]
     handler_body = js.split("function setupNetAppIp", 1)[1].split("function storagePathFields", 1)[0]
     assert "live NetApp IP apply is not implemented yet" in panel_body
-    assert "Save setup IP values" in panel_body
+    assert "Setup NetApp IP" in panel_body
     assert "Applying..." not in panel_body
     assert "NetApp IP setup was not applied" in handler_body
     assert 'appendSetupAction("NetApp setup IP", message, false, "warn")' in handler_body
@@ -420,6 +420,13 @@ def test_report_center_panel_has_view_and_download_forms():
     assert "Search reports" in report_body
     assert "relatedReportsQuery" in report_body
     assert "Related reports" in report_body
+
+
+def test_netapp_setup_ip_panel_uses_operator_action_label():
+    js = Path("static/js/react-desktop-ui.js").read_text(encoding="utf-8")
+    panel_body = js.split("function NetAppSetupIpPanel", 1)[1].split("function ActionLogPanel", 1)[0]
+    assert "Setup NetApp IP" in panel_body
+    assert "live NetApp IP apply is not implemented yet" in panel_body
 
 
 def test_execution_page_has_dedicated_scope_review_and_preview_forms():
