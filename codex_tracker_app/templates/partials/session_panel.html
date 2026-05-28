@@ -30,6 +30,15 @@
       <div class="small">session: {{ session.codex_usage_count or 0 }}</div>
       <div class="small">remaining total budget: {{ codex_usage_left }} / {{ codex_total_budget }}</div>
     </div>
+    <div class="meta-card">
+      <h4>Assistant mode</h4>
+      <div class="small">mode: {{ codex_backend.mode }}</div>
+      {% if codex_backend.remote_enabled %}
+      <div class="small">model: {{ codex_backend.model }}</div>
+      {% else %}
+      <div class="small">local helper</div>
+      {% endif %}
+    </div>
   </div>
 
   <div class="toolbar">

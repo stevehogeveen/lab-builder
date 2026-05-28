@@ -161,6 +161,31 @@ def test_project_filters_and_linked_sessions(planner_client, monkeypatch):
     assert "Build session" in response.text
 
 
+def test_new_session_inherits_project_from_linked_session(planner_client):
+    base = planner._create_session(
+        "Baseline session",
+        "Set base context",
+        "backend",
+        project_name="Delta",
+        session_purpose="Keep release prep stable",
+        audience="Operators",
+        applies_to_session_id="",
+    )
+    follower = planner._create_session(
+        "Follow-up session",
+        "Refine release prep",
+        "tests",
+        project_name="",
+        session_purpose="",
+        audience="",
+        applies_to_session_id=base["session_id"],
+        existing_sessions=[base],
+    )
+    assert follower["project_name"] == "Delta"
+    assert follower["session_purpose"] == "Keep release prep stable"
+    assert follower["audience"] == "Operators"
+
+
 def test_dashboard_shows_session_detail_fields(planner_client):
     first = planner._create_session(
         "Dashboard details",

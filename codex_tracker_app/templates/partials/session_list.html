@@ -12,7 +12,23 @@
       <div class="small">All sessions: {{ sessions|length }}</div>
       <div class="small">Projects: {{ projects|length }}</div>
     </div>
+    <div class="meta-card">
+      <h4>Codex backend</h4>
+      <div class="small">Mode: {{ codex_backend.mode }}</div>
+      {% if codex_backend.remote_enabled %}
+      <div class="small">Model: {{ codex_backend.model }}</div>
+      {% else %}
+      <div class="small">Local smart fallback</div>
+      {% endif %}
+    </div>
   </div>
+  {% if project_usage %}
+  <ul>
+    {% for item in project_usage %}
+    <li>{{ item.project }} · {{ item.used }} call{{ "s" if item.used != 1 else "" }} used</li>
+    {% endfor %}
+  </ul>
+  {% endif %}
   <div class="toolbar">
     <a class="btn" href="/api/sessions">Open JSON API</a>
   </div>

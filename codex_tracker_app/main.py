@@ -13,6 +13,7 @@ from fastapi import FastAPI, Form, HTTPException, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
+import httpx
 
 
 BASE_DIR = Path(__file__).resolve().parent
@@ -21,6 +22,14 @@ STATIC_DIR = BASE_DIR / "static"
 REPO_ROOT = Path(__file__).resolve().parents[1]
 SESSIONS_PATH = BASE_DIR / "data" / "sessions.json"
 CODEX_USAGE_QUOTA = int(os.getenv("CODEX_USAGE_QUOTA", "120"))
+CODEX_BACKEND_MODE = os.getenv("CODEX_BACKEND_MODE", "local").strip().lower() or "local"
+CODEX_API_BASE_URL = os.getenv("CODEX_API_BASE_URL", "https://api.openai.com/v1").rstrip("/")
+CODEX_API_MODEL = os.getenv("CODEX_API_MODEL", "gpt-4o-mini").strip() or "gpt-4o-mini"
+CODEX_API_KEY = os.getenv("CODEX_API_KEY", "").strip()
+try:
+    CODEX_API_TIMEOUT = float(os.getenv("CODEX_API_TIMEOUT", "12"))
+except ValueError:
+    CODEX_API_TIMEOUT = 12.0
 
 app = FastAPI(title="Codex App Planner", docs_url=None)
 templates = Jinja2Templates(directory=str(TEMPLATE_DIR))
@@ -63,6 +72,14 @@ def _normalize_project(value: Any) -> str:
 def _usage_left(all_sessions: list[dict[str, Any]]) -> int:
     used = sum(int(item.get("codex_usage_count") or 0) for item in all_sessions)
     return max(CODEX_USAGE_QUOTA - used, 0)
+
+
+def _codex_backend_status() -> dict[str, Any]:
+    return {
+        "mode": CODEX_BACKEND_MODE,
+        "remote_enabled": _is_codex_remote_enabled(),
+        "model": CODEX_API_MODEL if _is_codex_remote_enabled() else "",
+    }
 
 
 def _total_usage(all_sessions: list[dict[str, Any]]) -> int:
@@ -379,7 +396,7 @@ def _build_codex_prompt(session: dict[str, Any], sessions: list[dict[str, Any]])
     }
 
 
-def _build_chat_reply(session: dict[str, Any], message: str, sessions: list[dict[str, Any]]) -> str:
+def _build_chat_reply_sync(session: dict[str, Any], message: str, sessions: list[dict[str, Any]]) -> str:
     prompt = _normalize_text(message).lower()
     feature_area = _normalize_text(session.get("feature_area")).lower()
     feature_goal = _normalize_text(session.get("feature_goal"))
@@ -419,6 +436,89 @@ def _build_chat_reply(session: dict[str, Any], message: str, sessions: list[dict
     )
 
 
+def _is_codex_remote_enabled() -> bool:
+    return (
+        CODEX_BACKEND_MODE == "remote"
+        and bool(CODEX_API_KEY)
+        and bool(CODEX_API_MODEL)
+        and bool(CODEX_API_BASE_URL)
+    )
+
+
+def _build_codex_context(session: dict[str, Any], sessions: list[dict[str, Any]]) -> str:
+    return (
+        "You are helping implement this specific feature in a real project. "
+        "Keep guidance short, concrete, and easy to execute.\n"
+        f"Session: {_session_label(session)}\n"
+        f"Project: {_normalize_project(session.get('project_name'))}\n"
+        f"Purpose: {_normalize_text(session.get('session_purpose')) or 'not set'}\n"
+        f"Audience: {_normalize_text(session.get('audience')) or 'not set'}\n"
+        f"Goal: {_normalize_text(session.get('feature_goal'))}\n"
+        f"Current git snapshot: {(session.get('git_summary') or {}).get('headline', 'No snapshot')}\n"
+        f"Suggested starter prompt:\n{_build_codex_prompt(session, sessions)['prompt']}"
+    )
+
+
+async def _build_codex_reply(session: dict[str, Any], message: str, sessions: list[dict[str, Any]]) -> str:
+    fallback = _build_chat_reply_sync(session, message, sessions)
+    if not _is_codex_remote_enabled():
+        return fallback
+
+    remote_prompt = (
+        f"{_build_codex_context(session, sessions)}\n\n"
+        f"User asks: {_normalize_text(message)}\n"
+        "Reply with one short implementation plan and explicit next action."
+    )
+    headers = {
+        "Authorization": f"Bearer {CODEX_API_KEY}",
+        "Content-Type": "application/json",
+    }
+    payload = {
+        "model": CODEX_API_MODEL,
+        "messages": [
+            {
+                "role": "system",
+                "content": "You are a pragmatic coding assistant for software sessions.",
+            },
+            {
+                "role": "user",
+                "content": remote_prompt,
+            },
+        ],
+        "temperature": 0.2,
+    }
+
+    try:
+        async with httpx.AsyncClient(timeout=CODEX_API_TIMEOUT) as client:
+            response = await client.post(
+                f"{CODEX_API_BASE_URL}/chat/completions",
+                headers=headers,
+                json=payload,
+            )
+            response.raise_for_status()
+            body = response.json()
+    except Exception:
+        return f"{fallback}\n\nRemote assistant unavailable; using local fallback response."
+
+    choices = body.get("choices") if isinstance(body, dict) else None
+    if not isinstance(choices, list) or not choices:
+        return f"{fallback}\n\nRemote assistant returned no reply; using fallback."
+
+    first_choice = choices[0]
+    if not isinstance(first_choice, dict):
+        return f"{fallback}\n\nRemote assistant returned malformed reply; using fallback."
+
+    message_body = first_choice.get("message")
+    if not isinstance(message_body, dict):
+        return f"{fallback}\n\nRemote assistant returned malformed reply; using fallback."
+
+    reply = _normalize_text(message_body.get("content"))
+    if not reply:
+        return f"{fallback}\n\nRemote assistant returned empty reply; using fallback."
+
+    return reply
+
+
 def _load_dashboard_context(
     project_filter: str | None = None,
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]], list[str], int, int, dict[str, Any]]:
@@ -454,6 +554,7 @@ def _render_session_panel(session: dict[str, Any], sessions: list[dict[str, Any]
         "suggestions": _build_codex_prompt(session, sessions)["suggestions"],
         "title": session.get("title", "Session"),
         "codex_run": codex_run_signature(session),
+        "codex_backend": _codex_backend_status(),
     }
 
 
@@ -473,11 +574,19 @@ def _create_session(
     feature_goal = _normalize_text(feature_goal)
     feature_area = _normalize_text(feature_area)
     notes = _normalize_text(notes)
-    project_name = _normalize_project(project_name)
     session_purpose = _normalize_text(session_purpose)
     audience = _normalize_text(audience)
     applies_to_session_id = _normalize_text(applies_to_session_id)
     existing_sessions = existing_sessions or []
+    linked_session = find_session(existing_sessions, applies_to_session_id) if applies_to_session_id else None
+    if linked_session and not _normalize_text(project_name):
+        project_name = _normalize_project(linked_session.get("project_name"))
+    else:
+        project_name = _normalize_project(project_name)
+    if linked_session and not session_purpose:
+        session_purpose = _normalize_text(linked_session.get("session_purpose"))
+    if linked_session and not audience:
+        audience = _normalize_text(linked_session.get("audience"))
     summary = summarize_git_changes()
     session_id = str(uuid.uuid4())
     context_session = {
@@ -605,6 +714,17 @@ def _projects_from_sessions(sessions: list[dict[str, Any]]) -> list[str]:
     return sorted(project_set)
 
 
+def _project_usage_summary(sessions: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    usage_by_project: dict[str, int] = {}
+    for session in sessions:
+        project = _normalize_project(session.get("project_name"))
+        usage_by_project[project] = usage_by_project.get(project, 0) + int(session.get("codex_usage_count") or 0)
+    return [
+        {"project": project, "used": usage_by_project.get(project, 0)}
+        for project in sorted(usage_by_project)
+    ]
+
+
 def _enrich_sessions_for_listing(
     sessions: list[dict[str, Any]],
     *,
@@ -690,11 +810,13 @@ async def dashboard(request: Request, project: str | None = None):
             "selected_session_id": selected_session.get("session_id") if selected_session else "",
             "usage_used": usage_used,
             "usage_left": usage_left,
+            "project_usage": _project_usage_summary(all_sessions),
             "codex_usage": {
                 "quota": CODEX_USAGE_QUOTA,
                 "used": usage_used,
                 "left": usage_left,
             },
+            "codex_backend": _codex_backend_status(),
             "workspace_summary": workspace_summary,
             **selected_context,
             "title": "Codex App Planner",
@@ -717,6 +839,8 @@ async def session_list_fragment(request: Request, project: str | None = None):
             "usage_used": usage_used,
             "usage_left": usage_left,
             "workspace_summary": workspace_summary,
+            "project_usage": _project_usage_summary(all_sessions),
+            "codex_backend": _codex_backend_status(),
             "title": "Session list",
         },
     )
@@ -790,6 +914,8 @@ async def create_session(
                 "usage_used": _total_usage(all_sessions),
                 "usage_left": _usage_left(all_sessions),
                 "workspace_summary": workspace_summary,
+                "project_usage": _project_usage_summary(all_sessions),
+                "codex_backend": _codex_backend_status(),
             },
         )
     return RedirectResponse(url=f"/session/{session['session_id']}", status_code=303)
@@ -834,6 +960,8 @@ async def create_session_fragment(
             "usage_used": _total_usage(all_sessions),
             "usage_left": _usage_left(all_sessions),
             "workspace_summary": workspace_summary,
+            "project_usage": _project_usage_summary(all_sessions),
+            "codex_backend": _codex_backend_status(),
         },
     )
 
@@ -944,7 +1072,7 @@ async def chat_with_codex(
     session["messages"].append(
         {
             "role": "assistant",
-            "text": _build_chat_reply(session, user_message, sessions),
+            "text": await _build_codex_reply(session, user_message, sessions),
             "created_at": _utc_like_now(),
         }
     )
@@ -989,9 +1117,11 @@ async def api_sessions():
         "workspace_summary": summarize_git_changes(),
         "sessions": sessions,
         "projects": _projects_from_sessions(sessions),
+        "project_usage": _project_usage_summary(sessions),
         "codex_usage": {
             "quota": CODEX_USAGE_QUOTA,
             "used": _total_usage(sessions),
             "left": _usage_left(sessions),
         },
+        "codex_backend": _codex_backend_status(),
     }

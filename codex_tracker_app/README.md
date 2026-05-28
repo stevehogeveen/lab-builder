@@ -69,3 +69,16 @@ For this kind of app, use an async API server with a simple job layer:
 - **OpenAI-compatible client abstraction** behind your own service layer so you can swap providers later.
 
 This pattern keeps the UI responsive (HTTP routes return immediately), keeps Codex work async, and keeps data consistent across sessions in a project.
+
+### Optional real Codex assistant endpoint
+
+You can switch chat to a real model by setting:
+
+```bash
+export CODEX_BACKEND_MODE=remote
+export CODEX_API_KEY=<your_openai_or_compat_key>
+export CODEX_API_BASE_URL=https://api.openai.com/v1
+export CODEX_API_MODEL=gpt-4o-mini
+```
+
+When remote mode is not configured, the app uses local responses and still remains usable.
