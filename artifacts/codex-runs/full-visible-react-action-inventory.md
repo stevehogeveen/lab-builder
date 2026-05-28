@@ -1,6 +1,6 @@
 # Full Visible React Action Inventory
 
-Total rows: 175
+Total rows: 176
 
 | page_key | label | method | route | mode | location |
 | --- | --- | --- | --- | --- | --- |
@@ -164,6 +164,7 @@ Total rows: 175
 | execution | Open setup page | GET | /configuration | legacy-html | static/js/react-desktop-ui.js + app/main.py:react_ui_action_inventory |
 | execution | Open Reports | GET | /configs | legacy-html | static/js/react-desktop-ui.js + app/main.py:react_ui_action_inventory |
 | reports | Run history API | GET | /api/ui/run-history | json | static/js/react-desktop-ui.js + app/main.py:react_ui_action_inventory |
+| reports | Load filtered reports | GET | /api/ui/reports | json | static/js/react-desktop-ui.js + app/main.py:react_ui_action_inventory |
 | reports | Search reports | GET | /configs | legacy-html | static/js/react-desktop-ui.js + app/main.py:react_ui_action_inventory |
 | reports | Open detailed history | GET | /history | legacy-html | static/js/react-desktop-ui.js + app/main.py:react_ui_action_inventory |
 | reports | Open Reports | GET | /configs | legacy-html | static/js/react-desktop-ui.js + app/main.py:react_ui_action_inventory |

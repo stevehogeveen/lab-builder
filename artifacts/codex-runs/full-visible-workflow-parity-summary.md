@@ -31,7 +31,7 @@ Latest follow-up:
 - Upgrade Helper, OVF directory registration, storage repair/reboot/artifact, and history artifact labels were aligned with the original visible controls.
 - Exact visible-label comparison is down to two known raw Jinja conditional rows; their resolved labels are now all represented in React.
 - Removed tracked stale Codex prompt files that still described re-adding the removed Overnight Hardware Run feature.
-- React visible action inventory artifact was resynced from `react_ui_action_inventory`; it now records all 175 live React actions.
+- React visible action inventory artifact was resynced from `react_ui_action_inventory`; it now records all 176 live React actions.
 - React Global Settings now updates the NetApp cluster-management bootstrap override when the global NetApp IP changes, so Setup IP, app-state, saved config, and NetApp management values stay aligned.
 - React Setup IP now fills NetApp SP, cluster, node, and SVM management address fields from the saved default IP plan when no explicit bootstrap override exists.
 - React JSON save responses for Global Settings and iLO setup now say the values were saved locally and that reachability has not been verified, matching the Operator Mode wording.
