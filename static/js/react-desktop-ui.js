@@ -180,14 +180,15 @@
 
     function Button(props) {
         const className = "button" + (props.primary ? " button-primary" : "");
+        const isLink = props.href && !props.disabled;
         return h(
-            props.href ? "a" : "button",
+            isLink ? "a" : "button",
             {
                 className: className,
-                href: props.href,
-                type: props.href ? undefined : (props.type || "button"),
+                href: isLink ? props.href : undefined,
+                type: isLink ? undefined : (props.type || "button"),
                 onClick: props.onClick,
-                disabled: props.disabled,
+                disabled: isLink ? undefined : props.disabled,
             },
             props.children
         );

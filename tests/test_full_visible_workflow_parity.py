@@ -234,6 +234,15 @@ def test_legacy_post_actions_render_as_visible_operator_forms():
     assert "Open confirmation" in js
 
 
+def test_disabled_react_links_render_as_inert_buttons():
+    js = Path("static/js/react-desktop-ui.js").read_text(encoding="utf-8")
+    button_body = js.split("function Button(props)", 1)[1].split("function DownloadButton", 1)[0]
+    assert "const isLink = props.href && !props.disabled" in button_body
+    assert 'isLink ? "a" : "button"' in button_body
+    assert "href: isLink ? props.href : undefined" in button_body
+    assert "disabled: isLink ? undefined : props.disabled" in button_body
+
+
 def test_guarded_hardware_actions_do_not_auto_submit_from_action_inventory():
     inventory = all_actions()
     guarded_routes = {
