@@ -548,6 +548,40 @@ class FakeCiscoClient:
         return "Switch#"
 
 
+def test_evening_overnight_run_collects_before_next_morning_stop_window(tmp_path):
+    writer = OvernightArtifactWriter(tmp_path / "20260527-175700-ilo-cisco")
+    writer.initialize_placeholders()
+    cfg = {
+        "ilo": {"username": "Administrator", "password": "secret"},
+        "cisco_switch": {"console_port": "/dev/ttyUSB0", "console_baud": 9600},
+    }
+    fake_cisco = FakeCiscoClient("/dev/ttyUSB0", 9600)
+
+    result = run_overnight_hardware(
+        cfg,
+        OvernightHardwareConfig.from_mapping({}, cfg),
+        writer,
+        repo_root=tmp_path,
+        ilo_client_factory=lambda **_: FakeIloClient(),
+        cisco_diagnostics_fn=lambda: {"serial_imported": True, "ordered_ports": ["/dev/ttyUSB0"]},
+        cisco_discovery_factory=lambda: SimpleNamespace(scan=lambda: []),
+        cisco_client_factory=lambda port, baud: fake_cisco,
+        finalizer=lambda *args, **kwargs: {"status_label": "Ready for review"},
+        now_fn=lambda: datetime(2026, 5, 27, 20, 31),
+    )
+
+    events = yaml.safe_load(writer.trace_path.read_text(encoding="utf-8"))["events"]
+    assert result["ilo"]["ok"] is True
+    assert result["cisco"]["ok"] is True
+    assert not hardware_stop_requested(writer.run_dir)
+    assert fake_cisco.commands == ["terminal length 0", "show version", "show running-config"]
+    assert all("Finalization window is active" not in event["message"] for event in events)
+    assert '"status": "skipped"' not in (writer.run_dir / "ilo" / "discovery.json").read_text(encoding="utf-8")
+    assert "Cisco console discovery skipped" not in (writer.run_dir / "cisco" / "initial-session.txt").read_text(
+        encoding="utf-8"
+    )
+
+
 def test_mocked_cisco_console_discovery_is_read_only(tmp_path):
     cfg = {"cisco_switch": {"console_port": "/dev/ttyUSB0", "console_baud": 9600}}
     run_config = OvernightHardwareConfig.from_mapping({}, cfg)
