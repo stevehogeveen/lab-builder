@@ -1354,6 +1354,7 @@ def list_overnight_run_artifacts(artifacts_root: Path) -> list[dict[str, Any]]:
             needs_attention_reasons = ["Expected artifacts were skipped: " + ", ".join(artifact_health["skipped"])]
         runs.append(
             {
+                "run_id": run_dir.name,
                 "name": run_dir.name,
                 "path": str(run_dir),
                 "summary_path": str(summary_path),

@@ -673,6 +673,7 @@ def test_overnight_latest_run_status_appears_in_api_and_ui(client):
     payload = api_response.json()
     assert payload["operator"]["latest_run_status"] == "Needs attention"
     assert payload["operator"]["latest_run_folder"] == str(run_dir)
+    assert payload["debug"]["latest_run"]["run_id"] == run_dir.name
     assert "Pytest did not pass" in payload["operator"]["needs_attention"]
 
     page_response = client.get("/overnight-hardware")
