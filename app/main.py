@@ -15190,6 +15190,7 @@ def build_react_ui_state() -> dict[str, Any]:
         "storage": build_react_storage_state(cfg, job),
         "recent_activity": build_activity_feed(history, limit=10),
         "run_history": build_history_display_entries(history)[:30],
+        "report_center": build_report_center(cfg),
         "technical": {
             "logs": react_ui_job_payload(job)["logs"],
             "artifacts": react_ui_artifact_links(job),

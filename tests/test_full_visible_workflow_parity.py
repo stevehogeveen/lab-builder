@@ -272,7 +272,24 @@ def test_reports_page_exposes_action_inventory_and_debug_downloads():
     js = Path("static/js/react-desktop-ui.js").read_text(encoding="utf-8")
     reports_body = js.split("function ReportsPage", 1)[1].split("function TechnicalPage", 1)[0]
     assert "ActionInventoryPanel" in reports_body
+    assert "ReportCenterPanel" in reports_body
     assert "Download debug bundle" in {action["label"] for action in all_actions()["reports"]}
+
+
+def test_react_app_state_exposes_report_center_bundles_and_files():
+    state = main.build_react_ui_state()
+    report_center = state.get("report_center") or {}
+    assert "latest_bundles" in report_center
+    assert "entries_preview" in report_center
+    assert "entries_total" in report_center
+
+
+def test_report_center_panel_has_view_and_download_forms():
+    js = Path("static/js/react-desktop-ui.js").read_text(encoding="utf-8")
+    report_body = js.split("function ReportCenterPanel", 1)[1].split("function TechnicalPage", 1)[0]
+    assert '"/view-report"' in report_body
+    assert '"/download-report"' in report_body
+    assert 'name: "report_path"' in report_body
 
 
 def test_react_app_state_exposes_saved_setup_values_for_generic_pages():

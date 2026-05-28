@@ -1473,9 +1473,55 @@
                         })
                     )
                 ),
+                h(ReportCenterPanel, { reportCenter: state.report_center || {} }),
                 h(ActionInventoryPanel, { activePage: "reports", appState: state, actions: actions, onNavigate: props.onNavigate })
             ),
             h(ContextPanel, { activePage: "reports", appState: state, actions: actions, onNavigate: props.onNavigate })
+        );
+    }
+
+    function ReportCenterPanel(props) {
+        const center = props.reportCenter || {};
+        const bundles = center.latest_bundles || [];
+        const entries = center.entries_preview || [];
+        function reportPostForm(action, label, path) {
+            return h("form", { className: "inline-action-form", action: action, method: "post" },
+                h("input", { type: "hidden", name: "return_page", value: "configs" }),
+                h("input", { type: "hidden", name: "report_path", value: path || "" }),
+                h("button", { className: "button", type: "submit", disabled: !path }, label)
+            );
+        }
+        return h(Panel, {
+            label: "Report center",
+            title: "Run bundles and saved files",
+            subtitle: String(center.entries_total || 0) + " matching file(s). Latest bundles and newest files are shown first.",
+        },
+            bundles.length ? h("div", { className: "data-list report-bundle-list" }, bundles.slice(0, 6).map(function (bundle, index) {
+                return h("div", { className: "data-row report-row", key: "bundle-" + index },
+                    h("div", null,
+                        h("div", { className: "data-name" }, bundle.name || bundle.scope || "Run bundle"),
+                        h("div", { className: "data-value", title: bundle.human_summary || bundle.summary || "" }, bundle.human_summary || bundle.summary || "Open bundle for details."),
+                        h("div", { className: "field-help" }, [bundle.time, bundle.target].filter(Boolean).join(" | "))
+                    ),
+                    h("div", { className: "action-row-controls" },
+                        h(Pill, { tone: bundle.tone || "blue" }, bundle.result || "Recorded"),
+                        reportPostForm("/view-report", "Open bundle", bundle.run_summary_path)
+                    )
+                );
+            })) : h("div", { className: "empty-state" }, "No run bundles have been recorded for this kit yet."),
+            entries.length ? h("div", { className: "data-list report-file-list" }, entries.slice(0, 8).map(function (entry, index) {
+                return h("div", { className: "data-row report-row", key: "entry-" + index },
+                    h("div", null,
+                        h("div", { className: "data-name" }, entry.label || "Report"),
+                        h("div", { className: "data-value", title: entry.parent || entry.path || "" }, entry.parent || entry.kind || ""),
+                        h("div", { className: "field-help" }, [entry.kind, entry.mtime].filter(Boolean).join(" | "))
+                    ),
+                    h("div", { className: "action-row-controls" },
+                        reportPostForm("/view-report", "View", entry.path),
+                        reportPostForm("/download-report", "Download", entry.path)
+                    )
+                );
+            })) : h("div", { className: "empty-state" }, "No saved report files matched the default filter.")
         );
     }
 
