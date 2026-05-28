@@ -20,6 +20,7 @@ Latest follow-up:
 - React execution-review fallback now scopes missing ESXi ISO/media blockers to the ESXi stage instead of making every included stage look blocked by the same ESXi issue.
 - A follow-up NetApp template scan restored additional original console and cluster management IP action labels in React: save selected console, read current NetApp config, preview/apply console cluster IP, and preview/apply cluster management IP.
 - Storage action labels were aligned back to the original operator wording for current-state display, plan build, approval, invalid-selection repair, and approval removal.
+- Cisco action labels were aligned back to the original operator wording for console access, current-config check, version check, save-to-config, and config approval while preserving the explicit Setup Cisco IP action.
 
 Remaining gaps:
 - No unmatched original visible actions are currently listed in artifacts/codex-runs/full-visible-workflow-missing-controls.md.
