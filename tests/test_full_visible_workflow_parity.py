@@ -261,6 +261,16 @@ def test_setup_ip_copy_does_not_claim_cisco_reachability_before_ssh_test():
     assert "Use Test SSH to verify" in bootstrap_body
 
 
+def test_react_legacy_html_posts_surface_in_page_warnings_as_failures():
+    js = Path("static/js/react-desktop-ui.js").read_text(encoding="utf-8")
+    helper_body = js.split("function legacyHtmlWarningMessage", 1)[1].split("function htmlActionPost", 1)[0]
+    post_body = js.split("function htmlActionPost", 1)[1].split("function checkPasswordAttention", 1)[0]
+    assert "DOMParser" in helper_body
+    assert ".global-warning-popup" in helper_body
+    assert "legacyHtmlWarningMessage(text)" in post_body
+    assert "throw new Error(warning)" in post_body
+
+
 def test_legacy_post_actions_render_as_visible_operator_forms():
     js = Path("static/js/react-desktop-ui.js").read_text(encoding="utf-8")
     assert "inline-action-form" in js

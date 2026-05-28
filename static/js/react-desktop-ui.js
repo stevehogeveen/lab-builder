@@ -142,6 +142,18 @@
         });
     }
 
+    function legacyHtmlWarningMessage(text) {
+        if (!text || typeof DOMParser === "undefined") return "";
+        try {
+            const doc = new DOMParser().parseFromString(text, "text/html");
+            const warning = doc.querySelector(".global-warning-popup");
+            if (!warning) return "";
+            return warning.textContent.replace(/\s+/g, " ").trim();
+        } catch (error) {
+            return "";
+        }
+    }
+
     function htmlActionPost(url, fields) {
         const form = new FormData();
         Object.entries(fields || {}).forEach(function (entry) {
@@ -157,6 +169,12 @@
                 throw new Error("POST " + url + " failed with HTTP " + response.status);
             }
             return response.text();
+        }).then(function (text) {
+            const warning = legacyHtmlWarningMessage(text);
+            if (warning) {
+                throw new Error(warning);
+            }
+            return text;
         });
     }
 
