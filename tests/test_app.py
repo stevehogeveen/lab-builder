@@ -1395,6 +1395,7 @@ def test_react_ui_app_state_api_exposes_desktop_shell_state(client):
     assert any(action["label"] == "Setup NetApp IP" and action["route"] == "/modules/netapp/apply-ip-setup" for action in payload["actions"]["netapp"])
     assert any(action["label"] == "Setup Cisco IP" and action["route"] == "/modules/cisco/bootstrap-management" for action in payload["actions"]["cisco"])
     assert payload["actions"]["execution"][1]["route"] == "/api/ui/job-status"
+    assert payload["dashboard"]["label"] == payload["dashboard"]["headline"]
     assert payload["action_catalog"]["coverage"]["total_routes"] > 20
     assert "target_ip" in payload["setup_ip"]["ilo"]
     assert "management_ip" in payload["setup_ip"]["cisco"]

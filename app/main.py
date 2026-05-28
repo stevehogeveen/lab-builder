@@ -3528,6 +3528,7 @@ def build_dashboard_overview(
     )
 
     return {
+        "label": headline,
         "headline": headline,
         "summary": summary,
         "tone": tone,
