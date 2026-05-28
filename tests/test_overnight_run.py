@@ -556,3 +556,45 @@ def test_overnight_latest_run_status_appears_in_api_and_ui(client):
     page_response = client.get("/overnight-hardware")
     assert str(run_dir) in page_response.text
     assert "Pytest did not pass" in page_response.text
+
+
+def test_overnight_operator_mode_reconciles_stale_running_job(client):
+    run_dir = main.ARTIFACTS_DIR / "runs" / "overnight" / "20260527-175700-ilo-cisco"
+    writer = OvernightArtifactWriter(run_dir)
+    writer.initialize_placeholders()
+    writer.write_summary(
+        {
+            "status": "Needs attention",
+            "finalization": {
+                "status_label": "Needs attention",
+                "needs_attention_reasons": ["Expected artifacts still contain placeholders: ilo/discovery.json"],
+            },
+        }
+    )
+    writer.morning_report_path.write_text(
+        "# Morning Ready\n\nStatus: Needs attention\n\n## Needs Attention Reasons\n- Expected artifacts still contain placeholders: ilo/discovery.json\n",
+        encoding="utf-8",
+    )
+    cfg = main.load_kit_config()
+    main.save_job(
+        cfg["site"]["name"],
+        {
+            "status": "Running",
+            "scope": "overnight_hardware",
+            "root_scope": "overnight_hardware",
+            "overnight_mode": "discovery_only",
+            "current_stage": "Finalization",
+            "progress_percent": 72,
+            "logs": ["[OVERNIGHT] finalization: running - Stopping hardware work and starting morning finalization."],
+            "run_id": run_dir.name,
+            "run_bundle_dir": str(run_dir),
+        },
+    )
+
+    response = client.get("/api/ui/overnight-hardware")
+    payload = response.json()
+
+    assert response.status_code == 200
+    assert payload["operator"]["status"] == "Needs attention"
+    assert payload["operator"]["current_stage"] == "Finalization complete"
+    assert payload["operator"]["next"] == "Start a new discovery_only run before the hardware stop window to collect the pending artifacts."

@@ -14293,13 +14293,34 @@ def build_overnight_hardware_state(cfg: dict[str, Any], job: dict[str, Any] | No
             needs_attention_reasons.append("Expected artifacts are missing: " + ", ".join(artifact_health.get("missing") or []))
         if artifact_health.get("pending"):
             needs_attention_reasons.append("Expected artifacts still contain placeholders: " + ", ".join(artifact_health.get("pending") or []))
-    active_status = str(active_job.get("status") or "")
+    raw_active_status = str(active_job.get("status") or "")
+    active_run_id = str(active_job.get("run_id") or "")
+    active_run_dir = str(active_job.get("run_bundle_dir") or "")
+    latest_name = str(latest.get("name") or "")
+    finalized_statuses = {"ready for review", "needs attention"}
+    latest_is_finalized = morning_status.lower() in finalized_statuses or latest_status.lower() in finalized_statuses
+    finalized_display_status = morning_status if morning_status.lower() in finalized_statuses else latest_status
+    active_job_matches_latest = bool(latest) and (
+        (active_run_id and active_run_id == latest_name)
+        or (active_run_dir and active_run_dir == latest_folder)
+    )
+    stale_in_progress_job = raw_active_status in {"Running", "Overnight queued"} and active_job_matches_latest and latest_is_finalized
+    active_status = finalized_display_status if stale_in_progress_job else raw_active_status
+    current_stage = str(active_job.get("current_stage") or "Not running")
+    if stale_in_progress_job:
+        current_stage = "Finalization complete"
+    pending_artifacts = bool(artifact_health.get("pending"))
+    incomplete_artifacts = bool(artifact_health.get("missing") or artifact_health.get("unreadable"))
     if not latest:
         next_action = "Start discovery_only for the safe default pass."
-    elif active_status == "Running":
+    elif active_status in {"Running", "Overnight queued"}:
         next_action = "Let the current finalization finish, then review MORNING_READY.md."
+    elif pending_artifacts:
+        next_action = "Start a new discovery_only run before the hardware stop window to collect the pending artifacts."
+    elif incomplete_artifacts:
+        next_action = "Review Debug Mode, preserve diagnostics, then rerun the finalizer for the last folder."
     elif needs_attention_reasons or morning_status.lower() in {"needs attention", "pending", "missing", "unreadable"}:
-        next_action = "Review Debug Mode and rerun the finalizer for the last folder."
+        next_action = "Review Debug Mode and address the latest Needs Attention reason."
     elif morning_status == "Ready for review":
         next_action = "Review MORNING_READY.md."
     else:
@@ -14320,8 +14341,8 @@ def build_overnight_hardware_state(cfg: dict[str, Any], job: dict[str, Any] | No
             "next": next_action,
             "last": str(active_job.get("logs", ["No overnight run has been started."])[-1] if active_job.get("logs") else "No overnight run has been started."),
             "completion": int(active_job.get("progress_percent") or 0),
-            "status": str(active_job.get("status") or "Idle"),
-            "current_stage": str(active_job.get("current_stage") or "Not running"),
+            "status": active_status or "Idle",
+            "current_stage": current_stage,
             "finalization_status": morning_status,
             "latest_run_status": latest_status,
             "latest_run_folder": latest_folder,

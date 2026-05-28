@@ -3,21 +3,23 @@
 Status: repaired
 
 ## Finding
-- The latest overnight run `20260527-175700-ilo-cisco` started in the evening but was classified as already past the same-day 05:30 hardware stop and same-day 06:00 finalization deadline.
-- Resulting reports showed hardware stopped, commit/push skipped, and required iLO/Cisco artifacts left pending.
+- Latest overnight run inspected: `artifacts/runs/overnight/20260527-175700-ilo-cisco`.
+- The prior cutoff repair is present, safe defaults remain in place, and the stop marker exists.
+- The finalized run artifacts report `Needs attention`, but persisted app job state still reports the same run as `Running`.
+- `/api/ui/overnight-hardware` therefore showed Operator Mode as still waiting for finalization instead of pointing at the real issue: pending iLO/Cisco evidence artifacts.
 
 ## Repair
-- Anchored overnight hardware-stop and finalization-deadline decisions to the timestamp in the run folder name.
-- Evening starts now use the next morning's 05:30/06:00 cutoffs; runs started before 06:00 still use the current morning.
-- Added regression coverage for evening-start finalization and preserved same-morning behavior.
+- Operator Mode now reconciles stale in-progress job state when the latest matching run has a finalized morning status.
+- Pending required artifacts now get a direct next action: start a new `discovery_only` run before the hardware stop window to collect the pending evidence.
+- Added regression coverage for a stale `Running` job paired with a finalized `Needs attention` overnight run.
 
 ## Verification
-- `~/lab-builder/.venv/bin/python -m pytest -q tests/test_overnight_run.py::test_overnight_hardware_stop_and_finalization_deadline tests/test_overnight_run.py::test_evening_finalize_uses_next_morning_deadline` -> passed
-- `~/lab-builder/.venv/bin/python -m pytest -q tests/test_overnight_run.py` -> passed, 20 tests
-- `~/lab-builder/.venv/bin/python -m pytest -q` -> passed, 427 tests
+- Focused behavior check: `tests/test_overnight_run.py::test_overnight_operator_mode_reconciles_stale_running_job` -> passed
+- `~/lab-builder/.venv/bin/python -m pytest -q tests/test_overnight_run.py` -> passed, 21 tests
+- `~/lab-builder/.venv/bin/python -m pytest -q` -> passed, 428 tests
 - `~/lab-builder/.venv/bin/python -m compileall app` -> passed
 - `git diff --check` -> passed
 
 ## Commit Gate
-- Staged secret scan: clean, 4 staged files
-- Commit/push: pending
+- Staged secret scan: clean
+- Commit/push: eligible after clean gate
