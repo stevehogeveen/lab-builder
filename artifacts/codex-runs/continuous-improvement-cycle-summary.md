@@ -3,7 +3,7 @@
 Status: Repaired
 
 ## Inspection
-- Cycle completed at `2026-05-28 08:43 EDT`.
+- Cycle completed at `2026-05-28 08:47 EDT`.
 - Latest overnight run inspected: `artifacts/runs/overnight/20260527-175700-ilo-cisco`.
 - Required artifacts read: `live-job.log`, `trace.yml`, `summary.yml`, `MORNING_READY.md`, `job-state.yml`, `ilo/*`, and `cisco/*`; `config-snapshot.yml` was inspected with sensitive values redacted.
 - Latest commits inspected: `0d78d3e`, `6f55a61`, `2237b96`, `fe9cb38`, `a3b7801`, `abd7366`, `15fd38e`, and `225089b`.
@@ -21,7 +21,7 @@ Status: Repaired
 - `~/lab-builder/.venv/bin/python -m pytest -q` passed: 438 tests.
 - `~/lab-builder/.venv/bin/python -m compileall app` passed.
 - `git diff --check` passed after this summary write.
-- Final staged secret scan passed: 4 paths, 0 findings.
+- Final staged secret scan passed for this report update: 2 paths, 0 findings.
 
 ## Commit Gate
 - Tests, compile, diff check, and staged secret scan passed.

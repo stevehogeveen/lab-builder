@@ -11,3 +11,4 @@
 - The skipped iLO/Cisco files are explicit stop-marker skip diagnostics with next steps; they are not misleading captured hardware data.
 - Read-only `/api/ui/overnight-hardware` and `/overnight-hardware` checks returned 200. `discovery_only` remains the default, destructive defaults remain false, Operator Mode stays compact and reports `Hardware evidence was skipped (11 artifacts).` with one clear next action.
 - Repair target found: Debug Mode/API `latest_run` exposed the latest run as `name` and artifact path, but `run_id` was `None` even though `job-state.yml` records `run_id: 20260527-175700-ilo-cisco`. This made machine-readable latest-run state less clear than the artifact bundle.
+- Repair selected: add `run_id` to latest overnight run artifact entries and assert it in the overnight UI/API regression test.
