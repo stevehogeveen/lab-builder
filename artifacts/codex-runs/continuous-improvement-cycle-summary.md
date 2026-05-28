@@ -24,4 +24,4 @@ Status: Repaired skipped overnight artifact reporting
 
 ## Commit Gate
 - Staged secret scan passed with 0 findings over the 5 staged files.
-- Commit/push: allowed if final staged diff remains scoped to the repaired behavior.
+- Commit/push: completed for the repaired tracked changes.
