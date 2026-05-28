@@ -1,5 +1,7 @@
 # Full Visible Workflow Remaining Gaps
 
-Remaining unmatched original visible actions: 2
+Remaining unmatched original visible actions: 0
 
-These are dynamic template links or workflow-specific fix links whose target is computed at runtime. The React shell exposes their stable destination pages and underlying action routes.
+The last two dynamic placeholder rows were resolved in React:
+- Dashboard module rows use backend-provided `legacy_href` values through `ReactAwareButton`.
+- Run Center stage review/fix controls use `execution_review.stages` from the backend.

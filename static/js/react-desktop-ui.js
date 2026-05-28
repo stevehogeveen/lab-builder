@@ -579,6 +579,7 @@
 
     function ModuleCard(props) {
         const module = props.module || {};
+        const isNext = props.nextHref && module.legacy_href === props.nextHref;
         return h("div", { className: "module-card" },
             h("div", { className: "data-row" },
                 h("div", null,
@@ -589,7 +590,7 @@
             ),
             h("p", { className: "panel-subtitle" }, module.planned_summary || "Review setup."),
             h("div", { className: "job-actions" },
-                h(Button, { onClick: function () { props.onNavigate(module.key); } }, "Open"),
+                h(ReactAwareButton, { href: module.legacy_href, appState: props.appState, onNavigate: props.onNavigate, primary: isNext }, isNext ? "Open next" : "Open"),
                 h(Pill, { tone: "blue" }, "Actions available")
             )
         );
@@ -769,7 +770,7 @@
                 ),
                 h(Panel, { label: "Modules", title: "Setup workspaces", subtitle: "Each workspace shows saved values, readiness, and mapped operator actions from the backend." },
                     h("div", { className: "module-grid" }, modules.map(function (module) {
-                        return h(ModuleCard, { key: module.key, module: module, onNavigate: props.onNavigate });
+                        return h(ModuleCard, { key: module.key, module: module, appState: state, nextHref: (dashboard.next_step || {}).href, onNavigate: props.onNavigate });
                     }))
                 ),
                 h("div", { className: "dashboard-lower-grid" },
@@ -1503,6 +1504,8 @@
         const state = props.appState || {};
         const actions = ((state.actions || {}).execution || []);
         const included = ((state.kit || {}).included || {});
+        const review = state.execution_review || {};
+        const stages = review.stages || [];
         const scopes = [
             ["included", "Whole run", true],
             ["ilo", "iLO", included.ilo],
@@ -1560,6 +1563,28 @@
                             runForm("/execute-preview", "Start preview run", false)
                         )
                     )
+                ),
+                h(Panel, {
+                    label: "Stage readiness",
+                    title: "Fix blocked stages before launch",
+                    subtitle: ((review.confidence || {}).summary) || "The Run Center review uses the same stage checks and fix links as the original page.",
+                    action: h(Pill, { tone: (review.confidence || {}).tone || "progress" }, (review.confidence || {}).label || "Review"),
+                },
+                    h("div", { className: "data-list" }, stages.length ? stages.map(function (stage) {
+                        const blocked = !!stage.blocked_reason;
+                        return h("div", { className: "data-row", key: stage.key },
+                            h("div", null,
+                                h("div", { className: "data-name" }, stage.name),
+                                h("div", { className: "data-value" }, blocked ? stage.blocked_reason : (stage.summary || stage.state_used || "Ready for review")),
+                                stage.corrective_action ? h("div", { className: "field-help" }, stage.corrective_action) : null
+                            ),
+                            h("div", { className: "job-actions" },
+                                h(Pill, { tone: stage.status_tone }, stage.status_label || "Review"),
+                                stage.review_href ? h(ReactAwareButton, { href: stage.review_href, appState: state, onNavigate: props.onNavigate }, "Open setup page") : null,
+                                blocked && stage.fix_href ? h(ReactAwareButton, { href: stage.fix_href, appState: state, onNavigate: props.onNavigate, primary: true }, stage.fix_label || "Fix stage") : null
+                            )
+                        );
+                    }) : h("div", { className: "empty-state" }, "No selected run stages yet. Review the current kit before launching."))
                 ),
                 h(Panel, { label: "Real execution", title: "Confirmation required", subtitle: "The real run keeps the original checkbox and EXECUTE phrase gates." },
                     h("div", { className: "job-actions" },

@@ -1,8 +1,10 @@
 # Full Visible Workflow Missing Controls
 
-Total rows: 2
+Total rows: 0
 
 | module | route | method | label | action | inputs | location | purpose |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| Dashboard / home | /dashboard | GET | {{ loop.index }} {{ item.name }} {{ item.summary }} {% if is_next_step %} Next {% endif %} {{ item.label }} | {{ item.href }} |  | templates/partials/pages/dashboard.html | Open original linked workflow or artifact |
-| Execution / Run Center | /execution | GET | {{ stage.fix_label }} | {{ stage.fix_href }} |  | templates/partials/pages/execution.html | Open original linked workflow or artifact |
+
+All currently known dynamic visible actions have React equivalents:
+- Dashboard module rows now render React-aware links from each backend `legacy_href`, including the current next-step marker.
+- Run Center stage rows now render `review_href` and blocked-stage `fix_href` controls from `execution_review.stages`.

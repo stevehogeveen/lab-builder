@@ -15162,6 +15162,59 @@ def react_ui_module_summaries(cfg: dict[str, Any], workflow_contexts: dict[str, 
     return modules
 
 
+def build_react_execution_review_state(cfg: dict[str, Any]) -> dict[str, Any]:
+    try:
+        return build_execution_review(cfg, "included")
+    except Exception as exc:
+        included = cfg.get("included", {}) or {}
+        stages = []
+        stage_specs = [
+            ("ilo", "iLO", "/ilo"),
+            ("storage", "Storage / RAID", "/storage#storage-review-start"),
+            ("esxi", "ESXi", "/esxi"),
+            ("windows", "Windows", "/windows"),
+            ("qnap", "QNAP", "/qnap"),
+            ("iosafe", "ioSafe", "/global-settings"),
+            ("cisco_switch", "Cisco Switch", "/cisco"),
+            ("netapp", "NetApp", "/modules/netapp"),
+        ]
+        for key, name, href in stage_specs:
+            if not included.get(key):
+                continue
+            stages.append(
+                {
+                    "key": key,
+                    "name": name,
+                    "target": "Not checked",
+                    "included": True,
+                    "summary": "Review data could not be built for Operator Mode.",
+                    "review_href": href,
+                    "status_label": "Needs attention",
+                    "status_tone": "pending",
+                    "blocked_reason": str(exc).splitlines()[0],
+                    "corrective_action": "Open the setup page and resolve the blocked review input.",
+                    "fix_href": href,
+                    "fix_label": f"Fix on {name}",
+                }
+            )
+        return {
+            "scope": "included",
+            "selected_scopes_for_form": ["included"],
+            "stages": stages,
+            "confidence": {
+                "score": 0,
+                "label": "Needs attention",
+                "tone": "pending",
+                "summary": str(exc).splitlines()[0],
+                "ready_checks": 0,
+                "total_checks": len(stages),
+                "blocked_checks": [{"label": "Execution review", "details": str(exc).splitlines()[0], "ok": False}],
+                "review_checks": [],
+            },
+            "fallback_error": str(exc).splitlines()[0],
+        }
+
+
 def build_react_ui_state() -> dict[str, Any]:
     cfg = load_kit_config()
     kit_name = cfg.get("site", {}).get("name", "")
@@ -15187,6 +15240,7 @@ def build_react_ui_state() -> dict[str, Any]:
         "job": react_ui_job_payload(job),
         "dashboard": dashboard_overview,
         "modules": react_ui_module_summaries(cfg, workflow_contexts),
+        "execution_review": build_react_execution_review_state(cfg),
         "setup_ip": build_react_setup_ip_state(cfg),
         "setup_values": build_react_module_detail_state(cfg),
         "storage": build_react_storage_state(cfg, job),

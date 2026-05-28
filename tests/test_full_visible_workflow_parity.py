@@ -391,8 +391,34 @@ def test_execution_page_has_dedicated_scope_review_and_preview_forms():
     assert "Open full confirmation" in execution_body
     assert "Open summary" in execution_body
     assert "Download summary" in execution_body
+    assert "state.execution_review" in execution_body
+    assert "stage.fix_href" in execution_body
+    assert "Fix blocked stages before launch" in execution_body
     app_switch = js.split('} else if (activePage === "storage")', 1)[1].split('} else if (activePage === "reports")', 1)[0]
     assert "ExecutionPage" in app_switch
+
+
+def test_react_app_state_exposes_execution_review_fix_links():
+    state = main.build_react_ui_state()
+    review = state.get("execution_review") or {}
+    assert review.get("stages")
+    for stage in review["stages"]:
+        assert stage.get("review_href"), stage
+        if stage.get("blocked_reason"):
+            assert stage.get("fix_href"), stage
+            assert stage.get("fix_label"), stage
+
+
+def test_dashboard_module_cards_preserve_original_dynamic_links():
+    state = main.build_react_ui_state()
+    assert {module["legacy_href"] for module in state.get("modules", [])}
+    js = Path("static/js/react-desktop-ui.js").read_text(encoding="utf-8")
+    module_body = js.split("function ModuleCard", 1)[1].split("function JobTimelinePanel", 1)[0]
+    dashboard_body = js.split("function DashboardPage", 1)[1].split("function IloPage", 1)[0]
+    assert "module.legacy_href" in module_body
+    assert "ReactAwareButton" in module_body
+    assert "nextHref" in module_body
+    assert "nextHref: (dashboard.next_step || {}).href" in dashboard_body
 
 
 def test_react_app_state_exposes_saved_setup_values_for_generic_pages():
