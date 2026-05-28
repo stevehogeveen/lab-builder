@@ -83,14 +83,14 @@ Total rows: 155
 | cisco | Test console access | POST | /modules/cisco/discover-console | legacy-html | static/js/react-desktop-ui.js + app/main.py:react_ui_action_inventory |
 | cisco | Fix serial access | POST | /modules/cisco/fix-serial-permissions | legacy-html | static/js/react-desktop-ui.js + app/main.py:react_ui_action_inventory |
 | cisco | Setup Cisco IP | POST | /modules/cisco/bootstrap-management | legacy-html | static/js/react-desktop-ui.js + app/main.py:react_ui_action_inventory |
-| cisco | Verify console bootstrap | POST | /modules/cisco/verify-console-bootstrap | legacy-html | static/js/react-desktop-ui.js + app/main.py:react_ui_action_inventory |
+| cisco | Check current config | POST | /modules/cisco/verify-console-bootstrap | legacy-html | static/js/react-desktop-ui.js + app/main.py:react_ui_action_inventory |
 | cisco | Test SSH | POST | /modules/cisco/test-ssh | legacy-html | static/js/react-desktop-ui.js + app/main.py:react_ui_action_inventory |
-| cisco | Save port map | POST | /modules/cisco/save-port-map | legacy-html | static/js/react-desktop-ui.js + app/main.py:react_ui_action_inventory |
+| cisco | Save to config | POST | /modules/cisco/save-port-map | legacy-html | static/js/react-desktop-ui.js + app/main.py:react_ui_action_inventory |
 | cisco | Discover ports | POST | /modules/cisco/discover-ports | legacy-html | static/js/react-desktop-ui.js + app/main.py:react_ui_action_inventory |
 | cisco | Discover current state | POST | /modules/cisco/discover-state | legacy-html | static/js/react-desktop-ui.js + app/main.py:react_ui_action_inventory |
 | cisco | Preview config | POST | /modules/cisco/preview-config | legacy-html | static/js/react-desktop-ui.js + app/main.py:react_ui_action_inventory |
 | cisco | Apply config | POST | /modules/cisco/apply-config | legacy-html | static/js/react-desktop-ui.js + app/main.py:react_ui_action_inventory |
-| cisco | Approve config plan | POST | /modules/cisco/approve-config-plan | legacy-html | static/js/react-desktop-ui.js + app/main.py:react_ui_action_inventory |
+| cisco | Approve config | POST | /modules/cisco/approve-config-plan | legacy-html | static/js/react-desktop-ui.js + app/main.py:react_ui_action_inventory |
 | cisco | Backup config | POST | /modules/cisco/backup-config | legacy-html | static/js/react-desktop-ui.js + app/main.py:react_ui_action_inventory |
 | cisco | Factory reset switch | POST | /modules/cisco/factory-reset | legacy-html | static/js/react-desktop-ui.js + app/main.py:react_ui_action_inventory |
 | cisco | Plan Cisco upgrade | POST | /modules/cisco/plan-upgrade | legacy-html | static/js/react-desktop-ui.js + app/main.py:react_ui_action_inventory |
