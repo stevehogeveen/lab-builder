@@ -859,6 +859,100 @@ def test_cli_finalizer_syncs_matching_overnight_job_state(tmp_path):
     assert "do not persist this" not in job_state_text
 
 
+def test_cli_finalizer_sync_refreshes_existing_finalization_event(tmp_path):
+    repo = tmp_path
+    artifacts_root = repo / "artifacts"
+    run_dir = artifacts_root / "runs" / "overnight" / "20260527-175700-ilo-cisco"
+    run_dir.mkdir(parents=True)
+    current_timestamp = "2026-05-28T05:25:55.226624-04:00"
+    stale_timestamp = "2026-05-28T01:21:43.328871-04:00"
+    final_message = "Finalization result: Needs attention."
+    (run_dir / "config-snapshot.yml").write_text(
+        yaml.safe_dump({"kit_config": {"site": {"name": "Kit-01"}}}, sort_keys=False),
+        encoding="utf-8",
+    )
+    (run_dir / "summary.yml").write_text(
+        yaml.safe_dump(
+            {"generated_at": current_timestamp, "status": "Needs attention", "finalization": {}},
+            sort_keys=False,
+        ),
+        encoding="utf-8",
+    )
+    (run_dir / "trace.yml").write_text(
+        yaml.safe_dump(
+            {
+                "events": [
+                    {
+                        "timestamp": current_timestamp,
+                        "stage": "finalization",
+                        "status": "needs_attention",
+                        "progress": 100,
+                        "message": final_message,
+                    }
+                ]
+            },
+            sort_keys=False,
+        ),
+        encoding="utf-8",
+    )
+    jobs_dir = artifacts_root / "jobs"
+    jobs_dir.mkdir(parents=True)
+    job_path = jobs_dir / "Kit-01_job.yml"
+    job_path.write_text(
+        yaml.safe_dump(
+            {
+                "status": "Needs attention",
+                "scope": "overnight_hardware",
+                "root_scope": "overnight_hardware",
+                "current_stage": "Finalization complete",
+                "progress_percent": 100,
+                "logs": [],
+                "trace_events": [
+                    {
+                        "timestamp": stale_timestamp,
+                        "stage": "finalization",
+                        "status": "needs_attention",
+                        "progress": 100,
+                        "message": final_message,
+                        "source": "overnight_finalize_cli",
+                    }
+                ],
+                "run_id": run_dir.name,
+                "run_bundle_dir": str(run_dir),
+            },
+            sort_keys=False,
+        ),
+        encoding="utf-8",
+    )
+
+    overnight_finalize.sync_finalized_job_state(
+        repo_root=repo,
+        artifacts_root=artifacts_root,
+        run_dir=run_dir,
+        result={
+            "status_label": "Needs attention",
+            "test_result": "passed",
+            "compile_result": "passed",
+            "push_result": "pushed",
+            "secret_scan_result": "clean",
+            "needs_attention_reasons": ["Expected artifacts were skipped: ilo/discovery.json"],
+        },
+    )
+
+    updated = yaml.safe_load(job_path.read_text(encoding="utf-8"))
+    job_state = yaml.safe_load((run_dir / "job-state.yml").read_text(encoding="utf-8"))
+    matching_events = [
+        event
+        for event in updated["trace_events"]
+        if event.get("stage") == "finalization" and event.get("message") == final_message
+    ]
+
+    assert len(matching_events) == 1
+    assert matching_events[0]["timestamp"] == current_timestamp
+    assert matching_events[0]["source"] == "overnight_finalize_cli"
+    assert job_state["events"] == updated["trace_events"]
+
+
 def test_cli_finalizer_sync_reconciles_stale_deadline_snapshot(tmp_path):
     repo = tmp_path
     artifacts_root = repo / "artifacts"

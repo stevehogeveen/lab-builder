@@ -178,6 +178,29 @@ def _finalization_snapshot(result: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _latest_trace_event(run_dir: Path, *, stage: str, message: str) -> dict[str, Any]:
+    trace = _read_yaml_dict(run_dir / "trace.yml")
+    events = trace.get("events") if isinstance(trace.get("events"), list) else []
+    for event in reversed(events):
+        if not isinstance(event, dict):
+            continue
+        if event.get("stage") == stage and event.get("message") == message:
+            return dict(event)
+    return {}
+
+
+def _synced_finalization_event(run_dir: Path, *, event_status: str, message: str) -> dict[str, Any]:
+    trace_event = _latest_trace_event(run_dir, stage="finalization", message=message)
+    return {
+        "timestamp": str(trace_event.get("timestamp") or datetime.now().astimezone().isoformat()),
+        "stage": "finalization",
+        "status": str(trace_event.get("status") or event_status),
+        "progress": int(trace_event.get("progress") or 100),
+        "message": message,
+        "source": "overnight_finalize_cli",
+    }
+
+
 def _reconcile_finalization_result(run_dir: Path, result: dict[str, Any]) -> dict[str, Any]:
     reconciled = dict(result)
     summary = _read_yaml_dict(run_dir / "summary.yml")
@@ -287,17 +310,16 @@ def sync_finalized_job_state(
         logs.append(log_line)
 
     events = list(job.get("trace_events") or [])
-    if not any(isinstance(event, dict) and event.get("stage") == "finalization" and event.get("message") == message for event in events):
-        events.append(
-            {
-                "timestamp": datetime.now().astimezone().isoformat(),
-                "stage": "finalization",
-                "status": event_status,
-                "progress": 100,
-                "message": message,
-                "source": "overnight_finalize_cli",
-            }
-        )
+    synced_event = _synced_finalization_event(run_dir, event_status=event_status, message=message)
+    matching_indexes = [
+        index
+        for index, event in enumerate(events)
+        if isinstance(event, dict) and event.get("stage") == "finalization" and event.get("message") == message
+    ]
+    if matching_indexes:
+        events[matching_indexes[-1]] = {**dict(events[matching_indexes[-1]]), **synced_event}
+    else:
+        events.append(synced_event)
 
     job["status"] = job_status
     job["execution_mode"] = "overnight_hardware"
