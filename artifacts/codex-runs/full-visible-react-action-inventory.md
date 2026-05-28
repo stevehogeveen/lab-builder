@@ -1,6 +1,6 @@
 # Full Visible React Action Inventory
 
-Total rows: 165
+Total rows: 168
 
 | page_key | label | method | route | mode | location |
 | --- | --- | --- | --- | --- | --- |
@@ -84,6 +84,7 @@ Total rows: 165
 | cisco | Test console access | POST | /modules/cisco/discover-console | legacy-html | static/js/react-desktop-ui.js + app/main.py:react_ui_action_inventory |
 | cisco | Fix serial access | POST | /modules/cisco/fix-serial-permissions | legacy-html | static/js/react-desktop-ui.js + app/main.py:react_ui_action_inventory |
 | cisco | Setup Cisco IP | POST | /modules/cisco/bootstrap-management | legacy-html | static/js/react-desktop-ui.js + app/main.py:react_ui_action_inventory |
+| cisco | Apply Access Configs | POST | /modules/cisco/bootstrap-management | legacy-html | static/js/react-desktop-ui.js + app/main.py:react_ui_action_inventory |
 | cisco | Check current config | POST | /modules/cisco/verify-console-bootstrap | legacy-html | static/js/react-desktop-ui.js + app/main.py:react_ui_action_inventory |
 | cisco | Test SSH | POST | /modules/cisco/test-ssh | legacy-html | static/js/react-desktop-ui.js + app/main.py:react_ui_action_inventory |
 | cisco | Save to config | POST | /modules/cisco/save-port-map | legacy-html | static/js/react-desktop-ui.js + app/main.py:react_ui_action_inventory |
@@ -123,6 +124,8 @@ Total rows: 165
 | storage | Reboot storage now | POST | /reboot-storage-now | legacy-html | static/js/react-desktop-ui.js + app/main.py:react_ui_action_inventory |
 | storage | Reboot Machine Now | POST | /reboot-storage-now | legacy-html | static/js/react-desktop-ui.js + app/main.py:react_ui_action_inventory |
 | storage | Reboot Now | POST | /reboot-storage-now | legacy-html | static/js/react-desktop-ui.js + app/main.py:react_ui_action_inventory |
+| storage | Retry Reboot Now | POST | /reboot-storage-now | legacy-html | static/js/react-desktop-ui.js + app/main.py:react_ui_action_inventory |
+| storage | Approved | POST | /approve-storage-plan | legacy-html | static/js/react-desktop-ui.js + app/main.py:react_ui_action_inventory |
 | storage | View storage artifact | POST | /view-storage-artifact | legacy-html | static/js/react-desktop-ui.js + app/main.py:react_ui_action_inventory |
 | storage | View Apply Log | POST | /view-storage-artifact | legacy-html | static/js/react-desktop-ui.js + app/main.py:react_ui_action_inventory |
 | storage | View Apply Results | POST | /view-storage-artifact | legacy-html | static/js/react-desktop-ui.js + app/main.py:react_ui_action_inventory |
