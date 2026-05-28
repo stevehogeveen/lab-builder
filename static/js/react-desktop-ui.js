@@ -1151,7 +1151,7 @@
                     ),
                     h("div", { className: "job-actions" },
                         h(Button, { onClick: props.onBuildPlan, disabled: !canPlan }, "Build storage plan"),
-                        h(Button, { onClick: props.onRepairSelection, disabled: !canRead }, "Clear selections and reread")
+                        h(Button, { onClick: props.onRepairSelection, disabled: !canRead }, "Clear invalid selections and reload inventory")
                     )
                 ),
                 h(Panel, {
@@ -2438,7 +2438,7 @@
         }
 
         function repairStorageSelection() {
-            return runStorageAction("Repair storage selections", "/repair-storage-selection", { return_page: "storage" }, { success: "Storage selections were cleared and discovery was refreshed." });
+            return runStorageAction("Clear invalid selections and reload inventory", "/repair-storage-selection", { return_page: "storage" }, { success: "Storage selections were cleared and discovery was refreshed." });
         }
 
         function buildStoragePlan() {
@@ -2450,7 +2450,7 @@
         }
 
         function clearStorageApproval() {
-            return runStorageAction("Clear storage approval", "/clear-storage-approval", storagePathFields(), { success: "Storage approval clear returned." });
+            return runStorageAction("Remove approval", "/clear-storage-approval", storagePathFields(), { success: "Storage approval clear returned." });
         }
 
         function applyStorageLayout() {

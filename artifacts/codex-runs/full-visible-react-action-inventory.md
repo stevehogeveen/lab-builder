@@ -116,9 +116,9 @@ Total rows: 155
 | storage | Build storage plan | POST | /plan-raid-layout | legacy-html | static/js/react-desktop-ui.js + app/main.py:react_ui_action_inventory |
 | storage | Approve this plan | POST | /approve-storage-plan | legacy-html | static/js/react-desktop-ui.js + app/main.py:react_ui_action_inventory |
 | storage | Apply storage layout | POST | /apply-storage-layout | legacy-html | static/js/react-desktop-ui.js + app/main.py:react_ui_action_inventory |
-| storage | Repair storage selections | POST | /repair-storage-selection | legacy-html | static/js/react-desktop-ui.js + app/main.py:react_ui_action_inventory |
+| storage | Clear invalid selections and reload inventory | POST | /repair-storage-selection | legacy-html | static/js/react-desktop-ui.js + app/main.py:react_ui_action_inventory |
 | storage | Probe storage capabilities | POST | /probe-storage-capabilities | legacy-html | static/js/react-desktop-ui.js + app/main.py:react_ui_action_inventory |
-| storage | Clear storage approval | POST | /clear-storage-approval | legacy-html | static/js/react-desktop-ui.js + app/main.py:react_ui_action_inventory |
+| storage | Remove approval | POST | /clear-storage-approval | legacy-html | static/js/react-desktop-ui.js + app/main.py:react_ui_action_inventory |
 | storage | Reboot storage now | POST | /reboot-storage-now | legacy-html | static/js/react-desktop-ui.js + app/main.py:react_ui_action_inventory |
 | storage | View storage artifact | POST | /view-storage-artifact | legacy-html | static/js/react-desktop-ui.js + app/main.py:react_ui_action_inventory |
 | storage | Download storage artifact | POST | /download-storage-artifact | download | static/js/react-desktop-ui.js + app/main.py:react_ui_action_inventory |

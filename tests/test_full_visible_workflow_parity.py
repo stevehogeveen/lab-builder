@@ -61,8 +61,10 @@ EXPECTED_VISIBLE_WORKFLOWS = {
     "storage": [
         "Save storage target",
         "Display current storage setup",
+        "Clear invalid selections and reload inventory",
         "Build storage plan",
         "Approve this plan",
+        "Remove approval",
         "Apply storage layout",
         "Probe storage capabilities",
         "Reboot storage now",
