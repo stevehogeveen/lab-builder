@@ -14583,7 +14583,7 @@ def react_ui_action_inventory() -> dict[str, list[dict[str, str]]]:
             {"label": "Setup iLO IP", "method": "POST", "route": "/api/ui/ilo/setup-ip", "mode": "json"},
             {"label": "Save iLO setup HTML action", "method": "POST", "route": "/save-ilo-settings", "mode": "legacy-html"},
             {"label": "Export iLO config", "method": "POST", "route": "/export-ilo-config", "mode": "legacy-html"},
-            {"label": "Export iLO inventory", "method": "POST", "route": "/export-ilo-inventory", "mode": "legacy-html"},
+            {"label": "Read current iLO", "method": "POST", "route": "/export-ilo-inventory", "mode": "legacy-html"},
             {"label": "View iLO config snapshot", "method": "POST", "route": "/view-ilo-config-snapshot", "mode": "legacy-html"},
             {"label": "Plan iLO firmware upgrade", "method": "POST", "route": "/plan-ilo-upgrade", "mode": "legacy-html"},
             {"label": "Run iLO firmware upgrade", "method": "POST", "route": "/run-ilo-upgrade", "mode": "legacy-html"},

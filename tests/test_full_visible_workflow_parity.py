@@ -55,7 +55,7 @@ EXPECTED_VISIBLE_WORKFLOWS = {
         "Save iLO setup",
         "Setup iLO IP",
         "Export iLO config",
-        "Export iLO inventory",
+        "Read current iLO",
         "View iLO config snapshot",
     ],
     "storage": [
@@ -177,7 +177,7 @@ CONTEXT_REQUIRED_LABELS = {
     "Save global settings HTML action",
     "Save iLO setup HTML action",
     "Export iLO config",
-    "Export iLO inventory",
+    "Read current iLO",
     "View iLO config snapshot",
     "Save storage target",
     "Display current storage setup",
