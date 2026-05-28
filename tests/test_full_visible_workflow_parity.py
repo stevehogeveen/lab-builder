@@ -253,6 +253,14 @@ def test_react_action_catalog_categories_match_operator_navigation():
     assert main.react_ui_route_category("/execution") == "Run Center"
 
 
+def test_setup_ip_copy_does_not_claim_cisco_reachability_before_ssh_test():
+    source = Path("app/modules/cisco/routes.py").read_text(encoding="utf-8")
+    bootstrap_body = source.split('"/modules/cisco/bootstrap-management"', 1)[1].split('"/modules/cisco/verify-console-bootstrap"', 1)[0]
+    assert "Cisco management IP configured" not in bootstrap_body
+    assert "Cisco management IP command sent" in bootstrap_body
+    assert "Use Test SSH to verify" in bootstrap_body
+
+
 def test_legacy_post_actions_render_as_visible_operator_forms():
     js = Path("static/js/react-desktop-ui.js").read_text(encoding="utf-8")
     assert "inline-action-form" in js

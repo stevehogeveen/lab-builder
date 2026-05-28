@@ -494,8 +494,8 @@ async def cisco_bootstrap_management(
     main.save_kit_config(cfg)
     bootstrap_check = dict(cisco_cfg.get("last_console_bootstrap_check") or {})
     feedback = main.build_action_feedback(
-        "Cisco management IP configured" if result.get("ok") else "Cisco management config failed",
-        "Console bootstrap completed. Use Test SSH before running version discovery or upgrades." if result.get("ok") and bootstrap_check.get("ok") else str(result.get("error") or bootstrap_check.get("error") or "Console bootstrap needs attention."),
+        "Cisco management IP command sent" if result.get("ok") else "Cisco management config failed",
+        "Console bootstrap returned. Use Test SSH to verify the management IP is reachable before running discovery or upgrades." if result.get("ok") and bootstrap_check.get("ok") else str(result.get("error") or bootstrap_check.get("error") or "Console bootstrap needs attention."),
         tone="ready" if result.get("ok") and bootstrap_check.get("ok") else ("pending" if result.get("ok") else "danger"),
         outcomes=[f"Management IP: {cisco_cfg.get('management_ip') or cisco_cfg.get('ip') or 'Not set'}", f"Console: {cisco_cfg.get('console_port') or 'Not selected'}"],
         details=list(result.get("warnings") or []) + list(bootstrap_check.get("warnings") or []),
