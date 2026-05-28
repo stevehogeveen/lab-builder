@@ -885,12 +885,13 @@ def request_hardware_stop(writer: OvernightArtifactWriter, *, now: datetime | No
 
 def _write_morning_report(writer: OvernightArtifactWriter, payload: dict[str, Any]) -> None:
     reasons = list(payload.get("needs_attention_reasons") or [])
+    generated_at = payload.get("generated_at") or datetime.now().astimezone().isoformat()
     lines = [
         "# Morning Ready",
         "",
         f"Status: {payload.get('status_label', 'Needs attention')}",
         f"Artifact folder: {payload.get('artifact_folder') or writer.run_dir}",
-        f"Generated at: {datetime.now().astimezone().isoformat()}",
+        f"Generated at: {generated_at}",
         "",
         "## Results",
         f"- Branch: {payload.get('branch') or 'unknown'}",
@@ -923,7 +924,7 @@ def _write_morning_report(writer: OvernightArtifactWriter, payload: dict[str, An
     if payload.get("secret_findings"):
         lines.extend(["", "## Secret Findings"])
         for finding in payload["secret_findings"][:40]:
-            lines.append(f"- {finding.get('path')}:{finding.get('line')} possible secret ({finding.get('excerpt') or '[redacted]'})")
+            lines.append(f"- {finding.get('path')}:{finding.get('line')} possible secret ({_redacted_secret_excerpt(str(finding.get('excerpt') or ''))})")
     artifact_health = dict(payload.get("artifact_health") or {})
     if artifact_health:
         lines.extend(["", "## Artifact Health"])

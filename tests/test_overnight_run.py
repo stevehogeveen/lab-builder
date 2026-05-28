@@ -712,12 +712,36 @@ def test_cli_finalizer_sync_reconciles_stale_deadline_snapshot(tmp_path):
         yaml.safe_dump(
             {
                 "generated_at": "2026-05-27T20:35:11-04:00",
+                "status": "Needs attention",
                 "finalization": {
                     "needs_attention_reasons": ["The 6:00 AM finalization deadline was missed."],
+                    "notes": [
+                        "Hardware stop marker was written at or after 5:30 AM local time; verify no hardware action overran the stop window.",
+                        "Auto-commit/push skipped because the 6:00 AM finalization deadline was missed.",
+                    ],
+                    "secret_findings": [{"path": "example.txt", "line": 1, "excerpt": "do not persist this"}],
                 },
             },
             sort_keys=False,
         ),
+        encoding="utf-8",
+    )
+    (run_dir / "STOP_HARDWARE_WORK").write_text(
+        yaml.safe_dump(
+            {
+                "requested_at": "2026-05-27T20:31:11-04:00",
+                "reason": "finalization scheduler",
+                "deadline": "05:30",
+            },
+            sort_keys=False,
+        ),
+        encoding="utf-8",
+    )
+    (run_dir / "MORNING_READY.md").write_text(
+        "# Morning Ready\n\n"
+        "Status: Needs attention\n\n"
+        "## Needs Attention Reasons\n"
+        "- The 6:00 AM finalization deadline was missed.\n",
         encoding="utf-8",
     )
     jobs_dir = artifacts_root / "jobs"
@@ -760,6 +784,8 @@ def test_cli_finalizer_sync_reconciles_stale_deadline_snapshot(tmp_path):
 
     updated = yaml.safe_load(job_path.read_text(encoding="utf-8"))
     job_state = yaml.safe_load((run_dir / "job-state.yml").read_text(encoding="utf-8"))
+    summary = yaml.safe_load((run_dir / "summary.yml").read_text(encoding="utf-8"))
+    morning_ready = (run_dir / "MORNING_READY.md").read_text(encoding="utf-8")
 
     assert "The 6:00 AM finalization deadline was missed." not in updated["overnight_finalization"]["needs_attention_reasons"]
     assert updated["overnight_finalization"]["needs_attention_reasons"] == ["Expected artifacts still contain placeholders: ilo/discovery.json"]
@@ -767,6 +793,13 @@ def test_cli_finalizer_sync_reconciles_stale_deadline_snapshot(tmp_path):
     assert updated["overnight_finalization"]["finalization_deadline"] == "2026-05-28 06:00 local"
     assert updated["overnight_finalization"]["finalization_timing"] == "before deadline"
     assert job_state["finalization"] == updated["overnight_finalization"]
+    assert summary["finalization"]["needs_attention_reasons"] == ["Expected artifacts still contain placeholders: ilo/discovery.json"]
+    assert summary["finalization"]["notes"] == []
+    assert "do not persist this" not in (run_dir / "summary.yml").read_text(encoding="utf-8")
+    assert "The 6:00 AM finalization deadline was missed." not in morning_ready
+    assert "Hardware stop marker was written at or after 5:30 AM" not in morning_ready
+    assert "Finalization timing: before deadline" in morning_ready
+    assert "do not persist this" not in morning_ready
 
 
 def test_overnight_start_blocks_when_existing_run_is_active(client, monkeypatch):

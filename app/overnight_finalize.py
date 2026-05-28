@@ -14,9 +14,13 @@ from app.core.config import sanitize_kit_name
 from app.overnight_run import (
     OVERNIGHT_COMMIT_MESSAGE,
     OvernightArtifactWriter,
+    _write_morning_report,
     create_overnight_run_dir,
     finalize_overnight_run,
+    overnight_run_started_at,
+    redact_nested,
     reconcile_overnight_needs_attention_reasons,
+    should_stop_hardware_actions,
 )
 
 
@@ -38,6 +42,63 @@ def _write_yaml_atomic(path: Path, payload: dict[str, Any]) -> None:
     tmp_path = path.with_suffix(path.suffix + ".tmp")
     tmp_path.write_text(yaml.safe_dump(payload, sort_keys=False), encoding="utf-8")
     os.replace(tmp_path, path)
+
+
+def _parse_datetime(value: Any) -> datetime | None:
+    text = str(value or "").strip()
+    if not text:
+        return None
+    try:
+        return datetime.fromisoformat(text.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+
+
+def _deadline_missed_text(value: Any) -> bool:
+    return "6:00 am finalization deadline was missed" in str(value or "").lower()
+
+
+def _hardware_stop_window_note(value: Any) -> bool:
+    return "hardware stop marker was written at or after 5:30 am" in str(value or "").lower()
+
+
+def _secret_findings_list(value: Any) -> list[Any]:
+    return value if isinstance(value, list) else []
+
+
+def _redacted_secret_findings(findings: Any) -> list[dict[str, Any]]:
+    redacted: list[dict[str, Any]] = []
+    for finding in _secret_findings_list(findings):
+        item = finding if isinstance(finding, dict) else {}
+        redacted.append(
+            {
+                "path": str(item.get("path") or ""),
+                "line": item.get("line") or "",
+                "reason": str(item.get("reason") or ""),
+                "excerpt": "[redacted possible secret]",
+            }
+        )
+    return redacted
+
+
+def _reconcile_finalization_notes(run_dir: Path, notes: list[Any], timing: dict[str, Any]) -> list[str]:
+    normalized = [str(item) for item in notes if str(item).strip()]
+    before_deadline = timing.get("status") == "before_deadline"
+    stop_marker_note_stale = False
+    marker = _read_yaml_dict(run_dir / "STOP_HARDWARE_WORK")
+    requested_at = _parse_datetime(marker.get("requested_at"))
+    started_at = overnight_run_started_at(run_dir)
+    if requested_at is not None and started_at is not None:
+        stop_marker_note_stale = not should_stop_hardware_actions(requested_at, run_started_at=started_at)
+
+    reconciled: list[str] = []
+    for note in normalized:
+        if before_deadline and _deadline_missed_text(note):
+            continue
+        if stop_marker_note_stale and _hardware_stop_window_note(note):
+            continue
+        reconciled.append(note)
+    return reconciled
 
 
 def _resolve_kit_name_for_run(repo_root: Path, run_dir: Path) -> str:
@@ -84,7 +145,7 @@ def _finalized_job_status(status_label: str) -> str:
 
 
 def _finalization_snapshot(result: dict[str, Any]) -> dict[str, Any]:
-    secret_findings = list(result.get("secret_findings") or [])
+    secret_findings = _secret_findings_list(result.get("secret_findings"))
     return {
         "status_label": str(result.get("status_label") or ""),
         "test_result": str(result.get("test_result") or ""),
@@ -102,6 +163,7 @@ def _finalization_snapshot(result: dict[str, Any]) -> dict[str, Any]:
 def _reconcile_finalization_result(run_dir: Path, result: dict[str, Any]) -> dict[str, Any]:
     reconciled = dict(result)
     summary = _read_yaml_dict(run_dir / "summary.yml")
+    summary_finalization = summary.get("finalization") if isinstance(summary.get("finalization"), dict) else {}
     generated_at = str(reconciled.get("generated_at") or summary.get("generated_at") or "")
     reasons, timing = reconcile_overnight_needs_attention_reasons(
         list(reconciled.get("needs_attention_reasons") or []),
@@ -114,7 +176,34 @@ def _reconcile_finalization_result(run_dir: Path, result: dict[str, Any]) -> dic
         reconciled["finalization_deadline"] = str(reconciled.get("finalization_deadline") or timing.get("deadline") or "")
         if not reconciled.get("finalization_timing"):
             reconciled["finalization_timing"] = "before deadline" if timing.get("status") == "before_deadline" else "missed deadline"
+        notes = list(reconciled.get("notes") or summary_finalization.get("notes") or [])
+        reconciled["notes"] = _reconcile_finalization_notes(run_dir, notes, timing)
     return reconciled
+
+
+def _sync_durable_finalization_reports(run_dir: Path, result: dict[str, Any]) -> None:
+    summary_path = run_dir / "summary.yml"
+    summary = _read_yaml_dict(summary_path)
+    if not summary:
+        return
+
+    existing_finalization = summary.get("finalization") if isinstance(summary.get("finalization"), dict) else {}
+    finalization = {**dict(existing_finalization or {}), **dict(result)}
+    generated_at = str(summary.get("generated_at") or finalization.get("generated_at") or "")
+    if generated_at:
+        finalization["generated_at"] = generated_at
+
+    finalization["artifact_folder"] = str(finalization.get("artifact_folder") or run_dir)
+    finalization["hardware_stop_marker"] = str(finalization.get("hardware_stop_marker") or run_dir / "STOP_HARDWARE_WORK")
+    finalization["needs_attention_reasons"] = [
+        str(item) for item in list(finalization.get("needs_attention_reasons") or []) if str(item).strip()
+    ]
+    finalization["secret_findings"] = _redacted_secret_findings(finalization.get("secret_findings"))
+
+    summary["status"] = str(finalization.get("status_label") or summary.get("status") or "")
+    summary["finalization"] = finalization
+    _write_yaml_atomic(summary_path, redact_nested(summary))
+    _write_morning_report(OvernightArtifactWriter(run_dir), finalization)
 
 
 def _write_job_state_snapshot(
@@ -161,6 +250,8 @@ def sync_finalized_job_state(
 
     result = _reconcile_finalization_result(run_dir, result)
     status_label = str(result.get("status_label") or "").strip() or "Needs attention"
+    result["status_label"] = status_label
+    _sync_durable_finalization_reports(run_dir, result)
     job_status = _finalized_job_status(status_label)
     event_status = "completed" if job_status == "Completed" else "needs_attention"
     message = f"Finalization result: {status_label}."
