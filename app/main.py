@@ -14250,6 +14250,39 @@ def _read_text_excerpt(path: str | Path, *, max_chars: int = 6000) -> str:
     return text[-max_chars:]
 
 
+def _artifact_count_text(count: int) -> str:
+    return f"{count} artifact" if count == 1 else f"{count} artifacts"
+
+
+def _count_artifacts_from_reason(reason: str) -> int:
+    _, _, tail = str(reason or "").partition(":")
+    if not tail.strip():
+        return 0
+    return len([item for item in tail.split(",") if item.strip()])
+
+
+def _compact_overnight_operator_reasons(reasons: list[str], artifact_health: dict[str, Any]) -> list[str]:
+    compacted: list[str] = []
+    pending_count = len(list(artifact_health.get("pending") or []))
+    missing_count = len(list(artifact_health.get("missing") or []))
+    unreadable_count = len(list(artifact_health.get("unreadable") or []))
+    for reason in reasons:
+        text = str(reason or "").strip()
+        lowered = text.lower()
+        if lowered.startswith("expected artifacts still contain placeholders:"):
+            count = _count_artifacts_from_reason(text) or pending_count
+            text = f"Hardware evidence is still pending ({_artifact_count_text(count)})." if count else "Hardware evidence is still pending."
+        elif lowered.startswith("expected artifacts are missing:"):
+            count = _count_artifacts_from_reason(text) or missing_count
+            text = f"Required overnight artifacts are missing ({_artifact_count_text(count)})." if count else "Required overnight artifacts are missing."
+        elif lowered.startswith("expected artifacts could not be read:"):
+            count = _count_artifacts_from_reason(text) or unreadable_count
+            text = f"Required overnight artifacts could not be read ({_artifact_count_text(count)})." if count else "Required overnight artifacts could not be read."
+        if text and text not in compacted:
+            compacted.append(text)
+    return compacted
+
+
 def build_overnight_hardware_state(cfg: dict[str, Any], job: dict[str, Any] | None = None) -> dict[str, Any]:
     default_run_config = OvernightHardwareConfig.from_mapping({}, cfg)
     cisco_cfg = dict(cfg.get("cisco_switch") or {})
@@ -14293,6 +14326,7 @@ def build_overnight_hardware_state(cfg: dict[str, Any], job: dict[str, Any] | No
             needs_attention_reasons.append("Expected artifacts are missing: " + ", ".join(artifact_health.get("missing") or []))
         if artifact_health.get("pending"):
             needs_attention_reasons.append("Expected artifacts still contain placeholders: " + ", ".join(artifact_health.get("pending") or []))
+    operator_attention_reasons = _compact_overnight_operator_reasons(needs_attention_reasons, artifact_health)
     raw_active_status = str(active_job.get("status") or "")
     active_run_id = str(active_job.get("run_id") or "")
     active_run_dir = str(active_job.get("run_bundle_dir") or "")
@@ -14354,8 +14388,8 @@ def build_overnight_hardware_state(cfg: dict[str, Any], job: dict[str, Any] | No
             "finalization_status": morning_status,
             "latest_run_status": latest_status,
             "latest_run_folder": latest_folder,
-            "needs_attention": needs_attention_reasons[0] if needs_attention_reasons else "",
-            "needs_attention_reasons": needs_attention_reasons,
+            "needs_attention": operator_attention_reasons[0] if operator_attention_reasons else "",
+            "needs_attention_reasons": operator_attention_reasons,
         },
         "debug": {
             "latest_run": latest,

@@ -620,6 +620,38 @@ def test_overnight_latest_run_status_appears_in_api_and_ui(client):
     assert "Pytest did not pass" in page_response.text
 
 
+def test_overnight_operator_mode_summarizes_pending_artifact_details(client):
+    run_dir = main.ARTIFACTS_DIR / "runs" / "overnight" / "20260527-060000-ilo-cisco"
+    writer = OvernightArtifactWriter(run_dir)
+    writer.initialize_placeholders()
+    raw_reason = (
+        "Expected artifacts still contain placeholders: "
+        "ilo/discovery.json, cisco/initial-session.txt, cisco/show-version.txt"
+    )
+    writer.write_summary(
+        {
+            "status": "Needs attention",
+            "finalization": {
+                "status_label": "Needs attention",
+                "needs_attention_reasons": [raw_reason],
+            },
+        }
+    )
+    writer.morning_report_path.write_text(
+        f"# Morning Ready\n\nStatus: Needs attention\n\n## Needs Attention Reasons\n- {raw_reason}\n",
+        encoding="utf-8",
+    )
+
+    response = client.get("/api/ui/overnight-hardware")
+    payload = response.json()
+
+    assert response.status_code == 200
+    assert payload["operator"]["needs_attention"] == "Hardware evidence is still pending (3 artifacts)."
+    assert "ilo/discovery.json" not in payload["operator"]["needs_attention"]
+    assert payload["operator"]["needs_attention_reasons"] == ["Hardware evidence is still pending (3 artifacts)."]
+    assert payload["debug"]["latest_run"]["needs_attention_reasons"] == [raw_reason]
+
+
 def test_overnight_operator_mode_reconciles_stale_running_job(client):
     run_dir = main.ARTIFACTS_DIR / "runs" / "overnight" / "20260527-175700-ilo-cisco"
     writer = OvernightArtifactWriter(run_dir)
@@ -668,8 +700,10 @@ def test_overnight_operator_mode_reconciles_stale_running_job(client):
     assert payload["operator"]["completion"] == 100
     assert payload["operator"]["last"] == "Latest run finalized as Needs attention."
     assert payload["operator"]["next"] == "Start a new discovery_only run before the hardware stop window to collect the pending artifacts."
-    assert payload["operator"]["needs_attention"] == "Expected artifacts still contain placeholders: ilo/discovery.json"
+    assert payload["operator"]["needs_attention"] == "Hardware evidence is still pending (1 artifact)."
+    assert "ilo/discovery.json" not in payload["operator"]["needs_attention"]
     assert "The 6:00 AM finalization deadline was missed." not in payload["operator"]["needs_attention_reasons"]
+    assert payload["debug"]["latest_run"]["needs_attention_reasons"] == ["Expected artifacts still contain placeholders: ilo/discovery.json"]
     assert payload["debug"]["latest_run"]["deadline_reconciliation"]["removed_stale_deadline_reason"] is True
 
 
