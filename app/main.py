@@ -14697,7 +14697,7 @@ def react_ui_action_inventory() -> dict[str, list[dict[str, str]]]:
         "ovf_templates": [
             {"label": "Open OVF Templates", "method": "GET", "route": "/modules/ovf-templates", "mode": "legacy-html"},
             {"label": "Open Windows template settings", "method": "GET", "route": "/windows", "mode": "legacy-html"},
-            {"label": "Register OVF directory", "method": "POST", "route": "/modules/ovf-templates/register-directory", "mode": "legacy-html"},
+            {"label": "Register directory", "method": "POST", "route": "/modules/ovf-templates/register-directory", "mode": "legacy-html"},
             {"label": "Register OVF path", "method": "POST", "route": "/register-windows-ovf-path", "mode": "legacy-html"},
         ],
         "qnap": [

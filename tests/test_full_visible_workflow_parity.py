@@ -126,7 +126,7 @@ EXPECTED_VISIBLE_WORKFLOWS = {
         "Factory reset NetApp",
     ],
     "ovf_templates": [
-        "Register OVF directory",
+        "Register directory",
         "Register OVF path",
     ],
     "configuration": [
@@ -194,7 +194,7 @@ CONTEXT_REQUIRED_LABELS = {
     "Save Windows setup",
     "Plan Windows install (dry-run)",
     "Use selected template",
-    "Register OVF directory",
+    "Register directory",
     "Register OVF path",
     "Save QNAP setup",
     "Check version",
