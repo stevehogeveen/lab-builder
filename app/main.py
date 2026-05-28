@@ -15286,6 +15286,7 @@ def build_react_setup_ip_state(cfg: dict[str, Any] | None = None) -> dict[str, A
     netapp_cfg = cfg.get("netapp", {}) or {}
     netapp_bootstrap = netapp_cfg.get("bootstrap_overrides", {}) or {}
     netapp_desired = netapp_cfg.get("desired", {}) or {}
+    netapp_management = netapp_cfg.get("management", {}) or {}
     return {
         "ilo": {
             "current_ip": ilo_cfg.get("current_ip") or ilo_cfg.get("host") or "",
@@ -15321,12 +15322,12 @@ def build_react_setup_ip_state(cfg: dict[str, Any] | None = None) -> dict[str, A
             "console_baud": netapp_cfg.get("console_baud") or "9600",
             "gateway": netapp_desired.get("management_gateway") or ip_plan.get("gateway") or "",
             "netmask": netapp_desired.get("management_netmask") or ip_plan.get("netmask") or "255.255.255.0",
-            "sp_a_ip": netapp_bootstrap.get("netapp_sp_a") or "",
-            "sp_b_ip": netapp_bootstrap.get("netapp_sp_b") or "",
-            "cluster_mgmt_ip": netapp_bootstrap.get("netapp_cluster_mgmt") or netapp_cfg.get("host") or ip_plan.get("netapp") or "",
-            "node_01_mgmt_ip": netapp_bootstrap.get("netapp_node_01_mgmt") or "",
-            "node_02_mgmt_ip": netapp_bootstrap.get("netapp_node_02_mgmt") or "",
-            "svm_mgmt_ip": netapp_bootstrap.get("netapp_svm_mgmt") or netapp_desired.get("svm_mgmt_ip") or "",
+            "sp_a_ip": netapp_bootstrap.get("netapp_sp_a") or ip_plan.get("netapp_sp_a") or "",
+            "sp_b_ip": netapp_bootstrap.get("netapp_sp_b") or ip_plan.get("netapp_sp_b") or "",
+            "cluster_mgmt_ip": netapp_bootstrap.get("netapp_cluster_mgmt") or netapp_management.get("cluster_mgmt_ip") or netapp_cfg.get("host") or ip_plan.get("netapp_cluster_mgmt") or ip_plan.get("netapp") or "",
+            "node_01_mgmt_ip": netapp_bootstrap.get("netapp_node_01_mgmt") or netapp_management.get("node_01_mgmt_ip") or ip_plan.get("netapp_node_01_mgmt") or "",
+            "node_02_mgmt_ip": netapp_bootstrap.get("netapp_node_02_mgmt") or netapp_management.get("node_02_mgmt_ip") or ip_plan.get("netapp_node_02_mgmt") or "",
+            "svm_mgmt_ip": netapp_bootstrap.get("netapp_svm_mgmt") or netapp_management.get("svm_mgmt_ip") or netapp_desired.get("svm_mgmt_ip") or ip_plan.get("netapp_svm_mgmt") or "",
         },
     }
 

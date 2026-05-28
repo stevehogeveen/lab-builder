@@ -1400,6 +1400,8 @@ def test_react_ui_app_state_api_exposes_desktop_shell_state(client):
     assert "target_ip" in payload["setup_ip"]["ilo"]
     assert "management_ip" in payload["setup_ip"]["cisco"]
     assert "cluster_mgmt_ip" in payload["setup_ip"]["netapp"]
+    assert "sp_a_ip" in payload["setup_ip"]["netapp"]
+    assert "node_02_mgmt_ip" in payload["setup_ip"]["netapp"]
     assert payload["storage"]["target"]["default_host"]
     assert payload["storage"]["plan"]["create_only_confirmation"] == "CREATE STORAGE"
     assert payload["actions"]["storage"][0]["route"] == "/api/ui/storage"
@@ -1567,6 +1569,27 @@ def test_react_ui_global_settings_updates_netapp_cluster_management_override(cli
     assert saved["ip_plan"]["netapp_cluster_mgmt"] == "10.80.1.45"
     assert saved["netapp"]["management"]["cluster_mgmt_ip"] == "10.80.1.45"
     assert saved["netapp"]["bootstrap_overrides"]["netapp_cluster_mgmt"] == "10.80.1.45"
+
+
+def test_react_ui_setup_ip_state_defaults_netapp_bootstrap_addresses_from_plan(client):
+    cfg = main.default_config()
+    cfg["site"]["name"] = "React NetApp Defaults"
+    cfg["shared_network"]["subnet"] = "10.81.2.0/24"
+    cfg["ip_plan"].update(main.build_default_ip_plan("10.81.2.0/24"))
+    cfg["netapp"]["bootstrap_overrides"] = {}
+    main.save_kit_config(main.apply_ip_plan(cfg))
+    main.set_current_kit_name("React-NetApp-Defaults")
+
+    response = client.get("/api/ui/app-state")
+
+    assert response.status_code == 200
+    netapp_setup = response.json()["setup_ip"]["netapp"]
+    assert netapp_setup["sp_a_ip"] == "10.81.2.13"
+    assert netapp_setup["sp_b_ip"] == "10.81.2.14"
+    assert netapp_setup["cluster_mgmt_ip"] == "10.81.2.45"
+    assert netapp_setup["node_01_mgmt_ip"] == "10.81.2.46"
+    assert netapp_setup["node_02_mgmt_ip"] == "10.81.2.47"
+    assert netapp_setup["svm_mgmt_ip"] == "10.81.2.48"
 
 
 def test_react_ui_kits_api_restores_legacy_kit_management(client):
