@@ -30,6 +30,7 @@ Latest follow-up:
 - Dashboard kit switching now uses the original "Switch active kit" wording while preserving the legacy load-kit route in the action inventory.
 - Upgrade Helper, OVF directory registration, storage repair/reboot/artifact, and history artifact labels were aligned with the original visible controls.
 - Exact visible-label comparison is down to three known differences: the intentional Cisco "Setup Cisco IP" alias and two raw Jinja conditional button expressions that resolve to existing React labels.
+- Removed tracked stale Codex prompt files that still described re-adding the removed Overnight Hardware Run feature.
 
 Remaining gaps:
 - No unmatched original visible actions are currently listed in artifacts/codex-runs/full-visible-workflow-missing-controls.md.
@@ -44,7 +45,8 @@ Validation:
 - Latest current-head focused validation: /home/administrator/lab-builder/.venv/bin/python -m pytest -q tests/test_full_visible_workflow_parity.py tests/test_full_ui_parity_contract.py: 33 passed
 - Latest current-head full validation: /home/administrator/lab-builder/.venv/bin/python -m pytest -q: 457 passed in 242.63s
 - Latest current-head compile/JS/diff checks: compileall app passed; node --check static/js/react-desktop-ui.js passed; git diff --check passed
+- Latest Overnight removal/app-state validation: /home/administrator/lab-builder/.venv/bin/python -m pytest -q tests/test_full_ui_parity_contract.py::test_overnight_hardware_feature_is_removed_from_routes_and_nav tests/test_full_visible_workflow_parity.py::test_overnight_hardware_surface_remains_removed tests/test_app.py::test_react_ui_app_state_api_exposes_desktop_shell_state: 3 passed
 
 Hardware safety:
 - No hardware actions were executed by tests or validation.
-- Overnight Hardware Run remains removed from route/nav coverage.
+- Overnight Hardware Run remains removed from route/nav coverage, and no tracked non-test app/prompt/docs surface advertises it.
