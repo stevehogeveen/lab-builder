@@ -14547,6 +14547,7 @@ def react_ui_action_inventory() -> dict[str, list[dict[str, str]]]:
             {"label": "Create kit", "method": "POST", "route": "/api/ui/kits/create", "mode": "json"},
             {"label": "Open current config", "method": "POST", "route": "/view-current-kit-config", "mode": "legacy-html"},
             {"label": "Download current config", "method": "POST", "route": "/download-current-kit-config", "mode": "download"},
+            {"label": "Open next step", "method": "GET", "route": "/execution", "mode": "legacy-html"},
             {"label": "Open Run Center", "method": "GET", "route": "/execution", "mode": "legacy-html"},
             {"label": "Prepare run review", "method": "POST", "route": "/prepare-execute", "mode": "legacy-html"},
             {"label": "Start preview run", "method": "POST", "route": "/execute-preview", "mode": "legacy-html"},
@@ -14574,6 +14575,7 @@ def react_ui_action_inventory() -> dict[str, list[dict[str, str]]]:
             {"label": "Run ONTAP upgrade", "method": "POST", "route": "/modules/netapp/run-upgrade", "mode": "legacy-html"},
             {"label": "Plan iLO firmware upgrade", "method": "POST", "route": "/plan-ilo-upgrade", "mode": "legacy-html"},
             {"label": "Run iLO firmware upgrade", "method": "POST", "route": "/run-ilo-upgrade", "mode": "legacy-html"},
+            {"label": "Open iLO", "method": "GET", "route": "/ilo", "mode": "legacy-html"},
         ],
         "ilo": [
             {"label": "Load iLO state", "method": "GET", "route": "/api/ui/ilo", "mode": "json"},
@@ -14586,6 +14588,7 @@ def react_ui_action_inventory() -> dict[str, list[dict[str, str]]]:
             {"label": "Plan iLO firmware upgrade", "method": "POST", "route": "/plan-ilo-upgrade", "mode": "legacy-html"},
             {"label": "Run iLO firmware upgrade", "method": "POST", "route": "/run-ilo-upgrade", "mode": "legacy-html"},
             {"label": "iLO upgrade activity", "method": "GET", "route": "/ilo-upgrade-activity", "mode": "legacy-html"},
+            {"label": "Open storage setup", "method": "GET", "route": "/storage", "mode": "legacy-html"},
         ],
         "esxi": [
             {"label": "Save ESXi setup", "method": "POST", "route": "/save-esxi-settings", "mode": "legacy-html"},
@@ -14673,6 +14676,8 @@ def react_ui_action_inventory() -> dict[str, list[dict[str, str]]]:
             {"label": "Reboot storage now", "method": "POST", "route": "/reboot-storage-now", "mode": "legacy-html"},
             {"label": "View storage artifact", "method": "POST", "route": "/view-storage-artifact", "mode": "legacy-html"},
             {"label": "Download storage artifact", "method": "POST", "route": "/download-storage-artifact", "mode": "download"},
+            {"label": "Open reports", "method": "GET", "route": "/configs", "mode": "legacy-html"},
+            {"label": "Open build files", "method": "GET", "route": "/configs", "mode": "legacy-html"},
         ],
         "windows": [
             {"label": "Save Windows setup", "method": "POST", "route": "/save-windows-settings", "mode": "legacy-html"},
@@ -14700,9 +14705,15 @@ def react_ui_action_inventory() -> dict[str, list[dict[str, str]]]:
             {"label": "Start preview run", "method": "POST", "route": "/execute-preview", "mode": "legacy-html"},
             {"label": "Start real run", "method": "POST", "route": "/execute", "mode": "legacy-html"},
             {"label": "Retry storage stage", "method": "POST", "route": "/retry-storage-stage", "mode": "legacy-html"},
+            {"label": "Open setup page", "method": "GET", "route": "/configuration", "mode": "legacy-html"},
+            {"label": "Open Reports", "method": "GET", "route": "/configs", "mode": "legacy-html"},
         ],
         "reports": [
             {"label": "Run history API", "method": "GET", "route": "/api/ui/run-history", "mode": "json"},
+            {"label": "Search reports", "method": "GET", "route": "/configs", "mode": "legacy-html"},
+            {"label": "Open detailed history", "method": "GET", "route": "/history", "mode": "legacy-html"},
+            {"label": "Open Reports", "method": "GET", "route": "/configs", "mode": "legacy-html"},
+            {"label": "Related reports", "method": "GET", "route": "/configs", "mode": "legacy-html"},
             {"label": "View run summary", "method": "POST", "route": "/view-run-summary", "mode": "legacy-html"},
             {"label": "Download run summary", "method": "POST", "route": "/download-run-summary", "mode": "download"},
             {"label": "View report", "method": "POST", "route": "/view-report", "mode": "legacy-html"},

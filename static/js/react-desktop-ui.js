@@ -1421,6 +1421,7 @@
 
     function ReportsPage(props) {
         const state = props.appState || {};
+        const actions = ((state.actions || {}).reports || []);
         return h("div", { className: "page-layout" },
             h("div", { className: "page-main" },
                 h(SetupStrip, {
@@ -1440,9 +1441,10 @@
                             );
                         })
                     )
-                )
+                ),
+                h(ActionInventoryPanel, { activePage: "reports", appState: state, actions: actions, onNavigate: props.onNavigate })
             ),
-            h(ContextPanel, { activePage: "reports", appState: state, onNavigate: props.onNavigate })
+            h(ContextPanel, { activePage: "reports", appState: state, actions: actions, onNavigate: props.onNavigate })
         );
     }
 
@@ -1476,6 +1478,7 @@
     function ActionInventoryPanel(props) {
         const actions = props.actions || [];
         const pageHref = ((pageCopy[props.activePage] || {}).legacy) || "";
+        const returnPage = props.activePage === "reports" ? "configs" : props.activePage;
         function modeDisplay(mode) {
             if (mode === "legacy-html") return "html";
             return mode || "route";
@@ -1486,21 +1489,21 @@
         }
         function actionControl(action) {
             if (isGuarded(action)) {
-                return h(Pill, { tone: "warn" }, "Use page");
+                return h(ReactAwareButton, { href: pageHref || action.route, appState: props.appState, onNavigate: props.onNavigate }, "Open confirmation");
             }
-            if (action.method === "GET" || action.mode === "download") {
+            if (action.method === "GET") {
                 if (action.mode === "download") return h(DownloadButton, { href: action.route }, "Download");
                 return h(ReactAwareButton, { href: action.route, appState: props.appState, onNavigate: props.onNavigate }, "Open");
             }
-            if (action.mode === "legacy-html") {
-                if (pageHref && props.onNavigate && pageKeyForHref(pageHref, props.appState)) {
-                    return h(ReactAwareButton, { href: pageHref, appState: props.appState, onNavigate: props.onNavigate }, "Use page");
-                }
-                return h(Pill, { tone: "blue" }, "Mapped");
+            if (action.mode === "legacy-html" || action.mode === "download") {
+                return h("form", { className: "inline-action-form", action: action.route, method: "post" },
+                    h("input", { type: "hidden", name: "return_page", value: returnPage }),
+                    h("button", { className: "button", type: "submit" }, action.label)
+                );
             }
             return h(Pill, { tone: "ready" }, "API");
         }
-        return h(Panel, { label: "Backend action inventory", title: "Mapped routes", subtitle: "Routes are listed for coverage. Workflow buttons above provide the form fields needed to call them safely." },
+        return h(Panel, { label: "Backend action inventory", title: "Mapped routes", subtitle: "Every preserved workflow is visible here. Simple HTML actions submit to the original route; guarded hardware actions open the full confirmation page." },
             actions.length ? h("div", { className: "action-list" }, actions.map(function (action) {
                 return h("div", { className: "action-row", key: action.method + action.route + action.label },
                     h("div", null,
