@@ -14729,6 +14729,7 @@ def react_ui_action_inventory() -> dict[str, list[dict[str, str]]]:
         ],
         "reports": [
             {"label": "Run history API", "method": "GET", "route": "/api/ui/run-history", "mode": "json"},
+            {"label": "Load filtered reports", "method": "GET", "route": "/api/ui/reports", "mode": "json"},
             {"label": "Search reports", "method": "GET", "route": "/configs", "mode": "legacy-html"},
             {"label": "Open detailed history", "method": "GET", "route": "/history", "mode": "legacy-html"},
             {"label": "Open Reports", "method": "GET", "route": "/configs", "mode": "legacy-html"},
@@ -15640,6 +15641,12 @@ async def api_ui_global_settings():
 @app.get("/api/ui/storage")
 async def api_ui_storage():
     return jsonable_encoder(build_react_storage_state())
+
+
+@app.get("/api/ui/reports")
+async def api_ui_reports(report_query: str = "", report_type: str = "all"):
+    cfg = load_kit_config()
+    return jsonable_encoder(build_report_center(cfg, query=report_query, report_type=report_type))
 
 
 @app.post("/api/ui/global-settings/autofill")

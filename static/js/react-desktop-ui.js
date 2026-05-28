@@ -1494,7 +1494,7 @@
                         })
                     )
                 ),
-                h(ReportCenterPanel, { reportCenter: state.report_center || {} }),
+                h(ReportCenterPanel, { reportCenter: state.report_center || {}, onSearchReports: props.onSearchReports }),
                 h(ActionInventoryPanel, { activePage: "reports", appState: state, actions: actions, onNavigate: props.onNavigate })
             ),
             h(ContextPanel, { activePage: "reports", appState: state, actions: actions, onNavigate: props.onNavigate })
@@ -1623,16 +1623,22 @@
                 h("button", { className: "button", type: "submit", disabled: !path }, label)
             );
         }
-        function relatedReportsHref(bundle) {
+        function relatedReportsQuery(bundle) {
             const query = String((bundle || {}).related_reports_query || (bundle || {}).scope || "").trim();
-            return "/configs" + (query ? "?report_query=" + encodeURIComponent(query) : "");
+            return query;
+        }
+        function submitSearch(event) {
+            event.preventDefault();
+            if (!props.onSearchReports) return;
+            const data = new FormData(event.currentTarget);
+            props.onSearchReports(String(data.get("report_query") || ""), String(data.get("report_type") || "all"));
         }
         return h(Panel, {
             label: "Report center",
             title: "Run bundles and saved files",
             subtitle: String(center.entries_total || 0) + " matching file(s). Latest bundles and newest files are shown first.",
         },
-            h("form", { className: "report-search-form", action: "/configs", method: "get" },
+            h("form", { className: "report-search-form", onSubmit: submitSearch },
                 h("input", { className: "input", type: "text", name: "report_query", defaultValue: center.query || "", placeholder: "serial, storage, summary, plan" }),
                 h("select", { className: "input", name: "report_type", defaultValue: center.report_type || "all" },
                     h("option", { value: "all" }, "All reports"),
@@ -1653,7 +1659,7 @@
                     h("div", { className: "action-row-controls" },
                         h(Pill, { tone: bundle.tone || "blue" }, bundle.result || "Recorded"),
                         reportPostForm("/view-report", "Open bundle", bundle.run_summary_path),
-                        h(Button, { href: relatedReportsHref(bundle) }, "Related reports")
+                        h(Button, { onClick: function () { if (props.onSearchReports) props.onSearchReports(relatedReportsQuery(bundle), "all"); } }, "Related reports")
                     )
                 );
             })) : h("div", { className: "empty-state" }, "No run bundles have been recorded for this kit yet."),
@@ -2046,6 +2052,20 @@
                     return Object.assign({}, current, { storage: payload });
                 });
                 applyStoragePayload(payload);
+            }).catch(function (error) {
+                setMessage({ ok: false, text: error.message });
+            });
+        }
+
+        function loadReports(query, reportType) {
+            const params = new URLSearchParams();
+            params.set("report_query", query || "");
+            params.set("report_type", reportType || "all");
+            return apiGet("/api/ui/reports" + "?" + params.toString()).then(function (payload) {
+                setAppState(function (current) {
+                    if (!current) return current;
+                    return Object.assign({}, current, { report_center: payload });
+                });
             }).catch(function (error) {
                 setMessage({ ok: false, text: error.message });
             });
@@ -2619,7 +2639,7 @@
         } else if (activePage === "execution") {
             pageContent = h(ExecutionPage, { appState: appState, onNavigate: navigate, onRefresh: refreshAll });
         } else if (activePage === "reports") {
-            pageContent = h(ReportsPage, { appState: appState, onNavigate: navigate });
+            pageContent = h(ReportsPage, { appState: appState, onNavigate: navigate, onSearchReports: loadReports });
         } else if (activePage === "configuration") {
             pageContent = h(ConfigurationPage, {
                 appState: appState,

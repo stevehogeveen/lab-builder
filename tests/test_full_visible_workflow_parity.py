@@ -156,6 +156,7 @@ EXPECTED_VISIBLE_WORKFLOWS = {
         "Open Reports",
     ],
     "reports": [
+        "Load filtered reports",
         "Search reports",
         "Open detailed history",
         "View run summary",
@@ -414,10 +415,10 @@ def test_report_center_panel_has_view_and_download_forms():
     assert '"/view-report"' in report_body
     assert '"/download-report"' in report_body
     assert 'name: "report_path"' in report_body
-    assert 'action: "/configs"' in report_body
+    assert "onSubmit: submitSearch" in report_body
     assert 'name: "report_query"' in report_body
     assert "Search reports" in report_body
-    assert "relatedReportsHref" in report_body
+    assert "relatedReportsQuery" in report_body
     assert "Related reports" in report_body
 
 

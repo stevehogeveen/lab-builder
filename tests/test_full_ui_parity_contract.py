@@ -178,6 +178,13 @@ def test_react_aware_navigation_includes_legacy_module_aliases():
     assert '"/modules/ovf-templates": "ovf_templates"' in js
 
 
+def test_reports_search_stays_in_react_shell():
+    js = Path("static/js/react-desktop-ui.js").read_text(encoding="utf-8")
+    assert '"/api/ui/reports" + "?"' in js
+    assert 'className: "report-search-form", onSubmit: submitSearch' in js
+    assert 'h(Button, { href: relatedReportsHref(bundle) }, "Related reports")' not in js
+
+
 def test_overnight_hardware_feature_is_removed_from_routes_and_nav():
     paths = route_paths()
     assert "/overnight-hardware" not in paths

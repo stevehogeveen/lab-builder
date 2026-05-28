@@ -1440,6 +1440,17 @@ def test_react_ui_mapped_pages_and_actions_match_registered_routes():
             assert action["route"] in registered_routes, f"{page_key} maps missing route {action['route']}"
 
 
+def test_react_ui_reports_api_filters_report_center_without_legacy_navigation(client):
+    response = client.get("/api/ui/reports", params={"report_query": "storage", "report_type": "summary"})
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["query"] == "storage"
+    assert payload["report_type"] == "summary"
+    assert "entries_preview" in payload
+    assert "latest_bundles" in payload
+
+
 def test_react_ui_global_settings_api_saves_editable_shared_defaults(client):
     response = client.post(
         "/api/ui/global-settings",
