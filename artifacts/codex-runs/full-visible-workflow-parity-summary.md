@@ -24,6 +24,7 @@ Latest follow-up:
 - NetApp connection/save labels were aligned back to the original operator wording for "Test ONTAP API" and "Save NetApp setup."
 - iLO inventory readback was relabeled to the original operator wording, "Read current iLO."
 - Dashboard and command header text sizing was tightened by removing viewport-scaled heading sizes and negative letter spacing from the app shell.
+- Windows action labels were aligned to the original operator wording for template selection and dry-run install planning.
 
 Remaining gaps:
 - No unmatched original visible actions are currently listed in artifacts/codex-runs/full-visible-workflow-missing-controls.md.

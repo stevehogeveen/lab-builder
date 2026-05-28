@@ -14687,11 +14687,11 @@ def react_ui_action_inventory() -> dict[str, list[dict[str, str]]]:
         "windows": [
             {"label": "Save Windows setup", "method": "POST", "route": "/save-windows-settings", "mode": "legacy-html"},
             {"label": "Upload Windows image", "method": "POST", "route": "/upload-windows-image", "mode": "legacy-html"},
-            {"label": "Plan Windows install", "method": "POST", "route": "/plan-windows-install", "mode": "legacy-html"},
+            {"label": "Plan Windows install (dry-run)", "method": "POST", "route": "/plan-windows-install", "mode": "legacy-html"},
             {"label": "Probe vSphere", "method": "POST", "route": "/probe-windows-vsphere", "mode": "legacy-html"},
             {"label": "Probe WinRM", "method": "POST", "route": "/probe-windows-winrm", "mode": "legacy-html"},
             {"label": "Register OVF path", "method": "POST", "route": "/register-windows-ovf-path", "mode": "legacy-html"},
-            {"label": "Select Windows OVF template", "method": "POST", "route": "/select-windows-ovf-template", "mode": "legacy-html"},
+            {"label": "Use selected template", "method": "POST", "route": "/select-windows-ovf-template", "mode": "legacy-html"},
         ],
         "ovf_templates": [
             {"label": "Open OVF Templates", "method": "GET", "route": "/modules/ovf-templates", "mode": "legacy-html"},
