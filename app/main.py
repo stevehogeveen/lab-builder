@@ -15605,6 +15605,8 @@ async def api_ui_global_settings_save(request: Request):
     existing_snmp = cfg.get("shared_snmp", {}) or {}
     existing_users = normalize_snmp_users(existing_snmp.get("users", []))
     existing_extra_users = existing_users[1:] if existing_users else []
+    previous_ilo_plan_ip = str((cfg.get("ip_plan") or {}).get("ilo") or "").strip()
+    previous_ilo_current_ip = str((cfg.get("ilo") or {}).get("current_ip") or (cfg.get("ilo") or {}).get("host") or "").strip()
 
     def value_or_existing(key: str, existing: Any = "") -> str:
         if key in values:
@@ -15653,6 +15655,9 @@ async def api_ui_global_settings_save(request: Request):
             cfg["ip_plan"][plan_key] = value_or_existing(field, cfg["ip_plan"].get(plan_key, ""))
     if "ilo_target_ip" in values:
         cfg.setdefault("ilo", {})["target_ip"] = cfg["ip_plan"].get("ilo", "")
+        if not previous_ilo_current_ip or previous_ilo_current_ip == previous_ilo_plan_ip:
+            cfg["ilo"]["current_ip"] = cfg["ip_plan"].get("ilo", "")
+            cfg["ilo"]["host"] = cfg["ip_plan"].get("ilo", "")
     if "switch_ip" in values:
         cfg.setdefault("cisco_switch", {})["ip"] = cfg["ip_plan"].get("switch", "")
         cfg.setdefault("cisco_switch", {})["management_ip"] = cfg["ip_plan"].get("switch", "")
@@ -15727,6 +15732,7 @@ async def api_ui_global_settings_save(request: Request):
     try:
         cfg = apply_ip_plan(cfg)
         save_kit_config(cfg)
+        set_current_kit_name(cfg["site"]["name"])
         append_activity_event(
             cfg["site"]["name"],
             "global_settings_saved",

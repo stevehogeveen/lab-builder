@@ -1490,6 +1490,11 @@ def test_react_ui_global_settings_api_saves_editable_shared_defaults(client):
     assert payload["message"] == "Global settings saved."
     assert payload["ilo"]["values"]["target_ip"] == "10.55.1.11"
     assert any(module["key"] == "ilo" and module["target"] == "10.55.1.11" for module in payload["app_state"]["modules"])
+    assert payload["app_state"]["storage"]["target"]["resolved"] == "10.55.1.11"
+    setup_values = payload["app_state"]["setup_values"]
+    assert {"label": "Install IP", "value": "10.55.1.10"} in setup_values["esxi"]["summary"]
+    assert {"label": "Windows IP", "value": "10.55.1.20"} in setup_values["windows"]["summary"]
+    assert {"label": "QNAP IP", "value": "10.55.1.30"} in setup_values["qnap"]["summary"]
 
     saved = main.load_kit_config("React-Global-Kit")
     assert saved["shared_network"]["subnet"] == "10.55.1.0/24"
