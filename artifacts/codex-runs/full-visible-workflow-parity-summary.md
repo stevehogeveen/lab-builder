@@ -25,6 +25,7 @@ Latest follow-up:
 - iLO inventory readback was relabeled to the original operator wording, "Read current iLO."
 - Dashboard and command header text sizing was tightened by removing viewport-scaled heading sizes and negative letter spacing from the app shell.
 - Windows action labels were aligned to the original operator wording for template selection and dry-run install planning.
+- Storage page primary copy now uses the original "Display current storage setup" and "Approve this plan" operator labels.
 
 Remaining gaps:
 - No unmatched original visible actions are currently listed in artifacts/codex-runs/full-visible-workflow-missing-controls.md.

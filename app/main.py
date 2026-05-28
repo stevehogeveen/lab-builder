@@ -2968,7 +2968,7 @@ def build_validation_checks(cfg: dict[str, Any], workflow: str) -> list[dict[str
                 not storage_review.get("stale"),
                 "Ready" if not storage_review.get("stale") else "Storage approval no longer matches the latest discovery.",
                 why="A stale storage plan could target the wrong hardware state.",
-                fix="Read current storage again and approve the refreshed plan.",
+                fix="Display current storage setup again and approve the refreshed plan.",
                 href="/storage#storage-review-start",
             )
         )
@@ -3718,7 +3718,7 @@ def build_workflow_contexts(cfg: dict[str, Any], job: dict[str, Any], history: l
         "target": storage_target.get("resolved") or "Not set",
         "approved": storage_review.get("approved"),
         "stale": storage_review.get("stale"),
-        "current_summary": storage_review.get("status_reason") or "Read current storage to see what the server has today.",
+        "current_summary": storage_review.get("status_reason") or "Display current storage setup to see what the server has today.",
         "planned_summary": storage_review.get("approval", {}).get("plan_summary", {}).get("mode") or "Build a storage plan to see the proposed layout.",
         "approved_summary": "Approved for a later iLO run." if storage_review.get("approved") else "No approved storage plan yet.",
         "result_summary": "Recent storage activity appears in Run History and the storage reports." if latest_history_entry_for_scope(history, ["storage-apply", "storage-reboot"]) else "No storage run has been recorded yet.",

@@ -1113,7 +1113,7 @@
             h("div", { className: "page-main" },
                 h(SetupStrip, {
                     what: pageCopy.storage.what,
-                    next: (storage.blockers || []).length ? ((storage.blockers || [])[0].summary || "Resolve the storage blocker before planning.") : "Read current storage, build a plan, approve it, then apply only after reviewing the generated plan.",
+                    next: (storage.blockers || []).length ? ((storage.blockers || [])[0].summary || "Resolve the storage blocker before planning.") : "Display current storage setup, build a plan, approve it, then apply only after reviewing the generated plan.",
                     last: storage.review && storage.review.state_label ? ("Storage state: " + storage.review.state_label) : "No storage workflow state yet.",
                 }),
                 h(Panel, {
@@ -1130,7 +1130,7 @@
                     h("div", { className: "job-actions" },
                         h(Button, { primary: true, onClick: function () { props.onSaveTarget("override"); }, disabled: props.working }, props.working ? "Working..." : "Use entered IP"),
                         h(Button, { onClick: function () { props.onSaveTarget("defaults"); }, disabled: props.working }, "Use iLO defaults"),
-                        h(Button, { onClick: props.onReadCurrent, disabled: !canRead }, "Read current storage"),
+                        h(Button, { onClick: props.onReadCurrent, disabled: !canRead }, "Display current storage setup"),
                         h(Button, { onClick: props.onProbeCapabilities, disabled: !canRead }, "Probe capabilities")
                     )
                 ),
@@ -1140,7 +1140,7 @@
                 discovery.restore_error ? h("div", { className: "message message-warn" }, "Saved storage artifact could not be restored: " + discovery.restore_error) : null,
                 h(Panel, {
                     label: "Discovery",
-                    title: discovery.available ? "Latest storage discovery" : "Read current storage first",
+                    title: discovery.available ? "Latest storage discovery" : "Display current storage setup first",
                     subtitle: discovery.raw_path || "A discovery snapshot is required before a RAID plan can be built.",
                     action: h(Pill, { tone: discovery.available ? "ready" : "warn" }, discovery.available ? "Available" : "Missing")
                 },
@@ -2420,11 +2420,11 @@
                 storage_target_host: storageForm.target_host || "",
                 storage_username: storageForm.username || "",
                 storage_password: storageForm.password || "",
-            }, { success: "Storage target saved. Use Read current storage to verify reachability." });
+            }, { success: "Storage target saved. Use Display current storage setup to verify reachability." });
         }
 
         function readCurrentStorage() {
-            return runStorageAction("Read current storage", "/read-current-storage", { return_page: "storage" }, { success: "Storage discovery returned. The page now shows the latest saved discovery state." });
+            return runStorageAction("Display current storage setup", "/read-current-storage", { return_page: "storage" }, { success: "Storage discovery returned. The page now shows the latest saved discovery state." });
         }
 
         function probeStorageCapabilities() {
@@ -2440,7 +2440,7 @@
         }
 
         function approveStoragePlan() {
-            return runStorageAction("Approve storage plan", "/approve-storage-plan", storagePathFields({ include_in_ilo_run: storageForm.include_in_ilo_run ? "on" : "" }), { success: "Storage approval returned. Confirm the approved state before running." });
+            return runStorageAction("Approve this plan", "/approve-storage-plan", storagePathFields({ include_in_ilo_run: storageForm.include_in_ilo_run ? "on" : "" }), { success: "Storage approval returned. Confirm the approved state before running." });
         }
 
         function clearStorageApproval() {

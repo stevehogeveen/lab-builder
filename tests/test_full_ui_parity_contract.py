@@ -89,7 +89,7 @@ IMPORTANT_POST_ACTIONS = [
 
 EXPECTED_REACT_CONTROLS = [
     "Setup iLO IP",
-    "Read current storage",
+    "Display current storage setup",
     "Build storage plan",
     "Apply storage layout",
     "Save shared defaults",

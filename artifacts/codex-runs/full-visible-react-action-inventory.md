@@ -39,7 +39,7 @@ Total rows: 155
 | ilo | Setup iLO IP | POST | /api/ui/ilo/setup-ip | json | static/js/react-desktop-ui.js + app/main.py:react_ui_action_inventory |
 | ilo | Save iLO setup HTML action | POST | /save-ilo-settings | legacy-html | static/js/react-desktop-ui.js + app/main.py:react_ui_action_inventory |
 | ilo | Export iLO config | POST | /export-ilo-config | legacy-html | static/js/react-desktop-ui.js + app/main.py:react_ui_action_inventory |
-| ilo | Export iLO inventory | POST | /export-ilo-inventory | legacy-html | static/js/react-desktop-ui.js + app/main.py:react_ui_action_inventory |
+| ilo | Read current iLO | POST | /export-ilo-inventory | legacy-html | static/js/react-desktop-ui.js + app/main.py:react_ui_action_inventory |
 | ilo | View iLO config snapshot | POST | /view-ilo-config-snapshot | legacy-html | static/js/react-desktop-ui.js + app/main.py:react_ui_action_inventory |
 | ilo | Plan iLO firmware upgrade | POST | /plan-ilo-upgrade | legacy-html | static/js/react-desktop-ui.js + app/main.py:react_ui_action_inventory |
 | ilo | Run iLO firmware upgrade | POST | /run-ilo-upgrade | legacy-html | static/js/react-desktop-ui.js + app/main.py:react_ui_action_inventory |
@@ -51,8 +51,8 @@ Total rows: 155
 | esxi | Start ESXi run | POST | /execute | legacy-html | static/js/react-desktop-ui.js + app/main.py:react_ui_action_inventory |
 | netapp | Open NetApp setup | GET | /modules/netapp | legacy-html | static/js/react-desktop-ui.js + app/main.py:react_ui_action_inventory |
 | netapp | Module status | GET | /modules/netapp/status | json | static/js/react-desktop-ui.js + app/main.py:react_ui_action_inventory |
-| netapp | Save NetApp settings | POST | /modules/netapp/save-settings | legacy-html | static/js/react-desktop-ui.js + app/main.py:react_ui_action_inventory |
-| netapp | Test NetApp connection | POST | /modules/netapp/test-connection | legacy-html | static/js/react-desktop-ui.js + app/main.py:react_ui_action_inventory |
+| netapp | Save NetApp setup | POST | /modules/netapp/save-settings | legacy-html | static/js/react-desktop-ui.js + app/main.py:react_ui_action_inventory |
+| netapp | Test ONTAP API | POST | /modules/netapp/test-connection | legacy-html | static/js/react-desktop-ui.js + app/main.py:react_ui_action_inventory |
 | netapp | Read current ONTAP | POST | /modules/netapp/read-current-config | legacy-html | static/js/react-desktop-ui.js + app/main.py:react_ui_action_inventory |
 | netapp | Discover NetApp page | POST | /modules/netapp/discover-page | legacy-html | static/js/react-desktop-ui.js + app/main.py:react_ui_action_inventory |
 | netapp | Check console ports | POST | /modules/netapp/check-console-ports | legacy-html | static/js/react-desktop-ui.js + app/main.py:react_ui_action_inventory |
@@ -79,8 +79,8 @@ Total rows: 155
 | netapp | Run ONTAP upgrade | POST | /modules/netapp/run-upgrade | legacy-html | static/js/react-desktop-ui.js + app/main.py:react_ui_action_inventory |
 | netapp | ONTAP upgrade activity | GET | /modules/netapp/upgrade-activity | legacy-html | static/js/react-desktop-ui.js + app/main.py:react_ui_action_inventory |
 | cisco | Open Cisco setup | GET | /cisco | legacy-html | static/js/react-desktop-ui.js + app/main.py:react_ui_action_inventory |
-| cisco | Discover Cisco version | POST | /modules/cisco/discover-version | legacy-html | static/js/react-desktop-ui.js + app/main.py:react_ui_action_inventory |
-| cisco | Discover Cisco console | POST | /modules/cisco/discover-console | legacy-html | static/js/react-desktop-ui.js + app/main.py:react_ui_action_inventory |
+| cisco | Check version | POST | /modules/cisco/discover-version | legacy-html | static/js/react-desktop-ui.js + app/main.py:react_ui_action_inventory |
+| cisco | Test console access | POST | /modules/cisco/discover-console | legacy-html | static/js/react-desktop-ui.js + app/main.py:react_ui_action_inventory |
 | cisco | Fix serial access | POST | /modules/cisco/fix-serial-permissions | legacy-html | static/js/react-desktop-ui.js + app/main.py:react_ui_action_inventory |
 | cisco | Setup Cisco IP | POST | /modules/cisco/bootstrap-management | legacy-html | static/js/react-desktop-ui.js + app/main.py:react_ui_action_inventory |
 | cisco | Verify console bootstrap | POST | /modules/cisco/verify-console-bootstrap | legacy-html | static/js/react-desktop-ui.js + app/main.py:react_ui_action_inventory |
@@ -112,9 +112,9 @@ Total rows: 155
 | configuration | Import kit config | POST | /import-kit-config | legacy-html | static/js/react-desktop-ui.js + app/main.py:react_ui_action_inventory |
 | storage | Load storage state | GET | /api/ui/storage | json | static/js/react-desktop-ui.js + app/main.py:react_ui_action_inventory |
 | storage | Save storage target | POST | /save-storage-target | legacy-html | static/js/react-desktop-ui.js + app/main.py:react_ui_action_inventory |
-| storage | Read current storage | POST | /read-current-storage | legacy-html | static/js/react-desktop-ui.js + app/main.py:react_ui_action_inventory |
-| storage | Plan RAID layout | POST | /plan-raid-layout | legacy-html | static/js/react-desktop-ui.js + app/main.py:react_ui_action_inventory |
-| storage | Approve storage plan | POST | /approve-storage-plan | legacy-html | static/js/react-desktop-ui.js + app/main.py:react_ui_action_inventory |
+| storage | Display current storage setup | POST | /read-current-storage | legacy-html | static/js/react-desktop-ui.js + app/main.py:react_ui_action_inventory |
+| storage | Build storage plan | POST | /plan-raid-layout | legacy-html | static/js/react-desktop-ui.js + app/main.py:react_ui_action_inventory |
+| storage | Approve this plan | POST | /approve-storage-plan | legacy-html | static/js/react-desktop-ui.js + app/main.py:react_ui_action_inventory |
 | storage | Apply storage layout | POST | /apply-storage-layout | legacy-html | static/js/react-desktop-ui.js + app/main.py:react_ui_action_inventory |
 | storage | Repair storage selections | POST | /repair-storage-selection | legacy-html | static/js/react-desktop-ui.js + app/main.py:react_ui_action_inventory |
 | storage | Probe storage capabilities | POST | /probe-storage-capabilities | legacy-html | static/js/react-desktop-ui.js + app/main.py:react_ui_action_inventory |
@@ -126,11 +126,11 @@ Total rows: 155
 | storage | Open build files | GET | /configs | legacy-html | static/js/react-desktop-ui.js + app/main.py:react_ui_action_inventory |
 | windows | Save Windows setup | POST | /save-windows-settings | legacy-html | static/js/react-desktop-ui.js + app/main.py:react_ui_action_inventory |
 | windows | Upload Windows image | POST | /upload-windows-image | legacy-html | static/js/react-desktop-ui.js + app/main.py:react_ui_action_inventory |
-| windows | Plan Windows install | POST | /plan-windows-install | legacy-html | static/js/react-desktop-ui.js + app/main.py:react_ui_action_inventory |
+| windows | Plan Windows install (dry-run) | POST | /plan-windows-install | legacy-html | static/js/react-desktop-ui.js + app/main.py:react_ui_action_inventory |
 | windows | Probe vSphere | POST | /probe-windows-vsphere | legacy-html | static/js/react-desktop-ui.js + app/main.py:react_ui_action_inventory |
 | windows | Probe WinRM | POST | /probe-windows-winrm | legacy-html | static/js/react-desktop-ui.js + app/main.py:react_ui_action_inventory |
 | windows | Register OVF path | POST | /register-windows-ovf-path | legacy-html | static/js/react-desktop-ui.js + app/main.py:react_ui_action_inventory |
-| windows | Select Windows OVF template | POST | /select-windows-ovf-template | legacy-html | static/js/react-desktop-ui.js + app/main.py:react_ui_action_inventory |
+| windows | Use selected template | POST | /select-windows-ovf-template | legacy-html | static/js/react-desktop-ui.js + app/main.py:react_ui_action_inventory |
 | ovf_templates | Open OVF Templates | GET | /modules/ovf-templates | legacy-html | static/js/react-desktop-ui.js + app/main.py:react_ui_action_inventory |
 | ovf_templates | Open Windows template settings | GET | /windows | legacy-html | static/js/react-desktop-ui.js + app/main.py:react_ui_action_inventory |
 | ovf_templates | Register OVF directory | POST | /modules/ovf-templates/register-directory | legacy-html | static/js/react-desktop-ui.js + app/main.py:react_ui_action_inventory |
