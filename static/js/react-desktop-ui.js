@@ -1184,6 +1184,7 @@
         const copy = pageCopy[props.page] || pageCopy.esxi;
         const module = (state.modules || []).find(function (item) { return item.key === props.page; }) || {};
         const actions = ((state.actions || {})[props.page] || []);
+        const setupValues = ((state.setup_values || {})[props.page] || {});
         const last = module.last_summary || "No migrated React action has run yet.";
         return h("div", { className: "page-layout" },
             h("div", { className: "page-main" },
@@ -1195,6 +1196,7 @@
                 props.page === "netapp" ? h(NetAppStatusPanel, { netappStatus: props.netappStatus, onRefresh: props.onRefreshNetApp }) : null,
                 props.page === "cisco" ? h(CiscoSetupIpPanel, { form: (props.setupIpForm || {}).cisco || {}, onChange: props.onSetupIpChange, onSetupIp: props.onSetupCiscoIp, working: props.setupIpWorking }) : null,
                 props.page === "netapp" ? h(NetAppSetupIpPanel, { form: (props.setupIpForm || {}).netapp || {}, onChange: props.onSetupIpChange, onSetupIp: props.onSetupNetAppIp, working: props.setupIpWorking }) : null,
+                setupValues.summary ? h(ModuleDetailPanel, { page: props.page, detail: setupValues, appState: state, onNavigate: props.onNavigate }) : null,
                 h(Panel, {
                     label: "Workflow status",
                     title: copy.title,
@@ -1212,6 +1214,35 @@
                 h(ActionInventoryPanel, { activePage: props.page, appState: state, actions: actions, onNavigate: props.onNavigate })
             ),
             h(ContextPanel, { activePage: props.page, appState: state, actions: actions, onNavigate: props.onNavigate })
+        );
+    }
+
+    function ModuleDetailPanel(props) {
+        const detail = props.detail || {};
+        const primary = detail.primary_action || {};
+        function rows(items) {
+            return (items || []).map(function (item) {
+                return h("div", { className: "data-row", key: item.label + item.value },
+                    h("div", null,
+                        h("div", { className: "data-name" }, item.label),
+                        h("div", { className: "data-value", title: item.value }, item.value || "Not set")
+                    )
+                );
+            });
+        }
+        return h(Panel, {
+            label: "Saved setup values",
+            title: (pageCopy[props.page] || {}).title || "Setup values",
+            subtitle: "Current kit values are shown here so the React page exposes the same operator context as the original form.",
+            action: primary.href ? h(ReactAwareButton, { href: primary.href, appState: props.appState, onNavigate: props.onNavigate }, primary.label || "Open form") : null
+        },
+            h("div", { className: "section-grid" }, (detail.summary || []).map(function (item) {
+                return h("div", { className: "setup-card", key: item.label },
+                    h("div", { className: "metric-label" }, item.label),
+                    h("div", { className: "strip-value", title: item.value }, item.value || "Not set")
+                );
+            })),
+            (detail.details || []).length ? h("div", { className: "data-list module-detail-list" }, rows(detail.details)) : null
         );
     }
 

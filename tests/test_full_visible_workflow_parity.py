@@ -275,6 +275,23 @@ def test_reports_page_exposes_action_inventory_and_debug_downloads():
     assert "Download debug bundle" in {action["label"] for action in all_actions()["reports"]}
 
 
+def test_react_app_state_exposes_saved_setup_values_for_generic_pages():
+    state = main.build_react_ui_state()
+    setup_values = state.get("setup_values") or {}
+    for page in ["esxi", "windows", "qnap", "ovf_templates"]:
+        assert page in setup_values
+        assert setup_values[page]["summary"], page
+        assert setup_values[page]["primary_action"]["href"], page
+
+
+def test_generic_migration_pages_show_saved_setup_value_panel():
+    js = Path("static/js/react-desktop-ui.js").read_text(encoding="utf-8")
+    assert "function ModuleDetailPanel" in js
+    migration_body = js.split("function MigrationPage", 1)[1].split("function ModuleDetailPanel", 1)[0]
+    assert "state.setup_values" in migration_body
+    assert "ModuleDetailPanel" in migration_body
+
+
 def test_operator_mode_keeps_raw_logs_in_debug_surfaces():
     js = Path("static/js/react-desktop-ui.js").read_text(encoding="utf-8")
     dashboard_body = js.split("function DashboardPage", 1)[1].split("function IloPage", 1)[0]

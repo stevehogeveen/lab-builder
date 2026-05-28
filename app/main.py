@@ -15186,6 +15186,7 @@ def build_react_ui_state() -> dict[str, Any]:
         "dashboard": dashboard_overview,
         "modules": react_ui_module_summaries(cfg, workflow_contexts),
         "setup_ip": build_react_setup_ip_state(cfg),
+        "setup_values": build_react_module_detail_state(cfg),
         "storage": build_react_storage_state(cfg, job),
         "recent_activity": build_activity_feed(history, limit=10),
         "run_history": build_history_display_entries(history)[:30],
@@ -15246,6 +15247,97 @@ def build_react_setup_ip_state(cfg: dict[str, Any] | None = None) -> dict[str, A
             "node_01_mgmt_ip": netapp_bootstrap.get("netapp_node_01_mgmt") or "",
             "node_02_mgmt_ip": netapp_bootstrap.get("netapp_node_02_mgmt") or "",
             "svm_mgmt_ip": netapp_bootstrap.get("netapp_svm_mgmt") or netapp_desired.get("svm_mgmt_ip") or "",
+        },
+    }
+
+
+def build_react_module_detail_state(cfg: dict[str, Any] | None = None) -> dict[str, Any]:
+    cfg = cfg or load_kit_config()
+    ip_plan = cfg.get("ip_plan", {}) or {}
+    shared = cfg.get("shared_network", {}) or {}
+    included = cfg.get("included", {}) or {}
+    esxi_cfg = cfg.get("esxi", {}) or {}
+    windows_cfg = cfg.get("windows", {}) or {}
+    qnap_cfg = cfg.get("qnap", {}) or {}
+    ovf_templates = ((cfg.get("ovf_templates") or {}).get("templates") or {})
+    esxi_post_policy = ensure_esxi_post_config_policy(cfg)
+
+    def yes_no(value: Any) -> str:
+        return "Yes" if bool(value) else "No"
+
+    def dns_text(local_values: Any = None) -> str:
+        values = list(local_values or shared.get("dns_servers") or [])
+        return ", ".join(str(item) for item in values if str(item or "").strip()) or "Not set"
+
+    return {
+        "esxi": {
+            "summary": [
+                {"label": "Install IP", "value": str(esxi_cfg.get("ip_address") or ip_plan.get("esxi") or "Not set")},
+                {"label": "Hostname", "value": str(esxi_cfg.get("hostname") or "Not set")},
+                {"label": "ESXi version", "value": str(esxi_cfg.get("version") or "7")},
+                {"label": "Base ISO", "value": str(esxi_cfg.get("base_iso_path") or "Not selected")},
+                {"label": "Root password saved", "value": yes_no(esxi_cfg.get("root_password"))},
+                {"label": "Included", "value": yes_no(included.get("esxi"))},
+            ],
+            "details": [
+                {"label": "Gateway", "value": str(esxi_cfg.get("gateway") or ip_plan.get("gateway") or "Not set")},
+                {"label": "DNS", "value": dns_text(esxi_cfg.get("dns_servers"))},
+                {"label": "Debug no reboot", "value": yes_no(esxi_cfg.get("debug_no_reboot"))},
+                {"label": "Post-config transport", "value": str(esxi_cfg.get("post_config_transport") or "dry_run")},
+                {"label": "Discovery octets", "value": f"{esxi_post_policy.get('discovery_start_octet', 31)}-{esxi_post_policy.get('discovery_end_octet', 33)}"},
+                {"label": "Datastore create", "value": yes_no(esxi_post_policy.get("allow_datastore_create"))},
+            ],
+            "primary_action": {"label": "Open ESXi form", "href": "/esxi"},
+        },
+        "windows": {
+            "summary": [
+                {"label": "Windows IP", "value": str(windows_cfg.get("ip_address") or ip_plan.get("windows") or "Not set")},
+                {"label": "VM name", "value": str(windows_cfg.get("vm_name") or "Not set")},
+                {"label": "vSphere host", "value": str(windows_cfg.get("vsphere_host") or "Not set")},
+                {"label": "Datastore", "value": str(windows_cfg.get("vsphere_datastore") or "Not set")},
+                {"label": "Template", "value": str(windows_cfg.get("source_image_name") or windows_cfg.get("ovf_template_id") or "Not selected")},
+                {"label": "Included", "value": yes_no(included.get("windows"))},
+            ],
+            "details": [
+                {"label": "Gateway", "value": str(windows_cfg.get("gateway") or ip_plan.get("gateway") or "Not set")},
+                {"label": "DNS", "value": dns_text(windows_cfg.get("dns_servers"))},
+                {"label": "vSphere user", "value": str(windows_cfg.get("vsphere_username") or "Not set")},
+                {"label": "vSphere password saved", "value": yes_no(windows_cfg.get("vsphere_password"))},
+                {"label": "WinRM user", "value": str(windows_cfg.get("winrm_username") or "Administrator")},
+                {"label": "WinRM password saved", "value": yes_no(windows_cfg.get("winrm_password"))},
+                {"label": "WinRM port", "value": str(windows_cfg.get("winrm_port") or "5986")},
+                {"label": "Install plan", "value": "Ready" if (windows_cfg.get("install_plan") or {}).get("ready") else "Needs dry-run"},
+            ],
+            "primary_action": {"label": "Open Windows form", "href": "/windows"},
+        },
+        "qnap": {
+            "summary": [
+                {"label": "QNAP IP", "value": str(qnap_cfg.get("ip") or ip_plan.get("qnap") or "Not set")},
+                {"label": "Hostname", "value": str(qnap_cfg.get("hostname") or "Not set")},
+                {"label": "Username", "value": str(qnap_cfg.get("username") or "Not set")},
+                {"label": "Password saved", "value": yes_no(qnap_cfg.get("password"))},
+                {"label": "Gateway", "value": str(qnap_cfg.get("gateway") or ip_plan.get("gateway") or "Not set")},
+                {"label": "Included", "value": yes_no(included.get("qnap"))},
+            ],
+            "details": [
+                {"label": "DNS", "value": dns_text(qnap_cfg.get("dns_servers"))},
+                {"label": "Shared subnet", "value": str(shared.get("subnet") or ip_plan.get("subnet") or "Not set")},
+            ],
+            "primary_action": {"label": "Open QNAP form", "href": "/qnap"},
+        },
+        "ovf_templates": {
+            "summary": [
+                {"label": "Registered templates", "value": str(len(ovf_templates))},
+                {"label": "Windows selected template", "value": str(windows_cfg.get("ovf_template_id") or "Not selected")},
+            ],
+            "details": [
+                {
+                    "label": str((template or {}).get("name") or template_id),
+                    "value": str((template or {}).get("descriptor_name") or (template or {}).get("directory") or "Registered template"),
+                }
+                for template_id, template in list(ovf_templates.items())[:8]
+            ],
+            "primary_action": {"label": "Open OVF Templates form", "href": "/modules/ovf-templates"},
         },
     }
 
