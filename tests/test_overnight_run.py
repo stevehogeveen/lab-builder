@@ -5,8 +5,10 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
+import yaml
 from fastapi.testclient import TestClient
 
+import app.overnight_finalize as overnight_finalize
 import app.main as main
 from app.overnight_run import (
     DESTRUCTIVE_FLAG_DEFAULTS,
@@ -631,6 +633,70 @@ def test_overnight_operator_mode_reconciles_stale_running_job(client):
     assert payload["operator"]["needs_attention"] == "Expected artifacts still contain placeholders: ilo/discovery.json"
     assert "The 6:00 AM finalization deadline was missed." not in payload["operator"]["needs_attention_reasons"]
     assert payload["debug"]["latest_run"]["deadline_reconciliation"]["removed_stale_deadline_reason"] is True
+
+
+def test_cli_finalizer_syncs_matching_overnight_job_state(tmp_path):
+    repo = tmp_path
+    artifacts_root = repo / "artifacts"
+    run_dir = artifacts_root / "runs" / "overnight" / "20260527-175700-ilo-cisco"
+    run_dir.mkdir(parents=True)
+    (run_dir / "config-snapshot.yml").write_text(
+        yaml.safe_dump({"kit_config": {"site": {"name": "Kit-01"}}}, sort_keys=False),
+        encoding="utf-8",
+    )
+    jobs_dir = artifacts_root / "jobs"
+    jobs_dir.mkdir(parents=True)
+    job_path = jobs_dir / "Kit-01_job.yml"
+    job_path.write_text(
+        yaml.safe_dump(
+            {
+                "status": "Running",
+                "execution_mode": "overnight_hardware",
+                "scope": "overnight_hardware",
+                "root_scope": "overnight_hardware",
+                "current_stage": "Finalization",
+                "progress_percent": 72,
+                "completed_steps": 72,
+                "total_steps": 100,
+                "logs": ["[OVERNIGHT] finalization: running - Stopping hardware work."],
+                "trace_events": [],
+                "run_id": run_dir.name,
+                "run_bundle_dir": str(run_dir),
+            },
+            sort_keys=False,
+        ),
+        encoding="utf-8",
+    )
+
+    synced = overnight_finalize.sync_finalized_job_state(
+        repo_root=repo,
+        artifacts_root=artifacts_root,
+        run_dir=run_dir,
+        result={
+            "status_label": "Needs attention",
+            "test_result": "passed",
+            "compile_result": "passed",
+            "push_result": "not run",
+            "secret_scan_result": "blocked (1 finding(s))",
+            "secret_findings": [{"path": "example.txt", "line": 1, "excerpt": "do not persist this"}],
+            "needs_attention_reasons": ["Possible secrets were found; auto-commit and push were blocked."],
+        },
+    )
+
+    updated = yaml.safe_load(job_path.read_text(encoding="utf-8"))
+    job_state_text = (run_dir / "job-state.yml").read_text(encoding="utf-8")
+    job_state = yaml.safe_load(job_state_text)
+
+    assert synced == job_path
+    assert updated["status"] == "Needs attention"
+    assert updated["current_stage"] == "Finalization complete"
+    assert updated["progress_percent"] == 100
+    assert updated["completed_steps"] == 100
+    assert "Finalization result: Needs attention." in updated["logs"][-1]
+    assert job_state["status"] == "Needs attention"
+    assert job_state["finalization"]["secret_findings_count"] == 1
+    assert "secret_findings" not in job_state["finalization"]
+    assert "do not persist this" not in job_state_text
 
 
 def test_overnight_start_blocks_when_existing_run_is_active(client, monkeypatch):
