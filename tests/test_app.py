@@ -1490,7 +1490,7 @@ def test_react_ui_global_settings_api_saves_editable_shared_defaults(client):
     assert response.status_code == 200
     payload = response.json()
     assert payload["ok"] is True
-    assert payload["message"] == "Global settings saved."
+    assert payload["message"] == "Global settings saved locally. Device reachability has not been verified."
     assert payload["ilo"]["values"]["target_ip"] == "10.55.1.11"
     assert any(module["key"] == "ilo" and module["target"] == "10.55.1.11" for module in payload["app_state"]["modules"])
     assert payload["app_state"]["storage"]["target"]["resolved"] == "10.55.1.11"
@@ -1650,7 +1650,7 @@ def test_react_ui_ilo_settings_api_reuses_backend_save_logic(client):
     assert response.status_code == 200
     payload = response.json()
     assert payload["ok"] is True
-    assert payload["message"] == "iLO setup saved."
+    assert payload["message"] == "iLO setup saved locally. Reachability is not verified until Setup iLO IP completes."
 
     saved = main.load_kit_config("Kit-01")
     assert saved["ilo"]["current_ip"] == "10.10.8.90"

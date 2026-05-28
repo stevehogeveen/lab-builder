@@ -15828,7 +15828,7 @@ async def api_ui_global_settings_save(request: Request):
         return jsonable_encoder(
             {
                 "ok": True,
-                "message": "Global settings saved.",
+                "message": "Global settings saved locally. Device reachability has not been verified.",
                 "global": build_react_global_settings_state(load_kit_config()),
                 "ilo": build_react_ilo_state(load_kit_config()),
                 "app_state": build_react_ui_state(),
@@ -16104,7 +16104,7 @@ async def api_ui_ilo_settings(request: Request):
     return jsonable_encoder(
         {
             "ok": True,
-            "message": "iLO setup saved.",
+            "message": "iLO setup saved locally. Reachability is not verified until Setup iLO IP completes.",
             "normalized_hostname": updated.get("normalized_hostname") or "",
             "ilo": build_react_ilo_state(load_kit_config()),
             "app_state": build_react_ui_state(),
