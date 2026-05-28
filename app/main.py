@@ -15352,6 +15352,23 @@ async def start_overnight_hardware_run(request: Request):
     cfg = load_kit_config()
     form = dict(await request.form())
     run_config = OvernightHardwareConfig.from_mapping(form, cfg)
+    kit_name = cfg["site"]["name"]
+    existing_job = load_job(kit_name)
+    existing_scopes = {
+        str(existing_job.get("scope") or ""),
+        str(existing_job.get("root_scope") or ""),
+        str(existing_job.get("execution_mode") or ""),
+    }
+    if "overnight_hardware" in existing_scopes:
+        existing_state = build_overnight_hardware_state(cfg, existing_job)
+        existing_status = str(existing_state.get("operator", {}).get("status") or "")
+        if existing_status in {"Running", "Overnight queued"}:
+            return render_page(
+                request,
+                cfg,
+                active_page="overnight_hardware",
+                error_message="Overnight hardware run blocked: another overnight hardware run is still active. Let finalization finish or review MORNING_READY.md before starting a new run.",
+            )
     if run_config.requires_safety_confirmation:
         confirmed = str(form.get("overnight_safety_phrase") or "").strip().upper() == "OVERNIGHT"
         sheet_ack = str(form.get("overnight_safety_ack") or "").strip().lower() == "on"
@@ -15364,7 +15381,6 @@ async def start_overnight_hardware_run(request: Request):
             )
 
     writer = initialize_overnight_artifacts(cfg, run_config, ARTIFACTS_DIR)
-    kit_name = cfg["site"]["name"]
     save_job(
         kit_name,
         {

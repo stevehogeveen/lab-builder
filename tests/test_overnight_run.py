@@ -631,3 +631,32 @@ def test_overnight_operator_mode_reconciles_stale_running_job(client):
     assert payload["operator"]["needs_attention"] == "Expected artifacts still contain placeholders: ilo/discovery.json"
     assert "The 6:00 AM finalization deadline was missed." not in payload["operator"]["needs_attention_reasons"]
     assert payload["debug"]["latest_run"]["deadline_reconciliation"]["removed_stale_deadline_reason"] is True
+
+
+def test_overnight_start_blocks_when_existing_run_is_active(client, monkeypatch):
+    cfg = main.load_kit_config()
+    main.save_job(
+        cfg["site"]["name"],
+        {
+            "status": "Running",
+            "scope": "overnight_hardware",
+            "root_scope": "overnight_hardware",
+            "execution_mode": "overnight_hardware",
+            "overnight_mode": "discovery_only",
+            "current_stage": "iLO Discovery",
+            "progress_percent": 18,
+            "completed_steps": 18,
+            "total_steps": 100,
+            "logs": ["[OVERNIGHT] ilo_discovery: running - Connecting to Redfish service root."],
+        },
+    )
+
+    def fail_initialize(*args, **kwargs):
+        raise AssertionError("a second overnight hardware run should not be initialized")
+
+    monkeypatch.setattr(main, "initialize_overnight_artifacts", fail_initialize)
+
+    response = client.post("/overnight-hardware/start", data={"mode": "discovery_only"})
+
+    assert response.status_code == 200
+    assert "another overnight hardware run is still active" in response.text
