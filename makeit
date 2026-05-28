@@ -1,0 +1,32 @@
+#!/usr/bin/env bash
+
+# Start the standalone Codex App Planner from the repo root.
+
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+cd "$SCRIPT_DIR"
+
+HOST="${HOST:-127.0.0.1}"
+PORT="${PORT:-8000}"
+RELOAD="${RELOAD:-1}"
+
+UVICORN_ARGS=(
+  "codex_tracker_app.main:app"
+  "--host" "$HOST"
+  "--port" "$PORT"
+)
+
+if [[ "$RELOAD" == "1" || "${RELOAD,,}" == "true" || "${RELOAD,,}" == "yes" ]]; then
+  UVICORN_ARGS+=(--reload)
+fi
+
+if [[ -x ".venv/bin/uvicorn" ]]; then
+  exec ".venv/bin/uvicorn" "${UVICORN_ARGS[@]}"
+fi
+
+if command -v uvicorn >/dev/null 2>&1; then
+  exec uvicorn "${UVICORN_ARGS[@]}"
+fi
+
+exec python -m uvicorn "${UVICORN_ARGS[@]}"

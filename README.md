@@ -65,3 +65,18 @@ Default URL: `http://localhost:8000`
   - [docs/automation-principles.md](docs/automation-principles.md)
   - [docs/esxi-operations.md](docs/esxi-operations.md)
   - [docs/debugging.md](docs/debugging.md)
+
+## Codex App Planner
+
+This repository now includes a standalone planning helper under `codex_tracker_app/`:
+
+- Project-tagged sessions for app-creation work
+- Plain-language git change snapshots
+- Codex-ready prompts, suggestions, and session chat drafts
+- Usage budget tracking and session-level history
+
+Run it from the repository root:
+
+```bash
+./makeit
+```
