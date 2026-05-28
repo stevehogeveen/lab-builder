@@ -14599,8 +14599,8 @@ def react_ui_action_inventory() -> dict[str, list[dict[str, str]]]:
         "netapp": [
             {"label": "Open NetApp setup", "method": "GET", "route": "/modules/netapp", "mode": "legacy-html"},
             {"label": "Module status", "method": "GET", "route": "/modules/netapp/status", "mode": "json"},
-            {"label": "Save NetApp settings", "method": "POST", "route": "/modules/netapp/save-settings", "mode": "legacy-html"},
-            {"label": "Test NetApp connection", "method": "POST", "route": "/modules/netapp/test-connection", "mode": "legacy-html"},
+            {"label": "Save NetApp setup", "method": "POST", "route": "/modules/netapp/save-settings", "mode": "legacy-html"},
+            {"label": "Test ONTAP API", "method": "POST", "route": "/modules/netapp/test-connection", "mode": "legacy-html"},
             {"label": "Read current ONTAP", "method": "POST", "route": "/modules/netapp/read-current-config", "mode": "legacy-html"},
             {"label": "Read current NetApp config", "method": "POST", "route": "/modules/netapp/read-current-config", "mode": "legacy-html"},
             {"label": "Discover NetApp page", "method": "POST", "route": "/modules/netapp/discover-page", "mode": "legacy-html"},
