@@ -1,11 +1,12 @@
 # Full Visible React Action Inventory
 
-Total rows: 155
+Total rows: 156
 
 | page_key | label | method | route | mode | location |
 | --- | --- | --- | --- | --- | --- |
 | dashboard | Load kit library | GET | /api/ui/kits | json | static/js/react-desktop-ui.js + app/main.py:react_ui_action_inventory |
-| dashboard | Load existing kit | POST | /api/ui/kits/load | json | static/js/react-desktop-ui.js + app/main.py:react_ui_action_inventory |
+| dashboard | Switch active kit | POST | /api/ui/kits/load | json | static/js/react-desktop-ui.js + app/main.py:react_ui_action_inventory |
+| dashboard | Load existing kit | POST | /load-kit | legacy-html | static/js/react-desktop-ui.js + app/main.py:react_ui_action_inventory |
 | dashboard | Create kit | POST | /api/ui/kits/create | json | static/js/react-desktop-ui.js + app/main.py:react_ui_action_inventory |
 | dashboard | Open current config | POST | /view-current-kit-config | legacy-html | static/js/react-desktop-ui.js + app/main.py:react_ui_action_inventory |
 | dashboard | Download current config | POST | /download-current-kit-config | download | static/js/react-desktop-ui.js + app/main.py:react_ui_action_inventory |

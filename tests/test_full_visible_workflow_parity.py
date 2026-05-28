@@ -28,6 +28,7 @@ EXPECTED_PAGE_ROUTES = [
 
 EXPECTED_VISIBLE_WORKFLOWS = {
     "dashboard": [
+        "Switch active kit",
         "Load existing kit",
         "Create kit",
         "Open current config",

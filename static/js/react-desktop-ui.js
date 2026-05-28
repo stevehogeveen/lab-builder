@@ -734,7 +734,7 @@
                                 return h("option", { key: name, value: name }, name);
                             }) : h("option", { value: "" }, "No other saved kits found")),
                             h("div", { className: "job-actions" },
-                                h(Button, { onClick: function () { props.onLoadKit(selectedKit); }, disabled: !selectedKit || props.kitWorking }, props.kitWorking ? "Working..." : "Load existing kit")
+                                h(Button, { onClick: function () { props.onLoadKit(selectedKit); }, disabled: !selectedKit || props.kitWorking }, props.kitWorking ? "Working..." : "Switch active kit")
                             )
                         ),
                         h("div", { className: "setup-card kit-tool-card" },

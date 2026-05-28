@@ -14543,7 +14543,8 @@ def react_ui_action_inventory() -> dict[str, list[dict[str, str]]]:
     return {
         "dashboard": [
             {"label": "Load kit library", "method": "GET", "route": "/api/ui/kits", "mode": "json"},
-            {"label": "Load existing kit", "method": "POST", "route": "/api/ui/kits/load", "mode": "json"},
+            {"label": "Switch active kit", "method": "POST", "route": "/api/ui/kits/load", "mode": "json"},
+            {"label": "Load existing kit", "method": "POST", "route": "/load-kit", "mode": "legacy-html"},
             {"label": "Create kit", "method": "POST", "route": "/api/ui/kits/create", "mode": "json"},
             {"label": "Open current config", "method": "POST", "route": "/view-current-kit-config", "mode": "legacy-html"},
             {"label": "Download current config", "method": "POST", "route": "/download-current-kit-config", "mode": "download"},
