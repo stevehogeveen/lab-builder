@@ -427,6 +427,23 @@ def test_react_execution_review_does_not_probe_live_esxi_runtime(monkeypatch, tm
     assert "fallback_error" not in review
 
 
+def test_react_execution_review_fallback_scopes_missing_esxi_iso_to_esxi(monkeypatch, tmp_path):
+    cfg = main.load_kit_config()
+    cfg.setdefault("included", {})["ilo"] = True
+    cfg.setdefault("included", {})["esxi"] = True
+    cfg.setdefault("esxi", {}).pop("base_iso_path", None)
+    monkeypatch.setattr(main, "MEDIA_DIR", tmp_path / "media")
+
+    review = main.build_react_execution_review_state(cfg)
+    stages = {stage["key"]: stage for stage in review.get("stages", [])}
+
+    assert review.get("fallback_error")
+    assert stages["esxi"]["blocked_reason"]
+    assert stages["esxi"]["fix_href"] == "/esxi"
+    assert not stages["ilo"]["blocked_reason"]
+    assert stages["ilo"]["status_label"] == "Review"
+
+
 def test_dashboard_module_cards_preserve_original_dynamic_links():
     state = main.build_react_ui_state()
     assert {module["legacy_href"] for module in state.get("modules", [])}

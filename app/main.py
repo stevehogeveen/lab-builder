@@ -15167,6 +15167,9 @@ def build_react_execution_review_state(cfg: dict[str, Any]) -> dict[str, Any]:
     try:
         return build_execution_review(cfg, "included", include_runtime=False)
     except Exception as exc:
+        error_text = str(exc).splitlines()[0]
+        lowered_error = error_text.lower()
+        blocked_stage_key = "esxi" if "esxi" in lowered_error or "iso" in lowered_error else ""
         included = cfg.get("included", {}) or {}
         stages = []
         stage_specs = [
@@ -15182,20 +15185,21 @@ def build_react_execution_review_state(cfg: dict[str, Any]) -> dict[str, Any]:
         for key, name, href in stage_specs:
             if not included.get(key):
                 continue
+            blocked = not blocked_stage_key or key == blocked_stage_key
             stages.append(
                 {
                     "key": key,
                     "name": name,
                     "target": "Not checked",
                     "included": True,
-                    "summary": "Review data could not be built for Operator Mode.",
+                    "summary": "Open the setup page to review saved values." if not blocked else "Review data could not be built for Operator Mode.",
                     "review_href": href,
-                    "status_label": "Needs attention",
-                    "status_tone": "pending",
-                    "blocked_reason": str(exc).splitlines()[0],
-                    "corrective_action": "Open the setup page and resolve the blocked review input.",
-                    "fix_href": href,
-                    "fix_label": f"Fix on {name}",
+                    "status_label": "Needs attention" if blocked else "Review",
+                    "status_tone": "pending" if blocked else "progress",
+                    "blocked_reason": error_text if blocked else "",
+                    "corrective_action": "Open the setup page and resolve the blocked review input." if blocked else "Open the setup page if you want to review it again.",
+                    "fix_href": href if blocked else "",
+                    "fix_label": f"Fix on {name}" if blocked else "",
                 }
             )
         return {
@@ -15206,13 +15210,13 @@ def build_react_execution_review_state(cfg: dict[str, Any]) -> dict[str, Any]:
                 "score": 0,
                 "label": "Needs attention",
                 "tone": "pending",
-                "summary": str(exc).splitlines()[0],
+                "summary": error_text,
                 "ready_checks": 0,
                 "total_checks": len(stages),
-                "blocked_checks": [{"label": "Execution review", "details": str(exc).splitlines()[0], "ok": False}],
+                "blocked_checks": [{"label": "Execution review", "details": error_text, "ok": False}],
                 "review_checks": [],
             },
-            "fallback_error": str(exc).splitlines()[0],
+            "fallback_error": error_text,
         }
 
 
