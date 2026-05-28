@@ -1,6 +1,6 @@
 # Full Visible React Action Inventory
 
-Total rows: 156
+Total rows: 165
 
 | page_key | label | method | route | mode | location |
 | --- | --- | --- | --- | --- | --- |
@@ -121,7 +121,14 @@ Total rows: 156
 | storage | Probe storage capabilities | POST | /probe-storage-capabilities | legacy-html | static/js/react-desktop-ui.js + app/main.py:react_ui_action_inventory |
 | storage | Remove approval | POST | /clear-storage-approval | legacy-html | static/js/react-desktop-ui.js + app/main.py:react_ui_action_inventory |
 | storage | Reboot storage now | POST | /reboot-storage-now | legacy-html | static/js/react-desktop-ui.js + app/main.py:react_ui_action_inventory |
+| storage | Reboot Machine Now | POST | /reboot-storage-now | legacy-html | static/js/react-desktop-ui.js + app/main.py:react_ui_action_inventory |
+| storage | Reboot Now | POST | /reboot-storage-now | legacy-html | static/js/react-desktop-ui.js + app/main.py:react_ui_action_inventory |
 | storage | View storage artifact | POST | /view-storage-artifact | legacy-html | static/js/react-desktop-ui.js + app/main.py:react_ui_action_inventory |
+| storage | View Apply Log | POST | /view-storage-artifact | legacy-html | static/js/react-desktop-ui.js + app/main.py:react_ui_action_inventory |
+| storage | View Apply Results | POST | /view-storage-artifact | legacy-html | static/js/react-desktop-ui.js + app/main.py:react_ui_action_inventory |
+| storage | View details | POST | /view-storage-artifact | legacy-html | static/js/react-desktop-ui.js + app/main.py:react_ui_action_inventory |
+| storage | View discovery summary | POST | /view-storage-artifact | legacy-html | static/js/react-desktop-ui.js + app/main.py:react_ui_action_inventory |
+| storage | View raw discovery | POST | /view-storage-artifact | legacy-html | static/js/react-desktop-ui.js + app/main.py:react_ui_action_inventory |
 | storage | Download storage artifact | POST | /download-storage-artifact | download | static/js/react-desktop-ui.js + app/main.py:react_ui_action_inventory |
 | storage | Open reports | GET | /configs | legacy-html | static/js/react-desktop-ui.js + app/main.py:react_ui_action_inventory |
 | storage | Open build files | GET | /configs | legacy-html | static/js/react-desktop-ui.js + app/main.py:react_ui_action_inventory |
@@ -154,6 +161,8 @@ Total rows: 156
 | reports | View run summary | POST | /view-run-summary | legacy-html | static/js/react-desktop-ui.js + app/main.py:react_ui_action_inventory |
 | reports | Download run summary | POST | /download-run-summary | download | static/js/react-desktop-ui.js + app/main.py:react_ui_action_inventory |
 | reports | View report | POST | /view-report | legacy-html | static/js/react-desktop-ui.js + app/main.py:react_ui_action_inventory |
+| reports | Open run summary | POST | /view-report | legacy-html | static/js/react-desktop-ui.js + app/main.py:react_ui_action_inventory |
+| reports | Open storage plan used | POST | /view-report | legacy-html | static/js/react-desktop-ui.js + app/main.py:react_ui_action_inventory |
 | reports | Download report | POST | /download-report | download | static/js/react-desktop-ui.js + app/main.py:react_ui_action_inventory |
 | reports | View latest live summary | POST | /view-latest-live-summary | legacy-html | static/js/react-desktop-ui.js + app/main.py:react_ui_action_inventory |
 | reports | Download debug bundle | GET | /debug-bundles/latest | download | static/js/react-desktop-ui.js + app/main.py:react_ui_action_inventory |
