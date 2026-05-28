@@ -1318,8 +1318,8 @@
         return h(Panel, {
             label: "Setup IP",
             title: "NetApp management addresses",
-            subtitle: "Saves the NetApp bootstrap values and calls the existing Apply IP setup route.",
-            action: h(Button, { primary: true, onClick: props.onSetupIp, disabled: props.working }, props.working ? "Applying..." : "Setup IP")
+            subtitle: "Saves the NetApp bootstrap values. The existing backend route reports that live NetApp IP apply is not implemented yet.",
+            action: h(Button, { primary: true, onClick: props.onSetupIp, disabled: props.working }, props.working ? "Saving..." : "Save setup IP values")
         },
             h("div", { className: "form-grid" },
                 h(Field, { label: "Cluster management IP", name: "cluster_mgmt_ip", value: form.cluster_mgmt_ip, onChange: change }),
