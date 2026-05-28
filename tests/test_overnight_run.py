@@ -233,7 +233,10 @@ def test_finalize_records_skipped_artifacts_as_needs_attention(tmp_path):
     assert result["status_label"] == "Needs attention"
     assert any(reason.startswith("Expected artifacts were skipped:") for reason in result["needs_attention_reasons"])
     assert len(result["artifact_health"]["skipped"]) == 11
+    assert "## Next Action" in report
+    assert "Start a new discovery_only run before the hardware stop window to collect the skipped hardware evidence." in report
     assert "- Skipped: ilo/discovery.json" in report
+    assert "- Skipped reason: Hardware stop marker is present; no additional hardware actions will start." in report
     assert "Expected artifacts still contain placeholders" not in report
 
 

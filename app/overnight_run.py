@@ -397,6 +397,57 @@ def inspect_overnight_artifacts(run_dir: Path) -> dict[str, Any]:
     }
 
 
+def _morning_next_action(payload: dict[str, Any]) -> str:
+    artifact_health = dict(payload.get("artifact_health") or {})
+    if artifact_health.get("pending"):
+        return "Start a new discovery_only run before the hardware stop window to collect the pending artifacts."
+    if artifact_health.get("skipped"):
+        return "Start a new discovery_only run before the hardware stop window to collect the skipped hardware evidence."
+    if artifact_health.get("missing") or artifact_health.get("unreadable"):
+        return "Review Debug Mode, preserve diagnostics, then rerun the finalizer for the last folder."
+    if payload.get("needs_attention_reasons"):
+        return "Review the command results and Debug Mode details for the latest Needs Attention reason."
+    if str(payload.get("status_label") or "").lower() == "ready for review":
+        return "Review MORNING_READY.md and the preserved artifacts."
+    return ""
+
+
+def _safe_artifact_reason(path: Path) -> str:
+    try:
+        text = path.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return ""
+    stripped = text.strip()
+    reason = ""
+    if path.suffix == ".json":
+        try:
+            parsed = json.loads(stripped or "{}")
+        except json.JSONDecodeError:
+            parsed = {}
+        if isinstance(parsed, dict):
+            reason = str(parsed.get("reason") or "").strip()
+    if not reason:
+        for line in stripped.splitlines():
+            key, separator, value = line.partition(":")
+            if separator and key.strip().lower() == "reason":
+                reason = value.strip()
+                break
+    if not reason:
+        return ""
+    if scan_text_for_secrets(reason, path=str(path)):
+        return "[redacted possible secret in artifact reason]"
+    return reason
+
+
+def _unique_skipped_artifact_reasons(run_dir: Path, skipped: list[str]) -> list[str]:
+    reasons: list[str] = []
+    for relative in skipped:
+        reason = _safe_artifact_reason(Path(run_dir) / relative)
+        if reason and reason not in reasons:
+            reasons.append(reason)
+    return reasons
+
+
 def read_morning_report_status(path: Path) -> dict[str, str]:
     if not Path(path).exists():
         return {"status": "missing", "reason": "MORNING_READY.md is missing."}
@@ -955,6 +1006,9 @@ def _write_morning_report(writer: OvernightArtifactWriter, payload: dict[str, An
     if reasons:
         lines.extend(["", "## Needs Attention Reasons"])
         lines.extend(f"- {reason}" for reason in reasons)
+    next_action = _morning_next_action(payload)
+    if next_action:
+        lines.extend(["", "## Next Action", f"- {next_action}"])
     lines.extend(["", "## Notes"])
     notes = list(payload.get("notes") or [])
     if not notes:
@@ -978,6 +1032,9 @@ def _write_morning_report(writer: OvernightArtifactWriter, payload: dict[str, An
             if values:
                 any_issue = True
                 lines.append(f"- {label}: {', '.join(values)}")
+        skipped_reasons = _unique_skipped_artifact_reasons(writer.run_dir, list(artifact_health.get("skipped") or []))
+        for reason in skipped_reasons[:5]:
+            lines.append(f"- Skipped reason: {reason}")
         if not any_issue:
             lines.append("- Required artifacts are present; no placeholders or skipped evidence remain.")
     if payload.get("git_status_before") or payload.get("git_status_after"):
