@@ -2927,7 +2927,7 @@ def build_validation_checks(cfg: dict[str, Any], workflow: str) -> list[dict[str
                     bool(target),
                     target or "Cisco management IP is missing.",
                     why="Run Center applies Cisco config over SSH after console bootstrap.",
-                    fix="Open Cisco and use Apply Access Configs.",
+                    fix="Open Cisco and use Setup Cisco IP.",
                     href="/cisco",
                 ),
                 validation_check(
