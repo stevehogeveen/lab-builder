@@ -117,7 +117,14 @@
         <div class="small">Codex calls: {{ session.codex_usage_count or 0 }}</div>
       </div>
       <div class="actions">
-        <a class="btn" href="/session/{{ session.session_id }}">Open</a>
+        <a
+          class="btn"
+          href="/session/{{ session.session_id }}/panel"
+          hx-get="/session/{{ session.session_id }}/panel"
+          hx-target="#session-panel"
+          hx-swap="innerHTML"
+          >Open</a
+        >
       </div>
     </li>
     {% endfor %}

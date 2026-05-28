@@ -54,3 +54,18 @@ Optional env var:
 ```bash
 export CODEX_USAGE_QUOTA=200
 ```
+
+### Backend direction for a Codex-style API helper
+
+For this kind of app, use an async API server with a simple job layer:
+
+- **FastAPI** as the web/API layer (you already have this for the app).
+- **PostgreSQL** for sessions/projects/messages (instead of JSON file storage once you go beyond prototype).
+- **Redis + RQ or Celery** for background work like:
+  - capturing git snapshots,
+  - preparing long prompts,
+  - calling external LLM APIs without blocking UI actions.
+- **WebSocket/SSE (optional)** for streaming assistant replies and usage updates.
+- **OpenAI-compatible client abstraction** behind your own service layer so you can swap providers later.
+
+This pattern keeps the UI responsive (HTTP routes return immediately), keeps Codex work async, and keeps data consistent across sessions in a project.
