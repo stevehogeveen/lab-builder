@@ -31,13 +31,15 @@ Latest follow-up:
 - Upgrade Helper, OVF directory registration, storage repair/reboot/artifact, and history artifact labels were aligned with the original visible controls.
 - Exact visible-label comparison is down to two known raw Jinja conditional rows; their resolved labels are now all represented in React.
 - Removed tracked stale Codex prompt files that still described re-adding the removed Overnight Hardware Run feature.
-- React visible action inventory artifact was resynced from `react_ui_action_inventory`; it now records all 176 live React actions.
+- React visible action inventory artifact was resynced from `react_ui_action_inventory`; it now records all 177 live React actions.
 - React Global Settings now updates the NetApp cluster-management bootstrap override when the global NetApp IP changes, so Setup IP, app-state, saved config, and NetApp management values stay aligned.
 - React Setup IP now fills NetApp SP, cluster, node, and SVM management address fields from the saved default IP plan when no explicit bootstrap override exists.
 - React JSON save responses for Global Settings and iLO setup now say the values were saved locally and that reachability has not been verified, matching the Operator Mode wording.
 - React-aware navigation now maps the legacy `/modules/cisco` page alias back into the Cisco React page, matching the existing NetApp and OVF module aliases.
 - Reports search and related-report filtering now load through `/api/ui/reports` and update the React Reports page in place instead of navigating back to `/configs`.
 - NetApp setup-IP panel now uses the visible operator action label `Setup NetApp IP` while still warning that the current backend saves values only.
+- ESXi and Windows setup pages now expose in-place React backend action buttons for ESXi review/preview and Windows dry-run/probe workflows instead of sending operators to legacy forms.
+- QNAP setup now has a React save panel backed by `/api/ui/qnap/settings`, preserving saved passwords when left blank and keeping the operator in the React shell.
 
 Remaining gaps:
 - No unmatched original visible actions are currently listed in artifacts/codex-runs/full-visible-workflow-missing-controls.md.
@@ -62,6 +64,7 @@ Validation:
 - Latest Reports React-shell validation: /home/administrator/lab-builder/.venv/bin/python -m pytest -q tests/test_app.py::test_react_ui_reports_api_filters_report_center_without_legacy_navigation tests/test_app.py::test_react_ui_mapped_pages_and_actions_match_registered_routes tests/test_full_ui_parity_contract.py::test_reports_search_stays_in_react_shell tests/test_full_visible_workflow_parity.py::test_hard_coded_react_internal_urls_map_to_registered_routes tests/test_full_visible_workflow_parity.py::test_report_center_panel_has_view_and_download_forms tests/test_full_ui_parity_contract.py tests/test_full_visible_workflow_parity.py: 37 passed; node --check static/js/react-desktop-ui.js and git diff --check passed
 - Latest NetApp setup-IP label validation: /home/administrator/lab-builder/.venv/bin/python -m pytest -q tests/test_full_visible_workflow_parity.py::test_netapp_setup_ip_copy_matches_placeholder_backend_behavior tests/test_full_visible_workflow_parity.py::test_netapp_setup_ip_panel_uses_operator_action_label tests/test_full_visible_workflow_parity.py tests/test_full_ui_parity_contract.py: 36 passed; node --check static/js/react-desktop-ui.js and git diff --check passed
 - Latest current-head full validation after Reports and NetApp label fixes: /home/administrator/lab-builder/.venv/bin/python -m pytest -q: 463 passed in 242.94s
+- Latest setup-page in-place action validation: /home/administrator/lab-builder/.venv/bin/python -m pytest -q tests/test_app.py::test_react_ui_qnap_settings_api_saves_without_legacy_page tests/test_full_visible_workflow_parity.py::test_setup_pages_expose_in_place_backend_job_buttons tests/test_full_visible_workflow_parity.py::test_qnap_setup_page_has_react_save_form tests/test_full_visible_workflow_parity.py tests/test_full_ui_parity_contract.py: 39 passed; node --check static/js/react-desktop-ui.js and git diff --check passed
 
 Hardware safety:
 - No hardware actions were executed by tests or validation.

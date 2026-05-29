@@ -520,9 +520,36 @@ def test_generic_migration_pages_show_saved_setup_value_panel():
     migration_body = js.split("function MigrationPage", 1)[1].split("function ModuleDetailPanel", 1)[0]
     assert "state.setup_values" in migration_body
     assert "ModuleDetailPanel" in migration_body
+    assert "WorkflowActionsPanel" in migration_body
     detail_body = js.split("function ModuleDetailPanel", 1)[1].split("function NetAppStatusPanel", 1)[0]
     assert "Open full form" in detail_body
     assert "ReactAwareButton" not in detail_body
+
+
+def test_setup_pages_expose_in_place_backend_job_buttons():
+    js = Path("static/js/react-desktop-ui.js").read_text(encoding="utf-8")
+    panel_body = js.split("function WorkflowActionsPanel", 1)[1].split("function NetAppStatusPanel", 1)[0]
+    assert "Do the job from this page" in panel_body
+    assert "Prepare ESXi run" in panel_body
+    assert "Preview ESXi run" in panel_body
+    assert "Plan Windows install (dry-run)" in panel_body
+    assert "Probe vSphere" in panel_body
+    assert "Probe WinRM" in panel_body
+    assert 'route: "/prepare-execute"' in panel_body
+    assert 'route: "/execute-preview"' in panel_body
+    assert 'route: "/plan-windows-install"' in panel_body
+    assert "runWorkflowAction" in js
+    assert "htmlActionPost(url, fields || {})" in js
+
+
+def test_qnap_setup_page_has_react_save_form():
+    js = Path("static/js/react-desktop-ui.js").read_text(encoding="utf-8")
+    migration_body = js.split("function MigrationPage", 1)[1].split("function ModuleDetailPanel", 1)[0]
+    panel_body = js.split("function QnapSetupPanel", 1)[1].split("function NetAppStatusPanel", 1)[0]
+    assert "QnapSetupPanel" in migration_body
+    assert "Save QNAP setup" in panel_body
+    assert '"/api/ui/qnap/settings"' in js
+    assert "onSaveQnap: saveQnap" in js
 
 
 def test_operator_mode_keeps_raw_logs_in_debug_surfaces():

@@ -1,6 +1,6 @@
 # Full Visible React Action Inventory
 
-Total rows: 176
+Total rows: 177
 
 | page_key | label | method | route | mode | location |
 | --- | --- | --- | --- | --- | --- |
@@ -151,6 +151,7 @@ Total rows: 176
 | ovf_templates | Open Windows template settings | GET | /windows | legacy-html | static/js/react-desktop-ui.js + app/main.py:react_ui_action_inventory |
 | ovf_templates | Register directory | POST | /modules/ovf-templates/register-directory | legacy-html | static/js/react-desktop-ui.js + app/main.py:react_ui_action_inventory |
 | ovf_templates | Register OVF path | POST | /register-windows-ovf-path | legacy-html | static/js/react-desktop-ui.js + app/main.py:react_ui_action_inventory |
+| qnap | Save QNAP setup | POST | /api/ui/qnap/settings | json | static/js/react-desktop-ui.js + app/main.py:react_ui_action_inventory |
 | qnap | Open QNAP setup | GET | /qnap | legacy-html | static/js/react-desktop-ui.js + app/main.py:react_ui_action_inventory |
 | qnap | Save QNAP setup | POST | /save-qnap-settings | legacy-html | static/js/react-desktop-ui.js + app/main.py:react_ui_action_inventory |
 | execution | Open Run Center | GET | /execution | legacy-html | static/js/react-desktop-ui.js + app/main.py:react_ui_action_inventory |

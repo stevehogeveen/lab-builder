@@ -14712,6 +14712,7 @@ def react_ui_action_inventory() -> dict[str, list[dict[str, str]]]:
             {"label": "Register OVF path", "method": "POST", "route": "/register-windows-ovf-path", "mode": "legacy-html"},
         ],
         "qnap": [
+            {"label": "Save QNAP setup", "method": "POST", "route": "/api/ui/qnap/settings", "mode": "json"},
             {"label": "Open QNAP setup", "method": "GET", "route": "/qnap", "mode": "legacy-html"},
             {"label": "Save QNAP setup", "method": "POST", "route": "/save-qnap-settings", "mode": "legacy-html"},
         ],
@@ -15393,6 +15394,13 @@ def build_react_module_detail_state(cfg: dict[str, Any] | None = None) -> dict[s
             "primary_action": {"label": "Open Windows form", "href": "/windows"},
         },
         "qnap": {
+            "values": {
+                "hostname": str(qnap_cfg.get("hostname") or ""),
+                "username": str(qnap_cfg.get("username") or ""),
+                "password": "",
+                "password_saved": bool(qnap_cfg.get("password")),
+                "included": bool(included.get("qnap")),
+            },
             "summary": [
                 {"label": "QNAP IP", "value": str(qnap_cfg.get("ip") or ip_plan.get("qnap") or "Not set")},
                 {"label": "Hostname", "value": str(qnap_cfg.get("hostname") or "Not set")},
@@ -15647,6 +15655,35 @@ async def api_ui_storage():
 async def api_ui_reports(report_query: str = "", report_type: str = "all"):
     cfg = load_kit_config()
     return jsonable_encoder(build_report_center(cfg, query=report_query, report_type=report_type))
+
+
+@app.post("/api/ui/qnap/settings")
+async def api_ui_qnap_settings_save(request: Request):
+    cfg = merge_defaults(load_kit_config())
+    body = await _react_json_body(request)
+    qnap_cfg = cfg.setdefault("qnap", {})
+    existing_password = str(qnap_cfg.get("password") or "")
+    qnap_cfg["hostname"] = str(body.get("hostname") or qnap_cfg.get("hostname") or "").strip()
+    qnap_cfg["username"] = str(body.get("username") or qnap_cfg.get("username") or "").strip()
+    qnap_cfg["password"] = _react_preserve_secret(body.get("password"), existing_password)
+    if "included" in body:
+        cfg.setdefault("included", {})["qnap"] = _react_bool(body.get("included"))
+    cfg = apply_ip_plan(cfg)
+    save_kit_config(cfg)
+    append_activity_event(
+        cfg["site"]["name"],
+        "qnap_settings_saved",
+        workflow="qnap",
+        summary="Saved QNAP setup values from the React desktop UI.",
+        target=cfg["qnap"].get("ip") or cfg.get("ip_plan", {}).get("qnap", ""),
+    )
+    return jsonable_encoder(
+        {
+            "ok": True,
+            "message": "QNAP setup saved locally. Reachability has not been verified.",
+            "app_state": build_react_ui_state(),
+        }
+    )
 
 
 @app.post("/api/ui/global-settings/autofill")

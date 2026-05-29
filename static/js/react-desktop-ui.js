@@ -1217,7 +1217,9 @@
                 props.page === "netapp" ? h(NetAppStatusPanel, { netappStatus: props.netappStatus, onRefresh: props.onRefreshNetApp }) : null,
                 props.page === "cisco" ? h(CiscoSetupIpPanel, { form: (props.setupIpForm || {}).cisco || {}, onChange: props.onSetupIpChange, onSetupIp: props.onSetupCiscoIp, working: props.setupIpWorking }) : null,
                 props.page === "netapp" ? h(NetAppSetupIpPanel, { form: (props.setupIpForm || {}).netapp || {}, onChange: props.onSetupIpChange, onSetupIp: props.onSetupNetAppIp, working: props.setupIpWorking }) : null,
+                props.page === "qnap" ? h(QnapSetupPanel, { form: props.qnapForm || {}, onChange: props.onQnapChange, onSave: props.onSaveQnap, working: props.qnapWorking }) : null,
                 setupValues.summary ? h(ModuleDetailPanel, { page: props.page, detail: setupValues, appState: state, onNavigate: props.onNavigate }) : null,
+                h(WorkflowActionsPanel, { page: props.page, workingAction: props.workflowWorking, onWorkflowAction: props.onWorkflowAction }),
                 h(Panel, {
                     label: "Workflow status",
                     title: copy.title,
@@ -1231,7 +1233,7 @@
                     ),
                     module.blockers && module.blockers.length ? h("div", { className: "message message-warn" }, module.blockers[0].label + ": " + (module.blockers[0].fix || module.blockers[0].details || "Review required.")) : h("div", { className: "message message-good" }, "No blockers reported by the summary API.")
                 ),
-                (props.page === "cisco" || props.page === "netapp") ? h(ActionLogPanel, { title: "Setup action log", appState: state, entries: props.setupActionLog }) : null,
+                h(ActionLogPanel, { title: "Setup action log", appState: state, entries: props.setupActionLog }),
                 h(ActionInventoryPanel, { activePage: props.page, appState: state, actions: actions, onNavigate: props.onNavigate })
             ),
             h(ContextPanel, { activePage: props.page, appState: state, actions: actions, onNavigate: props.onNavigate })
@@ -1264,6 +1266,57 @@
                 );
             })),
             (detail.details || []).length ? h("div", { className: "data-list module-detail-list" }, rows(detail.details)) : null
+        );
+    }
+
+    function WorkflowActionsPanel(props) {
+        const page = props.page;
+        const actionsByPage = {
+            esxi: [
+                { label: "Prepare ESXi run", route: "/prepare-execute", fields: { scope: "esxi", return_page: "execution" }, primary: true, note: "Build the ESXi readiness review without leaving React." },
+                { label: "Preview ESXi run", route: "/execute-preview", fields: { scope: "esxi", return_page: "execution" }, note: "Start the original ESXi preview route and refresh React when it returns." },
+            ],
+            windows: [
+                { label: "Plan Windows install (dry-run)", route: "/plan-windows-install", fields: { return_page: "windows" }, primary: true, note: "Build the dry-run Windows install plan from saved settings." },
+                { label: "Probe vSphere", route: "/probe-windows-vsphere", fields: { return_page: "windows" }, note: "Use saved vSphere values to test the VMware control plane." },
+                { label: "Probe WinRM", route: "/probe-windows-winrm", fields: { return_page: "windows" }, note: "Use saved Windows target values to test WinRM reachability." },
+            ],
+        };
+        const actions = actionsByPage[page] || [];
+        if (!actions.length) return null;
+        return h(Panel, { label: "Run actions", title: "Do the job from this page", subtitle: "These buttons call the original backend routes in-place and keep the React workspace open." },
+            h("div", { className: "execution-form-grid" }, actions.map(function (action) {
+                const busy = props.workingAction === action.label;
+                return h("div", { className: "setup-card run-tool-card", key: action.label },
+                    h("div", { className: "data-name" }, action.label),
+                    h("div", { className: "data-value" }, action.note),
+                    h(Button, {
+                        primary: action.primary,
+                        disabled: !!props.workingAction,
+                        onClick: function () { props.onWorkflowAction(page, action.label, action.route, action.fields || {}); },
+                    }, busy ? "Working..." : action.label)
+                );
+            }))
+        );
+    }
+
+    function QnapSetupPanel(props) {
+        const form = props.form || {};
+        function change(name, value) {
+            props.onChange(name, value);
+        }
+        return h(Panel, {
+            label: "Setup",
+            title: "QNAP setup",
+            subtitle: "Save the QNAP identity and inclusion flag through the React API without opening the old page.",
+            action: h(Button, { primary: true, onClick: props.onSave, disabled: props.working }, props.working ? "Saving..." : "Save QNAP setup")
+        },
+            h("div", { className: "form-grid" },
+                h(Field, { label: "Hostname", name: "hostname", value: form.hostname, onChange: change }),
+                h(Field, { label: "Username", name: "username", value: form.username, onChange: change }),
+                h(Field, { label: "Password", name: "password", type: "password", value: form.password, onChange: change, help: form.password_saved ? "Leave blank to keep the saved password." : "Enter the QNAP password." }),
+                h(ToggleField, { label: "Include QNAP in run", name: "included", checked: form.included, onChange: change })
+            )
         );
     }
 
@@ -1954,12 +2007,21 @@
         const setupIpWorkingHook = React.useState(false);
         const setupIpWorking = setupIpWorkingHook[0];
         const setSetupIpWorking = setupIpWorkingHook[1];
+        const qnapFormHook = React.useState({ hostname: "", username: "", password: "", password_saved: false, included: false });
+        const qnapForm = qnapFormHook[0];
+        const setQnapForm = qnapFormHook[1];
+        const qnapWorkingHook = React.useState(false);
+        const qnapWorking = qnapWorkingHook[0];
+        const setQnapWorking = qnapWorkingHook[1];
         const storageFormHook = React.useState({ target_host: "", username: "", password: "", target_mode: "defaults", include_in_ilo_run: true, apply_mode: "create_only", typed_confirmation: "", acknowledge_apply: false });
         const storageForm = storageFormHook[0];
         const setStorageForm = storageFormHook[1];
         const storageWorkingHook = React.useState(false);
         const storageWorking = storageWorkingHook[0];
         const setStorageWorking = storageWorkingHook[1];
+        const workflowWorkingHook = React.useState("");
+        const workflowWorking = workflowWorkingHook[0];
+        const setWorkflowWorking = workflowWorkingHook[1];
         const setupActionLogHook = React.useState([]);
         const setupActionLog = setupActionLogHook[0];
         const setSetupActionLog = setupActionLogHook[1];
@@ -1977,9 +2039,21 @@
             });
         }
 
+        function applyQnapValuesFromAppState(payload) {
+            const values = (((payload || {}).setup_values || {}).qnap || {}).values || {};
+            setQnapForm({
+                hostname: values.hostname || "",
+                username: values.username || "",
+                password: "",
+                password_saved: !!values.password_saved,
+                included: !!values.included,
+            });
+        }
+
         function loadAppState() {
             return apiGet("/api/ui/app-state").then(function (payload) {
                 setAppState(payload);
+                applyQnapValuesFromAppState(payload);
                 if (payload.setup_ip) {
                     setSetupIpForm({
                         cisco: Object.assign({}, (payload.setup_ip || {}).cisco || {}),
@@ -2286,6 +2360,33 @@
             });
         }
 
+        function onQnapChange(name, value) {
+            setQnapForm(function (current) {
+                const next = Object.assign({}, current || {});
+                next[name] = name === "included" ? !!value : value;
+                return next;
+            });
+        }
+
+        function saveQnap() {
+            setQnapWorking(true);
+            setMessage(null);
+            apiPost("/api/ui/qnap/settings", qnapForm || {}).then(function (payload) {
+                setQnapWorking(false);
+                setMessage({ ok: !!payload.ok, tone: payload.ok ? "info" : "warn", text: payload.message || "QNAP setup returned." });
+                if (payload.app_state) {
+                    setAppState(payload.app_state);
+                    applyQnapValuesFromAppState(payload.app_state);
+                }
+                appendSetupAction("Save QNAP setup", payload.message || "QNAP setup returned.", !!payload.ok, payload.ok ? "blue" : "warn");
+                return refreshAll();
+            }).catch(function (error) {
+                setQnapWorking(false);
+                setMessage({ ok: false, text: error.message });
+                appendSetupAction("Save QNAP setup", error.message, false, "warn");
+            });
+        }
+
         function setupIloIp() {
             setSetupIpWorking(true);
             setMessage(null);
@@ -2398,6 +2499,22 @@
                 setSetupIpWorking(false);
                 setMessage({ ok: false, text: error.message });
                 appendSetupAction("NetApp setup IP", error.message, false, "warn");
+            });
+        }
+
+        function runWorkflowAction(page, label, url, fields) {
+            setWorkflowWorking(label);
+            setMessage({ ok: true, tone: "info", text: label + " requested. React will refresh when the backend returns." });
+            appendSetupAction(label, "POST " + url, true, "blue");
+            htmlActionPost(url, fields || {}).then(function () {
+                setWorkflowWorking("");
+                setMessage({ ok: true, tone: "info", text: label + " returned. Review refreshed state and logs before continuing." });
+                appendSetupAction(label, label + " returned from the backend route.", true, "blue");
+                return refreshAll();
+            }).catch(function (error) {
+                setWorkflowWorking("");
+                setMessage({ ok: false, text: error.message });
+                appendSetupAction(label, error.message, false, "warn");
             });
         }
 
@@ -2662,7 +2779,7 @@
         } else if (activePage === "technical") {
             pageContent = h(TechnicalPage, { appState: appState, technical: technical, onNavigate: navigate });
         } else {
-            pageContent = h(MigrationPage, { page: activePage, appState: appState, netappStatus: netappStatus, setupIpForm: setupIpForm, setupIpWorking: setupIpWorking, setupActionLog: setupActionLog, onSetupIpChange: onSetupIpChange, onSetupCiscoIp: setupCiscoIp, onSetupNetAppIp: setupNetAppIp, onRefreshNetApp: loadNetApp, onNavigate: navigate });
+            pageContent = h(MigrationPage, { page: activePage, appState: appState, netappStatus: netappStatus, setupIpForm: setupIpForm, setupIpWorking: setupIpWorking, setupActionLog: setupActionLog, workflowWorking: workflowWorking, qnapForm: qnapForm, qnapWorking: qnapWorking, onWorkflowAction: runWorkflowAction, onSetupIpChange: onSetupIpChange, onSetupCiscoIp: setupCiscoIp, onSetupNetAppIp: setupNetAppIp, onQnapChange: onQnapChange, onSaveQnap: saveQnap, onRefreshNetApp: loadNetApp, onNavigate: navigate });
         }
 
         return h("div", { className: "desktop-preview" },

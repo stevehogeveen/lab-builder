@@ -1451,6 +1451,31 @@ def test_react_ui_reports_api_filters_report_center_without_legacy_navigation(cl
     assert "latest_bundles" in payload
 
 
+def test_react_ui_qnap_settings_api_saves_without_legacy_page(client):
+    cfg = main.default_config()
+    cfg["site"]["name"] = "React QNAP Kit"
+    cfg["qnap"]["password"] = "saved-qnap-password"
+    main.save_kit_config(main.apply_ip_plan(cfg))
+    main.set_current_kit_name("React-QNAP-Kit")
+
+    response = client.post(
+        "/api/ui/qnap/settings",
+        json={"hostname": "qnap-react", "username": "qnapadmin", "password": "", "included": True},
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["ok"] is True
+    assert payload["message"] == "QNAP setup saved locally. Reachability has not been verified."
+    saved = main.load_kit_config("React-QNAP-Kit")
+    assert saved["qnap"]["hostname"] == "qnap-react"
+    assert saved["qnap"]["username"] == "qnapadmin"
+    assert saved["qnap"]["password"] == "saved-qnap-password"
+    assert saved["included"]["qnap"] is True
+    assert payload["app_state"]["setup_values"]["qnap"]["values"]["hostname"] == "qnap-react"
+    assert payload["app_state"]["setup_values"]["qnap"]["values"]["password_saved"] is True
+
+
 def test_react_ui_global_settings_api_saves_editable_shared_defaults(client):
     response = client.post(
         "/api/ui/global-settings",
