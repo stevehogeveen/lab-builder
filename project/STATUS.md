@@ -36,6 +36,7 @@ Verification status:
 - NetApp module lane now passes 31/31.
 - Broad Windows lane excluding `tests/test_app.py` passes 97/97.
 - Full collection still succeeds with 402 tests collected.
+- Product queue hygiene completed: completed onboarding/test tasks were moved from `project/queue/ready/` to `project/queue/done/`.
 
 Safety status:
 
@@ -49,4 +50,4 @@ Current risk:
 
 Next safe task:
 
-- None selected in this product repo after TASK-003. Use COO routing for the next safe task.
+- None selected in this product repo after TASK-003 and queue hygiene. Use COO routing or an explicit ready task before continuing implementation work.

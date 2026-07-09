@@ -12,3 +12,4 @@
 - Recorded residual suite work: full pytest timed out after 5 minutes and `tests/test_netapp_module.py` has 2 UI assertion failures.
 - Added `TASK-003-legacy-test-suite-triage.md` as the next safe task.
 - Executed TASK-003 non-destructively: fixed stale NetApp UI assertions, documented Windows test lanes, NetApp lane passed `31/31`, broad Windows lane passed `97/97`, and collection still reports 402 tests.
+- Executed product queue hygiene: moved completed tasks from `project/queue/ready/` to `project/queue/done/` so COO routing only sees real available work.
