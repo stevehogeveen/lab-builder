@@ -33,4 +33,4 @@ Make LabBuilder understandable to Project OS and safe for future product work by
 
 ## Next Task
 
-`project/queue/ready/TASK-001-runtime-and-repo-reconciliation.md` is the next safe Product Team Beta task selected by COO routing.
+`project/queue/ready/TASK-002-windows-runtime-compatibility.md` is the next safe Product Team Beta task after runtime reconciliation.

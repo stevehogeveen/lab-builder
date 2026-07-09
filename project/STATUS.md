@@ -8,7 +8,7 @@ Local path: `C:\Users\TLANADMIN\Documents\Codex\2026-06-22\have-we\work\lab-buil
 
 Project OS role: Product Team Beta
 
-Current phase: Onboarding follow-up, runtime verification, and repo reconciliation queued
+Current phase: Windows runtime compatibility queued
 
 Product version discovered: `0.1.0`
 
@@ -20,6 +20,11 @@ Verification status:
 - Route, module, script, doc, and test inventories were inspected.
 - Test collection was not completed because the Windows PATH only exposes the Microsoft Store Python alias, and the bundled Codex Python runtime does not have `pytest` installed.
 - COO routing selected `TASK-001-runtime-and-repo-reconciliation.md` as the next safe task.
+- A Windows venv was created with Python 3.12.13.
+- Official dependency install failed because `uvloop==0.22.1` does not support Windows.
+- With `uvloop` skipped as a non-repo workaround, dependencies installed and a 30-test subset passed.
+- Full pytest collection is blocked by POSIX-only Cisco imports of `grp` and `pwd`.
+- Docker verification is blocked because Docker is not available on PATH.
 
 Safety status:
 
@@ -29,7 +34,8 @@ Safety status:
 Current risk:
 
 - This product repo appears older and materially different from the newer `infra-config-portal` app workstream. Reconciliation should happen before major implementation work.
+- Product-local recommendation is to keep this repo as legacy hardware workflow source while treating `infra-config-portal/app` as the active implementation candidate, pending Steve/CTO confirmation.
 
 Next safe task:
 
-- `project/queue/ready/TASK-001-runtime-and-repo-reconciliation.md`
+- `project/queue/ready/TASK-002-windows-runtime-compatibility.md`
