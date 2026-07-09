@@ -2,13 +2,11 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 import difflib
-import grp
 import json
 from pathlib import Path
 import glob
 import ipaddress
 import os
-import pwd
 import re
 import stat
 import shutil
@@ -17,6 +15,16 @@ import time
 from typing import Any
 
 import paramiko
+
+try:
+    import grp
+except ImportError:  # pragma: no cover - Windows compatibility.
+    grp = None
+
+try:
+    import pwd
+except ImportError:  # pragma: no cover - Windows compatibility.
+    pwd = None
 
 try:  # pyserial is optional at import time so tests can monkeypatch it cleanly.
     import serial
@@ -208,6 +216,24 @@ class CiscoSSHError(CiscoError):
     pass
 
 
+def _current_username() -> str:
+    if pwd is not None and hasattr(os, "getuid"):
+        try:
+            return pwd.getpwuid(os.getuid()).pw_name
+        except (KeyError, OSError):
+            pass
+    return os.environ.get("USERNAME") or os.environ.get("USER") or ""
+
+
+def _group_name(group_id: int) -> str:
+    if grp is not None:
+        try:
+            return grp.getgrgid(group_id).gr_name
+        except KeyError:
+            pass
+    return str(group_id)
+
+
 @dataclass
 class CiscoSerialCandidate:
     port: str
@@ -322,13 +348,10 @@ def _device_access_details(path: str) -> dict[str, Any]:
         details["error"] = str(exc).splitlines()[0]
         return details
     try:
-        owner = pwd.getpwuid(device_stat.st_uid).pw_name
+        owner = pwd.getpwuid(device_stat.st_uid).pw_name if pwd is not None else str(device_stat.st_uid)
     except KeyError:
         owner = str(device_stat.st_uid)
-    try:
-        group = grp.getgrgid(device_stat.st_gid).gr_name
-    except KeyError:
-        group = str(device_stat.st_gid)
+    group = _group_name(device_stat.st_gid)
     details.update(
         {
             "mode": stat.filemode(device_stat.st_mode),
@@ -411,12 +434,13 @@ def _load_serial_modules() -> tuple[Any, Any]:
 def serial_runtime_diagnostics() -> dict[str, Any]:
     serial_module, port_tools = _load_serial_modules()
     ordered = _ordered_port_paths(_port_metadata())
-    group_names = sorted({grp.getgrgid(group_id).gr_name for group_id in os.getgroups()})
+    group_ids = os.getgroups() if hasattr(os, "getgroups") else []
+    group_names = sorted({_group_name(group_id) for group_id in group_ids})
     return {
         "serial_imported": serial_module is not None,
         "list_ports_imported": port_tools is not None,
         "log_path": str(CISCO_LOG_PATH),
-        "user": pwd.getpwuid(os.getuid()).pw_name,
+        "user": _current_username(),
         "group_names": group_names,
         "ordered_ports": ordered,
         "by_id_ports": sorted(glob.glob("/dev/serial/by-id/*")),
@@ -430,8 +454,16 @@ def apply_serial_permission_fix(sudo_password: str, *, username: str = "") -> di
     password = str(sudo_password or "")
     if not password:
         return {"ok": False, "error": "Sudo password is required.", "applied": [], "warnings": [], "diagnostics": serial_runtime_diagnostics()}
+    if getattr(os, "name", "") == "nt":
+        return {
+            "ok": False,
+            "error": "Serial permission fix is only available on Unix-like hosts.",
+            "applied": [],
+            "warnings": [],
+            "diagnostics": serial_runtime_diagnostics(),
+        }
 
-    effective_user = str(username or pwd.getpwuid(os.getuid()).pw_name).strip()
+    effective_user = str(username or _current_username()).strip()
     diagnostics_before = serial_runtime_diagnostics()
     real_devices = sorted({os.path.realpath(path) for path in list(diagnostics_before.get("ordered_ports") or []) if str(path).strip()})
     applied: list[str] = []

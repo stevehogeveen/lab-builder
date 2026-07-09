@@ -37,6 +37,23 @@ Copy this block and update it in place.
 
 ## Active Sessions
 
+### Session: project-os-router-codex
+- Status: done
+- Branch: main
+- Scope owner: legacy test-suite triage routed by Project OS Executive Router
+- Working on: TASK-003 legacy test-suite triage
+- Blocked by: no product-local queue metadata found for TASK-003; ESXi missing-media review behavior remains the first failing class
+- Ready to hand off: Fix ESXi execution-review handling for missing base ISO media
+- Files claimed:
+  - app/cisco.py
+  - docs/legacy-test-suite-triage-2026-07-09.md
+- Shared files touched with caution:
+  - app/cisco.py
+- Last changed:
+  - 2026-07-09 America/Toronto - Fixed Windows import/collection blocker in Cisco helpers and documented legacy suite triage.
+- Next intended change:
+  - Fix ESXi prepare-execute missing-media handling so tests render blocked guidance instead of raising `FileNotFoundError`.
+
 ### Session: netapp
 - Status: active
 - Branch: unknown
