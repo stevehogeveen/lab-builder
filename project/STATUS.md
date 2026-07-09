@@ -8,7 +8,7 @@ Local path: `C:\Users\TLANADMIN\Documents\Codex\2026-06-22\have-we\work\lab-buil
 
 Project OS role: Product Team Beta
 
-Current phase: Legacy test-suite triage queued
+Current phase: Legacy test-suite triage completed
 
 Product version discovered: `0.1.0`
 
@@ -32,6 +32,10 @@ Verification status:
 - Known Windows-compatible subset passed 30/30.
 - Full pytest timed out after 5 minutes.
 - NetApp module lane has 2 UI assertion failures and 29 passing tests.
+- TASK-003 fixed stale NetApp UI assertions.
+- NetApp module lane now passes 31/31.
+- Broad Windows lane excluding `tests/test_app.py` passes 97/97.
+- Full collection still succeeds with 402 tests collected.
 
 Safety status:
 
@@ -45,4 +49,4 @@ Current risk:
 
 Next safe task:
 
-- `project/queue/ready/TASK-003-legacy-test-suite-triage.md`
+- None selected in this product repo after TASK-003. Use COO routing for the next safe task.

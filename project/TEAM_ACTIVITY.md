@@ -11,3 +11,4 @@
 - Executed TASK-002 non-destructively: Windows install succeeds, pytest collection succeeds with 402 tests, Cisco lane passed `36/36`, known Windows subset passed `30/30`.
 - Recorded residual suite work: full pytest timed out after 5 minutes and `tests/test_netapp_module.py` has 2 UI assertion failures.
 - Added `TASK-003-legacy-test-suite-triage.md` as the next safe task.
+- Executed TASK-003 non-destructively: fixed stale NetApp UI assertions, documented Windows test lanes, NetApp lane passed `31/31`, broad Windows lane passed `97/97`, and collection still reports 402 tests.

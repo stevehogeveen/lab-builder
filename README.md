@@ -38,6 +38,19 @@ py -3 -m venv .venv
 If the Windows Python launcher is not installed, replace `py -3` with the full
 path to a Python 3 executable.
 
+Useful Windows test lanes:
+
+```powershell
+# Fast collection proof.
+.\.venv\Scripts\python.exe -m pytest --collect-only -q
+
+# Broad lane that avoids the very large legacy app integration file.
+.\.venv\Scripts\python.exe -m pytest tests --ignore=tests/test_app.py -q
+
+# Focused legacy app integration lane. Use a longer timeout window.
+.\.venv\Scripts\python.exe -m pytest tests/test_app.py -q
+```
+
 ```bash
 ./scripts/start-app-dev
 ```

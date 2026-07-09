@@ -1,6 +1,6 @@
 # TASK-003 - Legacy Test Suite Triage
 
-Status: Ready
+Status: Completed
 
 Repository: `stevehogeveen/lab-builder`
 
@@ -35,3 +35,9 @@ TASK-002 made requirements install and pytest collection work on Windows. Focuse
 - Windows test lanes are documented.
 - At least one broad Windows test lane runs to completion.
 - Safety gates remain unchanged.
+
+## Result
+
+Result report: `project/reports/2026-07-09-legacy-test-suite-triage.md`
+
+No live provider or destructive workflow was executed.

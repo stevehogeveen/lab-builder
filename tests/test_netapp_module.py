@@ -90,10 +90,10 @@ def test_netapp_module_route_returns_200_with_bootstrap_and_connection_state(cli
 
     assert response.status_code == 200
     assert "NetApp setup" in response.text
-    assert "Connection Target" in response.text
-    assert "Bootstrap Plan" in response.text
-    assert "ONTAP API / Cluster Management IP" in response.text
-    assert "Test ONTAP API connection" in response.text
+    assert "Connect to ONTAP" in response.text
+    assert "Console/bootstrap IPs" in response.text
+    assert "Cluster management IP" in response.text
+    assert "Test connection" in response.text
 
 
 def test_netapp_action_endpoints_return_planning_data(client):
@@ -132,7 +132,8 @@ def test_netapp_test_connection_endpoint_returns_result(client):
     )
 
     assert response.status_code == 200
-    assert "API connection test" in response.text
+    assert "Last connection test" in response.text
+    assert "Target 10.10.8.46" in response.text
 
 
 def test_netapp_plan_includes_validate_and_plan_stage_order_when_host_is_set(client):
