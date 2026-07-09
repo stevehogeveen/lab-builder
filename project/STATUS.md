@@ -8,7 +8,7 @@ Local path: `C:\Users\TLANADMIN\Documents\Codex\2026-06-22\have-we\work\lab-buil
 
 Project OS role: Product Team Beta
 
-Current phase: Windows runtime compatibility queued
+Current phase: Legacy test-suite triage queued
 
 Product version discovered: `0.1.0`
 
@@ -25,6 +25,13 @@ Verification status:
 - With `uvloop` skipped as a non-repo workaround, dependencies installed and a 30-test subset passed.
 - Full pytest collection is blocked by POSIX-only Cisco imports of `grp` and `pwd`.
 - Docker verification is blocked because Docker is not available on PATH.
+- TASK-002 resolved Windows dependency install and full collection blockers.
+- Windows dependency install now succeeds by skipping `uvloop` only on Windows.
+- Pytest collection now succeeds with 402 tests collected.
+- Focused Cisco lane passed 36/36.
+- Known Windows-compatible subset passed 30/30.
+- Full pytest timed out after 5 minutes.
+- NetApp module lane has 2 UI assertion failures and 29 passing tests.
 
 Safety status:
 
@@ -38,4 +45,4 @@ Current risk:
 
 Next safe task:
 
-- `project/queue/ready/TASK-002-windows-runtime-compatibility.md`
+- `project/queue/ready/TASK-003-legacy-test-suite-triage.md`

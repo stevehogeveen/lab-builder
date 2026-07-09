@@ -381,8 +381,9 @@ def test_apply_serial_permission_fix_runs_usermod_and_acl(monkeypatch):
     ]
     monkeypatch.setattr(cisco, "serial_runtime_diagnostics", lambda: diagnostics.pop(0))
     monkeypatch.setattr(cisco, "append_cisco_log", lambda *args, **kwargs: None)
+    monkeypatch.setattr(cisco, "grp", SimpleNamespace(getgrgid=lambda _gid: SimpleNamespace(gr_name="administrator")))
     monkeypatch.setattr(cisco, "pwd", SimpleNamespace(getpwuid=lambda _uid: SimpleNamespace(pw_name="administrator")))
-    monkeypatch.setattr(cisco, "os", SimpleNamespace(getuid=lambda: 1000, path=SimpleNamespace(realpath=lambda value: value)))
+    monkeypatch.setattr(cisco, "os", SimpleNamespace(getuid=lambda: 1000, getgroups=lambda: [1000], path=SimpleNamespace(realpath=lambda value: value)))
     monkeypatch.setattr(cisco.shutil, "which", lambda name: "/usr/bin/setfacl" if name == "setfacl" else None)
 
     def fake_run(command, password):
@@ -404,3 +405,27 @@ def test_apply_serial_permission_fix_requires_password():
 
     assert result["ok"] is False
     assert "password is required" in result["error"].lower()
+
+
+def test_serial_diagnostics_handles_missing_posix_modules(monkeypatch):
+    monkeypatch.setattr(cisco, "grp", None)
+    monkeypatch.setattr(cisco, "pwd", None)
+    monkeypatch.setattr(cisco, "_port_metadata", lambda: {})
+
+    diagnostics = cisco.serial_runtime_diagnostics()
+
+    assert diagnostics["posix_permissions_supported"] is False
+    assert diagnostics["group_names"] == []
+    assert "user" in diagnostics
+
+
+def test_apply_serial_permission_fix_blocks_without_posix_support(monkeypatch):
+    monkeypatch.setattr(cisco, "grp", None)
+    monkeypatch.setattr(cisco, "pwd", None)
+    monkeypatch.setattr(cisco, "_port_metadata", lambda: {})
+
+    result = cisco.apply_serial_permission_fix("pw")
+
+    assert result["ok"] is False
+    assert "posix" in result["error"].lower()
+    assert result["applied"] == []

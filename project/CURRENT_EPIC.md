@@ -33,4 +33,4 @@ Make LabBuilder understandable to Project OS and safe for future product work by
 
 ## Next Task
 
-`project/queue/ready/TASK-002-windows-runtime-compatibility.md` is the next safe Product Team Beta task after runtime reconciliation.
+`project/queue/ready/TASK-003-legacy-test-suite-triage.md` is the next safe Product Team Beta task after Windows runtime compatibility.

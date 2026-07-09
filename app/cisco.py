@@ -2,13 +2,12 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 import difflib
-import grp
+import getpass
 import json
 from pathlib import Path
 import glob
 import ipaddress
 import os
-import pwd
 import re
 import stat
 import shutil
@@ -17,6 +16,16 @@ import time
 from typing import Any
 
 import paramiko
+
+try:
+    import grp
+except ImportError:  # pragma: no cover - depends on host platform.
+    grp = None
+
+try:
+    import pwd
+except ImportError:  # pragma: no cover - depends on host platform.
+    pwd = None
 
 try:  # pyserial is optional at import time so tests can monkeypatch it cleanly.
     import serial
@@ -43,6 +52,8 @@ CISCO_PROFILE_FIELDS = {
     "bpduguard",
     "extra_commands",
 }
+
+POSIX_SERIAL_PERMISSION_ERROR = "Cisco serial permission repair is supported only on POSIX hosts with pwd/grp support."
 
 
 DEFAULT_CISCO_VLANS: list[dict[str, Any]] = [
@@ -314,6 +325,40 @@ def mask_secrets(value: str, secrets: list[str] | None = None) -> str:
     return masked
 
 
+def _posix_permissions_supported() -> bool:
+    return bool(grp is not None and pwd is not None and hasattr(os, "getuid") and hasattr(os, "getgroups"))
+
+
+def _current_username() -> str:
+    if pwd is not None and hasattr(os, "getuid"):
+        try:
+            return str(pwd.getpwuid(os.getuid()).pw_name)
+        except Exception:
+            pass
+    try:
+        return getpass.getuser()
+    except Exception:
+        return ""
+
+
+def _group_name(group_id: int) -> str:
+    if grp is not None:
+        try:
+            return str(grp.getgrgid(group_id).gr_name)
+        except KeyError:
+            pass
+    return str(group_id)
+
+
+def _group_names() -> list[str]:
+    if grp is None or not hasattr(os, "getgroups"):
+        return []
+    names: set[str] = set()
+    for group_id in os.getgroups():
+        names.add(_group_name(group_id))
+    return sorted(names)
+
+
 def _device_access_details(path: str) -> dict[str, Any]:
     details: dict[str, Any] = {"path": str(path or "")}
     try:
@@ -321,14 +366,13 @@ def _device_access_details(path: str) -> dict[str, Any]:
     except OSError as exc:
         details["error"] = str(exc).splitlines()[0]
         return details
-    try:
-        owner = pwd.getpwuid(device_stat.st_uid).pw_name
-    except KeyError:
-        owner = str(device_stat.st_uid)
-    try:
-        group = grp.getgrgid(device_stat.st_gid).gr_name
-    except KeyError:
-        group = str(device_stat.st_gid)
+    owner = str(device_stat.st_uid)
+    if pwd is not None:
+        try:
+            owner = str(pwd.getpwuid(device_stat.st_uid).pw_name)
+        except KeyError:
+            pass
+    group = _group_name(device_stat.st_gid)
     details.update(
         {
             "mode": stat.filemode(device_stat.st_mode),
@@ -411,13 +455,13 @@ def _load_serial_modules() -> tuple[Any, Any]:
 def serial_runtime_diagnostics() -> dict[str, Any]:
     serial_module, port_tools = _load_serial_modules()
     ordered = _ordered_port_paths(_port_metadata())
-    group_names = sorted({grp.getgrgid(group_id).gr_name for group_id in os.getgroups()})
     return {
         "serial_imported": serial_module is not None,
         "list_ports_imported": port_tools is not None,
         "log_path": str(CISCO_LOG_PATH),
-        "user": pwd.getpwuid(os.getuid()).pw_name,
-        "group_names": group_names,
+        "user": _current_username(),
+        "group_names": _group_names(),
+        "posix_permissions_supported": _posix_permissions_supported(),
         "ordered_ports": ordered,
         "by_id_ports": sorted(glob.glob("/dev/serial/by-id/*")),
         "ttyusb_ports": sorted(glob.glob("/dev/ttyUSB*")),
@@ -430,8 +474,11 @@ def apply_serial_permission_fix(sudo_password: str, *, username: str = "") -> di
     password = str(sudo_password or "")
     if not password:
         return {"ok": False, "error": "Sudo password is required.", "applied": [], "warnings": [], "diagnostics": serial_runtime_diagnostics()}
+    if not _posix_permissions_supported():
+        diagnostics = serial_runtime_diagnostics()
+        return {"ok": False, "error": POSIX_SERIAL_PERMISSION_ERROR, "applied": [], "warnings": [], "diagnostics": diagnostics}
 
-    effective_user = str(username or pwd.getpwuid(os.getuid()).pw_name).strip()
+    effective_user = str(username or _current_username()).strip()
     diagnostics_before = serial_runtime_diagnostics()
     real_devices = sorted({os.path.realpath(path) for path in list(diagnostics_before.get("ordered_ports") or []) if str(path).strip()})
     applied: list[str] = []
