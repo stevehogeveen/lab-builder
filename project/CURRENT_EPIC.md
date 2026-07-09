@@ -30,3 +30,7 @@ Make LabBuilder understandable to Project OS and safe for future product work by
 - `project/queue/ready/TASK-000-repository-discovery.md` exists.
 - `project/reports/` and `project/mail/` are represented in git.
 - `docs/13-Repository-Map.md` exists and covers the required discovery sections.
+
+## Next Task
+
+`project/queue/ready/TASK-001-runtime-and-repo-reconciliation.md` is the next safe Product Team Beta task selected by COO routing.
