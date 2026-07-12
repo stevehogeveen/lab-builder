@@ -10,6 +10,52 @@ from fastapi.responses import FileResponse, HTMLResponse
 ExecutionRuntime = dict[str, Callable[..., Any]]
 
 
+def _blocked_execution_review(scope: str, reason: str) -> dict[str, Any]:
+    normalized_scope = str(scope or "included")
+    reason_text = str(reason or "A required run prerequisite is missing.").splitlines()[0]
+    esxi_blocked = "esxi" in reason_text.lower() or normalized_scope == "esxi"
+    stage_name = "ESXi" if esxi_blocked else normalized_scope.replace("_", " ").title()
+    setup_href = "/esxi" if esxi_blocked else "/execution"
+    corrective_action = (
+        "Add the required local ESXi base ISO or correct the saved ISO path, then review the run again."
+        if esxi_blocked
+        else "Correct the missing stage prerequisite, then review the run again."
+    )
+    return {
+        "detail_text": f"Execution review blocked: {reason_text}",
+        "selected_scopes_for_form": [normalized_scope],
+        "execution_mode": {"key": "blocked", "badge": "Blocked"},
+        "confidence": {
+            "next_recommended_action": corrective_action,
+            "blocked_checks": [
+                {
+                    "label": f"{stage_name} review blocked",
+                    "details": reason_text,
+                    "fix": corrective_action,
+                    "href": setup_href,
+                }
+            ],
+        },
+        "stages": [
+            {
+                "name": stage_name,
+                "status_tone": "pending",
+                "status_label": "Blocked",
+                "summary": "Run review stopped at a missing prerequisite.",
+                "blocked_reason": reason_text,
+                "corrective_action": corrective_action,
+                "review_href": setup_href,
+                "fix_href": setup_href,
+                "fix_label": "Open setup page",
+            }
+        ],
+        "launch_options": {"real": None, "preview": None},
+        "warning_points": [reason_text],
+        "esxi_install_review": None,
+        "storage_run_review": None,
+    }
+
+
 async def view_run_summary_handler(
     request: Request,
     runtime: ExecutionRuntime,
@@ -82,7 +128,12 @@ async def prepare_execute_handler(
         runtime["validate_execution_scope"](cfg, scope)
     except Exception as e:
         preview_error = str(e).splitlines()[0]
-    review = runtime["build_execution_review"](cfg, scope)
+    try:
+        review = runtime["build_execution_review"](cfg, scope)
+    except (FileNotFoundError, OSError, ValueError) as e:
+        review_error = str(e).splitlines()[0]
+        preview_error = preview_error or review_error
+        review = _blocked_execution_review(scope, review_error)
     return runtime["render_page"](
         request,
         cfg,
