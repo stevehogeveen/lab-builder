@@ -10,47 +10,114 @@ from fastapi.responses import FileResponse, HTMLResponse
 ExecutionRuntime = dict[str, Callable[..., Any]]
 
 
-def _blocked_execution_review(scope: str, reason: str) -> dict[str, Any]:
+def _blocked_stage_target(reason: str, scope: str) -> tuple[str, str]:
+    reason_lower = str(reason or "").lower()
+    targets = (
+        ("ilo", "iLO", "/ilo"),
+        ("esxi", "ESXi", "/esxi"),
+        ("windows", "Windows", "/windows"),
+        ("storage", "Storage", "/storage"),
+        ("qnap", "QNAP", "/qnap"),
+        ("iosafe", "ioSafe", "/iosafe"),
+        ("cisco", "Cisco Switch", "/cisco"),
+        ("netapp", "NetApp", "/netapp"),
+    )
+    for keyword, name, href in targets:
+        if keyword in reason_lower:
+            return name, href
+    normalized_scope = str(scope or "included")
+    scope_targets = {
+        "ilo": ("iLO", "/ilo"),
+        "esxi": ("ESXi", "/esxi"),
+        "windows": ("Windows", "/windows"),
+        "storage": ("Storage", "/storage"),
+        "qnap": ("QNAP", "/qnap"),
+        "iosafe": ("ioSafe", "/iosafe"),
+        "cisco_switch": ("Cisco Switch", "/cisco"),
+        "netapp": ("NetApp", "/netapp"),
+    }
+    return scope_targets.get(normalized_scope, ("Run", "/execution"))
+
+
+def _blocked_execution_stage(name: str, href: str, reason: str, corrective_action: str) -> dict[str, Any]:
+    return {
+        "name": name,
+        "status_tone": "pending",
+        "status_label": "Blocked",
+        "summary": "Run review stopped at a missing prerequisite.",
+        "blocked_reason": reason,
+        "corrective_action": corrective_action,
+        "review_href": href,
+        "fix_href": href,
+        "fix_label": f"Fix on {name}",
+    }
+
+
+def _blocked_execution_review(scope: str, reason: str, validation_reason: str = "") -> dict[str, Any]:
     normalized_scope = str(scope or "included")
     reason_text = str(reason or "A required run prerequisite is missing.").splitlines()[0]
-    esxi_blocked = "esxi" in reason_text.lower() or normalized_scope == "esxi"
-    stage_name = "ESXi" if esxi_blocked else normalized_scope.replace("_", " ").title()
-    setup_href = "/esxi" if esxi_blocked else "/execution"
+    validation_text = str(validation_reason or "").splitlines()[0]
+    stages: list[dict[str, Any]] = []
+    blocked_checks: list[dict[str, str]] = []
+    warning_points: list[str] = []
+
+    if validation_text and validation_text != reason_text:
+        validation_name, validation_href = _blocked_stage_target(validation_text, normalized_scope)
+        validation_action = (
+            f"Open {validation_name} setup and correct the missing saved values, then review the run again."
+        )
+        stages.append(
+            _blocked_execution_stage(
+                validation_name,
+                validation_href,
+                validation_text,
+                validation_action,
+            )
+        )
+        blocked_checks.append(
+            {
+                "label": f"{validation_name} review blocked",
+                "details": validation_text,
+                "fix": validation_action,
+                "href": validation_href,
+            }
+        )
+        warning_points.append(validation_text)
+
+    stage_name, setup_href = _blocked_stage_target(reason_text, normalized_scope)
+    esxi_media_blocked = stage_name == "ESXi" and (
+        "iso" in reason_text.lower() or "media" in reason_text.lower()
+    )
     corrective_action = (
         "Add the required local ESXi base ISO or correct the saved ISO path, then review the run again."
-        if esxi_blocked
+        if esxi_media_blocked
         else "Correct the missing stage prerequisite, then review the run again."
     )
+    stages.append(_blocked_execution_stage(stage_name, setup_href, reason_text, corrective_action))
+    blocked_checks.append(
+        {
+            "label": f"{stage_name} review blocked",
+            "details": reason_text,
+            "fix": corrective_action,
+            "href": setup_href,
+        }
+    )
+    warning_points.append(reason_text)
+
+    next_recommended_action = (
+        stages[0]["corrective_action"] if stages else corrective_action
+    )
     return {
-        "detail_text": f"Execution review blocked: {reason_text}",
+        "detail_text": f"Execution review blocked: {validation_text or reason_text}",
         "selected_scopes_for_form": [normalized_scope],
         "execution_mode": {"key": "blocked", "badge": "Blocked"},
         "confidence": {
-            "next_recommended_action": corrective_action,
-            "blocked_checks": [
-                {
-                    "label": f"{stage_name} review blocked",
-                    "details": reason_text,
-                    "fix": corrective_action,
-                    "href": setup_href,
-                }
-            ],
+            "next_recommended_action": next_recommended_action,
+            "blocked_checks": blocked_checks,
         },
-        "stages": [
-            {
-                "name": stage_name,
-                "status_tone": "pending",
-                "status_label": "Blocked",
-                "summary": "Run review stopped at a missing prerequisite.",
-                "blocked_reason": reason_text,
-                "corrective_action": corrective_action,
-                "review_href": setup_href,
-                "fix_href": setup_href,
-                "fix_label": "Open setup page",
-            }
-        ],
+        "stages": stages,
         "launch_options": {"real": None, "preview": None},
-        "warning_points": [reason_text],
+        "warning_points": warning_points,
         "esxi_install_review": None,
         "storage_run_review": None,
     }
@@ -132,8 +199,8 @@ async def prepare_execute_handler(
         review = runtime["build_execution_review"](cfg, scope)
     except (FileNotFoundError, OSError, ValueError) as e:
         review_error = str(e).splitlines()[0]
+        review = _blocked_execution_review(scope, review_error, preview_error or "")
         preview_error = preview_error or review_error
-        review = _blocked_execution_review(scope, review_error)
     return runtime["render_page"](
         request,
         cfg,
