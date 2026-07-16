@@ -1,3 +1,13 @@
+# Legacy Lab Builder — Retired
+
+> **This repository is retired and must not receive new product work.**  
+> The canonical Lab Builder repository is [`stevehogeveen/infra-config-portal`](https://github.com/stevehogeveen/infra-config-portal).  
+> See [`RETIREMENT_AUDIT.md`](RETIREMENT_AUDIT.md) for the capability audit, migration candidates, and retirement rules.
+
+This repository remains available as a read-only historical reference for selected operational lessons, the offline ONTAP API catalog, the standalone ESXi OVF fallback, and legacy packaging material. Do not copy credentials, runtime state, media, artifacts, or provider code into the canonical repository without a focused safety review.
+
+---
+
 # Lab Builder
 
 Lab Builder is a FastAPI application for offline/controlled lab provisioning workflows. It helps operators configure kit settings, stage infrastructure actions (iLO, storage, ESXi, Windows, and optional modules), and run guarded execution with artifacts and diagnostics.
