@@ -28,6 +28,7 @@ from app.esxi.builder import build_custom_iso
 from app.esxi.models import EsxiBuildSpec
 from app.debug_bundle import create_debug_bundle
 from app.diagnostics import diagnostic_log_lines, diagnostic_result
+from app.operator_home import build_operator_home_state
 from app.core.config import (
     apply_ip_plan as core_apply_ip_plan,
     build_default_ip_plan as core_build_default_ip_plan,
@@ -513,8 +514,8 @@ DEFAULT_IP_OFFSETS = {
 }
 PAGE_META = {
     "dashboard": {
-        "title": "Lab Builder Dashboard",
-        "subtitle": "Generic readiness cockpit for the active deployment workspace.",
+        "title": "Operator Home",
+        "subtitle": "The next safe step for the active kit.",
     },
     "global_settings": {
         "title": "Global Settings",
@@ -1911,41 +1912,6 @@ def build_history_display_entries(history: list[dict[str, Any]]) -> list[dict[st
     return display_entries
 
 
-def build_dashboard_job_status(history: list[dict[str, Any]]) -> dict[str, Any]:
-    workflow_defs = [
-        ("ilo", "iLO", ["ilo"]),
-        ("storage", "Storage", ["storage-apply", "storage-reboot"]),
-        ("esxi", "ESXi", ["esxi"]),
-        ("windows", "Windows", ["windows"]),
-        ("qnap", "QNAP", ["qnap"]),
-        ("netapp", "NetApp", ["netapp"]),
-    ]
-    passed: list[dict[str, str]] = []
-    failed: list[dict[str, str]] = []
-    for _, label, scopes in workflow_defs:
-        latest = latest_history_entry_for_scope(history, scopes) or {}
-        if not latest:
-            continue
-        status = str(latest.get("status") or "")
-        item = {
-            "name": label,
-            "status": status or "Run recorded",
-            "time": str(latest.get("time") or ""),
-            "run_summary_path": str(latest.get("run_summary_path") or ""),
-        }
-        lowered = status.lower()
-        if "supersed" in lowered:
-            continue
-        if "fail" in lowered:
-            failed.append(item)
-        elif "complete" in lowered:
-            passed.append(item)
-    return {
-        "passed": passed,
-        "failed": failed,
-    }
-
-
 def latest_storage_discovery_export(cfg: dict[str, Any], allow_global_fallback: bool = False) -> dict[str, Path] | None:
     storage_cfg = cfg.get("storage", {}) or {}
     latest_raw = str(storage_cfg.get("latest_discovery_raw_path") or "").strip()
@@ -3226,98 +3192,6 @@ def build_setup_precheck_summary(
         "next_step": recommended_next_step,
         "next_blocker": next_blocker,
         "items": cards,
-    }
-
-
-def build_dashboard_overview(
-    cfg: dict[str, Any],
-    setup_precheck_summary: dict[str, Any],
-    workflow_contexts: dict[str, dict[str, Any]],
-    dashboard_job_status: dict[str, Any],
-    job: dict[str, Any],
-) -> dict[str, Any]:
-    cards = list(setup_precheck_summary.get("items") or [])
-    total_checks = sum(int(item.get("total_checks") or 0) for item in cards)
-    ready_checks = sum(int(item.get("checks_ready") or 0) for item in cards)
-    total_blockers = int(setup_precheck_summary.get("total_blockers") or 0)
-    readiness_percent = int(round((ready_checks / total_checks) * 100)) if total_checks else 0
-    ready_workflows = int(setup_precheck_summary.get("ready_workflows") or 0)
-    total_workflows = int(setup_precheck_summary.get("total_workflows") or len(cards))
-    running = str(job.get("status") or "").lower() not in {"", "idle", "complete", "completed", "preview complete"}
-    failed_runs = list(dashboard_job_status.get("failed") or [])
-    passed_runs = list(dashboard_job_status.get("passed") or [])
-
-    if running:
-        headline = "Run in progress"
-        summary = str(job.get("current_stage") or "A run is active. Watch Run Center for live status.")
-        tone = "progress"
-    elif total_blockers:
-        headline = "Needs attention"
-        summary = f"{total_blockers} blocker{'s' if total_blockers != 1 else ''} need review before this kit is ready."
-        tone = "pending"
-    elif total_workflows:
-        headline = "Ready for review"
-        summary = "Included setup modules are ready for Run Center review."
-        tone = "ready"
-    else:
-        headline = "No included setup modules"
-        summary = "Choose the modules for this kit in Global Settings."
-        tone = "muted"
-
-    if failed_runs:
-        latest_result = {
-            "label": f"{failed_runs[0].get('name', 'Stage')} failed",
-            "summary": failed_runs[0].get("time") or "Review the latest failed run.",
-            "tone": "pending",
-        }
-    elif passed_runs:
-        latest_result = {
-            "label": f"{passed_runs[0].get('name', 'Stage')} passed",
-            "summary": passed_runs[0].get("time") or "Latest run completed.",
-            "tone": "ready",
-        }
-    else:
-        latest_result = {
-            "label": "No completed runs yet",
-            "summary": "Run results will appear here after preview or execution.",
-            "tone": "progress",
-        }
-
-    module_rows = []
-    for item in cards:
-        blockers = int(item.get("blockers") or 0)
-        module_rows.append(
-            {
-                "name": item.get("name") or "Module",
-                "label": item.get("state_label") or item.get("label") or "Review",
-                "tone": item.get("tone") or "progress",
-                "href": item.get("href") or "/dashboard",
-                "checks_ready": int(item.get("checks_ready") or 0),
-                "total_checks": int(item.get("total_checks") or 0),
-                "blockers": blockers,
-                "summary": (
-                    item.get("next_blocker", {}).get("label")
-                    if blockers and isinstance(item.get("next_blocker"), dict)
-                    else workflow_contexts.get(str(item.get("key") or ""), {}).get("planned_summary", "Review saved setup.")
-                ),
-            }
-        )
-
-    return {
-        "headline": headline,
-        "summary": summary,
-        "tone": tone,
-        "readiness_percent": readiness_percent,
-        "ready_checks": ready_checks,
-        "total_checks": total_checks,
-        "ready_workflows": ready_workflows,
-        "total_workflows": total_workflows,
-        "total_blockers": total_blockers,
-        "next_step": setup_precheck_summary.get("next_step") or {},
-        "next_blocker": setup_precheck_summary.get("next_blocker"),
-        "latest_result": latest_result,
-        "module_rows": module_rows,
-        "workspace_label": cfg.get("site", {}).get("name", "") or "Current kit",
     }
 
 
@@ -14075,8 +13949,12 @@ def render_page(
     page_precheck_summary = build_page_precheck_summary(active_page, cfg, workflow_contexts)
     activity_feed = build_activity_feed(history)
     history_display = build_history_display_entries(history)
-    dashboard_job_status = build_dashboard_job_status(history)
-    dashboard_overview = build_dashboard_overview(cfg, setup_precheck_summary, workflow_contexts, dashboard_job_status, job)
+    operator_home = build_operator_home_state(
+        kit_name=str(cfg.get("site", {}).get("name") or "Current kit"),
+        setup_summary=setup_precheck_summary,
+        recommended_next_step=recommended_next_step,
+        job=job,
+    )
     hardware_identity = build_hardware_identity(cfg)
     upgrade_helper_summary = build_upgrade_helper_card(cfg)
     ilo_input_review = build_ilo_input_review(cfg, include_policy_validation=active_page == "ilo")
@@ -14160,11 +14038,10 @@ def render_page(
         "recommended_next_step": recommended_next_step,
         "setup_precheck_summary": setup_precheck_summary,
         "page_precheck_summary": page_precheck_summary,
-        "dashboard_overview": dashboard_overview,
+        "operator_home": operator_home,
         "upgrade_helper_summary": upgrade_helper_summary,
         "activity_feed": activity_feed,
         "history_display": history_display,
-        "dashboard_job_status": dashboard_job_status,
         "hardware_identity": hardware_identity,
         "ilo_input_review": ilo_input_review,
         "ilo_field_errors": ilo_field_errors,

@@ -1,257 +1,128 @@
-<section class="dashboard-cockpit">
-    <section class="dashboard-command-center">
-        <div class="dashboard-command-main">
-            <div class="dashboard-command-copy">
-                <div class="dashboard-kicker">Mission control overview</div>
-                <h2>Deployment cockpit</h2>
-                <p>{{ dashboard_overview.summary }}</p>
-            </div>
-            <div class="dashboard-command-score" style="--score: {{ dashboard_overview.readiness_percent }};">
-                <div class="dashboard-score-ring">
-                    <span>{{ dashboard_overview.readiness_percent }}%</span>
-                </div>
-                <div>
-                    <div class="font-semibold">Readiness</div>
-                    <div class="text-sm text-slate-400">{{ dashboard_overview.ready_checks }} / {{ dashboard_overview.total_checks }} checks ready</div>
-                </div>
-            </div>
-        </div>
-
-        <div class="dashboard-command-rail">
-            <div class="dashboard-rail-top">
-                <span class="status {{ dashboard_overview.tone }}">{{ dashboard_overview.headline }}</span>
-                <div class="dashboard-active-workspace">
-                    <div class="dashboard-kicker">Active kit</div>
-                    <div class="dashboard-workspace-name truncate-single" title="{{ dashboard_overview.workspace_label }}">{{ dashboard_overview.workspace_label }}</div>
-                    {% set visible_other_kits = kits | reject('equalto', current_kit) | list %}
-                    <form hx-post="/load-kit" hx-target="#main-content" hx-swap="outerHTML" class="mt-3 flex gap-2 flex-wrap items-center">
-                        <input type="hidden" name="return_page" value="dashboard">
-                        <select class="input" name="selected_kit" {% if not visible_other_kits %}disabled{% endif %} required>
-                            {% if visible_other_kits %}
-                            {% for kit in kits %}
-                            {% if kit != current_kit %}
-                            <option value="{{ kit }}">{{ kit }}</option>
-                            {% endif %}
-                            {% endfor %}
-                            {% else %}
-                            <option value="" disabled selected>No other saved kits found</option>
-                            {% endif %}
-                        </select>
-                        <button class="btn" type="submit" {% if not visible_other_kits %}disabled{% endif %}>Switch active kit</button>
-                    </form>
-                </div>
-            </div>
-            <div class="dashboard-next-action">
-                <div class="dashboard-kicker">Recommended next step</div>
-                <div class="dashboard-next-title">{{ recommended_next_step.title }}</div>
-                <div class="text-sm text-slate-400 mt-1">{{ recommended_next_step.summary }}</div>
-                <div class="actions mt-3">
-                    <a class="btn btn-primary action-button" href="{{ recommended_next_step.href }}">Open next step</a>
-                    <a class="btn" href="/execution">Run Center</a>
-                </div>
-            </div>
-        </div>
-    </section>
-
-    <section class="dashboard-signal-grid">
-        <div class="dashboard-signal-card dashboard-signal-ready">
-            <div class="dashboard-kicker">Setup modules</div>
-            <div class="dashboard-signal-value">{{ dashboard_overview.ready_workflows }} / {{ dashboard_overview.total_workflows }}</div>
-            <div class="text-sm text-slate-400">Ready modules</div>
-        </div>
-        <div class="dashboard-signal-card dashboard-signal-blockers">
-            <div class="dashboard-kicker">Blockers</div>
-            <div class="dashboard-signal-value">{{ dashboard_overview.total_blockers }}</div>
-            <div class="text-sm text-slate-400">
-                {% if dashboard_overview.next_blocker %}
-                Next fix: {{ dashboard_overview.next_blocker.label }}
-                {% else %}
-                No blocking pre-checks
-                {% endif %}
-            </div>
-        </div>
-        <div class="dashboard-signal-card">
-            <div class="dashboard-kicker">Latest result</div>
-            <div class="dashboard-signal-title">{{ dashboard_overview.latest_result.label }}</div>
-            <div class="text-sm text-slate-400 truncate-single" title="{{ dashboard_overview.latest_result.summary }}">{{ dashboard_overview.latest_result.summary }}</div>
-        </div>
-        <div class="dashboard-signal-card">
-            <div class="dashboard-kicker">Quick actions</div>
-            <div class="dashboard-action-stack">
-                <form hx-post="/view-current-kit-config" hx-target="#main-content" hx-swap="outerHTML">
-                    <input type="hidden" name="return_page" value="dashboard">
-                    <button class="btn" type="submit">Open current config</button>
-                </form>
-                <form action="/download-current-kit-config" method="post">
-                    <button class="btn" type="submit">Download current config</button>
-                </form>
-            </div>
-        </div>
-    </section>
-
-    <section class="dashboard-guidance-grid">
-        <div class="dashboard-path-panel">
-            <div class="dashboard-panel-heading">
-                <div>
-                    <div class="dashboard-kicker">Continue setup</div>
-                    <div class="text-lg font-semibold">Build path</div>
-                    <div class="text-sm text-slate-400 mt-1">No hidden steps: configure, prove, approve, then run.</div>
-                </div>
-                <span class="status {{ dashboard_overview.tone }}">{{ dashboard_overview.headline }}</span>
-            </div>
-            <div class="dashboard-path-list">
-                {% for item in dashboard_overview.module_rows %}
-                {% set is_next_step = item.href == recommended_next_step.href %}
-                <a class="dashboard-path-step dashboard-path-step-{{ item.tone }}{% if is_next_step %} dashboard-path-step-active{% endif %}" href="{{ item.href }}">
-                    <span class="dashboard-path-index">{{ loop.index }}</span>
-                    <span class="dashboard-path-copy">
-                        <span class="dashboard-path-title">{{ item.name }}</span>
-                        <span class="dashboard-path-summary truncate-single" title="{{ item.summary }}">{{ item.summary }}</span>
-                    </span>
-                    <span class="dashboard-path-meta">
-                        {% if is_next_step %}
-                        <span class="status progress">Next</span>
-                        {% endif %}
-                        <span class="status {{ item.tone }}">{{ item.label }}</span>
-                    </span>
-                </a>
-                {% endfor %}
-                <a class="dashboard-path-step dashboard-path-step-progress{% if recommended_next_step.href == '/execution' %} dashboard-path-step-active{% endif %}" href="/execution">
-                    <span class="dashboard-path-index">{{ dashboard_overview.module_rows | length + 1 }}</span>
-                    <span class="dashboard-path-copy">
-                        <span class="dashboard-path-title">Run Center</span>
-                        <span class="dashboard-path-summary">Review the approved plan, launch the run, and watch live proof.</span>
-                    </span>
-                    <span class="dashboard-path-meta">
-                        {% if recommended_next_step.href == '/execution' %}
-                        <span class="status progress">Next</span>
-                        {% endif %}
-                        <span class="status progress">Approve</span>
-                    </span>
-                </a>
-            </div>
-        </div>
-
-        <aside class="dashboard-operator-panel">
+{% set operator_tone = 'ready' if operator_home.DisplayState == 'ready' else ('pending' if operator_home.DisplayState == 'needs_attention' else 'progress') %}
+<section class="operator-home" data-testid="operator-home" data-display-state="{{ operator_home.DisplayState }}" data-tier="operator">
+    <header class="operator-home-header">
+        <div class="operator-home-identity">
             <div>
-                <div class="dashboard-kicker">Operator model</div>
-                <div class="text-lg font-semibold">Configure. Prove. Approve.</div>
-                <div class="text-sm text-slate-400 mt-1">Every module should show what it knows, what it will change, and what still needs a human decision.</div>
+                <div class="operator-home-kicker">Selected kit</div>
+                <div class="operator-home-kit-name" title="{{ operator_home.KitName }}">{{ operator_home.KitName }}</div>
             </div>
-            <div class="operator-principle-list">
-                <div class="operator-principle">
-                    <span class="operator-principle-mark">1</span>
-                    <span>
-                        <span class="operator-principle-title">Collect evidence</span>
-                        <span class="operator-principle-copy">Discovery and pre-checks stay visible before any apply action.</span>
-                    </span>
-                </div>
-                <div class="operator-principle">
-                    <span class="operator-principle-mark">2</span>
-                    <span>
-                        <span class="operator-principle-title">Plan safely</span>
-                        <span class="operator-principle-copy">Warnings explain risk, overrides, and why a step is blocked.</span>
-                    </span>
-                </div>
-                <div class="operator-principle">
-                    <span class="operator-principle-mark">3</span>
-                    <span>
-                        <span class="operator-principle-title">Run with receipts</span>
-                        <span class="operator-principle-copy">Run Center becomes the record of planned changes, results, and proof.</span>
-                    </span>
-                </div>
-            </div>
-        </aside>
+            <span class="status {{ operator_tone }}">{{ operator_home.CurrentPhase }}</span>
+        </div>
+        <div class="operator-home-intro">
+            <h1>{{ operator_home.Headline }}</h1>
+            <p>{{ operator_home.SupportingMessage }}</p>
+        </div>
+    </header>
+
+    <section class="operator-home-progress" data-testid="canonical-readiness" aria-label="Kit progress">
+        <div class="operator-home-progress-copy">
+            <span>Kit progress</span>
+            <strong>{{ operator_home.Progress.Label }}</strong>
+        </div>
+        <div class="operator-home-progress-track" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="{{ operator_home.Progress.Percent }}">
+            <span style="width: {{ operator_home.Progress.Percent }}%"></span>
+        </div>
     </section>
 
-    {% set precheck_summary = setup_precheck_summary %}
-    {% include "partials/components/precheck_summary.html" %}
+    <section class="operator-home-summary" aria-labelledby="operator-home-devices-title">
+        <div>
+            <div class="operator-home-kicker" id="operator-home-devices-title">Equipment summary</div>
+            <p>{{ operator_home.DeviceSummary.Summary }}</p>
+        </div>
+        <span class="operator-home-summary-count">{{ operator_home.DeviceSummary.Found }} setup area{% if operator_home.DeviceSummary.Found != 1 %}s{% endif %}</span>
+    </section>
 
-    <section class="dashboard-workspace-grid">
-        <aside class="dashboard-side-panel dashboard-side-panel-wide">
-            <details class="dashboard-kit-drawer">
-                <summary class="summary-row">
-                    <span class="text-sm font-bold text-slate-300">Kit management</span>
-                    <span class="status progress">Choose a kit</span>
-                </summary>
-                <div class="dashboard-kit-forms">
-                    <form hx-post="/new-kit" hx-target="#main-content" hx-swap="outerHTML" class="space-y-3">
+    <section class="operator-home-next" aria-labelledby="operator-home-next-title">
+        <div>
+            <div class="operator-home-kicker">Next safe action</div>
+            <h2 id="operator-home-next-title">{{ operator_home.NextAction.Label }}</h2>
+            <p>{{ operator_home.NextAction.SupportingMessage }}</p>
+        </div>
+        <a class="btn btn-primary operator-home-primary" data-testid="operator-home-primary-action" href="{{ operator_home.NextAction.Href }}">{{ operator_home.NextAction.Label }}</a>
+    </section>
+
+    {% if operator_home.AttentionItems %}
+    <section class="operator-home-attention" data-testid="operator-home-attention" aria-labelledby="operator-home-attention-title">
+        <div class="operator-home-section-heading">
+            <div>
+                <div class="operator-home-kicker">What needs you</div>
+                <h2 id="operator-home-attention-title">Resolve before continuing</h2>
+            </div>
+            <span class="status pending">{{ operator_home.AttentionItems | length }} item{% if operator_home.AttentionItems | length != 1 %}s{% endif %}</span>
+        </div>
+        <div class="operator-home-attention-list">
+            {% for item in operator_home.AttentionItems %}
+            <article class="operator-home-attention-item">
+                <div>
+                    <h3>{{ item.Title }}</h3>
+                    <p>{{ item.Explanation }}</p>
+                    {% if item.Resolution and item.Resolution != item.Explanation %}
+                    <p class="operator-home-resolution"><strong>How to fix it:</strong> {{ item.Resolution }}</p>
+                    {% endif %}
+                </div>
+                <a class="operator-home-attention-link" href="{{ item.Href }}">Review setup</a>
+            </article>
+            {% endfor %}
+        </div>
+    </section>
+    {% else %}
+    <div class="operator-home-clear" data-testid="operator-home-clear">
+        <span class="operator-home-clear-mark" aria-hidden="true">&#10003;</span>
+        <span>No setup items need attention.</span>
+    </div>
+    {% endif %}
+
+    <details class="operator-home-details" data-testid="operator-home-details" data-tier="details">
+        <summary>View details</summary>
+        <div class="operator-home-details-body">
+            <section aria-labelledby="operator-home-all-items-title">
+                <div class="operator-home-kicker" id="operator-home-all-items-title">All setup areas</div>
+                <div class="operator-home-device-list">
+                    {% for device in operator_home.DeviceSummary.Items %}
+                    <a class="operator-home-device-row" href="{{ device.Href }}">
+                        <span>
+                            <strong>{{ device.Name }}</strong>
+                            <span>{{ device.Summary }}</span>
+                        </span>
+                        <span class="status {{ 'ready' if device.DisplayState == 'ready' else 'pending' }}">{{ 'Ready' if device.DisplayState == 'ready' else 'Needs attention' }}</span>
+                    </a>
+                    {% endfor %}
+                </div>
+            </section>
+
+            <section class="operator-home-kit-tools" aria-labelledby="operator-home-kit-tools-title">
+                <div>
+                    <div class="operator-home-kicker" id="operator-home-kit-tools-title">Kit management</div>
+                    <p>Create another kit or switch to one already saved on this machine.</p>
+                </div>
+                <div class="operator-home-kit-forms">
+                    <form hx-post="/new-kit" hx-target="#main-content" hx-swap="outerHTML">
                         <input type="hidden" name="return_page" value="dashboard">
-                        <label>
-                            <div class="dashboard-kicker">Create a new kit</div>
-                            <input class="input" type="text" name="new_kit_name" placeholder="New kit name" required>
-                        </label>
-                        <button class="btn btn-primary action-button" type="submit">Create new kit</button>
+                        <label for="new-kit-name">New kit name</label>
+                        <div class="operator-home-form-row">
+                            <input class="input" id="new-kit-name" type="text" name="new_kit_name" placeholder="New kit name" required>
+                            <button class="btn" type="submit">Create kit</button>
+                        </div>
                     </form>
-                    <form hx-post="/load-kit" hx-target="#main-content" hx-swap="outerHTML" class="space-y-3">
+                    <form hx-post="/load-kit" hx-target="#main-content" hx-swap="outerHTML">
                         <input type="hidden" name="return_page" value="dashboard">
-                        <label>
-                            <div class="dashboard-kicker">Use an existing kit</div>
-                            <select class="input" name="selected_kit" required>
-                                {% set other_kits = kits | reject('equalto', current_kit) | list %}
+                        <label for="selected-kit">Saved kit</label>
+                        <div class="operator-home-form-row">
+                            <select class="input" id="selected-kit" name="selected_kit" required>
+                                {% set other_kits = kits | reject('equalto', operator_home.KitName) | list %}
                                 {% if other_kits %}
-                                {% for kit in kits %}
-                                {% if kit != current_kit %}
+                                {% for kit in other_kits %}
                                 <option value="{{ kit }}">{{ kit }}</option>
-                                {% endif %}
                                 {% endfor %}
                                 {% else %}
-                                <option value="" disabled selected>No other saved kits found</option>
+                                <option value="" disabled selected>No other saved kits</option>
                                 {% endif %}
                             </select>
-                        </label>
-                        <button class="btn" type="submit" {% if not other_kits %}disabled{% endif %}>Load existing kit</button>
+                            <button class="btn" type="submit" {% if not other_kits %}disabled{% endif %}>Switch kit</button>
+                        </div>
                     </form>
                 </div>
-            </details>
-
-            <div class="dashboard-side-block">
-                <div class="dashboard-kicker">Job status</div>
-                {% set has_job_results = dashboard_job_status.passed or dashboard_job_status.failed %}
-                {% if has_job_results %}
-                <div class="dashboard-status-list dashboard-status-list-compact">
-                    {% for item in dashboard_job_status.failed %}
-                    <div class="dashboard-status-item dashboard-status-item-warn">
-                        <div>
-                            <div class="font-semibold">{{ item.name }} run failed</div>
-                            <div class="text-sm text-slate-500">{{ item.time }}</div>
-                        </div>
-                        <div class="dashboard-status-actions">
-                            <span class="status pending">Failed</span>
-                            {% if item.run_summary_path %}
-                            <form hx-post="/view-run-summary" hx-target="#main-content" hx-swap="outerHTML">
-                                <input type="hidden" name="report_path" value="{{ item.run_summary_path }}">
-                                <button class="btn" type="submit">Open log</button>
-                            </form>
-                            {% endif %}
-                        </div>
-                    </div>
-                    {% endfor %}
-                    {% for item in dashboard_job_status.passed %}
-                    <div class="dashboard-status-item dashboard-status-item-good">
-                        <div>
-                            <div class="font-semibold">{{ item.name }} run passed</div>
-                            <div class="text-sm text-slate-500">{{ item.time }}</div>
-                        </div>
-                        <div class="dashboard-status-actions">
-                            <span class="status ready">Passed</span>
-                            {% if item.run_summary_path %}
-                            <form hx-post="/view-run-summary" hx-target="#main-content" hx-swap="outerHTML">
-                                <input type="hidden" name="report_path" value="{{ item.run_summary_path }}">
-                                <button class="btn" type="submit">Open log</button>
-                            </form>
-                            {% endif %}
-                        </div>
-                    </div>
-                    {% endfor %}
-                </div>
-                {% else %}
-                <div class="dashboard-empty-state">
-                    <div class="font-semibold">No runs have completed for this kit yet.</div>
-                    <div class="text-sm text-slate-400 mt-1">When a run finishes, the latest result for each stage will show up here.</div>
-                </div>
-                {% endif %}
-            </div>
-        </aside>
-    </section>
+            </section>
+        </div>
+    </details>
 </section>

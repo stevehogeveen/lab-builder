@@ -16,36 +16,19 @@
     <div class="brand-block">
         <div class="eyebrow">Offline Provisioning</div>
         <div class="brand">Lab Builder</div>
-        <div class="muted">Work through one kit at a time using the setup pages below.</div>
+        <div class="muted">Prepare one kit at a time.</div>
     </div>
 
     <div class="sidebar-kit-card">
-        <div class="sidebar-kit-top">
-            <span class="sidebar-kit-label">Kit state</span>
-            <span class="status {{ setup_precheck_summary.tone if setup_precheck_summary else 'progress' }}">{{ setup_precheck_summary.label if setup_precheck_summary else 'Review' }}</span>
-        </div>
-        <div class="sidebar-kit-name truncate-single" title="{{ current_kit }}">{{ current_kit }}</div>
-        <div class="sidebar-kit-meter" style="--meter: {{ dashboard_overview.readiness_percent if dashboard_overview else 0 }}%;">
-            <span></span>
-        </div>
-        <div class="sidebar-kit-meta">
-            <span>{{ setup_precheck_summary.ready_workflows if setup_precheck_summary else 0 }} / {{ setup_precheck_summary.total_workflows if setup_precheck_summary else 0 }} ready</span>
-            {% if setup_precheck_summary and setup_precheck_summary.total_blockers %}
-            <span>{{ setup_precheck_summary.total_blockers }} blocker{% if setup_precheck_summary.total_blockers != 1 %}s{% endif %}</span>
-            {% else %}
-            <span>No blockers</span>
-            {% endif %}
-        </div>
+        <div class="sidebar-kit-label">Selected kit</div>
+        <div class="sidebar-kit-name truncate-single" title="{{ operator_home.KitName if operator_home else current_kit }}">{{ operator_home.KitName if operator_home else current_kit }}</div>
+        <a class="sidebar-kit-home" href="/dashboard">Open Operator Home</a>
     </div>
 
     <div class="sidebar-utility-grid" aria-label="Operator shortcuts">
         <button class="sidebar-tool-button" type="button" data-command-palette-open aria-haspopup="dialog" aria-controls="command-palette">
             <span>Quick jump</span>
             <span class="kbd">Ctrl K</span>
-        </button>
-        <button class="sidebar-tool-button" type="button" data-issue-drawer-open aria-haspopup="dialog" aria-controls="issue-drawer">
-            <span>Open issues</span>
-            <span class="status {{ setup_precheck_summary.tone if setup_precheck_summary else 'progress' }}">{{ setup_precheck_summary.total_blockers if setup_precheck_summary else 0 }}</span>
         </button>
         <button class="sidebar-tool-button" type="button" data-density-toggle aria-pressed="false">
             <span data-density-label>Compact view</span>
@@ -60,8 +43,8 @@
                 <span class="nav-dot nav-dot-progress"></span>
                 <span class="nav-icon icon-tone-progress" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 13h7V4H4z"/><path d="M13 20h7v-9h-7z"/><path d="M13 10h7V4h-7z"/><path d="M4 20h7v-5H4z"/></svg></span>
                 <span class="nav-link-copy">
-                    <span class="nav-link-title">Dashboard</span>
-                    <span class="nav-link-subtitle">Mission control</span>
+                    <span class="nav-link-title">Operator Home</span>
+                    <span class="nav-link-subtitle">Next safe action</span>
                 </span>
             </span>
         </a>

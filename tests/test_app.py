@@ -1,5 +1,6 @@
 import asyncio
 import copy
+import re
 import pytest
 import yaml
 import requests
@@ -11155,7 +11156,7 @@ def test_run_storage_as_part_of_real_run_powers_on_when_server_starts_off():
     assert "Storage stage confirmed server PowerState=On" in joined_logs
 
 
-def test_dashboard_shows_recommended_next_step_and_workflow_cards(client):
+def test_operator_home_shows_one_canonical_state_and_next_action(client):
     cfg = main.default_config()
     cfg["site"]["name"] = "Dash Kit"
     cfg["ilo"]["current_ip"] = ""
@@ -11167,38 +11168,36 @@ def test_dashboard_shows_recommended_next_step_and_workflow_cards(client):
     response = client.get("/dashboard")
 
     assert response.status_code == 200
-    assert "Dashboard" in response.text
-    assert "Active kit" in response.text
-    assert response.text.count("Active kit") == 1
-    assert "Choose a kit" in response.text
-    active_section = response.text.split("Active kit", 1)[1]
-    assert "Choose a kit" in active_section
-    assert "Create a new kit" in response.text
-    assert "Use an existing kit" in response.text
-    assert "Open current config" in response.text
-    assert "Download current config" in response.text
-    assert "Recommended next step" in response.text
-    assert "Open next step" in response.text
-    assert "Build path" in response.text
-    assert "No hidden steps" in response.text
-    assert "Configure. Prove. Approve." in response.text
-    assert "Collect evidence" in response.text
-    assert "Kit state" in response.text
-    assert "Continue setup" in response.text
-    assert "Run Center" in response.text
-    assert "Review ESXi setup" not in response.text
-    assert "Open run history" not in response.text
-    assert "Open reports &amp; technical details" not in response.text
+    assert "Operator Home" in response.text
+    assert "Selected kit" in response.text
+    assert "Dash-Kit" in response.text
+    assert "Kit progress" in response.text
+    assert "Next safe action" in response.text
+    assert "View details" in response.text
+    assert response.text.count('data-testid="operator-home-primary-action"') == 1
+    assert response.text.count('data-testid="canonical-readiness"') == 1
+    assert len(re.findall(r'<(?:a|button)\b[^>]*class="[^"]*\bbtn-primary\b[^"]*"[^>]*>', response.text)) == 1
+    assert response.text.index('data-testid="operator-home-primary-action"') < response.text.index('data-testid="operator-home-details"')
     assert 'name="selected_kit"' in response.text
     assert 'name="new_kit_name"' in response.text
     assert 'type="file"' not in response.text
-    assert "Generic readiness cockpit for the active deployment workspace." in response.text
-    assert "Job status" in response.text
-    assert "No runs have completed for this kit yet." in response.text
-    assert "Last update" not in response.text
-    assert "What happened last" not in response.text
-    assert 'id="theme-toggle"' not in response.text
-    assert "Use this page to move through the setup one step at a time." not in response.text
+    for superseded_surface in [
+        "Deployment cockpit",
+        "Build path",
+        "Operations summary",
+        "Open issues",
+        "Blockers and next fixes",
+        "Job status",
+        "Open log",
+        "Open current config",
+        "Download current config",
+    ]:
+        assert superseded_surface not in response.text
+
+    operator_markup = response.text.split('data-testid="operator-home"', 1)[1].split('data-testid="operator-home-details"', 1)[0].lower()
+    for internal_term in ["provider_mode", "redfish", "api payload", "dependency-node", "raw error"]:
+        assert internal_term not in operator_markup
+    assert "blocker" not in operator_markup
 
 
 def test_dashboard_load_previous_kit_uses_saved_kit_dropdown(client):
@@ -11214,7 +11213,8 @@ def test_dashboard_load_previous_kit_uses_saved_kit_dropdown(client):
 
     assert response.status_code == 200
     assert 'name="selected_kit"' in response.text
-    assert "Switch active kit" in response.text
+    assert "Saved kit" in response.text
+    assert "Switch kit" in response.text
     selector_section = response.text.split('name="selected_kit"', 1)[1]
     assert ">Older-Dash-Kit<" in selector_section
     assert ">Primary-Dash-Kit<" not in selector_section
@@ -11396,7 +11396,7 @@ def test_cisco_discover_version_uses_posted_management_fields(client, monkeypatc
     assert "17.09.04a" in response.text
 
 
-def test_dashboard_job_status_lists_passed_and_failed_with_dates(client):
+def test_operator_home_keeps_run_logs_and_report_paths_out_of_default_view(client):
     cfg = main.default_config()
     cfg["site"]["name"] = "Dash Status Kit"
     main.save_kit_config(cfg)
@@ -11411,35 +11411,14 @@ def test_dashboard_job_status_lists_passed_and_failed_with_dates(client):
     response = client.get("/dashboard")
 
     assert response.status_code == 200
-    assert "Job status" in response.text
-    assert "iLO run passed" in response.text
-    assert ">Passed<" in response.text
-    assert "2026-04-17 09:15:00" in response.text
-    assert "ESXi run failed" in response.text
-    assert ">Failed<" in response.text
-    assert "2026-04-17 10:30:00" in response.text
-    assert response.text.count("Open log") >= 2
-    assert "/tmp/ilo-summary.yml" in response.text
-    assert "/tmp/esxi-summary.yml" in response.text
+    assert "Operator Home" in response.text
+    assert "Job status" not in response.text
+    assert "Open log" not in response.text
+    assert "/tmp/ilo-summary.yml" not in response.text
+    assert "/tmp/esxi-summary.yml" not in response.text
 
 
-def test_dashboard_job_status_ignores_superseded_entries(client):
-    cfg = main.default_config()
-    cfg["site"]["name"] = "Dash Superseded Kit"
-    main.save_kit_config(cfg)
-    history = [
-        {"time": "2026-04-17 10:45:00", "scope": "storage-apply:wipe_rebuild", "status": "Completed", "run_summary_path": "/tmp/storage-ok.yml"},
-        {"time": "2026-04-17 10:30:00", "scope": "storage-apply:wipe_rebuild", "status": "Superseded", "original_status": "Failed", "run_summary_path": "/tmp/storage-failed.yml"},
-        {"time": "2026-04-17 09:15:00", "scope": "ilo", "status": "Completed", "run_summary_path": "/tmp/ilo-summary.yml"},
-    ]
-
-    status = main.build_dashboard_job_status(history)
-
-    assert status["failed"] == []
-    assert any(item["name"] == "Storage" and item["status"] == "Completed" for item in status["passed"])
-
-
-def test_dashboard_keeps_focus_on_kit_status_and_next_steps(client):
+def test_operator_home_keeps_focus_on_kit_state_and_next_action(client):
     cfg = main.default_config()
     cfg["site"]["name"] = "Identity Kit"
     cfg["ilo"]["current_ip"] = "10.10.8.50"
@@ -11521,12 +11500,12 @@ def test_dashboard_keeps_focus_on_kit_status_and_next_steps(client):
     response = client.get("/dashboard")
 
     assert response.status_code == 200
-    assert "Active kit" in response.text
-    assert "Choose a kit" in response.text
-    assert "Job status" in response.text
-    assert "iLO run passed" in response.text
-    assert "Open log" in response.text
-    assert "Continue setup" in response.text
+    assert "Selected kit" in response.text
+    assert "Next safe action" in response.text
+    assert response.text.count('data-testid="operator-home-primary-action"') == 1
+    assert "Job status" not in response.text
+    assert "iLO run passed" not in response.text
+    assert "Open log" not in response.text
     assert "Hardware identity" not in response.text
     assert "Latest build receipt" not in response.text
     assert "Build timeline" not in response.text
@@ -11536,7 +11515,8 @@ def test_dashboard_uses_simplified_primary_navigation(client):
     response = client.get("/dashboard")
 
     assert response.status_code == 200
-    assert "Mission control" in response.text
+    assert "Operator Home" in response.text
+    assert "Next safe action" in response.text
     assert "Shared defaults" in response.text
     assert "Reports" in response.text
     assert "Technical details" in response.text
@@ -11547,16 +11527,16 @@ def test_dashboard_uses_simplified_primary_navigation(client):
     assert "Quick jump" in response.text
     assert "Ctrl K" in response.text
     assert "Compact view" in response.text
-    assert "Open issues" in response.text
-    assert "Readiness issues" in response.text
-    assert "Blockers and next fixes" in response.text
+    assert "Open issues" not in response.text
+    assert "Readiness issues" not in response.text
+    assert "Blockers and next fixes" not in response.text
     assert 'data-density-toggle' in response.text
     assert ".sidebar .nav-group:last-of-type" not in response.text
     assert "Run History" not in response.text
     assert "Reset dashboard layout" not in response.text
 
 
-def test_dashboard_and_windows_page_show_precheck_summary(client):
+def test_operator_home_owns_kit_progress_while_windows_keeps_scoped_precheck(client):
     cfg = main.default_config()
     cfg["site"]["name"] = "Precheck Kit"
     cfg["included"]["windows"] = True
@@ -11564,10 +11544,10 @@ def test_dashboard_and_windows_page_show_precheck_summary(client):
 
     dashboard = client.get("/dashboard")
     assert dashboard.status_code == 200
-    assert "Operations summary" in dashboard.text
-    assert "Ready workflows" in dashboard.text
-    assert "Next fix" in dashboard.text
-    assert "Mission control overview" in dashboard.text
+    assert dashboard.text.count('data-testid="canonical-readiness"') == 1
+    assert "Operations summary" not in dashboard.text
+    assert "Ready workflows" not in dashboard.text
+    assert "Mission control overview" not in dashboard.text
 
     windows = client.get("/windows")
     assert windows.status_code == 200
@@ -11646,10 +11626,10 @@ def test_kits_route_falls_back_to_dashboard_workflow(client):
     response = client.get("/kits")
 
     assert response.status_code == 200
-    assert "Dashboard" in response.text
-    assert "Active kit" in response.text
-    assert "Choose a kit" in response.text
-    assert "Continue setup" in response.text
+    assert "Operator Home" in response.text
+    assert "Selected kit" in response.text
+    assert "View details" in response.text
+    assert "Next safe action" in response.text
 
 
 def test_create_new_kit_updates_active_kit_on_dashboard(client):
@@ -11659,7 +11639,7 @@ def test_create_new_kit_updates_active_kit_on_dashboard(client):
     )
 
     assert response.status_code == 200
-    assert "Active kit" in response.text
+    assert "Selected kit" in response.text
     assert "Fresh-Kit" in response.text
 
 
@@ -12423,7 +12403,7 @@ def test_netapp_module_route_renders_without_breaking_legacy_routes(client):
     assert "NetApp setup" in response.text
     dashboard = client.get("/dashboard")
     assert dashboard.status_code == 200
-    assert "Lab Builder Dashboard" in dashboard.text
+    assert "Operator Home" in dashboard.text
 
 
 def test_cisco_module_route_renders_without_breaking_legacy_routes(client):

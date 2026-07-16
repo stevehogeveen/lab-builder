@@ -135,26 +135,15 @@
             margin: -8px 0 18px;
             padding: 12px;
             border: 1px solid color-mix(in srgb, var(--accent) 18%, var(--border));
-            border-radius: 15px;
-            background:
-                radial-gradient(circle at top right, color-mix(in srgb, var(--accent) 9%, white 91%) 0%, transparent 42%),
-                linear-gradient(180deg, color-mix(in srgb, white 94%, var(--panel2) 6%), white);
-            box-shadow: 0 12px 28px rgba(28, 49, 77, 0.07);
-        }
-
-        .sidebar-kit-top,
-        .sidebar-kit-meta {
-            display: flex;
-            align-items: center;
-            justify-content: space-between;
-            gap: 8px;
+            border-radius: 8px;
+            background: white;
         }
 
         .sidebar-kit-label {
             color: var(--muted);
             font-size: 0.72rem;
             font-weight: 800;
-            letter-spacing: .1em;
+            letter-spacing: 0;
             text-transform: uppercase;
         }
 
@@ -165,27 +154,12 @@
             font-weight: 850;
         }
 
-        .sidebar-kit-meter {
-            height: 7px;
-            margin: 10px 0 8px;
-            overflow: hidden;
-            border-radius: 999px;
-            background: color-mix(in srgb, var(--border) 74%, white 26%);
-            border: 1px solid color-mix(in srgb, var(--border-strong) 76%, white 24%);
-        }
-
-        .sidebar-kit-meter span {
-            display: block;
-            height: 100%;
-            width: var(--meter, 0%);
-            border-radius: inherit;
-            background: linear-gradient(90deg, var(--accent), var(--good));
-        }
-
-        .sidebar-kit-meta {
-            color: var(--muted);
-            font-size: 0.76rem;
-            line-height: 1.25;
+        .sidebar-kit-home {
+            display: inline-block;
+            margin-top: 8px;
+            color: var(--accent);
+            font-size: 0.78rem;
+            font-weight: 750;
         }
 
         .sidebar-utility-grid {
@@ -243,7 +217,7 @@
             color: var(--accent);
             font-size: 0.72rem;
             font-weight: 700;
-            letter-spacing: .14em;
+            letter-spacing: 0;
             margin-bottom: 8px;
             text-transform: uppercase;
         }
@@ -262,7 +236,7 @@
             color: var(--muted);
             font-size: 0.8rem;
             text-transform: uppercase;
-            letter-spacing: .08em;
+            letter-spacing: 0;
             margin-bottom: 8px;
         }
 
@@ -454,7 +428,7 @@
             color: var(--info);
             font-size: 0.75rem;
             font-weight: 800;
-            letter-spacing: 0.12em;
+            letter-spacing: 0;
             text-transform: uppercase;
         }
 
@@ -545,7 +519,7 @@
             font-weight: bold;
             font-size: .8rem;
             border: 1px solid transparent;
-            letter-spacing: 0.01em;
+            letter-spacing: 0;
         }
 
         .ready { color: var(--good); background: var(--good-soft); border-color: color-mix(in srgb, var(--good) 18%, var(--border)); }
@@ -831,86 +805,268 @@
             text-align: center;
         }
 
-        .issue-drawer {
-            position: fixed;
-            inset: 0;
-            z-index: 10015;
+        .operator-home {
+            width: min(1040px, 100%);
+            margin: 0 auto;
+            padding: 18px 10px 48px;
+        }
+
+        .operator-home-header {
+            padding: 26px 0 22px;
+            border-bottom: 1px solid var(--border);
+        }
+
+        .operator-home-identity,
+        .operator-home-progress-copy,
+        .operator-home-summary,
+        .operator-home-section-heading,
+        .operator-home-next {
             display: flex;
-            justify-content: flex-end;
-            background: rgba(15, 23, 42, 0.24);
-            backdrop-filter: blur(5px);
-        }
-
-        .issue-drawer[hidden] {
-            display: none;
-        }
-
-        .issue-drawer-panel {
-            width: min(520px, 100vw);
-            height: 100%;
-            overflow-y: auto;
-            padding: 18px;
-            border-left: 1px solid color-mix(in srgb, var(--accent) 20%, var(--border));
-            background:
-                radial-gradient(circle at top left, color-mix(in srgb, var(--warn) 8%, white 92%) 0%, transparent 34%),
-                linear-gradient(180deg, color-mix(in srgb, white 96%, var(--panel2) 4%), white);
-            box-shadow: -28px 0 70px rgba(15, 23, 42, 0.18);
-        }
-
-        .issue-drawer-header {
-            display: flex;
-            align-items: flex-start;
+            align-items: center;
             justify-content: space-between;
-            gap: 14px;
-            padding-bottom: 14px;
-            border-bottom: 1px solid color-mix(in srgb, var(--border) 82%, transparent);
+            gap: 18px;
         }
 
-        .issue-list {
+        .operator-home-kicker {
+            color: var(--muted);
+            font-size: 0.72rem;
+            font-weight: 800;
+            letter-spacing: 0;
+            text-transform: uppercase;
+        }
+
+        .operator-home-kit-name {
+            margin-top: 4px;
+            font-size: 1rem;
+            font-weight: 850;
+        }
+
+        .operator-home-intro {
+            max-width: 720px;
+            margin-top: 30px;
+        }
+
+        .operator-home-intro h1 {
+            margin: 0;
+            font-size: 2.15rem;
+            line-height: 1.08;
+            letter-spacing: 0;
+        }
+
+        .operator-home-intro p,
+        .operator-home-next p,
+        .operator-home-kit-tools p {
+            margin: 8px 0 0;
+            color: var(--muted);
+            line-height: 1.5;
+        }
+
+        .operator-home-progress {
+            padding: 18px 0;
+            border-bottom: 1px solid var(--border);
+        }
+
+        .operator-home-progress-copy span {
+            color: var(--muted);
+            font-size: 0.82rem;
+            font-weight: 750;
+        }
+
+        .operator-home-progress-copy strong {
+            font-size: 0.88rem;
+        }
+
+        .operator-home-progress-track {
+            height: 7px;
+            margin-top: 10px;
+            overflow: hidden;
+            border-radius: 999px;
+            background: color-mix(in srgb, var(--border) 74%, white 26%);
+        }
+
+        .operator-home-progress-track span {
+            display: block;
+            height: 100%;
+            border-radius: inherit;
+            background: var(--action);
+        }
+
+        .operator-home-summary {
+            padding: 20px 0;
+            border-bottom: 1px solid var(--border);
+        }
+
+        .operator-home-summary p {
+            margin: 5px 0 0;
+            font-size: 1.05rem;
+            font-weight: 750;
+        }
+
+        .operator-home-summary-count {
+            color: var(--muted);
+            font-size: 0.84rem;
+            white-space: nowrap;
+        }
+
+        .operator-home-attention {
+            margin-top: 24px;
+            padding: 20px 22px;
+            border-left: 4px solid var(--warn);
+            background: color-mix(in srgb, var(--warn-soft) 46%, white 54%);
+        }
+
+        .operator-home-section-heading h2,
+        .operator-home-next h2 {
+            margin: 4px 0 0;
+            font-size: 1.22rem;
+            letter-spacing: 0;
+        }
+
+        .operator-home-attention-list {
             display: grid;
             gap: 10px;
-            margin-top: 14px;
+            margin-top: 16px;
         }
 
-        .issue-item {
+        .operator-home-attention-item {
             display: grid;
             grid-template-columns: minmax(0, 1fr) auto;
-            gap: 12px;
-            align-items: start;
-            width: 100%;
-            padding: 12px;
-            border: 1px solid color-mix(in srgb, var(--warn) 18%, var(--border));
-            border-radius: 15px;
-            background: color-mix(in srgb, var(--warn-soft) 54%, white 46%);
-            color: var(--text);
-            text-align: left;
+            align-items: center;
+            gap: 18px;
+            padding: 15px 16px;
+            border: 1px solid color-mix(in srgb, var(--warn) 20%, var(--border));
+            border-radius: 8px;
+            background: white;
+        }
+
+        .operator-home-attention-item h3 {
+            margin: 0;
+            font-size: 1rem;
+            letter-spacing: 0;
+        }
+
+        .operator-home-attention-item p {
+            margin: 4px 0 0;
+            color: var(--muted);
+            line-height: 1.45;
+        }
+
+        .operator-home-resolution {
+            font-size: 0.88rem;
+        }
+
+        .operator-home-attention-link {
+            color: var(--accent);
+            font-size: 0.85rem;
+            font-weight: 800;
+            white-space: nowrap;
+        }
+
+        .operator-home-clear {
+            display: flex;
+            gap: 10px;
+            align-items: center;
+            margin-top: 22px;
+            color: var(--good);
+            font-weight: 750;
+        }
+
+        .operator-home-clear-mark {
+            display: grid;
+            place-items: center;
+            width: 24px;
+            height: 24px;
+            border-radius: 999px;
+            background: var(--good-soft);
+        }
+
+        .operator-home-next {
+            margin-top: 28px;
+            padding: 24px 26px;
+            border: 1px solid color-mix(in srgb, var(--action) 24%, var(--border));
+            border-radius: 8px;
+            background: color-mix(in srgb, var(--good-soft) 42%, white 58%);
+        }
+
+        .operator-home-primary {
+            min-width: 190px;
+            min-height: 44px;
+            justify-content: center;
+            text-align: center;
+        }
+
+        .operator-home-details {
+            margin-top: 24px;
+            border-top: 1px solid var(--border);
+        }
+
+        .operator-home-details > summary {
+            padding: 18px 0;
+            color: var(--accent);
+            font-weight: 800;
             cursor: pointer;
         }
 
-        .issue-item:hover,
-        .issue-item:focus-visible {
-            border-color: color-mix(in srgb, var(--warn) 34%, var(--border));
-            box-shadow: 0 14px 30px rgba(166, 108, 33, 0.1);
-            outline: none;
+        .operator-home-details-body {
+            display: grid;
+            gap: 30px;
+            padding: 0 0 10px;
         }
 
-        .issue-title {
-            font-weight: 850;
-            line-height: 1.2;
+        .operator-home-device-list {
+            margin-top: 10px;
+            border-top: 1px solid var(--border);
         }
 
-        .issue-copy {
+        .operator-home-device-row {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 18px;
+            padding: 13px 0;
+            border-bottom: 1px solid var(--border);
+            color: var(--text);
+        }
+
+        .operator-home-device-row > span:first-child {
+            display: grid;
+            gap: 3px;
+        }
+
+        .operator-home-device-row > span:first-child span {
             color: var(--muted);
-            font-size: 0.9rem;
-            margin-top: 4px;
+            font-size: 0.86rem;
         }
 
-        .issue-empty {
-            margin-top: 14px;
-            padding: 16px;
-            border: 1px solid color-mix(in srgb, var(--good) 18%, var(--border));
-            border-radius: 15px;
-            background: color-mix(in srgb, var(--good-soft) 70%, white 30%);
+        .operator-home-kit-tools {
+            display: grid;
+            grid-template-columns: minmax(180px, 0.6fr) minmax(0, 1.4fr);
+            gap: 28px;
+            padding-top: 24px;
+            border-top: 1px solid var(--border);
+        }
+
+        .operator-home-kit-forms {
+            display: grid;
+            grid-template-columns: repeat(2, minmax(0, 1fr));
+            gap: 18px;
+        }
+
+        .operator-home-kit-forms label {
+            display: block;
+            margin-bottom: 7px;
+            color: var(--muted);
+            font-size: 0.78rem;
+            font-weight: 750;
+        }
+
+        .operator-home-form-row {
+            display: flex;
+            gap: 8px;
+        }
+
+        .operator-home-form-row .input {
+            min-width: 0;
         }
 
         .action-card {
@@ -950,7 +1106,7 @@
             color: var(--muted);
             font-size: 0.74rem;
             font-weight: 800;
-            letter-spacing: 0.12em;
+            letter-spacing: 0;
             text-transform: uppercase;
             margin-bottom: 6px;
         }
@@ -959,7 +1115,7 @@
             font-size: clamp(2rem, 4vw, 3.2rem);
             line-height: 1.02;
             font-weight: 800;
-            letter-spacing: -0.03em;
+            letter-spacing: 0;
         }
 
         .dashboard-next-step,
@@ -1979,7 +2135,7 @@
         }
 
         .ilo-capability-badge {
-            letter-spacing: 0.08em;
+            letter-spacing: 0;
             text-transform: uppercase;
             font-size: 0.7rem;
         }
@@ -2426,7 +2582,7 @@
         th {
             color: var(--muted);
             font-size: 0.78rem;
-            letter-spacing: 0.04em;
+            letter-spacing: 0;
             text-transform: uppercase;
             background: color-mix(in srgb, var(--panel3) 54%, white 46%);
         }
@@ -2459,7 +2615,7 @@
             font-size: .78rem;
             margin-bottom: 4px;
             text-transform: uppercase;
-            letter-spacing: .08em;
+            letter-spacing: 0;
         }
 
         .hero-stat-value {
@@ -2546,7 +2702,7 @@
         .nav-label,
         .text-xs,
         .text-sm {
-            letter-spacing: 0.005em;
+            letter-spacing: 0;
         }
 
         .panel > .flex:first-child,
@@ -2742,10 +2898,108 @@
 
             .sidebar {
                 width: 100%;
+                position: relative;
+                height: auto;
+                display: grid;
+                grid-template-columns: minmax(0, 1fr) minmax(132px, 0.8fr);
+                align-items: center;
+                gap: 10px;
+                padding: 12px;
+                overflow: visible;
+            }
+
+            .brand-block {
+                margin: 0;
+            }
+
+            .brand-block .eyebrow,
+            .brand-block .muted {
+                display: none;
+            }
+
+            .sidebar-kit-card {
+                margin: 0;
+                padding: 9px 10px;
+            }
+
+            .sidebar-kit-name {
+                margin-top: 3px;
+            }
+
+            .sidebar-kit-home {
+                display: none;
+            }
+
+            .sidebar-utility-grid {
+                grid-column: 1 / -1;
+                margin: 0;
+            }
+
+            .sidebar-tool-button[data-density-toggle],
+            .sidebar .nav-group {
+                display: none;
             }
 
             .main {
                 padding: 16px;
+            }
+
+            .operator-home {
+                padding: 0 0 36px;
+            }
+
+            .operator-home-header {
+                padding-top: 8px;
+            }
+
+            .operator-home-identity,
+            .operator-home-progress-copy,
+            .operator-home-summary,
+            .operator-home-section-heading,
+            .operator-home-next {
+                align-items: flex-start;
+                flex-direction: column;
+            }
+
+            .operator-home-intro {
+                margin-top: 22px;
+            }
+
+            .operator-home-intro h1 {
+                font-size: 1.75rem;
+            }
+
+            .operator-home-attention {
+                padding: 18px 16px;
+            }
+
+            .operator-home-attention-item,
+            .operator-home-kit-tools,
+            .operator-home-kit-forms {
+                grid-template-columns: 1fr;
+            }
+
+            .operator-home-attention-link {
+                white-space: normal;
+            }
+
+            .operator-home-next {
+                padding: 20px;
+            }
+
+            .operator-home-primary,
+            .operator-home-form-row {
+                width: 100%;
+            }
+
+            .operator-home-form-row {
+                align-items: stretch;
+                flex-direction: column;
+            }
+
+            .operator-home-device-row {
+                align-items: flex-start;
+                flex-direction: column;
             }
 
             .panel,
@@ -2842,6 +3096,7 @@
     {% include "partials/sidebar.html" %}
 
     <main class="main">
+        {% if active_page != 'dashboard' %}
         {% set hero_summary = page_precheck_summary if active_page != 'dashboard' and page_precheck_summary else setup_precheck_summary %}
         {% set hero_ready = hero_summary.get('checks_ready', hero_summary.get('ready_workflows', 0)) if hero_summary else 0 %}
         {% set hero_total = hero_summary.get('total_checks', hero_summary.get('total_workflows', 0)) if hero_summary else 0 %}
@@ -2864,32 +3119,7 @@
                 </div>
             </div>
             <div class="hero-meta">
-                {% if active_page == 'dashboard' and dashboard_overview %}
-                <div class="hero-stat">
-                    <div class="hero-stat-label">Workspace</div>
-                    <div class="hero-stat-value">{{ current_kit }}</div>
-                </div>
-                <div class="hero-stat">
-                    <div class="hero-stat-label">Readiness</div>
-                    <div class="hero-stat-value">{{ dashboard_overview.readiness_percent }}%</div>
-                </div>
-                <div class="hero-stat">
-                    <div class="hero-stat-label">Modules</div>
-                    <div class="hero-stat-value">{{ dashboard_overview.ready_workflows }}/{{ dashboard_overview.total_workflows }} ready</div>
-                </div>
-                <div class="hero-stat">
-                    <div class="hero-stat-label">Blockers</div>
-                    <div class="hero-stat-value">{{ dashboard_overview.total_blockers }}</div>
-                </div>
-                <div class="hero-stat">
-                    <div class="hero-stat-label">Next Step</div>
-                    <div class="hero-stat-value">{{ recommended_next_step.title if recommended_next_step else 'Review setup' }}</div>
-                </div>
-                <div class="hero-stat">
-                    <div class="hero-stat-label">Latest</div>
-                    <div class="hero-stat-value">{{ dashboard_overview.latest_result.label }}</div>
-                </div>
-                {% elif page_precheck_summary %}
+                {% if page_precheck_summary %}
                 <div class="hero-stat">
                     <div class="hero-stat-label">State</div>
                     <div class="hero-stat-value">{{ page_precheck_summary.get('state_label') or page_precheck_summary.get('label', 'Review') }}</div>
@@ -2926,6 +3156,7 @@
                 {% endif %}
             </div>
         </section>
+        {% endif %}
 
         {% include "partials/main_content.html" %}
     </main>
@@ -2946,44 +3177,6 @@
         <input class="command-palette-search" id="command-palette-search" type="search" placeholder="Jump to a page or setup module" autocomplete="off" aria-label="Search pages">
         <div class="command-palette-list" id="command-palette-list" role="listbox" aria-label="Available pages"></div>
     </div>
-</div>
-
-<div class="issue-drawer" id="issue-drawer" role="dialog" aria-modal="true" aria-labelledby="issue-drawer-title" hidden>
-    <aside class="issue-drawer-panel">
-        <div class="issue-drawer-header">
-            <div>
-                <div class="dashboard-kicker">Readiness issues</div>
-                <div class="text-xl font-bold" id="issue-drawer-title">Blockers and next fixes</div>
-                <div class="text-sm text-slate-400 mt-1">A single place to see what is stopping the active kit from moving forward.</div>
-            </div>
-            <button class="btn" type="button" data-issue-drawer-close>Close</button>
-        </div>
-        {% set issue_cards = setup_precheck_summary.get('items', []) if setup_precheck_summary else [] %}
-        {% if setup_precheck_summary and setup_precheck_summary.total_blockers %}
-        <div class="issue-list">
-            {% for item in issue_cards %}
-            {% if item.get('blockers', 0) %}
-            {% set blocker = item.get('next_blocker') %}
-            <button class="issue-item" type="button" data-issue-href="{{ item.get('href', '/dashboard') }}">
-                <span>
-                    <span class="issue-title">{{ item.get('name', 'Setup item') }}</span>
-                    <span class="issue-copy">{{ blocker.label if blocker else item.get('state_label', 'Review this setup item') }}</span>
-                    {% if blocker and blocker.get('fix') %}
-                    <span class="issue-copy">Fix: {{ blocker.get('fix') }}</span>
-                    {% endif %}
-                </span>
-                <span class="status {{ item.get('tone', 'pending') }}">{{ item.get('blockers', 0) }} issue{% if item.get('blockers', 0) != 1 %}s{% endif %}</span>
-            </button>
-            {% endif %}
-            {% endfor %}
-        </div>
-        {% else %}
-        <div class="issue-empty">
-            <div class="font-semibold">No blockers are currently visible.</div>
-            <div class="text-sm text-slate-500 mt-1">Run preview or discovery actions on setup pages to add fresh proof before final execution.</div>
-        </div>
-        {% endif %}
-    </aside>
 </div>
 
 <div class="request-overlay" id="request-overlay" aria-live="polite" aria-hidden="true">
@@ -3342,52 +3535,6 @@
         } else if (key === "Enter") {
             event.preventDefault();
             activatePaletteMatch(paletteActiveIndex);
-        }
-    });
-
-    const issueDrawer = document.getElementById("issue-drawer");
-    let issueDrawerReturnFocus = null;
-
-    function openIssueDrawer(trigger) {
-        if (!issueDrawer) return;
-        issueDrawerReturnFocus = trigger || document.activeElement;
-        issueDrawer.hidden = false;
-        const closeButton = issueDrawer.querySelector("[data-issue-drawer-close]");
-        if (closeButton) window.setTimeout(function () { closeButton.focus(); }, 0);
-    }
-
-    function closeIssueDrawer() {
-        if (!issueDrawer) return;
-        issueDrawer.hidden = true;
-        if (issueDrawerReturnFocus && typeof issueDrawerReturnFocus.focus === "function") {
-            issueDrawerReturnFocus.focus({ preventScroll: true });
-        }
-    }
-
-    document.body.addEventListener("click", function (event) {
-        const openButton = event.target.closest && event.target.closest("[data-issue-drawer-open]");
-        if (openButton) {
-            openIssueDrawer(openButton);
-            return;
-        }
-        if (event.target.closest && event.target.closest("[data-issue-drawer-close]")) {
-            closeIssueDrawer();
-            return;
-        }
-        const issueButton = event.target.closest && event.target.closest("[data-issue-href]");
-        if (issueButton) {
-            window.location.href = issueButton.getAttribute("data-issue-href");
-            return;
-        }
-        if (issueDrawer && !issueDrawer.hidden && event.target === issueDrawer) {
-            closeIssueDrawer();
-        }
-    });
-
-    document.addEventListener("keydown", function (event) {
-        if (event.key === "Escape" && issueDrawer && !issueDrawer.hidden) {
-            event.preventDefault();
-            closeIssueDrawer();
         }
     });
 
